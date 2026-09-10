@@ -2901,6 +2901,8 @@ struct FeatureMessageView: View {
 }
 
 private struct FeatureMessageAttachmentsView: View {
+    @SwiftUI.Environment(\.markdownMediaContext) private var mediaContext
+    @State private var previewedDocument: FeatureMessageAttachment?
     let attachments: [FeatureMessageAttachment]
     @State private var previewedAttachment: FeatureMessageAttachment?
 
@@ -2938,6 +2940,12 @@ private struct FeatureMessageAttachmentsView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
 
+                        if FeatureFilePreviewPath.isDocument(attachment.name), mediaContext?.resolveDocumentURL != nil {
+                            Button { previewedDocument = attachment } label: {
+                                Label("Preview document", systemImage: "doc.richtext").font(T3Typography.supportingStrong)
+                                    .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
+                            }.buttonStyle(.plain).accessibilityLabel("Preview \(attachment.name)")
+                        }
                         HStack(spacing: 9) {
                             Image(
                                 systemName: FeatureAttachmentGlyph.systemImage(
@@ -3006,6 +3014,11 @@ private struct FeatureMessageAttachmentsView: View {
                             previewedAttachment = attachment
                         }
                     }
+                }
+            }
+            .sheet(item: $previewedDocument) { attachment in
+                if let resolve = mediaContext?.resolveDocumentURL {
+                    FeatureDocumentAttachmentPreview(attachment: attachment, resolve: resolve)
                 }
             }
             .fullScreenCover(item: $previewedAttachment) { attachment in

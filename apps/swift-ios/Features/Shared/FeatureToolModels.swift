@@ -129,6 +129,8 @@ public struct FeatureFileContent: Sendable, Equatable, Codable {
 }
 
 public enum FeatureFilePreviewKind: Sendable, Equatable {
+    case video
+    case browserDocument
     case image
     case markdown
     case source
@@ -136,6 +138,8 @@ public enum FeatureFilePreviewKind: Sendable, Equatable {
 
     public static func infer(path: String, language: String? = nil) -> Self {
         let fileExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
+        if ["mp4", "mov", "m4v", "webm"].contains(fileExtension) { return .video }
+        if ["pdf", "html", "htm", "svg"].contains(fileExtension) { return .browserDocument }
         if imageExtensions.contains(fileExtension) { return .image }
         if language?.lowercased() == "markdown" || ["md", "mdx"].contains(fileExtension) {
             return .markdown
@@ -1078,4 +1082,9 @@ public struct FeatureTerminalSnapshot: Sendable, Equatable, Codable {
 @MainActor
 public protocol FeatureUsageLimitsReading: AnyObject {
     func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot]
+}
+
+@MainActor
+public protocol FeatureDocumentAttachmentResolving: AnyObject {
+    func documentAttachmentURL(threadID: String, attachment: FeatureMessageAttachment) async throws -> URL
 }

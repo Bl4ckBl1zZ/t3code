@@ -26,6 +26,7 @@ import {
   CustomModelSetting,
   ExecutionEnvironmentDescriptor,
   ExecutionEnvironmentCapabilities,
+  AssetResource,
   EnvironmentId,
   ServerProviderUsageLimits,
   ServerProvider,
@@ -1145,3 +1146,36 @@ if (process.argv.includes("--check")) {
 } else {
   NodeFS.writeFileSync(agentSessionFixturePath, agentSessionFixture);
 }
+
+const filePreviewFixturePath = NodePath.join(NodePath.dirname(outputPath), "filePreviews.json");
+const filePreviewFixture = `${JSON.stringify(
+  {
+    host: Schema.encodeSync(AssetResource)({
+      _tag: "media-file",
+      threadId: ThreadId.make("thread-1"),
+      path: "/tmp/report.html",
+    }),
+    attachment: Schema.encodeSync(AssetResource)({
+      _tag: "attachment",
+      attachmentId: "upload-pdf",
+      fileName: "report.pdf",
+      mimeType: "application/pdf",
+      disposition: "inline",
+    }),
+    capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
+      repositoryIdentity: true,
+      fileDocumentPreviews: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(filePreviewFixturePath) ||
+    NodeFS.readFileSync(filePreviewFixturePath, "utf8") !== filePreviewFixture
+  ) {
+    console.error("[swift-fixtures] filePreviews.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(filePreviewFixturePath, filePreviewFixture);

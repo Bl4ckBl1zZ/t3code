@@ -900,3 +900,34 @@ describe("rightPanelStore", () => {
     ).toEqual(["terminal:term-1", "browser:tab-b", "browser:tab-c"]);
   });
 });
+
+describe("document attachment panels", () => {
+  it("keeps same-name uploads distinct and retains them when the workspace is purged", () => {
+    const store = useRightPanelStore.getState();
+    const document = {
+      type: "pdf" as const,
+      id: "one",
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 100,
+    };
+    store.openAttachment(refA, document);
+    store.openAttachment(refA, document);
+    store.openAttachment(refA, { ...document, id: "two" });
+    store.openFile(refA, "report.pdf");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toHaveLength(3);
+    store.reconcileFileSurfaces(refA, false);
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      "file:attachment:one",
+      "file:attachment:two",
+    ]);
+    expect(state.activeSurfaceId).toBe("file:attachment:two");
+    store.closeAllSurfaces(refA);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([]);
+  });
+});

@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
+    FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
     FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -518,9 +518,27 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func workspaceAssetURL(threadID: String, path: String) async throws -> URL {
         let route = try threadRoute(for: threadID)
-        return try await route.client.resolvedAssetURL(
-            resource: .workspaceFile(threadID: route.wireID, path: path)
-        )
+        let config = try await route.client.serverConfig()
+        let hostFiles = config.environment?.capabilities.fileDocumentPreviews == true
+        let root = try workspaceContext(route: route).cwd
+        let absolute = FeatureFilePreviewPath.isAbsolute(path)
+        let normalized = ProjectCreationPath.normalizedForComparison(path)
+        let normalizedRoot = ProjectCreationPath.normalizedForComparison(root)
+        let outside = absolute && normalized != normalizedRoot && !normalized.hasPrefix(normalizedRoot + "/")
+        if outside && !hostFiles { throw FeatureCapabilityUnavailable("Host file previews; update this server") }
+        // Workspace HTML keeps sibling resources; host files authorize only the selected file.
+        let resource: AssetResource = outside || (hostFiles && FeatureFilePreviewKind.infer(path: path) == .video)
+            ? .mediaFile(threadID: route.wireID, path: path)
+            : .workspaceFile(threadID: route.wireID, path: path)
+        return try await route.client.resolvedAssetURL(resource: resource)
+    }
+
+    func documentAttachmentURL(threadID: String, attachment: FeatureMessageAttachment) async throws -> URL {
+        let route = try threadRoute(for: threadID)
+        guard try await route.client.serverConfig().environment?.capabilities.fileDocumentPreviews == true else {
+            throw FeatureCapabilityUnavailable("Document previews; update this server")
+        }
+        return try await route.client.resolvedAssetURL(resource: .documentAttachment(id: attachment.id, name: attachment.name, mimeType: attachment.mimeType))
     }
 
     func browserArtifactAssetURL(threadID: String, fileName: String) async throws -> URL {

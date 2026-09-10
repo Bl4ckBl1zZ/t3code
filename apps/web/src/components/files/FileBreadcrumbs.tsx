@@ -1,3 +1,4 @@
+import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { Spinner } from "~/components/ui/spinner";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { ArrowLeftIcon, ChevronRightIcon, RefreshCwIcon } from "lucide-react";
@@ -26,6 +27,7 @@ import {
 import { useProjectEntriesQuery } from "./projectFilesQueryState";
 
 interface FileBreadcrumbsProps {
+  readonly workspaceMutationId?: string | null;
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
   readonly onOpenFile: (relativePath: string) => void;
@@ -64,6 +66,7 @@ function BreadcrumbLabel(props: {
 }
 
 function BreadcrumbMenuContent(props: {
+  readonly workspaceMutationId?: string | null;
   readonly cwd: string;
   readonly currentFilePath: string;
   readonly directoryPath: string;
@@ -75,8 +78,12 @@ function BreadcrumbMenuContent(props: {
   readonly rootPath: string;
 }) {
   const entriesQuery = useProjectEntriesQuery(props.environmentId, props.cwd);
-  // Mounted only while a folder menu is open. Refresh the fork's scoped
-  // project index here; V1 workspace mutation notifications are not available.
+  useWorkspaceMutationRefresh({
+    mutationId: props.workspaceMutationId ?? null,
+    resourceKey: `breadcrumbs:${props.environmentId}:${props.cwd}`,
+    refresh: entriesQuery.refresh,
+  });
+  // Opening a folder menu also refreshes external changes not observed by a provider.
   const refresh = entriesQuery.refresh;
   useEffect(() => {
     refresh();
@@ -229,6 +236,7 @@ function DirectoryBreadcrumb(props: FileBreadcrumbsProps & { readonly crumb: Fil
       </Tooltip>
       {open ? (
         <BreadcrumbMenuContent
+          workspaceMutationId={props.workspaceMutationId ?? null}
           cwd={props.cwd}
           currentFilePath={props.relativePath}
           directoryPath={directoryPath}

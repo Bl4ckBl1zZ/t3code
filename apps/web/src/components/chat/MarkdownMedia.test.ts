@@ -52,6 +52,15 @@ describe("resolveMarkdownMediaSource", () => {
     });
   });
 
+  it("resolves rendered-file images from the containing folder, preserving direct URLs", () => {
+    expect(resolveMarkdownMediaSource("images/plot.png", threadRef, "/repo/docs")).toMatchObject({
+      resource: { path: "/repo/docs/images/plot.png" },
+    });
+    expect(
+      resolveMarkdownMediaSource("https://example.com/plot.png", threadRef, "/repo/docs"),
+    ).toEqual({ _tag: "direct", url: "https://example.com/plot.png" });
+  });
+
   it("unescapes sanitized Windows drive paths", () => {
     expect(
       resolveMarkdownMediaSource(

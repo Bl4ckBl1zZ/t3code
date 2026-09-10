@@ -1,3 +1,4 @@
+import { resolvePathLinkTarget } from "~/terminal-links";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { MediaActions } from "../media/MediaActions";
 import {
@@ -25,6 +26,7 @@ const MEDIA_FRAME_CLASS_NAME =
   "my-2 block max-h-96 max-w-full rounded-lg border border-border/60 bg-background object-contain";
 
 interface MarkdownMediaProps {
+  baseDirectory?: string | undefined;
   src: string | undefined;
   alt?: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
@@ -65,11 +67,16 @@ export type ResolvedMarkdownMediaSource =
 export function resolveMarkdownMediaSource(
   src: string,
   threadRef: ScopedThreadRef,
+  baseDirectory?: string,
 ): ResolvedMarkdownMediaSource {
   if (DIRECT_MEDIA_SRC_PATTERN.test(src)) {
     return { _tag: "direct", url: src };
   }
-  const path = mediaPathFromSrc(src);
+  const authoredPath = mediaPathFromSrc(src);
+  const path =
+    baseDirectory && !ABSOLUTE_PATH_PATTERN.test(authoredPath)
+      ? resolvePathLinkTarget(authoredPath, baseDirectory)
+      : authoredPath;
   const artifactFileName = browserArtifactFileName(path);
   return {
     _tag: "resource",
@@ -249,6 +256,7 @@ export const MarkdownMedia = memo(function MarkdownMedia({
   alt,
   threadRef,
   kind,
+  baseDirectory,
 }: MarkdownMediaProps) {
   if (!src) {
     return null;
@@ -267,7 +275,7 @@ export const MarkdownMedia = memo(function MarkdownMedia({
       <MediaUnavailable name={name} />
     );
   }
-  const resolved = resolveMarkdownMediaSource(src, threadRef);
+  const resolved = resolveMarkdownMediaSource(src, threadRef, baseDirectory);
   return resolved._tag === "direct" ? (
     <ResolvedMedia
       url={resolved.url}

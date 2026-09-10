@@ -69,6 +69,8 @@ public struct UploadChatImageAttachment: Codable, Equatable, Sendable {
 
 public enum AssetResource: Equatable, Sendable {
     case workspaceFile(threadID: String, path: String)
+    case mediaFile(threadID: String, path: String)
+    case documentAttachment(id: String, name: String, mimeType: String)
     case attachment(id: String)
     /// A file in the server's browser-artifacts directory: Hermes screenshots
     /// and recordings. Without this, an assistant message referencing one has
@@ -87,6 +89,11 @@ public enum AssetResource: Equatable, Sendable {
                 "threadId": .string(threadID),
                 "path": .string(path),
             ])
+        case let .mediaFile(threadID, path):
+            .object(["_tag": .string("media-file"), "threadId": .string(threadID), "path": .string(path)])
+        case let .documentAttachment(id, name, mimeType):
+            .object(["_tag": .string("attachment"), "attachmentId": .string(id),
+                     "fileName": .string(name), "mimeType": .string(mimeType), "disposition": .string("inline")])
         case let .attachment(id):
             .object([
                 "_tag": .string("attachment"),

@@ -10,6 +10,8 @@ public struct ThreadActivityFileRoute: Equatable, Sendable {
     public let path: [String]
     /// Absent unless the link points at a specific line.
     public let line: String?
+    /// Absolute host paths retain their leading separator outside Expo route segments.
+    public var absolutePath: String? = nil
 
     /// - Parameter activitySourceThreadID: Deliberately unused. Activity
     ///   provenance may come from a parent thread, but file routes stay scoped
@@ -29,7 +31,8 @@ public struct ThreadActivityFileRoute: Equatable, Sendable {
             // `split` drops empty segments, so a leading or doubled separator
             // does not produce a blank path component.
             path: relativePath.split(separator: "/").map(String.init),
-            line: resolvedLine
+            line: resolvedLine,
+            absolutePath: FeatureFilePreviewPath.isAbsolute(relativePath) ? relativePath : nil
         )
     }
 }

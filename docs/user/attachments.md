@@ -46,3 +46,19 @@ Downloading still saves the original image.
 
 Uploads show progress in the web composer. If an upload fails, retry it from its chip or
 remove it; the draft stays available. Older servers may accept smaller files.
+
+## Previewing documents and workspace files
+
+Open a PDF or HTML attachment to preview it inside T3 Code. Web and desktop show it in a
+file-panel tab; the native iOS app opens a document sheet. Separate uploads with the same
+name keep separate tabs. Uploaded documents remain available when their worktree is removed.
+Older connected servers may need an update before document previews are available.
+
+The file browser can show images, videos, PDFs and HTML pages. For HTML, switch between the
+rendered page and its source. Markdown images resolve relative to the document's folder.
+Files outside the project can be opened by their absolute path and are read-only.
+
+On web and desktop, completed file-changing tools refresh the open preview and file tree.
+Unsaved edits finish saving first, and playing videos keep their playhead until paused.
+On iOS, use Reload to fetch a fresh copy. If a document fails to load, its retry action gets
+a fresh preview URL.

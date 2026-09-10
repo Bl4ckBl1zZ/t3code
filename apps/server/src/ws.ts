@@ -2352,7 +2352,10 @@ const makeWsRpcLayer = (
                     : {}),
                 });
               }
-              if (input.resource._tag !== "workspace-file") {
+              if (
+                input.resource._tag !== "workspace-file" &&
+                input.resource._tag !== "media-file"
+              ) {
                 return yield* issueAssetUrl({ resource: input.resource });
               }
               const thread = yield* threadManagement

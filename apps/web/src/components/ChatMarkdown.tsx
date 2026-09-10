@@ -150,6 +150,7 @@ import {
 } from "../browser/openFileInPreview";
 
 interface ChatMarkdownProps {
+  imageBaseDir?: string | undefined;
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   text: string;
   cwd: string | undefined;
@@ -1631,6 +1632,8 @@ function areMarkdownFileLinkPropsEqual(
 }
 
 interface ChatMarkdownComponentsContext {
+  readonly hostFilePreviews: boolean;
+  readonly imageBaseDir: string | undefined;
   readonly onUseArtifactTemplate: ChatMarkdownProps["onUseArtifactTemplate"];
   readonly text: string;
   readonly cwd: string | undefined;
@@ -1719,8 +1722,10 @@ const STABLE_CHAT_MARKDOWN_COMPONENTS = Object.fromEntries(
 
 function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): Components {
   const {
+    hostFilePreviews,
     text,
     cwd,
+    imageBaseDir,
     inlineCodeFileLinkMetaByText,
     skills,
     threadRef,
@@ -1766,7 +1771,9 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         targetPath={fileLinkMeta.targetPath}
         iconPath={fileLinkMeta.filePath}
         displayPath={fileLinkMeta.displayPath}
-        workspaceRelativePath={fileLinkMeta.workspaceRelativePath}
+        workspaceRelativePath={
+          fileLinkMeta.workspaceRelativePath ?? (hostFilePreviews ? fileLinkMeta.filePath : null)
+        }
         line={fileLinkMeta.line}
         label={labelParts.join(" · ")}
         copyMarkdown={copyMarkdown}
@@ -1782,7 +1789,10 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         }
         revealLabel={revealInFileManagerLabel}
         onOpenInBrowser={
-          threadRef && isPreviewSupportedInRuntime() && isBrowserPreviewFile(fileLinkMeta.filePath)
+          threadRef &&
+          (fileLinkMeta.workspaceRelativePath !== null || hostFilePreviews) &&
+          isPreviewSupportedInRuntime() &&
+          isBrowserPreviewFile(fileLinkMeta.filePath)
             ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
             : undefined
         }
@@ -2056,6 +2066,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
           src={typeof src === "string" ? src : undefined}
           alt={alt}
           threadRef={threadRef}
+          baseDirectory={imageBaseDir}
         />
       );
     },
@@ -2064,6 +2075,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         <MarkdownMedia
           src={typeof src === "string" ? src : undefined}
           threadRef={threadRef}
+          baseDirectory={imageBaseDir}
           kind="video"
         />
       );
@@ -2116,6 +2128,7 @@ function ChatMarkdown({
   onUseArtifactTemplate,
   text,
   cwd,
+  imageBaseDir,
   threadRef,
   environmentId: explicitEnvironmentId,
   onTaskListChange,
@@ -2150,6 +2163,8 @@ function ChatMarkdown({
   const threadServerConfig = useAtomValue(
     serverEnvironment.configValueAtom(threadRef?.environmentId ?? environmentId),
   );
+  const hostFilePreviews =
+    threadServerConfig?.environment.capabilities.fileDocumentPreviews === true;
   const projects = useProjects();
   const availableEditors = serverConfig?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const [preferredEditor] = usePreferredEditor(availableEditors);
@@ -2330,12 +2345,13 @@ function ChatMarkdown({
       return openFileInPreview({
         threadRef,
         filePath: path,
+        ...(cwd ? { workspaceRoot: cwd } : {}),
         httpBaseUrl: preparedConnection.value.httpBaseUrl,
         createAssetUrl,
         openPreview,
       });
     },
-    [createAssetUrl, openPreview, preparedConnection, threadRef],
+    [createAssetUrl, cwd, openPreview, preparedConnection, threadRef],
   );
   const findWorkspaceBasenameMatch = useCallback(
     async (workspaceRelativePath: string) => {
@@ -2393,9 +2409,11 @@ function ChatMarkdown({
   const markdownComponents = useMemo<Components>(
     () =>
       createChatMarkdownComponents({
+        hostFilePreviews,
         onUseArtifactTemplate,
         text,
         cwd,
+        imageBaseDir,
         inlineCodeFileLinkMetaByText,
         skills,
         threadRef,
@@ -2420,6 +2438,8 @@ function ChatMarkdown({
     [
       canUseShellActions,
       cwd,
+      imageBaseDir,
+      hostFilePreviews,
       diffThemeName,
       fileLinkParentSuffixByPath,
       inlineCodeFileLinkMetaByText,

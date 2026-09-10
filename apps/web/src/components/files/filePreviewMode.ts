@@ -1,3 +1,4 @@
+import { isAbsolutePath } from "~/terminal-links";
 export const isMarkdownPreviewFile = (path: string): boolean => /\.(?:md|mdx)$/i.test(path);
 
 export function setMarkdownTaskChecked(
@@ -15,4 +16,15 @@ export function setMarkdownTaskChecked(
   }
 
   return `${markdown.slice(0, markerOffset + 1)}${checked ? "x" : " "}${markdown.slice(markerOffset + 2)}`;
+}
+
+export function shouldShowFileExplorer(input: {
+  readonly relativePath: string | null;
+  readonly explorerOpen: boolean;
+  readonly attachmentOpen: boolean;
+}): boolean {
+  if (input.attachmentOpen || (input.relativePath && isAbsolutePath(input.relativePath))) {
+    return false;
+  }
+  return input.explorerOpen || input.relativePath === null;
 }

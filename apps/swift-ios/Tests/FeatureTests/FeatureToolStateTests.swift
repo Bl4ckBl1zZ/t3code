@@ -21,6 +21,10 @@ struct FeatureToolStateTests {
     @Test
     func filePreviewKindUsesImageMarkdownAndSourceSemantics() {
         #expect(FeatureFilePreviewKind.infer(path: "art/hero.webp") == .image)
+        #expect(FeatureFilePreviewKind.infer(path: "demo.MP4") == .video)
+        #expect(FeatureFilePreviewKind.infer(path: "report.pdf") == .browserDocument)
+        #expect(FeatureFilePreviewKind.infer(path: "report.html") == .browserDocument)
+        #expect(FeatureFilePreviewKind.infer(path: "art/diagram.svg") == .browserDocument)
         #expect(FeatureFilePreviewKind.infer(path: "README.md") == .markdown)
         #expect(FeatureFilePreviewKind.infer(path: "Package.swift") == .source)
         #expect(FeatureFilePreviewKind.infer(path: "LICENSE") == .plainText)

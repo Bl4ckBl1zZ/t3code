@@ -1,3 +1,6 @@
+import { useCallback } from "react";
+import { useAtomQueryRunner } from "../state/use-atom-query-runner";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
@@ -71,4 +74,19 @@ export function useAssetUrls(
           ),
     [preparedConnection, resources, results],
   );
+}
+
+/** Explicit refresh for media replaced on disk, independent of ordinary signed-URL caching. */
+export function useAssetUrlRefresh(
+  environmentId: EnvironmentId,
+  resource: AssetResource,
+): () => Promise<void> {
+  const refresh = useAtomQueryRunner(assetEnvironment.createUrl, {
+    refresh: true,
+    reportFailure: false,
+  });
+  return useCallback(async () => {
+    const result = await refresh({ environmentId, input: { resource } });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+  }, [environmentId, resource, refresh]);
 }

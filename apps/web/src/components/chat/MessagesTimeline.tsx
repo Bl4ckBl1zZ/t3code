@@ -1383,7 +1383,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       }}
                     />
                   ) : (
-                    <MessageFileAttachmentTile attachment={attachment} />
+                    <MessageFileAttachmentTile attachment={attachment} threadRef={ctx.threadRef} />
                   )}
                   <MessageAttachmentPlacement
                     attachment={attachment}

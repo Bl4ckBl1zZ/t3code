@@ -40,7 +40,7 @@ public struct FeatureFilesView: View {
     /// again; a route with no segments names no file and opens the tree root.
     static func destination(for route: ThreadActivityFileRoute) -> (path: String?, line: Int?) {
         (
-            path: route.path.isEmpty ? nil : route.path.joined(separator: "/"),
+            path: route.absolutePath ?? (route.path.isEmpty ? nil : route.path.joined(separator: "/")),
             line: route.line.flatMap(Int.init)
         )
     }
@@ -81,10 +81,10 @@ public struct FeatureFilesView: View {
     /// names no file and opens the tree root instead.
     static func deepLinkedEntry(path: String?) -> FeatureFileEntry? {
         guard let path else { return nil }
-        let segments = path.split(separator: "/").map(String.init)
+        let segments = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).map(String.init)
         guard let name = segments.last else { return nil }
         return FeatureFileEntry(
-            path: segments.joined(separator: "/"),
+            path: FeatureFilePreviewPath.isAbsolute(path) ? path : segments.joined(separator: "/"),
             name: name,
             kind: .file
         )
@@ -214,6 +214,8 @@ private struct FeatureFileRow: View {
         case .symbolicLink: "link"
         case .file:
             switch FeatureFilePreviewKind.infer(path: entry.path) {
+            case .video: "film"
+            case .browserDocument: "doc.richtext"
             case .image: "photo"
             case .markdown: "doc.richtext"
             case .source: entry.name.hasSuffix(".swift") ? "swift" : "chevron.left.forwardslash.chevron.right"
@@ -232,6 +234,8 @@ private struct FeatureFilePreviewView: View {
     var focusedLine: Int?
 
     @State private var content: FeatureFileContent?
+    @AppStorage("t3.files.renderHTML") private var renderHTML = true
+    @State private var revealDismissed = false
     @State private var sourceLines: [FeatureSourceLine] = []
     @State private var image: UIImage?
     @State private var assetURL: URL?
@@ -242,11 +246,22 @@ private struct FeatureFilePreviewView: View {
         FeatureFilePreviewKind.infer(path: entry.path, language: content?.language)
     }
 
+    private var isHTML: Bool { ["html", "htm"].contains(URL(fileURLWithPath: entry.path).pathExtension.lowercased()) }
+    private var showDocument: Bool { previewKind == .browserDocument && (!isHTML || (renderHTML && (focusedLine == nil || revealDismissed))) }
+
     var body: some View {
         Group {
-            if isLoading, content == nil, image == nil {
+            if isLoading, content == nil, image == nil, assetURL == nil {
                 ProgressView("Loading file…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let assetURL, previewKind == .video {
+                FeatureInlineVideoView(url: assetURL, title: entry.name)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black)
+            } else if let assetURL, showDocument {
+                FeatureBrowserDocumentView(url: assetURL, refreshURL: {
+                    guard let resolver = client as? any FeatureWorkspaceAssetResolving else { throw FeatureCapabilityUnavailable("File previews") }
+                    return try await resolver.workspaceAssetURL(threadID: threadID, path: entry.path)
+                })
             } else if let image {
                 FeatureZoomableImageView(image: image)
                     .background(Color.black)
@@ -265,15 +280,16 @@ private struct FeatureFilePreviewView: View {
                     case .markdown:
                         ScrollView {
                             MarkdownMessageView(content.text)
+                                .environment(\.markdownMediaContext, MarkdownMediaContext(threadID: threadID, client: client, baseDirectory: FeatureFilePreviewPath.parent(entry.path)))
                                 .frame(maxWidth: T3Metrics.readingWidth, alignment: .leading)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 18)
                                 .padding(.vertical, 16)
                         }
                         .scrollDismissesKeyboard(.interactively)
-                    case .source, .plainText:
+                    case .source, .plainText, .browserDocument:
                         FeatureSourceTextView(lines: sourceLines, focusedLine: focusedLine)
-                    case .image:
+                    case .image, .video:
                         EmptyView()
                     }
                 }
@@ -289,6 +305,18 @@ private struct FeatureFilePreviewView: View {
         .navigationTitle(entry.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if isHTML {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(showDocument ? "Show HTML source" : "Show rendered page", systemImage: showDocument ? "chevron.left.forwardslash.chevron.right" : "eye") {
+                        renderHTML = !showDocument
+                        revealDismissed = true
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Reload file", systemImage: "arrow.clockwise") { Task { await load() } }.disabled(isLoading)
+            }
+            if !FeatureFilePreviewPath.isAbsolute(entry.path) {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     ForEach(FeatureFilesView.containingDirectories(path: entry.path)) { directory in
@@ -306,13 +334,14 @@ private struct FeatureFilePreviewView: View {
                 .accessibilityLabel("Browse containing folder")
                 .accessibilityIdentifier("file-preview-folders")
             }
+            }
 
             if let assetURL {
                 ToolbarItem(placement: .topBarTrailing) {
                     ShareLink(item: assetURL) {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .accessibilityLabel("Share image")
+                    .accessibilityLabel("Share file")
                 }
             } else if let content {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -323,14 +352,19 @@ private struct FeatureFilePreviewView: View {
                 }
             }
         }
-        .task { await load() }
+        .task(id: showDocument) { await load() }
     }
 
     private func load() async {
         isLoading = true
         defer { isLoading = false }
         do {
-            if previewKind == .image {
+            if previewKind == .video || showDocument {
+                guard let resolver = client as? any FeatureWorkspaceAssetResolving else { throw FeatureCapabilityUnavailable("File previews") }
+                let url = try await resolver.workspaceAssetURL(threadID: threadID, path: entry.path)
+                guard !Task.isCancelled else { return }
+                assetURL = url; content = nil; image = nil; sourceLines = []
+            } else if previewKind == .image {
                 guard let resolver = client as? any FeatureWorkspaceAssetResolving else {
                     throw FeatureCapabilityUnavailable("Signed image previews")
                 }
@@ -364,7 +398,7 @@ private struct FeatureFilePreviewView: View {
                 )
                 let lines: [FeatureSourceLine]
                 switch loadedKind {
-                case .source:
+                case .source, .browserDocument:
                     lines = await Task.detached(priority: .userInitiated) {
                         FeatureSourceHighlighter.lines(
                             text: loaded.text,
@@ -380,7 +414,7 @@ private struct FeatureFilePreviewView: View {
                         for: MarkdownContentRevision(loaded.text)
                     )
                     lines = []
-                case .image:
+                case .image, .video:
                     lines = []
                 }
                 guard !Task.isCancelled else { return }

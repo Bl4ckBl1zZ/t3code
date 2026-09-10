@@ -8,7 +8,7 @@
  * workspace paths, and diff/files remain singleton surfaces.
  */
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ChatAttachment, ScopedThreadRef } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -44,6 +44,7 @@ export type RightPanelSurface =
       id: `file:${string}`;
       kind: "file";
       relativePath: string;
+      attachment?: ChatAttachment;
       revealLine: number | null;
       revealRequestId: number;
     }
@@ -107,6 +108,7 @@ interface RightPanelStoreState {
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
+  openAttachment: (ref: ScopedThreadRef, attachment: ChatAttachment) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
@@ -541,6 +543,20 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return upsertSurface(current, pullRequestSurface(target));
           }),
         ),
+      openAttachment: (ref, attachment) =>
+        set((state) =>
+          userAction(state, ref, (current) => {
+            const surface: RightPanelSurface = {
+              id: `file:attachment:${attachment.id}`,
+              kind: "file",
+              relativePath: attachment.name,
+              attachment,
+              revealLine: null,
+              revealRequestId: 0,
+            };
+            return upsertSurface(current, surface);
+          }),
+        ),
       openFile: (ref, relativePath, line) =>
         set((state) =>
           userAction(state, ref, (current) => {
@@ -742,7 +758,9 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           updateThread(state, ref, (current) => {
             if (workspaceAvailable) return current;
             const surfaces = current.surfaces.filter(
-              (surface) => surface.kind !== "files" && surface.kind !== "file",
+              (surface) =>
+                surface.kind !== "files" &&
+                (surface.kind !== "file" || surface.attachment !== undefined),
             );
             if (surfaces.length === current.surfaces.length) return current;
             const activeStillExists = surfaces.some(

@@ -1,3 +1,7 @@
+import { useAtomValue } from "@effect/atom-react";
+import { serverEnvironment } from "../../state/server";
+import { useRightPanelStore } from "../../rightPanelStore";
+import { isBrowserPreviewFile } from "../../browser/openFileInPreview";
 /**
  * A non-media attachment inside a sent message bubble.
  *
@@ -12,7 +16,7 @@
  * attachment with no `previewUrl` is unrenderable as media, and a labelled file
  * row says more than a stretched empty box.
  */
-import type { ChatAttachment } from "@t3tools/contracts";
+import type { ChatAttachment, ScopedThreadRef } from "@t3tools/contracts";
 import { formatAttachmentSize, middleTruncateFileName } from "@t3tools/shared/composerAttachments";
 
 import { useTheme } from "../../hooks/useTheme";
@@ -25,12 +29,21 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 const NAME_MAX_CHARS = 26;
 
 export function MessageFileAttachmentTile(props: {
+  readonly threadRef?: ScopedThreadRef | null;
   readonly attachment: Pick<ChatAttachment, "type" | "name" | "mimeType" | "sizeBytes"> & {
     readonly previewUrl?: string | undefined;
+    readonly id?: string;
   };
   readonly className?: string;
 }) {
-  const { attachment } = props;
+  const { attachment, threadRef } = props;
+  const config = useAtomValue(serverEnvironment.configValueAtom(threadRef?.environmentId ?? null));
+  const canPreview =
+    threadRef != null &&
+    attachment.id !== undefined &&
+    (attachment.type === "pdf" || attachment.type === "file") &&
+    isBrowserPreviewFile(attachment.name) &&
+    config?.environment.capabilities.fileDocumentPreviews === true;
   const { resolvedTheme } = useTheme();
   const kind = attachmentKindLabel(attachment);
   const size = formatAttachmentSize(attachment.sizeBytes);
@@ -64,6 +77,42 @@ export function MessageFileAttachmentTile(props: {
   // The full name goes on the tooltip because the visible one is truncated, and
   // on the accessible name because a screen reader should not have to read the
   // ellipsis either.
+  if (canPreview) {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              className={cn(
+                shared,
+                "w-full hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
+              )}
+              aria-label={`Preview ${attachment.name}, ${kind}, ${size}`}
+              onClick={() => {
+                if (
+                  !threadRef ||
+                  !attachment.id ||
+                  (attachment.type !== "file" && attachment.type !== "pdf")
+                )
+                  return;
+                useRightPanelStore.getState().openAttachment(threadRef, {
+                  id: attachment.id,
+                  type: attachment.type,
+                  name: attachment.name,
+                  mimeType: attachment.mimeType,
+                  sizeBytes: attachment.sizeBytes,
+                });
+              }}
+            />
+          }
+        >
+          {body}
+        </TooltipTrigger>
+        <TooltipPopup side="top">{attachment.name}</TooltipPopup>
+      </Tooltip>
+    );
+  }
   if (attachment.previewUrl === undefined) {
     return (
       <Tooltip>

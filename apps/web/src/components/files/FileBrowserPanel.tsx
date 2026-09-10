@@ -1,3 +1,4 @@
+import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import type {
   ContextMenuItem as TreeContextMenuItem,
   ContextMenuOpenContext as TreeContextMenuOpenContext,
@@ -24,6 +25,7 @@ import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTree
 import { useProjectEntriesQuery } from "./projectFilesQueryState";
 
 interface FileBrowserPanelProps {
+  workspaceMutationId?: string | null;
   environmentId: EnvironmentId;
   cwd: string;
   projectName: string;
@@ -108,10 +110,16 @@ export default function FileBrowserPanel({
   selectedPathRevealId,
   onOpenFile,
   onRefreshSelectedFile,
+  workspaceMutationId = null,
 }: FileBrowserPanelProps) {
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
   const entriesQuery = useProjectEntriesQuery(environmentId, cwd);
+  useWorkspaceMutationRefresh({
+    mutationId: workspaceMutationId,
+    resourceKey: `entries:${environmentId}:${cwd}`,
+    refresh: entriesQuery.refresh,
+  });
   const entries = entriesQuery.data?.entries ?? [];
   const entryKinds = useMemo(
     () => new Map(entries.map((entry) => [entry.path, entry.kind] as const)),

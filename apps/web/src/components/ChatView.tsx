@@ -1,3 +1,4 @@
+import { latestWorkspaceMutationId } from "../hooks/useWorkspaceMutationRefresh";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { resolveRestingComposerInset } from "./chat/composerRestingState";
 import {
@@ -2856,6 +2857,10 @@ function ChatViewContent(props: ChatViewProps) {
       return next;
     });
   }, []);
+  const workspaceMutationId = useMemo(
+    () => latestWorkspaceMutationId(serverVisibleTurnItems),
+    [serverVisibleTurnItems],
+  );
   const committedServerAttachmentIds = useMemo(() => {
     const attachmentIds = new Set<string>();
     for (const row of serverVisibleTurnItems) {
@@ -7732,14 +7737,15 @@ function ChatViewContent(props: ChatViewProps) {
       />
     ) : (renderedRightPanelSurface?.kind === "files" ||
         renderedRightPanelSurface?.kind === "file") &&
-      activeProject &&
-      activeWorkspaceRoot ? (
+      ((renderedRightPanelSurface.kind === "file" &&
+        renderedRightPanelSurface.attachment !== undefined) ||
+        (activeProject && activeWorkspaceRoot)) ? (
       <Suspense fallback={null}>
         <FilePreviewPanel
-          key={`${activeProject.environmentId}:${activeWorkspaceRoot}`}
-          environmentId={activeProject.environmentId}
-          cwd={activeWorkspaceRoot}
-          projectName={activeProject.title}
+          key={`${activeThreadRef.environmentId}:${activeWorkspaceRoot ?? "attachments"}`}
+          environmentId={activeThreadRef.environmentId}
+          cwd={activeWorkspaceRoot ?? activeProject?.workspaceRoot ?? ""}
+          projectName={activeProject?.title ?? "Attachments"}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
@@ -7753,6 +7759,13 @@ function ChatViewContent(props: ChatViewProps) {
           revealRequestId={activeFileSurface?.revealRequestId ?? 0}
           onOpenFile={openFileSurface}
           onPendingChange={handleFilePendingChange}
+          attachment={
+            renderedRightPanelSurface.kind === "file"
+              ? renderedRightPanelSurface.attachment
+              : undefined
+          }
+          workspaceMutationId={workspaceMutationId}
+          selectedFilePending={pendingFileSurfaceIds.has(renderedRightPanelSurface.id)}
         />
       </Suspense>
     ) : null

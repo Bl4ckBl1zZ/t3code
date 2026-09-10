@@ -955,3 +955,26 @@ segments. Linked badges remain links; remote image links open their full-size ta
 keys release signed URLs when images unmount. Repeated images retain the clicked occurrence,
 and navigation wraps correctly after any number of backward steps. The native Markdown
 renderer already supplies a paged gallery with adjacent-page loading and needs no duplicate UI.
+
+### File and document previews (2026-09-10 parity port)
+
+The reviewed upstream file-preview behavior is integrated with the fork's file surfaces and
+unified image/pdf/video/file attachments. Web/desktop show PDF/HTML attachments in distinct
+ID-keyed tabs, even without an active workspace, and render workspace videos, PDF/HTML pages
+and source toggles. Absolute host paths are read-only. Markdown images resolve relative to
+the file's directory. Native iOS gains video/document file previews, HTML/source switching,
+a document-attachment sheet, load/retry states, and signed-URL renewal, using its existing
+navigation shell and video renderer. Native file previews refresh explicitly with Reload.
+
+Host-media access uses an exact, canonical file capability bound to device/inode and an open
+descriptor. Renaming/replacing a path cannot change an in-flight full or ranged response;
+atomic replacements require a fresh URL. Existing workspace sibling-asset capabilities,
+V2 purged-worktree checks and the fork's browser-artifact route remain. Explicit absolute
+text-file reads are bounded to 1 MiB and never enable out-of-workspace writes. Inline document
+attachments require a stored PDF/HTML extension; a supplied MIME type cannot make an archive
+render as HTML. Served HTML receives an opaque-origin sandbox policy.
+
+`fileDocumentPreviews` gates the new host/document operations and is mirrored in Swift with
+schema-generated wire fixtures. V2 completed file-change/command items drive web refreshes,
+including failed commands and out-of-order completions. Local pending saves defer refreshes;
+no V1 activity import or observer is used. Existing native media galleries are retained.

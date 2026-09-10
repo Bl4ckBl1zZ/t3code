@@ -15,6 +15,11 @@ export const AssetResource = Schema.Union([
     threadId: ThreadId,
     path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
+  /** An exact identity-checked host file, relative to the thread workspace or absolute. */
+  Schema.TaggedStruct("media-file", {
+    threadId: ThreadId,
+    path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+  }),
   Schema.TaggedStruct("attachment", {
     attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
     /** Display name and mime from the `ChatAttachment` the caller holds. The
@@ -23,6 +28,7 @@ export const AssetResource = Schema.Union([
         an octet-stream download without a filename. */
     fileName: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
     mimeType: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
+    disposition: Schema.optionalKey(Schema.Literals(["inline", "attachment"])),
   }),
   /** A file in the server's browser-artifacts directory (screenshots/recordings). */
   Schema.TaggedStruct("browser-artifact", {
