@@ -13,3 +13,22 @@ Changes appear on your other connected clients. Icon editing requires a server t
 
 Use **Reset** to return to automatic detection. On iOS, tap **Save** after resetting.
 Project image files can be SVG, PNG, ICO, JPEG, GIF, AVIF, or WebP.
+
+## Automatic pulls
+
+Turn on **Automatically pull** to keep a clean default-branch checkout current.
+T3 pulls only when the branch has an upstream, is behind, has no local commits,
+and has no working-tree changes. Pulls only fast-forward. Feature branches and
+dirty checkouts are left alone; a failed pull leaves status usable and can retry
+on a later refresh.
+
+Web and desktop expose the machine default in **Settings → General** and a
+per-project choice in project settings. **Machine default** restores inheritance;
+**Off** remains off even when the default is on. Group changes apply to its
+checkouts on connected, supported machines. Offline machines retain their settings.
+
+On iOS, open **Settings → Automatic project pulls**, choose a machine, and change
+its default or individual project overrides. The choices are shared with other
+clients connected to that machine. Background refreshes respect the machine’s
+background activity policy; an explicit source-control refresh also checks for a
+pull. Enabled projects are also refreshed once when the server starts. The default is off.

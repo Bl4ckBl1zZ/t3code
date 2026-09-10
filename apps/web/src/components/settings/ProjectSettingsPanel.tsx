@@ -1,3 +1,4 @@
+import { ProjectAutoPullSettings } from "./ProjectAutoPullSettings";
 import type { ProjectIconOverride } from "@t3tools/contracts";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { ProjectIconPickerDialog } from "./ProjectIconPickerDialog";
@@ -915,6 +916,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               )
             }
           />
+          <ProjectAutoPullSettings projects={group.memberProjects} />
           <SettingsRow
             title="Workspace"
             description="Where new threads in this project start. Overrides t3.json and the global default; applies to every checkout in this group."

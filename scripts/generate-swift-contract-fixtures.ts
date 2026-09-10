@@ -20,6 +20,8 @@ import { formatAssistantCitationHref } from "../packages/shared/src/assistantCit
  *   node scripts/generate-swift-contract-fixtures.ts --check   # CI: fail if stale
  */
 import {
+  ServerSettings,
+  ServerSettingsPatch,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   AssistantCitation,
@@ -1179,3 +1181,36 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(filePreviewFixturePath, filePreviewFixture);
+
+const autoPullFixturePath = NodePath.join(NodePath.dirname(outputPath), "projectAutoPull.json");
+const autoPullFixture = `${JSON.stringify(
+  {
+    patch: Schema.encodeSync(ServerSettingsPatch)({
+      defaultAutoPull: true,
+      projectAutoPullOverrides: { [ProjectId.make("off")]: false, [ProjectId.make("reset")]: null },
+    }),
+    settings: Schema.encodeSync(ServerSettings)(
+      Schema.decodeSync(ServerSettings)({
+        defaultAutoPull: true,
+        projectAutoPullOverrides: { off: false },
+      }),
+    ),
+    capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
+      repositoryIdentity: true,
+      projectAutoPull: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(autoPullFixturePath) ||
+    NodeFS.readFileSync(autoPullFixturePath, "utf8") !== autoPullFixture
+  ) {
+    console.error("[swift-fixtures] projectAutoPull.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(autoPullFixturePath, autoPullFixture);
+}

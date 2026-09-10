@@ -72,6 +72,7 @@ export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Exact host media and read-only host text previews, plus inline document attachments. */
+  projectAutoPull: Schema.optionalKey(Schema.Boolean),
   fileDocumentPreviews: Schema.optionalKey(Schema.Boolean),
   /** Bounded CLI transcript discovery and V2 history import. */
   agentSessionImport: Schema.optionalKey(Schema.Boolean),

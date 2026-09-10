@@ -1,3 +1,5 @@
+import { resolveProjectAutoPull } from "@t3tools/shared/serverSettings";
+import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -393,6 +395,38 @@ const awaitServerActivation = ServerActivation.pipe(
   Effect.flatMap((activation) => activation ?? Effect.void),
 );
 
+/** A one-time refresh after activation, before recovered provider effects can run. */
+export const autoPullProjects = Effect.gen(function* () {
+  const projects = yield* ProjectService.ProjectService;
+  const settingsService = yield* ServerSettings.ServerSettingsService;
+  const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const settings = yield* settingsService.getSettings;
+  if (!settings.defaultAutoPull && !Object.values(settings.projectAutoPullOverrides).some(Boolean))
+    return;
+  const snapshot = yield* projects.snapshot;
+  const roots = [
+    ...new Set(
+      snapshot.projects
+        .filter((project) => resolveProjectAutoPull(settings, project.id))
+        .map((project) => project.workspaceRoot),
+    ),
+  ];
+  yield* Effect.forEach(
+    roots,
+    (cwd) =>
+      broadcaster
+        .refreshStatus(cwd)
+        .pipe(
+          Effect.catch((cause) => Effect.logWarning("Startup project pull failed", { cwd, cause })),
+        ),
+    { concurrency: 4, discard: true },
+  );
+}).pipe(
+  Effect.catch((cause) =>
+    Effect.logWarning("Failed to load projects for automatic pull", { cause }),
+  ),
+);
+
 export const make = (options?: StartupOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
@@ -580,7 +614,10 @@ export const make = (options?: StartupOptions) =>
             // The worker drains the durable effect outbox, which is exactly what
             // an uncommitted trial must not do, so park it until activation. The
             // fiber still starts here so shutdown owns a handle to interrupt.
-            runWorker: awaitServerActivation.pipe(Effect.andThen(EffectWorker.runDaemon)),
+            runWorker: awaitServerActivation.pipe(
+              Effect.andThen(runStartupPhase("projects.auto-pull", autoPullProjects)),
+              Effect.andThen(EffectWorker.runDaemon),
+            ),
             startRelay: agentAwarenessRelay.start(),
             workerFiberRef: effectWorkerFiber,
           }),

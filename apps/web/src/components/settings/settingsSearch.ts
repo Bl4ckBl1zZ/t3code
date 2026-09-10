@@ -50,6 +50,12 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
  */
 export const SETTINGS_SEARCH_ITEMS = [
   {
+    id: "automatic-project-pull",
+    title: "Automatically pull",
+    to: "/settings/general",
+    searchTerms: ["git", "clean", "default branch", "project", "fast forward"],
+  },
+  {
     id: "diff-color-scheme",
     title: "Diff colors",
     to: "/settings/appearance",

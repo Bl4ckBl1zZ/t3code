@@ -1,3 +1,4 @@
+import { ProjectAutoPullSettings } from "./ProjectAutoPullSettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { type EnvironmentId } from "@t3tools/contracts";
 import { useEnvironments } from "../../state/environments";
@@ -2730,6 +2731,8 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        <ProjectAutoPullSettings />
 
         <SettingsRow
           {...searchableSetting("new-threads")}

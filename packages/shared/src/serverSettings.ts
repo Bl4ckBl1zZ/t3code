@@ -3,6 +3,7 @@ import {
   isProviderAvailable,
   resolveProviderInstanceEnabled,
   type ModelSelection,
+  type ProjectId,
   type ProviderDriverKind,
   type ServerProvider,
   ServerSettings,
@@ -19,6 +20,14 @@ import {
   normalizeServerBackgroundActivitySettings,
   resolveBackgroundActivitySettings,
 } from "./backgroundActivitySettings.ts";
+
+/** Explicit project choices override the environment default; null patches restore inheritance. */
+export function resolveProjectAutoPull(
+  settings: Pick<ServerSettings, "defaultAutoPull" | "projectAutoPullOverrides">,
+  projectId: ProjectId,
+): boolean {
+  return settings.projectAutoPullOverrides[projectId] ?? settings.defaultAutoPull;
+}
 
 const ServerSettingsJson = fromLenientJson(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
@@ -133,6 +142,7 @@ export function applyServerSettingsPatch(
     backgroundActivityProfile,
     backgroundActivity,
     usagePriceOverrides: pricePatch,
+    projectAutoPullOverrides: autoPullPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -176,9 +186,15 @@ export function applyServerSettingsPatch(
     if (price === null) delete usagePriceOverrides[model];
     else usagePriceOverrides[model] = price;
   }
+  const projectAutoPullOverrides = { ...current.projectAutoPullOverrides };
+  for (const [projectId, enabled] of Object.entries(autoPullPatch ?? {})) {
+    if (enabled === null) delete projectAutoPullOverrides[projectId as ProjectId];
+    else projectAutoPullOverrides[projectId as ProjectId] = enabled;
+  }
   const nextWithReplacementsBase = {
     ...next,
     usagePriceOverrides,
+    projectAutoPullOverrides,
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {

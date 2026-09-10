@@ -13,6 +13,7 @@ public struct SettingsView: View {
     @State private var showingIntegrations = false
     @State private var showingAgents = false
     @State private var showingSetup = false
+    @State private var showingProjectDefaults = false
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
     @State private var showingHermesRuns = false
@@ -117,6 +118,12 @@ public struct SettingsView: View {
                         showingAddEnvironment = false
                     }
                 )
+            }
+            .sheet(isPresented: $showingProjectDefaults) {
+                NavigationStack {
+                    SettingsProjectAutoPullView(model: model)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingProjectDefaults = false } } }
+                }
             }
             .sheet(isPresented: $showingEnvironmentIcons) {
                 NavigationStack {
@@ -460,6 +467,11 @@ public struct SettingsView: View {
     private var configurationSection: some View {
         SettingsSection(title: "Features") {
             VStack(spacing: 0) {
+                Button { showingProjectDefaults = true } label: {
+                    SettingsNavigationRow(title: "Automatic project pulls", systemImage: "arrow.down.circle")
+                }.buttonStyle(.plain)
+                settingsDivider
+
                 Button { showingSetup = true } label: {
                     SettingsNavigationRow(title: "Set up T3 Code", systemImage: "checklist")
                 }.buttonStyle(.plain)

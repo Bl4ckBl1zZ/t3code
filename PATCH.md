@@ -978,3 +978,16 @@ render as HTML. Served HTML receives an opaque-origin sandbox policy.
 schema-generated wire fixtures. V2 completed file-change/command items drive web refreshes,
 including failed commands and out-of-order completions. Local pending saves defer refreshes;
 no V1 activity import or observer is used. Existing native media galleries are retained.
+
+## Automatic project pulls
+
+Upstream clean-default-branch pulling is ported through the fork's VCS broadcaster
+and ProjectService, with no V1 thread query or migration. Server settings carry an
+off-by-default machine preference and sparse project overrides; null removes one
+override without replacing others. The fork’s project aggregate supplies the policy.
+Canonical-workspace locks serialize refreshes and pulls, and existing fast-forward-only
+Git operations preserve local commits. Web/desktop and Swift expose defaults plus
+on/off/inherit, guarded by `projectAutoPull` on older servers. Upstream's turn-end
+PR refresh and discovery remain separate ports. Startup refreshes enabled projects
+once after managed-update activation and before the V2 effect worker drains recovered
+provider work; no checkout mutation runs in an uncommitted update trial.

@@ -265,6 +265,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// Opaque envelopes preserve unknown driver fields while editing one account's models.
     public let providerInstances: [String: JSONValue]
     public let providerDefinitions: [String: JSONValue]
+    public let defaultAutoPull: Bool
+    public let projectAutoPullOverrides: [String: Bool]
     public let environmentIcon: String?
     public let usagePriceOverrides: [String: UsageModelPriceOverride]?
     /// The default window matching `DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS` in
@@ -307,6 +309,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public init(
         providerInstances: [String: JSONValue] = [:],
         providerDefinitions: [String: JSONValue] = [:],
+        defaultAutoPull: Bool = false,
+        projectAutoPullOverrides: [String: Bool] = [:],
         environmentIcon: String? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
@@ -324,6 +328,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     ) {
         self.providerInstances = providerInstances
         self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
+        self.defaultAutoPull = defaultAutoPull
+        self.projectAutoPullOverrides = projectAutoPullOverrides
         self.environmentIcon = environmentIcon
         self.usagePriceOverrides = usagePriceOverrides
         self.defaultThreadEnvMode = defaultThreadEnvMode
@@ -339,6 +345,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case providerInstances
+        case defaultAutoPull, projectAutoPullOverrides
         case environmentIcon
         case usagePriceOverrides
         case defaultThreadEnvMode
@@ -366,6 +373,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         providerInstances = try container.decodeIfPresent([String: JSONValue].self, forKey: .providerInstances) ?? [:]
+        defaultAutoPull = try container.decodeIfPresent(Bool.self, forKey: .defaultAutoPull) ?? false
+        projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
         environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
         usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
         defaultThreadEnvMode = try container.decode(
@@ -407,6 +416,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(providerInstances, forKey: .providerInstances)
+        try container.encode(defaultAutoPull, forKey: .defaultAutoPull)
+        try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
         try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
         try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
         try container.encode(defaultThreadEnvMode, forKey: .defaultThreadEnvMode)
@@ -435,6 +446,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// whatever another client changed in between. Add a field here — and one line
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
+    public var defaultAutoPull: Bool?
+    public var projectAutoPullOverrides: [String: Bool?]?
     public var providerInstances: [String: JSONValue]?
     public var customModelsByDriver: [String: [JSONValue]]?
     /// A present nil entry resets one model. Omitted models are unchanged.
@@ -449,6 +462,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var hiddenModelsByProvider: [String: [String]]?
 
     public init(
+        defaultAutoPull: Bool? = nil,
+        projectAutoPullOverrides: [String: Bool?]? = nil,
         providerInstances: [String: JSONValue]? = nil,
         customModelsByDriver: [String: [JSONValue]]? = nil,
         environmentIcon: String?? = nil,
@@ -457,6 +472,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         claudeAutoCompactWindow: String? = nil,
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
+        self.defaultAutoPull = defaultAutoPull
+        self.projectAutoPullOverrides = projectAutoPullOverrides
         self.providerInstances = providerInstances
         self.customModelsByDriver = customModelsByDriver
         self.environmentIcon = environmentIcon
@@ -468,6 +485,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
 
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
+        if let defaultAutoPull { fields["defaultAutoPull"] = .bool(defaultAutoPull) }
+        if let projectAutoPullOverrides { fields["projectAutoPullOverrides"] = .object(projectAutoPullOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
         if let environmentIcon { fields["environmentIcon"] = environmentIcon.map(JSONValue.string) ?? .null }
         if let enableHermes { fields["enableHermes"] = .bool(enableHermes) }
         if let enableAgentBrowserAccess {

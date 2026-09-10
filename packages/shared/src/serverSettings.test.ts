@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -10,6 +11,7 @@ import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySet
 import { createModelSelection } from "./model.ts";
 import {
   applyServerSettingsPatch,
+  resolveProjectAutoPull,
   extractPersistedServerObservabilitySettings,
   isModelSelectionProviderEnabled,
   normalizePersistedServerSettingString,
@@ -587,4 +589,32 @@ it("patches model prices per entry and replaces optional cache rates", () => {
   expect(
     applyServerSettingsPatch(second, { usagePriceOverrides: { one: null } }).usagePriceOverrides,
   ).toEqual({ two: first.usagePriceOverrides.two });
+});
+
+describe("project automatic pull preferences", () => {
+  it("defaults off and preserves explicit off when the machine default is on", () => {
+    const project = ProjectId.make("project");
+    expect(resolveProjectAutoPull(DEFAULT_SERVER_SETTINGS, project)).toBe(false);
+    const defaults = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { defaultAutoPull: true });
+    expect(resolveProjectAutoPull(defaults, project)).toBe(true);
+    const overridden = applyServerSettingsPatch(defaults, {
+      projectAutoPullOverrides: { [project]: false },
+    });
+    expect(resolveProjectAutoPull(overridden, project)).toBe(false);
+    expect(resolveProjectAutoPull(overridden, ProjectId.make("another"))).toBe(true);
+  });
+  it("sparse edits and resets preserve other project overrides", () => {
+    const a = ProjectId.make("a"),
+      b = ProjectId.make("b");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      projectAutoPullOverrides: { [a]: true, [b]: false },
+    });
+    const reset = applyServerSettingsPatch(initial, { projectAutoPullOverrides: { [a]: null } });
+    expect(reset.projectAutoPullOverrides).toEqual({ [b]: false });
+    expect(initial.projectAutoPullOverrides).toEqual({ [a]: true, [b]: false });
+    expect(resolveProjectAutoPull(reset, a)).toBe(false);
+    expect(
+      applyServerSettingsPatch(reset, { defaultAutoPull: true }).projectAutoPullOverrides[b],
+    ).toBe(false);
+  });
 });

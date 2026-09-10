@@ -1,3 +1,4 @@
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import { assert, it, describe } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Cause from "effect/Cause";
@@ -6,6 +7,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -21,7 +23,7 @@ import type {
   VcsStatusResult,
   VcsStatusStreamEvent,
 } from "@t3tools/contracts";
-import { GitManagerError } from "@t3tools/contracts";
+import { GitCommandError, GitManagerError } from "@t3tools/contracts";
 
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
@@ -142,6 +144,176 @@ function makeBackgroundPolicyLayer(shouldRunScopeWork: (scope: BackgroundScope) 
 }
 
 describe("VcsStatusBroadcaster", () => {
+  it.effect("an initial status read cannot overwrite an explicit refresh", () => {
+    const firstReadStarted = Deferred.makeUnsafe<void>();
+    const releaseFirstRead = Deferred.makeUnsafe<void>();
+    let remoteReads = 0;
+    const layer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) })),
+      Layer.provideMerge(NodeServices.layer),
+      Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          localStatus: () => Effect.succeed(baseLocalStatus),
+          remoteStatus: () =>
+            Effect.gen(function* () {
+              remoteReads += 1;
+              if (remoteReads === 1) {
+                yield* Deferred.succeed(firstReadStarted, undefined);
+                yield* Deferred.await(releaseFirstRead);
+                return baseRemoteStatus;
+              }
+              return remoteStatusWithPr;
+            }),
+          invalidateStatus: () => Effect.void,
+        }),
+      ),
+    );
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const initial = yield* broadcaster.getStatus({ cwd: "/repo" }).pipe(Effect.forkScoped);
+      yield* Deferred.await(firstReadStarted);
+      const refresh = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
+      // Run ready fibers before releasing the delayed first read.
+      yield* TestClock.adjust(Duration.zero);
+      yield* Deferred.succeed(releaseFirstRead, undefined);
+      yield* Fiber.join(initial);
+      yield* Fiber.join(refresh);
+      assert.deepStrictEqual(
+        (yield* broadcaster.getStatus({ cwd: "/repo" })).pr,
+        remoteStatusWithPr.pr,
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
+
+  for (const scenario of [
+    "disabled",
+    "dirty",
+    "feature",
+    "ahead",
+    "no-upstream",
+    "current",
+    "failure",
+  ] as const) {
+    it.effect(`automatic pull respects ${scenario}`, () => {
+      let pulls = 0;
+      const local = {
+        ...baseLocalStatus,
+        isDefaultRef: scenario !== "feature",
+        hasWorkingTreeChanges: scenario === "dirty",
+      };
+      const remote = {
+        ...baseRemoteStatus,
+        behindCount: scenario === "current" ? 0 : 2,
+        aheadCount: scenario === "ahead" ? 1 : 0,
+        hasUpstream: scenario !== "no-upstream",
+      };
+      return Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const result = yield* broadcaster.refreshStatus("/repo");
+        assert.equal(result.behindCount, remote.behindCount);
+        assert.equal(pulls, scenario === "failure" ? 1 : 0);
+      }).pipe(
+        Effect.provide(
+          VcsStatusBroadcaster.layer.pipe(
+            Layer.provide(NodeServices.layer),
+            Layer.provide(makeBackgroundPolicyLayer(() => true)),
+            Layer.provide(
+              Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
+                isEnabled: () => Effect.succeed(scenario !== "disabled"),
+              }),
+            ),
+            Layer.provide(
+              Layer.mock(GitWorkflowService.GitWorkflowService)({
+                localStatus: () => Effect.succeed(local),
+                remoteStatus: () => Effect.succeed(remote),
+                invalidateStatus: () => Effect.void,
+                invalidateLocalStatus: () => Effect.void,
+                invalidateRemoteStatus: () => Effect.void,
+                pullCurrentBranch: () =>
+                  Effect.sync(() => {
+                    pulls++;
+                  }).pipe(
+                    Effect.andThen(
+                      Effect.fail(
+                        new GitCommandError({
+                          operation: "pull",
+                          command: "git pull",
+                          cwd: "/repo",
+                          detail: "offline",
+                        }),
+                      ),
+                    ),
+                  ),
+              }),
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
+  it.effect.skipIf(!symlinksSupported)(
+    "automatically pulls an enabled clean default branch when status detects it is behind",
+    () => {
+      let remoteStatus: VcsStatusRemoteResult = { ...baseRemoteStatus, behindCount: 2 };
+      let pullCalls = 0;
+      let configuredWorkspaceRoot = "";
+      const localStatus: VcsStatusLocalResult = {
+        ...baseLocalStatus,
+        isDefaultRef: true,
+        refName: "main",
+      };
+      const testLayer = VcsStatusBroadcaster.layer.pipe(
+        Layer.provideMerge(NodeServices.layer),
+        Layer.provide(makeBackgroundPolicyLayer(() => true)),
+        Layer.provide(
+          Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
+            isEnabled: (cwd) => Effect.succeed(cwd === configuredWorkspaceRoot),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(GitWorkflowService.GitWorkflowService)({
+            localStatus: () => Effect.succeed(localStatus),
+            remoteStatus: () => Effect.succeed(remoteStatus),
+            invalidateLocalStatus: () => Effect.void,
+            invalidateRemoteStatus: () => Effect.void,
+            invalidateStatus: () => Effect.void,
+            pullCurrentBranch: () =>
+              Effect.sync(() => {
+                pullCalls += 1;
+                remoteStatus = { ...remoteStatus, behindCount: 0 };
+                return {
+                  status: "pulled" as const,
+                  refName: "main",
+                  upstreamRef: "origin/main",
+                };
+              }),
+          }),
+        ),
+      );
+
+      return Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const realDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-vcs-auto-pull-real-",
+        });
+        const linkParent = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-vcs-auto-pull-link-",
+        });
+        configuredWorkspaceRoot = path.join(linkParent, "repo-link");
+        yield* fileSystem.symlink(realDir, configuredWorkspaceRoot);
+
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const status = yield* broadcaster.refreshStatus(configuredWorkspaceRoot);
+
+        assert.equal(pullCalls, 1);
+        assert.equal(status.behindCount, 0);
+      }).pipe(Effect.provide(testLayer));
+    },
+  );
+
   it.effect("reuses the cached VCS status across repeated reads", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
