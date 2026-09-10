@@ -1034,5 +1034,22 @@ flow and `providerTerminalEnvironment`; it pretypes without submitting and owns
 cleanup/retry. Swift model pickers and account settings push a machine-scoped setup
 screen using the same native terminal protocol, preserving the composer voice
 gesture surface. Small picker controls and floating-layer event scope match upstream.
-Antigravity setup is not advertised until its V2 adapter exists. Remote model-manifest
-metadata/new badges remain a separate port; the fork's current highlight policy stays.
+Antigravity setup is not advertised until its V2 adapter exists.
+
+## Remote model catalogs on V2
+
+The provider manifest now carries model presentation, aliases, new badges, defaults,
+CLI compatibility gates, and allowlisted Claude runtime profiles. Invalid references
+or adapter metadata retain the last good catalog; an older disk manifest cannot hide
+newer bundled models. Claude discovery, V2 turns, and structured text generation read
+that same cached source. Each turn keeps its compiled prompt options through steering.
+Custom model aliases stay opaque and use their own descriptors.
+
+The fork deliberately transforms upstream's Claude `contextWindow` descriptor into
+its real `autoCompactWindow` slider. Models run at their largest supported window;
+known natively-1M models retain bare identifiers, while suffix-based profiles select
+the largest window. Provider-level and thread-level compaction ceilings still compose
+in the V2 SDK settings. This preserves the existing working Context control instead
+of restoring upstream's ineffective 200k selector on natively-1M models. No V1 runtime
+or migration is introduced. Web/desktop and Swift render manifest-driven New badges;
+the frozen Expo client accepts the additive contract fields.

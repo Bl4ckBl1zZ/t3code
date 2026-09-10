@@ -5298,6 +5298,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                             },
                             isDefault: model.isDefault ?? false,
                             isLegacy: model.isLegacy,
+                            badge: model.badge,
                             options: options
                         )
                     },

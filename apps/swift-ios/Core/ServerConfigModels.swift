@@ -120,6 +120,8 @@ public struct ServerModelCapabilities: Codable, Equatable, Sendable {
 }
 
 public struct ServerProviderModelSnapshot: Codable, Identifiable, Equatable, Sendable {
+    public var aliases: [String]? = nil
+    public var badge: String? = nil
     public var id: String { slug }
 
     public let slug: String

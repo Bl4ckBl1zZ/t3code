@@ -72,7 +72,7 @@ for (const disabled of [false, true]) {
       assert.equal(run.mock.calls.length, disabled ? 0 : 1);
       if (!disabled) {
         assert.equal(run.mock.calls[0]?.[0].cwd, "/repo-worktree");
-        assert.include(run.mock.calls[0]?.[0].args, "echo teardown");
+        assert.isTrue(run.mock.calls[0]?.[0].args?.includes("echo teardown"));
         assert.equal(run.mock.calls[0]?.[0].timeoutBehavior, "timedOutResult");
       }
     }).pipe(Effect.provide(layer));

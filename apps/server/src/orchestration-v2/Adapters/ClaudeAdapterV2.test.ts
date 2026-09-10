@@ -1,3 +1,4 @@
+import { type ClaudeModelCatalog } from "../../provider/ClaudeModelCatalog.ts";
 import type {
   Query as ClaudeQuery,
   SDKMessage,
@@ -3580,5 +3581,124 @@ describe("ClaudeAdapterV2 query message stream", () => {
       yield* Scope.close(scope, Exit.void);
       assert.isTrue(closed);
     }),
+  );
+});
+
+describe("ClaudeAdapterV2 model catalog", () => {
+  it.effect("compiles remote model profiles and keeps steering on the active turn's profile", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const offered: SDKUserMessage[] = [];
+      const opened: ClaudeAgentSdkQueryOptions[] = [];
+      let catalogReads = 0;
+      const catalog: ClaudeModelCatalog = {
+        models: [
+          {
+            model: {
+              slug: "remote-model",
+              aliases: ["remote"],
+              name: "Remote",
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "effort",
+                    label: "Effort",
+                    type: "select",
+                    options: [
+                      { id: "high", label: "High", isDefault: true },
+                      { id: "ultrathink", label: "Ultrathink" },
+                    ],
+                    promptInjectedValues: ["ultrathink"],
+                  },
+                ],
+              },
+            },
+            runtime: { effortMap: { high: "remote-high" } },
+            compatibility: {},
+          },
+        ],
+      };
+      const adapter = makeClaudeAdapterV2({
+        instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
+        settings: DEFAULT_CLAUDE_SETTINGS,
+        environment: {},
+        attachmentsDir: "/unused",
+        fileSystem,
+        idAllocator,
+        modelCatalog: Effect.sync(() => {
+          catalogReads += 1;
+          return catalogReads === 1 ? catalog : { models: [] };
+        }),
+        queryRunner: {
+          allocateSessionId: Effect.succeed("native-remote-model"),
+          open: ({ options }) =>
+            Effect.sync(() => {
+              opened.push(options);
+              return {
+                messages: Stream.never,
+                offer: (message: SDKUserMessage) =>
+                  Effect.sync(() => {
+                    offered.push(message);
+                  }),
+                setModel: () => Effect.void,
+                interrupt: Effect.void,
+                close: Effect.void,
+              };
+            }),
+          forkSession: () => Effect.die("unused"),
+          assertComplete: Effect.void,
+        },
+      });
+      const threadId = ThreadId.make("thread-remote-model");
+      const modelSelection: ModelSelection = { ...CLAUDE_TEST_MODEL_SELECTION, model: "remote" };
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("session-remote-model"),
+        modelSelection,
+        runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+      });
+      const attemptId = RunAttemptId.make("attempt-remote-model");
+      yield* runtime.startTurn({
+        ...makeClaudeTestTurnInput({
+          threadId,
+          providerThread,
+          now: yield* DateTime.now,
+          attemptId,
+          text: "First",
+          attachments: [],
+        }),
+        modelSelection,
+      });
+      yield* runtime.steerTurn({
+        threadId,
+        runId: RunId.make("run-remote-model"),
+        providerThread,
+        providerTurnId: idAllocator.derive.providerTurn({
+          driver: CLAUDE_PROVIDER,
+          nativeTurnId: `turn:${attemptId}`,
+        }),
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: MessageId.make("steer-remote-model"),
+          text: "Follow up",
+          attachments: [],
+        },
+      });
+      assert.equal(opened[0]?.model, "remote-model");
+      assert.equal(opened[0]?.effort, "remote-high");
+      assert.deepEqual(
+        offered.map((message) => message.message.content),
+        ["Ultrathink:\nFirst", "Ultrathink:\nFollow up"],
+      );
+      assert.equal(catalogReads, 1);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );
 });

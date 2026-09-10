@@ -10,7 +10,18 @@
     "status": "authenticated"
   },
   "checkedAt": "2026-09-10T00:00:00Z",
-  "models": [],
+  "models": [
+    {
+      "slug": "test-model",
+      "name": "Test model",
+      "aliases": [
+        "test"
+      ],
+      "badge": "new",
+      "isCustom": false,
+      "capabilities": null
+    }
+  ],
   "slashCommands": [],
   "skills": []
 }

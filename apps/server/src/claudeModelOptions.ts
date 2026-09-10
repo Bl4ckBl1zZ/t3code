@@ -7,13 +7,15 @@ import {
 } from "@t3tools/shared/model";
 
 import {
-  getClaudeModelCapabilities,
-  isClaudeUltracodeEffort,
-  normalizeClaudeCliEffort,
-  resolveClaudeApiModelId,
-  resolveClaudeAutoCompactTokens,
-  resolveClaudeEffort,
-} from "./provider/Layers/ClaudeProvider.ts";
+  BUNDLED_CLAUDE_MODEL_CATALOG,
+  type ClaudeModelCatalog,
+  getClaudeCatalogModelCapabilities,
+  resolveClaudeCatalogEffort,
+  normalizeClaudeCatalogEffort,
+  isClaudeCatalogUltracodeEffort,
+  resolveClaudeCatalogApiModelId,
+  resolveClaudeCatalogAutoCompactTokens,
+} from "./provider/ClaudeModelCatalog.ts";
 
 export interface CompiledClaudeModelSelection {
   readonly apiModelId: string;
@@ -31,14 +33,15 @@ export interface CompiledClaudeModelSelection {
 /** Compile every Claude model option at the provider boundary. */
 export function compileClaudeModelSelection(
   selection: ModelSelection,
+  catalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
 ): CompiledClaudeModelSelection {
-  const capabilities = getClaudeModelCapabilities(selection.model);
+  const capabilities = getClaudeCatalogModelCapabilities(catalog, selection.model);
   const descriptors = getProviderOptionDescriptors({ caps: capabilities });
   const supportsBoolean = (id: string) =>
     descriptors.some((descriptor) => descriptor.type === "boolean" && descriptor.id === id);
   const rawEffort = getModelSelectionStringOptionValue(selection, "effort");
-  const resolvedEffort = resolveClaudeEffort(capabilities, rawEffort);
-  const effort = normalizeClaudeCliEffort(resolvedEffort, selection.model);
+  const resolvedEffort = resolveClaudeCatalogEffort(catalog, selection.model, rawEffort);
+  const effort = normalizeClaudeCatalogEffort(catalog, resolvedEffort, selection.model);
   const fastMode = supportsBoolean("fastMode")
     ? getModelSelectionBooleanOptionValue(selection, "fastMode")
     : undefined;
@@ -48,11 +51,11 @@ export function compileClaudeModelSelection(
   const settings = {
     ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-    ...(isClaudeUltracodeEffort(resolvedEffort) ? { ultracode: true } : {}),
+    ...(isClaudeCatalogUltracodeEffort(resolvedEffort) ? { ultracode: true } : {}),
   };
-  const apiModelId = resolveClaudeApiModelId(selection);
+  const apiModelId = resolveClaudeCatalogApiModelId(catalog, selection);
   const promptEffort = resolvePromptInjectedEffort(capabilities, rawEffort) ?? undefined;
-  const autoCompactWindow = resolveClaudeAutoCompactTokens(selection);
+  const autoCompactWindow = resolveClaudeCatalogAutoCompactTokens(catalog, selection);
   return {
     apiModelId,
     effort,

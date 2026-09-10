@@ -697,6 +697,15 @@ private struct ModelOptionLabel: View {
                         .font(T3Typography.homeTitle)
                         .foregroundStyle(T3Colors.textPrimary)
                         .lineLimit(1)
+                    if option.model.badge == "new" {
+                        Text("New")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(T3Colors.warning)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(T3Colors.warning.opacity(0.12), in: Capsule())
+                            .accessibilityLabel("New model")
+                    }
                     if option.model.supportsImages {
                         capability("Images", icon: "photo")
                     }

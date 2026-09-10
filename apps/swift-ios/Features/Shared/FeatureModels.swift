@@ -969,6 +969,7 @@ public struct FeatureModel: Identifiable, Sendable, Equatable, Hashable, Codable
     public var supportsImages: Bool
     public var supportsReasoning: Bool
     public var isDefault: Bool
+    public var badge: String?
     public var isLegacy: Bool?
     public var options: [FeatureModelOptionDescriptor]
 
@@ -980,6 +981,7 @@ public struct FeatureModel: Identifiable, Sendable, Equatable, Hashable, Codable
         supportsReasoning: Bool = false,
         isDefault: Bool = false,
         isLegacy: Bool? = nil,
+        badge: String? = nil,
         options: [FeatureModelOptionDescriptor] = []
     ) {
         self.id = id
@@ -989,6 +991,7 @@ public struct FeatureModel: Identifiable, Sendable, Equatable, Hashable, Codable
         self.supportsReasoning = supportsReasoning
         self.isDefault = isDefault
         self.isLegacy = isLegacy
+        self.badge = badge
         self.options = options
     }
 }

@@ -1080,7 +1080,7 @@ const providerContextReportingPath = NodePath.join(
   NodePath.dirname(outputPath),
   "providerContextReporting.json",
 );
-const providerContextReportingSerialized = `${JSON.stringify(Schema.encodeSync(ServerProvider)({ instanceId: ProviderInstanceId.make("codex-work"), driver: ProviderDriverKind.make("codex"), reportsContextWindow: true, enabled: true, installed: true, version: null, status: "ready", auth: { status: "authenticated" }, checkedAt: "2026-09-10T00:00:00Z", models: [], slashCommands: [], skills: [] }), null, 2)}\n`;
+const providerContextReportingSerialized = `${JSON.stringify(Schema.encodeSync(ServerProvider)({ instanceId: ProviderInstanceId.make("codex-work"), driver: ProviderDriverKind.make("codex"), reportsContextWindow: true, enabled: true, installed: true, version: null, status: "ready", auth: { status: "authenticated" }, checkedAt: "2026-09-10T00:00:00Z", models: [{ slug: "test-model", name: "Test model", isCustom: false, capabilities: null, aliases: ["test"], badge: "new" }], slashCommands: [], skills: [] }), null, 2)}\n`;
 if (process.argv.includes("--check")) {
   if (
     !NodeFS.existsSync(providerContextReportingPath) ||

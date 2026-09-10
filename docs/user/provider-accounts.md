@@ -32,3 +32,13 @@ terminal session. Your configured account home and binary are respected.
 On iOS, use **Set up agents** in the model picker, or **Install or sign in** in
 an account's settings. Setup stays on the selected task's machine. Older servers
 show that an update is required instead of opening an unscoped terminal.
+
+Model lists can refresh between app releases. New models may carry a **New** label,
+and models that require a newer agent version appear after that agent is updated.
+If a refresh fails, the previous catalog stays available. Custom model names remain
+specific to their account.
+
+For Claude, **Context** controls when conversation compaction happens. The model keeps
+its largest supported window; selecting 250K, 500K, or 750K sets an earlier compaction
+threshold, while 1M leaves the model's own limit in control. An account-level compaction
+limit can set a lower ceiling.
