@@ -66,3 +66,7 @@ Images keep their proportions while loading when the server can read their size.
 image dimensions take precedence. Local image paths can point outside the workspace when the
 connected server supports host-file previews. The iOS transcript keeps a stable media frame;
 tap an image to inspect it at full size.
+
+On iOS, expanded tool history remembers where you were reading inside a long result when you
+collapse the group or scroll it off screen. Dragging takes control immediately if a saved
+position is being restored.

@@ -792,6 +792,7 @@ struct ThreadWorkLog: View {
     private var history: ThreadWorkLogHistory {
         (sharedHistory ?? localHistory).entry("\(currentThreadID):\(rows.first?.id ?? "empty")")
     }
+    private var historyKey: String { "\(currentThreadID):\(rows.first?.id ?? "empty")" }
     @State private var copiedRowID: String?
 
     private var isExpanded: Bool { history.groupExpanded ?? alwaysExpandActivity }
@@ -867,19 +868,8 @@ struct ThreadWorkLog: View {
     }
 
     private var expandedHistory: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 1) {
-                ForEach(visibleCandidates) { rowView($0) }
-            }.scrollTargetLayout()
-        }
-        .scrollPosition(id: Binding(
-            get: { history.anchorID },
-            set: { if let id = $0 { history.anchorID = id } }
-        ), anchor: .top)
-        .frame(maxHeight: 320)
-        .onChange(of: visibleCandidates.map(\.id), initial: true) { _, ids in
-            if let anchor = history.anchorID, !ids.contains(anchor) { history.anchorID = nil }
-        }
+        ThreadWorkLogExpandedHistory(rows: visibleCandidates, history: history, rowContent: rowView)
+            .id(historyKey)
     }
 
     @ViewBuilder
@@ -1433,6 +1423,162 @@ struct ChatFlowLayout: Layout {
             )
             x += size.width + horizontalSpacing
             rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+private struct ThreadWorkLogFramesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+/// Measurements are transient, so scroll events do not invalidate the whole
+/// transcript. Only the bounded coordinator cache owns durable reader choices.
+@MainActor private final class ThreadWorkLogViewportMeasurements {
+    var frames: [String: CGRect] = [:]
+    weak var scrollView: UIScrollView?
+    var pending: ThreadWorkLogViewportAnchor?
+
+    init(history: ThreadWorkLogHistory) {
+        pending = history.anchorID.map { .init(id: $0, offset: history.offsetWithinAnchor) }
+    }
+}
+
+private struct ThreadWorkLogExpandedHistory<Content: View>: View {
+    let rows: [ThreadWorkLogRow]
+    let history: ThreadWorkLogHistory
+    let rowContent: (ThreadWorkLogRow) -> Content
+    @State private var viewport: ThreadWorkLogViewportMeasurements
+
+    init(rows: [ThreadWorkLogRow], history: ThreadWorkLogHistory, @ViewBuilder rowContent: @escaping (ThreadWorkLogRow) -> Content) {
+        self.rows = rows
+        self.history = history
+        self.rowContent = rowContent
+        _viewport = State(initialValue: ThreadWorkLogViewportMeasurements(history: history))
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(rows) { row in
+                        rowContent(row).id(row.id)
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear.preference(key: ThreadWorkLogFramesKey.self, value: [row.id: geometry.frame(in: .named("work-log-content"))])
+                                }
+                            }
+                    }
+                }
+                .coordinateSpace(name: "work-log-content")
+                .background(ThreadWorkLogScrollObserver(onResolve: { scrollView in
+                    viewport.scrollView = scrollView
+                    restoreViewport()
+                }, onScroll: { scrollView in
+                    guard scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating else { return }
+                    viewport.pending = nil
+                    history.rememberViewport(rows: frames, contentOffset: scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
+                }))
+            }
+            .frame(maxHeight: 320)
+            .onPreferenceChange(ThreadWorkLogFramesKey.self) { frames in
+                viewport.frames = frames
+                restoreViewport()
+                if let scrollView = viewport.scrollView,
+                   scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
+                    history.rememberViewport(rows: self.frames, contentOffset: scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
+                }
+            }
+            .onAppear {
+                if let anchor = viewport.pending, rows.contains(where: { $0.id == anchor.id }) {
+                    // Bring the lazy target into the measured set first; its
+                    // actual frame then supplies the precise intra-row offset.
+                    proxy.scrollTo(anchor.id, anchor: .top)
+                    restoreViewport()
+                }
+            }
+            .onChange(of: rows.map(\.id)) { _, ids in
+                if let anchor = history.anchorID, !ids.contains(anchor) {
+                    history.clearViewport()
+                    viewport.pending = nil
+                    if let first = ids.first { proxy.scrollTo(first, anchor: .top) }
+                }
+            }
+        }
+    }
+
+    private var frames: [ThreadWorkLogRowFrame] {
+        viewport.frames.map { id, frame in .init(id: id, minY: frame.minY, height: frame.height) }
+    }
+
+    private func restoreViewport() {
+        guard let pending = viewport.pending, let scrollView = viewport.scrollView,
+              !scrollView.isTracking, !scrollView.isDragging, !scrollView.isDecelerating,
+              let frame = frames.first(where: { $0.id == pending.id }),
+              let offset = pending.restoredOffset(in: frame) else { return }
+        viewport.pending = nil
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: offset - scrollView.adjustedContentInset.top), animated: false)
+    }
+}
+
+/// iOS 17-compatible observation of the owned inner scroll view. KVO leaves
+/// SwiftUI's delegate intact; no display link, polling or transcript relayout.
+private struct ThreadWorkLogScrollObserver: UIViewRepresentable {
+    let onResolve: (UIScrollView) -> Void
+    let onScroll: (UIScrollView) -> Void
+
+    func makeUIView(context: Context) -> ObserverView {
+        let view = ObserverView()
+        view.isUserInteractionEnabled = false
+        view.accessibilityElementsHidden = true
+        return view
+    }
+    func updateUIView(_ view: ObserverView, context: Context) {
+        view.onResolve = onResolve
+        view.onScroll = onScroll
+        view.resolveSoon()
+    }
+    static func dismantleUIView(_ view: ObserverView, coordinator: ()) { view.detach() }
+
+    final class ObserverView: UIView {
+        var onResolve: ((UIScrollView) -> Void)?
+        var onScroll: ((UIScrollView) -> Void)?
+        private weak var observedScrollView: UIScrollView?
+        private var observation: NSKeyValueObservation?
+        private var resolutionTask: Task<Void, Never>?
+
+        override func didMoveToSuperview() { super.didMoveToSuperview(); resolveSoon() }
+        override func didMoveToWindow() { super.didMoveToWindow(); resolveSoon() }
+
+        func resolveSoon() {
+            resolutionTask?.cancel()
+            resolutionTask = Task { @MainActor [weak self] in
+                guard !Task.isCancelled, let self else { return }
+                var ancestor = superview
+                while let view = ancestor {
+                    if let scrollView = view as? UIScrollView {
+                        guard observedScrollView !== scrollView else { return }
+                        observation = nil
+                        observedScrollView = scrollView
+                        observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] scrollView, _ in
+                            MainActor.assumeIsolated { self?.onScroll?(scrollView) }
+                        }
+                        onResolve?(scrollView)
+                        return
+                    }
+                    ancestor = view.superview
+                }
+            }
+        }
+        func detach() {
+            resolutionTask?.cancel()
+            resolutionTask = nil
+            observation = nil
+            observedScrollView = nil
+            onResolve = nil
+            onScroll = nil
         }
     }
 }

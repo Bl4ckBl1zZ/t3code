@@ -1096,3 +1096,12 @@ reported by that account's probe, never a guessed model name. Cached Claude prob
 original sample timestamp. Failed or older probes do not erase newer live bars; unsupported
 accounts remain unsupported. This uses the existing provider snapshot contract on web/desktop,
 Expo and Swift, with no V1 provider bridge or migration.
+
+### Native tool-history reading offset (2026-09-11 parity port)
+
+Swift retains an offset within the first visible tool row in its bounded, thread/group-scoped
+history cache. Restoring a recycled or reopened group first materializes the lazy row, then uses
+its measured frame to restore the reading position; changed row heights clamp safely. A passive
+iOS 17-compatible observer reads only the inner scroll view and leaves SwiftUI's delegate intact.
+User dragging cancels pending restoration. Measurements are transient and do not invalidate the
+whole transcript on every scroll. No simulator or browser was launched for verification.
