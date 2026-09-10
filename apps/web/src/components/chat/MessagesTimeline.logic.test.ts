@@ -1,3 +1,5 @@
+import { RunId } from "@t3tools/contracts";
+import type { WorkLogEntry, TimelineEntry } from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
 import {
   collapseWorkEntriesKeepingLiveBackground,
@@ -5,6 +7,7 @@ import {
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  resolveLiveWorkEntry,
   resolveAssistantMessageCopyState,
   resolveTimelineToolPresentation,
   shouldPreserveAssistantLineBreaks,
@@ -2025,5 +2028,94 @@ describe("day dividers", () => {
     ]);
 
     expect(rows.some((row) => row.kind === "day-divider")).toBe(false);
+  });
+});
+
+describe("V2 live work focus", () => {
+  const runId = RunId.make("live-run");
+  const at = "2026-09-10T00:00:00Z";
+  function entry(
+    id: string,
+    status: WorkLogEntry["toolLifecycleStatus"] = "completed",
+    extra: Partial<WorkLogEntry> = {},
+  ): WorkLogEntry {
+    return {
+      id,
+      createdAt: at,
+      runId,
+      label: id,
+      tone: "tool",
+      toolLifecycleStatus: status,
+      projectedItem: {
+        item: {
+          type: "command_execution",
+          status: status === "inProgress" ? "running" : "completed",
+        },
+      } as never,
+      ...extra,
+    };
+  }
+  function rows(entries: TimelineEntry[], isWorking = true) {
+    return deriveMessagesTimelineRows({
+      timelineEntries: entries,
+      latestRun: {
+        runId,
+        status: isWorking ? "running" : "completed",
+        startedAt: at,
+        completedAt: isWorking ? null : at,
+      },
+      isWorking,
+      activeTurnStartedAt: at,
+      alwaysExpandActivity: true,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+  }
+  function work(item: WorkLogEntry): TimelineEntry {
+    return { kind: "work", id: item.id, createdAt: at, entry: item };
+  }
+  it("keeps a running tool focused when a later concurrent call completes", () => {
+    const running = entry("running", "inProgress");
+    expect(resolveLiveWorkEntry([running, entry("done")], runId)).toBe(running);
+  });
+  it("holds the last successful operation between messages and replaces the extra working row", () => {
+    const result = rows([work(entry("done"))]);
+    expect(result.find((row) => row.kind === "work")?.liveEntry?.id).toBe("done");
+    expect(result.some((row) => row.kind === "working")).toBe(false);
+  });
+  it("returns to working after a failure and keeps the failure visible", () => {
+    const result = rows([work(entry("failed", "failed"))]);
+    expect(result.find((row) => row.kind === "work")?.liveEntry).toBeUndefined();
+    expect(result.some((row) => row.kind === "working")).toBe(true);
+    expect(result.find((row) => row.kind === "work")?.groupedEntries[0]?.id).toBe("failed");
+  });
+  it("does not make background activity the foreground focus", () => {
+    const background = entry("background", "inProgress", {
+      projectedItem: {
+        item: { type: "command_execution", status: "waiting", background: true },
+      } as never,
+    });
+    expect(resolveLiveWorkEntry([background], runId)).toBeNull();
+    const foreground = entry("foreground");
+    expect(resolveLiveWorkEntry([foreground, background], runId)).toBe(foreground);
+  });
+  it("does not revive another run or settled activity", () => {
+    expect(
+      resolveLiveWorkEntry([entry("old", "completed", { runId: RunId.make("other") })], runId),
+    ).toBeNull();
+    expect(
+      rows([work(entry("done"))], false).find((row) => row.kind === "work")?.liveEntry,
+    ).toBeUndefined();
+  });
+  it("separates errors and compaction from a later live operation", () => {
+    const result = rows([
+      work(entry("error", "failed", { tone: "error" })),
+      work(entry("compact", "completed", { sourceItemType: "compaction" })),
+      work(entry("next", "inProgress")),
+    ]);
+    expect(result.filter((row) => row.kind === "work")).toHaveLength(3);
+    expect(
+      result.filter((row) => row.kind === "work").find((row) => row.liveEntry)?.liveEntry?.id,
+    ).toBe("next");
   });
 });

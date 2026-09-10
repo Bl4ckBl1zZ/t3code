@@ -1,3 +1,4 @@
+import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import type { AssistantCitation } from "@t3tools/contracts";
@@ -1147,7 +1148,17 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     >
       {row.kind === "chat-cleared" ? <ChatClearedTimelineRow /> : null}
       {row.kind === "day-divider" ? <DayDividerTimelineRow row={row} /> : null}
-      {row.kind === "work" ? <WorkGroupSection groupedEntries={row.groupedEntries} /> : null}
+      {row.kind === "work" ? (
+        row.liveEntry ? (
+          <LiveWorkGroupSection
+            groupedEntries={row.groupedEntries}
+            entry={row.liveEntry}
+            startedAt={row.liveStartedAt ?? null}
+          />
+        ) : (
+          <WorkGroupSection groupedEntries={row.groupedEntries} />
+        )
+      ) : null}
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
       {row.kind === "attempt-fold" ? <AttemptFoldTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
@@ -2141,6 +2152,83 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
 // Extracted row sections — own their state / store subscriptions so changes
 // re-render only the affected row, not the entire list.
 // ---------------------------------------------------------------------------
+
+/** One current operation, with its history mounted only on explicit expansion. */
+function LiveWorkGroupSection({
+  groupedEntries,
+  entry,
+  startedAt,
+}: {
+  groupedEntries: TimelineWorkEntry[];
+  entry: TimelineWorkEntry;
+  startedAt: string | null;
+}) {
+  const { workspaceRoot } = use(TimelineRowCtx);
+  const [expanded, setExpanded] = useState(false);
+  const visible = useMemo(() => groupedEntries.filter(workLogEntryIsVisible), [groupedEntries]);
+  const background = useMemo(
+    () =>
+      visible.filter((candidate) => {
+        const item = candidate.projectedItem?.item;
+        return item !== undefined && orchestrationV2CommandExecutionIsLiveInBackground(item);
+      }),
+    [visible],
+  );
+  const label = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
+  return (
+    <section aria-label="Current activity" className="min-w-0 space-y-1">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="flex min-h-7 w-full items-center gap-2 rounded-md px-1 text-left text-xs text-foreground/80 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+      >
+        <ChevronRightIcon
+          aria-hidden
+          className={cn(
+            "size-3.5 shrink-0 transition-transform motion-reduce:transition-none",
+            expanded && "rotate-90",
+          )}
+        />
+        <Tooltip>
+          <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
+            {label}
+          </TooltipTrigger>
+          <TooltipPopup>{label}</TooltipPopup>
+        </Tooltip>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          {visible.length} {visible.length === 1 ? "tool call" : "tool calls"}
+        </span>
+        {startedAt && (
+          <span className="shrink-0 text-[11px] text-muted-foreground">
+            <WorkingTimer createdAt={startedAt} />
+          </span>
+        )}
+      </button>
+      {expanded ? (
+        <div
+          className="overflow-hidden rounded-md border border-border/50"
+          role="region"
+          aria-label="Tool activity history"
+        >
+          <LegendList
+            data={visible}
+            keyExtractor={(item) => item.id}
+            estimatedItemSize={40}
+            style={{ height: Math.min(320, Math.max(80, visible.length * 40)) }}
+            renderItem={({ item }) => (
+              <SimpleWorkEntryRow workEntry={item} workspaceRoot={workspaceRoot} />
+            )}
+          />
+        </div>
+      ) : (
+        background.map((item) => (
+          <SimpleWorkEntryRow key={item.id} workEntry={item} workspaceRoot={workspaceRoot} />
+        ))
+      )}
+    </section>
+  );
+}
 
 /** Collapsed state shows the earliest chunk so "Show more" only appends rows downward. */
 const WorkGroupSection = memo(function WorkGroupSection({

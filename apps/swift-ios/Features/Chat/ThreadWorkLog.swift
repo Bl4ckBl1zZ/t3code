@@ -82,6 +82,11 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         return liveness.background == true && !item.status.isTerminal
     }
 
+    var liveFocusItem: ThreadLiveWorkItem {
+        ThreadLiveWorkItem(id: id, runID: runID, running: inProgress, successful: status == .success,
+            background: isLiveBackgroundCommand, boundary: prominent || item.type == "error" || item.type == "compaction")
+    }
+
     public static func make(_ row: OrchestrationV2ProjectedTurnItem) -> ThreadWorkLogRow {
         let item = row.item
         let toolDisplayName = T3McpToolPresentation.displayName(for: item)
@@ -111,9 +116,10 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// Tool-like activities with a neutral status carry no signal worth a row.
+    /// Running V2 items carry activity even before they have a result. Only
+    /// terminal neutral markers are omitted from the work log.
     public static func visible(_ rows: [ThreadWorkLogRow]) -> [ThreadWorkLogRow] {
-        rows.filter { !($0.toolLike && $0.status == .neutral) }
+        rows.filter { $0.inProgress || !($0.toolLike && $0.status == .neutral) }
     }
 
     /// Contiguous rows that fold as one unit. A group is the thing that folds,
@@ -126,13 +132,13 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         var openRunID: String?
         var openHasProminent = false
         for row in rows {
-            if !groups.isEmpty, openRunID == row.runID, !row.prominent, !openHasProminent {
+            if !groups.isEmpty, openRunID == row.runID, !row.liveFocusItem.boundary, !openHasProminent {
                 groups[groups.count - 1].append(row)
                 continue
             }
             groups.append([row])
             openRunID = row.runID
-            openHasProminent = row.prominent
+            openHasProminent = row.liveFocusItem.boundary
         }
         return groups
     }
@@ -772,6 +778,7 @@ struct WorkRowDiffStat: View {
 /// The work log under a turn: what the agent actually did, one line per step.
 struct ThreadWorkLog: View {
     let rows: [ThreadWorkLogRow]
+    var liveEntryID: String? = nil
     let currentThreadID: String
     let currentWireThreadID: String
     var workspaceRoot: String?
@@ -823,13 +830,30 @@ struct ThreadWorkLog: View {
                         .padding(.bottom, 2)
                 }
 
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(displayedRows) { row in
-                        rowView(row)
+                if let focus = visibleCandidates.first(where: { $0.id == liveEntryID }) {
+                    Button { overflowExpanded = !isExpanded } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
+                            Image(systemName: focus.icon.symbolName)
+                            Text(focus.summary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Text("\(visibleCandidates.count)").monospacedDigit().foregroundStyle(T3Colors.textTertiary)
+                        }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
+                    }.buttonStyle(.plain).accessibilityLabel("\(focus.summary), \(visibleCandidates.count) tool calls")
+                        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                    if isExpanded {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 1) { ForEach(visibleCandidates) { rowView($0) } }
+                        }.frame(maxHeight: 320)
+                    } else {
+                        ForEach(visibleCandidates.filter(\.isLiveBackgroundCommand)) { rowView($0) }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(displayedRows) { row in rowView(row) }
                     }
                 }
 
-                if visibleCandidates.count > ThreadWorkLogPresentation.maxVisibleEntries,
+                if liveEntryID == nil, visibleCandidates.count > ThreadWorkLogPresentation.maxVisibleEntries,
                     isExpanded || !hiddenRows.isEmpty {
                     overflowToggle
                 }

@@ -97,8 +97,7 @@ final class ThreadWorkLogTests: XCTestCase {
         )
     }
 
-    /// Tool-like activities with a neutral status carry no signal worth a row.
-    func testNeutralToolRowsAreDroppedFromTheLog() {
+    func testRunningToolRowsRemainVisibleBeforeTheyHaveAResult() {
         let rows = [
             row(command(id: "a", input: "ls", status: "running")),
             row(command(id: "b", input: "ls")),
@@ -110,7 +109,7 @@ final class ThreadWorkLogTests: XCTestCase {
             ),
         ]
         XCTAssertEqual(ThreadWorkLogRow.visible(rows).map(\.id), [
-            "local:thread-v2:b", "local:thread-v2:c",
+            "local:thread-v2:a", "local:thread-v2:b", "local:thread-v2:c",
         ])
     }
 

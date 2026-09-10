@@ -202,3 +202,10 @@ Completed responses on iOS collapse earlier commentary and work under a “Worke
 When you return to the desktop app or a desktop-sized browser window, the composer regains
 focus so you can type immediately. An active text field, terminal, dialog, or popup keeps its
 focus. Returning on a phone does not automatically open the keyboard.
+
+While an agent is using tools, the timeline focuses its current foreground operation. Open that
+row to browse its tool-call history. A successful operation remains visible while the agent moves
+to its next action; a failure stays in the history and returns the activity indicator to working.
+Running background commands remain visible when the group is collapsed. On iOS, running tool rows
+remain available before their first result, and background processes do not take over the composer's
+foreground status.

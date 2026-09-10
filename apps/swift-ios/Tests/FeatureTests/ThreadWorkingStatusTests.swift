@@ -14,6 +14,11 @@ struct ThreadWorkingStatusTests {
         #expect(status?.startedAt == nil)
     }
 
+    @Test func aBackgroundProcessDoesNotClaimTheForegroundStatus() {
+        let background = projected(V2Fixture.turnItem(id: "background", type: "command_execution", status: "running", extra: ["runId": .string("run-1"), "input": .string("pnpm dev"), "background": .bool(true)]))
+        #expect(resolve(state: .working, items: [background])?.headline == "Thinking")
+    }
+
     private let startedAt = Date(timeIntervalSince1970: 10_000)
 
     private func projected(

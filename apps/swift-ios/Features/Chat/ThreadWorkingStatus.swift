@@ -83,6 +83,7 @@ struct ThreadWorkingStatus: Equatable, Sendable {
         timelineItems.last { projected in
             let item = projected.item
             guard !item.status.isTerminal else { return false }
+            if case let .commandExecution(_, _, _, liveness) = item.payload, liveness.background == true { return false }
             if let activeRunID, item.base.runId != activeRunID { return false }
             return ThreadWorkLogPresentation.isToolLike(item) || item.type == "assistant_message"
         }

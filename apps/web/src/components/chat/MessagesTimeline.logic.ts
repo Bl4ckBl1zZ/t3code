@@ -1,6 +1,8 @@
 import * as Equal from "effect/Equal";
 import {
   formatDuration,
+  workLogEntryIsVisible,
+  workEntryIndicatesToolSuccess,
   timelineEntryIsPersistentResourceCard,
   type TimelineEntry,
   type WorkLogEntry,
@@ -80,6 +82,34 @@ export function collapseWorkEntriesKeepingLiveBackground<
     }
   }
   return entries.filter((entry) => kept.has(entry));
+}
+
+/** V2 already coalesces provider lifecycle updates into one projected item.
+ * Focus the latest foreground operation; a background process retains its own
+ * row and cannot stand in for what the agent is currently doing.
+ */
+export function resolveLiveWorkEntry(
+  entries: ReadonlyArray<WorkLogEntry>,
+  runId: RunId,
+): WorkLogEntry | null {
+  if (
+    entries.some(
+      (entry) =>
+        entry.runId !== runId || entry.tone === "error" || entry.sourceItemType === "compaction",
+    )
+  )
+    return null;
+  const foreground = entries.filter((entry) => {
+    const item = entry.projectedItem?.item;
+    return (
+      workLogEntryIsVisible(entry) &&
+      !(item && orchestrationV2CommandExecutionIsLiveInBackground(item))
+    );
+  });
+  const running = foreground.findLast((entry) => entry.toolLifecycleStatus === "inProgress");
+  if (running) return running;
+  const latest = foreground.at(-1);
+  return latest && workEntryIndicatesToolSuccess(latest) ? latest : null;
 }
 
 export function shouldPreserveAssistantLineBreaks(text: string): boolean {
@@ -238,6 +268,8 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       groupedEntries: WorkLogEntry[];
+      liveEntry?: WorkLogEntry;
+      liveStartedAt?: string | null;
     }
   | {
       kind: "turn-fold";
@@ -702,7 +734,14 @@ export function deriveMessagesTimelineRows(input: {
           collapsedSupersededEntryIds.has(nextEntry.id) ||
           foldsByAnchorEntryId.has(nextEntry.id) ||
           supersededFoldsByAnchorEntryId.has(nextEntry.id) ||
-          nextEntry.attempt?.id !== timelineEntry.attempt?.id
+          nextEntry.attempt?.id !== timelineEntry.attempt?.id ||
+          nextEntry.entry.runId !== timelineEntry.entry.runId ||
+          timelineEntry.entry.tone === "error" ||
+          nextEntry.entry.tone === "error" ||
+          timelineEntry.entry.sourceItemType === "compaction" ||
+          nextEntry.entry.sourceItemType === "compaction" ||
+          timelineEntryIsPersistentResourceCard(timelineEntry) ||
+          timelineEntryIsPersistentResourceCard(nextEntry)
         ) {
           break;
         }
@@ -778,9 +817,18 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
+  const lastRow = nextRows.at(-1);
+  const liveEntry =
+    input.isWorking && unsettledRunId !== null && lastRow?.kind === "work"
+      ? resolveLiveWorkEntry(lastRow.groupedEntries, unsettledRunId)
+      : null;
+  if (lastRow?.kind === "work" && liveEntry) {
+    lastRow.liveEntry = liveEntry;
+    lastRow.liveStartedAt = input.activeTurnStartedAt;
+  }
   const mergedRows = insertDayDividers(mergeRelatedThreadCardRuns(mergeAgentUpdateRuns(nextRows)));
 
-  if (input.isWorking) {
+  if (input.isWorking && liveEntry === null) {
     mergedRows.push({
       kind: "working",
       id: "working-indicator-row",
@@ -948,8 +996,14 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "event":
       return a.projectedItem === (b as typeof a).projectedItem;
-    case "work":
-      return Equal.equals(a.groupedEntries, (b as typeof a).groupedEntries);
+    case "work": {
+      const other = b as typeof a;
+      return (
+        a.liveStartedAt === other.liveStartedAt &&
+        Equal.equals(a.liveEntry, other.liveEntry) &&
+        Equal.equals(a.groupedEntries, other.groupedEntries)
+      );
+    }
 
     case "message": {
       const bm = b as typeof a;

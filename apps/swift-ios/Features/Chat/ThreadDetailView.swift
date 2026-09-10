@@ -1394,6 +1394,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     }
 
     struct WorkLog: Equatable {
+        var liveEntryID: String? = nil
         let id: String
         let rows: [ThreadWorkLogRow]
         /// Relational support keyed by projected-item id, read by the inspector
@@ -1436,7 +1437,7 @@ enum ThreadTimelineFeed {
         for detail: FeatureThreadDetail,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
-        entries(
+        var result = entries(
             timelineItems: detail.timelineItems,
             messages: detail.messages,
             runs: detail.timelineRuns,
@@ -1444,6 +1445,11 @@ enum ThreadTimelineFeed {
             subagentChildThreadIDs: detail.subagentChildThreadIDs,
             calendar: calendar
         )
+        if detail.thread.state == .working, case var .workLog(work)? = result.last {
+            work.liveEntryID = ThreadLiveWorkFocus.selection(items: work.rows.map(\.liveFocusItem), activeRunID: detail.workflow.queueState.activeRun?.id)
+            result[result.count - 1] = .workLog(work)
+        }
+        return result
     }
 
     static func entries(
@@ -1664,6 +1670,7 @@ private struct ThreadTimelineEntryView: View {
         case let .workLog(workLog):
             ThreadWorkLog(
                 rows: workLog.rows,
+                liveEntryID: workLog.liveEntryID,
                 currentThreadID: currentThreadID,
                 currentWireThreadID: currentWireThreadID,
                 workspaceRoot: workspaceRoot,
