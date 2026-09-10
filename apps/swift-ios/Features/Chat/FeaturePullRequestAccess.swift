@@ -25,6 +25,7 @@ struct FeaturePullRequestAccess {
     let threads: ((Int, String) -> FeaturePullRequestThreadAccess)?
     let draftKey: String
     let submitReview: ((Int, String, PullRequestReviewSubmission) async throws -> Void)?
+    let fileContents: ((Int, String, PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents)?
     let diff: ((Int, String?, String?) async throws -> PullRequestDiffResult)?
     let overview: (Int) async throws -> FeaturePullRequestOverview
     let labels: (Int) async throws -> PullRequestLabelCandidateList
@@ -39,8 +40,9 @@ struct FeaturePullRequestAccess {
             submitReview = { try await reviewer.submitPullRequestReview(scope: .thread(threadID), number: $0, expectedURL: $1, submission: $2) }
         } else { submitReview = nil; threads = nil }
         if let reader = client as? any FeaturePullRequestCodeReading {
+            fileContents = { try await reader.pullRequestFileContents(scope: .thread(threadID), number: $0, expectedURL: $1, input: $2) }
             diff = { try await reader.pullRequestDiff(scope: .thread(threadID), number: $0, cursor: $1, commit: $2) }
-        } else { diff = nil }
+        } else { diff = nil; fileContents = nil }
         overview = { try await client.pullRequestOverview(threadID: threadID, number: $0) }
         labels = { try await client.pullRequestLabelCandidates(threadID: threadID, number: $0) }
         setLabels = { try await client.setPullRequestLabels(threadID: threadID, number: $0, labels: $1, applied: $2) }
@@ -55,8 +57,9 @@ struct FeaturePullRequestAccess {
             submitReview = { try await reviewer.submitPullRequestReview(scope: .project(scope), number: $0, expectedURL: $1, submission: $2) }
         } else { submitReview = nil; threads = nil }
         if let reader = manager as? any FeaturePullRequestCodeReading {
+            fileContents = { try await reader.pullRequestFileContents(scope: .project(scope), number: $0, expectedURL: $1, input: $2) }
             diff = { try await reader.pullRequestDiff(scope: .project(scope), number: $0, cursor: $1, commit: $2) }
-        } else { diff = nil }
+        } else { diff = nil; fileContents = nil }
         overview = { try await manager.projectPullRequestOverview(scope: scope, number: $0) }
         labels = { try await manager.projectPullRequestLabels(scope: scope, number: $0) }
         setLabels = { try await manager.setProjectPullRequestLabels(scope: scope, number: $0, labels: $1, applied: $2) }
@@ -73,6 +76,7 @@ enum FeaturePullRequestScope: Sendable {
 
 @MainActor
 protocol FeaturePullRequestCodeReading: AnyObject, Sendable {
+    func pullRequestFileContents(scope: FeaturePullRequestScope, number: Int, expectedURL: String, input: PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents
     func pullRequestDiff(scope: FeaturePullRequestScope, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult
 }
 

@@ -17,5 +17,18 @@
         "deletions": 87
       }
     ]
+  },
+  "fileInput": {
+    "projectId": "project-v2",
+    "repository": "owner/repo",
+    "number": 42,
+    "commit": "abc123",
+    "changeType": "rename-changed",
+    "oldPath": "old.swift",
+    "newPath": "new.swift"
+  },
+  "fileContents": {
+    "oldContents": "old\n",
+    "newContents": "new\n"
   }
 }

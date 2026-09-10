@@ -28,6 +28,8 @@ import {
   PullRequestListStatsResult,
   PullRequestDiffInput,
   PullRequestDiffResult,
+  PullRequestDiffFileContentsInput,
+  PullRequestDiffFileContentsResult,
   PullRequestSubmitReviewInput,
   PullRequestThreadCommentsResult,
   UsageModelPriceOverride,
@@ -714,7 +716,14 @@ if (process.argv.includes("--check")) {
 
 const pullRequestDiffPath = NodePath.join(NodePath.dirname(outputPath), "pullRequestDiff.json");
 const pullRequestDiffSerialized = `${JSON.stringify(
-  Schema.encodeSync(Schema.Struct({ input: PullRequestDiffInput, result: PullRequestDiffResult }))({
+  Schema.encodeSync(
+    Schema.Struct({
+      input: PullRequestDiffInput,
+      result: PullRequestDiffResult,
+      fileInput: PullRequestDiffFileContentsInput,
+      fileContents: PullRequestDiffFileContentsResult,
+    }),
+  )({
     input: {
       projectId,
       repository: "owner/repo",
@@ -722,6 +731,16 @@ const pullRequestDiffSerialized = `${JSON.stringify(
       cursor: "opaque/next",
       commit: "abc123",
     },
+    fileInput: {
+      projectId,
+      repository: "owner/repo",
+      number: 42,
+      commit: "abc123",
+      changeType: "rename-changed",
+      oldPath: "old.swift",
+      newPath: "new.swift",
+    },
+    fileContents: { oldContents: "old\n", newContents: "new\n" },
     result: {
       patch: "",
       truncated: true,

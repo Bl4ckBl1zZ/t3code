@@ -731,7 +731,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   counts and partial-read errors. A native collapsible file tree, path filter/copy and lazy line
   diff use the fork’s diff color tokens. The shared unified-patch parser now decodes Git C-quoted
   paths and distinguishes file metadata from code beginning with `---`/`+++`. Local working-tree
-  hydration and agent-prompt comments are not used for host PR code. Full-file context remains separate parity work.
+  hydration and agent-prompt comments are not used for host PR code. Full-file context uses the host-backed comparison described below.
 
 - Native PR reviews use `pullRequests.submitReview` with private persisted summary/line drafts.
   Offered verdicts intersect host capabilities with viewer permissions; line comments are available
@@ -745,3 +745,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   conversations stay separate. Replies and resolution intersect host/viewer permissions and
   revalidate repository identity. Failed replies retain their text; refreshing merges loaded comment
   pages and preserves other unsent replies. Repeated cursors stop rather than looping.
+
+- Native PR full-file context calls `pullRequests.diffFileContents` with the selected commit and
+  rename sides after repository-identity validation. Expanded contents must match the visible hunk
+  coordinates before they are joined; a changed revision asks for refresh. Files without supplied
+  hunks show labelled old/new snapshots instead of fabricated unchanged lines. Added context does
+  not acquire review targets that were absent from the original patch. No local checkout reads.

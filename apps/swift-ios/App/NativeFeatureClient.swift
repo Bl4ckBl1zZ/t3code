@@ -2099,6 +2099,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
+    func pullRequestFileContents(scope: FeaturePullRequestScope, number: Int, expectedURL: String, input: PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        return try await route.client.pullRequestDiffFileContents(projectID: route.projectID, repository: route.repository, number: number, input: input)
+    }
+
     func pullRequestDiff(scope: FeaturePullRequestScope, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
         let route = try pullRequestRoute(scope: scope)
         return try await route.client.pullRequestDiff(projectID: route.projectID, repository: route.repository, number: number, cursor: cursor, commit: commit)

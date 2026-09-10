@@ -167,7 +167,9 @@ struct PullRequestDetailSheet: View {
                     }
                 case .code:
                     if overview.detail.capabilities?.diff == true, let diff = access.diff {
-                        PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, commits: overview.activity?.commits ?? [], load: diff, reviewDraft: reviewDraft,
+                        PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, commits: overview.activity?.commits ?? [], load: diff,
+                            fileContents: access.fileContents.map { read in { input in try await read(displayedNumber, overview.detail.url, input) } },
+                            reviewDraft: reviewDraft,
                             conversations: PullRequestConversationContext(threads: overview.activity?.reviewThreads ?? [],
                                 access: access.threads?(displayedNumber, overview.detail.url),
                                 canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,

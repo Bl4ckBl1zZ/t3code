@@ -6,6 +6,7 @@ struct PullRequestCodeView: View {
     let updatedAt: String
     let commits: [PullRequestCommit]
     let load: (Int, String?, String?) async throws -> PullRequestDiffResult
+    let fileContents: ((PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents)?
     let reviewDraft: PullRequestReviewDraftModel?
     let conversations: PullRequestConversationContext
     let canComment: Bool
@@ -52,7 +53,7 @@ struct PullRequestCodeView: View {
                     Group {
                         if let file = row.file {
                             NavigationLink {
-                                PullRequestCodeFileView(file: file, reviewDraft: reviewDraft, canComment: canComment && selectedCommit == nil, conversations: conversations, commit: selectedCommit)
+                                PullRequestCodeFileView(file: file, reviewDraft: reviewDraft, canComment: canComment && selectedCommit == nil, conversations: conversations, commit: selectedCommit, fileContents: fileContents)
                             } label: {
                                 FeatureReviewFileRow(file: file).frame(minHeight: 52)
                             }
@@ -114,6 +115,13 @@ private struct PullRequestCodeFileView: View {
     let canComment: Bool
     let conversations: PullRequestConversationContext
     let commit: String?
+    let fileContents: ((PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents)?
+    @State private var fullContents: PullRequestDiffFileContents?
+    @State private var hydratedLines: [FeatureDiffLine]?
+    @State private var fullContext = false
+    @State private var loadingContext = false
+    @State private var contextError: String?
+    private var displayedLines: [FeatureDiffLine] { fullContext ? hydratedLines ?? file.lines : file.lines }
     private var fileThreads: [PullRequestReviewThread] { conversations.threads.filter { $0.path == file.path } }
     private var placed: [String: [PullRequestReviewThread]] {
         Dictionary(grouping: fileThreads.compactMap { thread -> (String, PullRequestReviewThread)? in
@@ -122,6 +130,7 @@ private struct PullRequestCodeFileView: View {
     }
     @State private var commentingLine: FeatureDiffLine?
     var body: some View {
+        let originalPositions = Set(file.lines.map(PullRequestFullContext.positionKey))
         let placedThreads = placed
         let unplacedThreads = fileThreads.filter { PullRequestThreadPlacement.anchor(thread: $0, file: file, commit: commit) == nil }
         VStack(alignment: .leading, spacing: 8) {
@@ -132,15 +141,23 @@ private struct PullRequestCodeFileView: View {
                 }
                 FeatureDiffStatsLabel(additions: file.additions, deletions: file.deletions)
             }.padding(.horizontal, 16)
-            if file.lines.isEmpty {
+            if file.change != .binary, fileContents != nil {
+                Button(fullContext ? "Show changed hunks" : "Show full file context") { Task { await toggleContext() } }
+                    .frame(minHeight: 44).disabled(loadingContext)
+                if loadingContext { ProgressView() }
+                if let contextError { Text(contextError).font(T3Typography.supporting).foregroundStyle(T3Colors.warning).padding(.horizontal, 16) }
+            }
+            if fullContext, let fullContents, hydratedLines == nil {
+                PullRequestFileVersionsView(contents: fullContents)
+            } else if displayedLines.isEmpty {
                 ContentUnavailableView("No text diff", systemImage: "doc", description: Text(file.change == .binary ? "This is a binary file." : "The host did not include text hunks for this file."))
             } else {
                 GeometryReader { geometry in
                     ScrollView([.horizontal, .vertical]) {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(file.lines) { line in
+                            ForEach(displayedLines) { line in
                                 FeatureDiffLineRow(line: line, isSelected: false, minimumWidth: geometry.size.width,
-                                    select: canComment && PullRequestReviewDraftModel.position(line) != nil ? { commentingLine = line } : nil)
+                                    select: canComment && originalPositions.contains(PullRequestFullContext.positionKey(line)) && PullRequestReviewDraftModel.position(line) != nil ? { commentingLine = line } : nil)
                                 ForEach(placedThreads[line.id] ?? []) { thread in
                                     conversation(thread).frame(width: geometry.size.width).padding(.vertical, 8)
                                 }
@@ -169,9 +186,46 @@ private struct PullRequestCodeFileView: View {
             }
         }
     }
+    private func toggleContext() async {
+        if fullContext { fullContext = false; return }
+        if fullContents != nil { fullContext = true; return }
+        guard let fileContents, let input = PullRequestFullContext.input(file: file, commit: commit) else { return }
+        loadingContext = true; contextError = nil
+        defer { loadingContext = false }
+        do {
+            let contents = try await fileContents(input)
+            guard !Task.isCancelled else { return }
+            guard PullRequestFullContext.matchesPatch(file: file, contents: contents) else {
+                contextError = "The file no longer matches this diff. Go back and refresh the pull request."
+                return
+            }
+            fullContents = contents
+            hydratedLines = PullRequestFullContext.lines(file: file, contents: contents)
+            fullContext = true
+        } catch { contextError = error.localizedDescription }
+    }
+
     private func conversation(_ thread: PullRequestReviewThread) -> some View {
         PullRequestThreadCard(thread: thread, access: conversations.access, canReply: conversations.canReply,
             canResolve: conversations.canResolve, onReplied: conversations.refresh)
     }
 
+}
+
+private struct PullRequestFileVersionsView: View {
+    let contents: PullRequestDiffFileContents
+    @State private var side = "new"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("The host omitted the hunks. These are file versions, not a reconstructed diff.")
+                .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(.horizontal, 16)
+            Picker("File version", selection: $side) {
+                Text("Previous version").tag("old"); Text("New version").tag("new")
+            }.pickerStyle(.segmented).padding(.horizontal, 16)
+            ScrollView([.horizontal, .vertical]) {
+                Text(verbatim: side == "old" ? contents.oldContents : contents.newContents)
+                    .font(T3Typography.code).textSelection(.enabled).padding(12)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
 }

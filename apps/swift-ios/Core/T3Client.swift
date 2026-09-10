@@ -838,6 +838,13 @@ public actor T3Client {
         let _: JSONValue = try await rpc.request("pullRequests.submitReview", payload: .object(payload), as: JSONValue.self)
     }
 
+    public func pullRequestDiffFileContents(projectID: String, repository: String, number: Int, input: PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "changeType": .string(input.changeType), "oldPath": .string(input.oldPath), "newPath": .string(input.newPath)]
+        if let commit = input.commit { payload["commit"] = .string(commit) }
+        return try await rpc.request("pullRequests.diffFileContents", payload: .object(payload), as: PullRequestDiffFileContents.self)
+    }
+
     public func pullRequestDiff(projectID: String, repository: String, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
         var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
         if let cursor { payload["cursor"] = .string(cursor) }

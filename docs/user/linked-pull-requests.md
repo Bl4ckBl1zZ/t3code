@@ -68,3 +68,8 @@ Review conversations appear in **Timeline** and beside their matching lines in t
 Older or out-of-hunk conversations stay separate from current code. Expand a resolved conversation
 to read it, load more comments, reply, or reopen it when permitted. Replies preserve your text when
 sending fails, and resolving a conversation can be undone with **Reopen conversation**.
+
+In an iOS PR file, **Show full file context** reads the host’s previous and new versions for the
+selected comparison. **Show changed hunks** returns to the compact diff. If the PR changed while
+you were reading, refresh it before expanding. When the host withheld the hunks, you can switch
+between labelled previous and new file versions; those snapshots are not presented as a diff.
