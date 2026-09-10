@@ -296,6 +296,11 @@ public struct WorkspaceView: View {
         } message: { _ in
             Text("This thread will return to its normal place in the list.")
         }
+        .environment(\.pullRequestHandoff, (model.client is any FeaturePullRequestThreadPreparing) ? PullRequestHandoffHandler { scope, overview, kind, mode in
+            let threadID = try await model.stagePullRequestTask(scope: scope, overview: overview, kind: kind, mode: mode)
+            showingPullRequests = false
+            openThread(threadID)
+        } : nil)
         .onChange(of: selectedThreadIsAvailable) { _, isAvailable in
             if !isAvailable { closeSelectedThread() }
         }

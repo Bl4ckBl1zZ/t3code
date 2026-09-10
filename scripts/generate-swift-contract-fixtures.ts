@@ -16,6 +16,8 @@ import { formatAssistantCitationHref } from "../packages/shared/src/assistantCit
  *   node scripts/generate-swift-contract-fixtures.ts --check   # CI: fail if stale
  */
 import {
+  GitPreparePullRequestThreadInput,
+  GitPreparePullRequestThreadResult,
   AssistantCitation,
   CustomModelSetting,
   ExecutionEnvironmentDescriptor,
@@ -1020,3 +1022,47 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestReviewersPath, pullRequestReviewersSerialized);
+
+const pullRequestCheckoutPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "pullRequestCheckout.json",
+);
+const pullRequestCheckoutSerialized = `${JSON.stringify(
+  Schema.encodeSync(
+    Schema.Struct({
+      input: GitPreparePullRequestThreadInput,
+      result: GitPreparePullRequestThreadResult,
+    }),
+  )({
+    input: {
+      cwd: "/repo",
+      reference: "https://github.com/acme/app/pull/3",
+      mode: "worktree",
+      threadId: ThreadId.make("checkout-thread"),
+    },
+    result: {
+      pullRequest: {
+        number: 3,
+        title: "Review checkout",
+        url: "https://github.com/acme/app/pull/3",
+        headBranch: "topic",
+        baseBranch: "main",
+        state: "open",
+      },
+      branch: "topic",
+      worktreePath: "/repo.worktrees/pr-3",
+      isOnPullRequestHead: false,
+    },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestCheckoutPath) ||
+    NodeFS.readFileSync(pullRequestCheckoutPath, "utf8") !== pullRequestCheckoutSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestCheckout.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestCheckoutPath, pullRequestCheckoutSerialized);

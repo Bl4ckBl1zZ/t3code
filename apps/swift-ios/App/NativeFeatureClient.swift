@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
+    FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
     FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -2097,6 +2097,38 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
             return (route.client, project.id, repository)
         }
+    }
+
+    func preparePullRequestAgentThread(scope: FeaturePullRequestScope, number: Int, expectedURL: String, title: String, mode: PullRequestCheckoutMode?) async throws -> FeaturePullRequestPreparedThread {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        let environmentID = route.client.environment.id
+        let generation = environmentGeneration
+        guard let project = shellsByEnvironmentID[environmentID]?.projects.first(where: { $0.id == route.projectID }) else {
+            throw NativeFeatureClientError.repositoryIdentityUnavailable
+        }
+        let projectID = FeatureScopedID.project(environmentID: environmentID, wireID: route.projectID)
+        let thread = try await createThread(projectID: projectID, title: title, selection: nil)
+        guard let wireID = thread.wireID else { throw CancellationError() }
+        var checkout: PullRequestCheckoutResult?
+        do {
+            if let mode {
+                checkout = try await route.client.preparePullRequestCheckout(cwd: project.workspaceRoot, reference: expectedURL, mode: mode, threadID: wireID)
+            }
+            guard isKnownClient(route.client, environmentID: environmentID, generation: generation) else { throw CancellationError() }
+            var fields: [String: JSONValue] = ["linkedPullRequest": try JSONValue.encode(OrchestrationV2ThreadLinkedPullRequest(projectId: route.projectID, repository: route.repository, number: number, url: expectedURL))]
+            if let checkout {
+                fields["branch"] = .string(checkout.branch)
+                fields["worktreePath"] = checkout.worktreePath.map(JSONValue.string) ?? .null
+                fields["expectedWorktreePath"] = .null
+            }
+            _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(threadID: wireID, fields: fields))
+        } catch {
+            let recovery = checkout.map { "The checkout is ready on \($0.branch), but the new thread could not be attached. Select that branch in the new thread before sending a task." }
+                ?? "The new empty thread was kept. No agent task was sent."
+            throw FeatureCapabilityUnavailable("\(error.localizedDescription) \(recovery)")
+        }
+        guard isKnownClient(route.client, environmentID: environmentID, generation: generation) else { throw CancellationError() }
+        return FeaturePullRequestPreparedThread(thread: thread, staleCheckout: checkout?.isOnPullRequestHead == false)
     }
 
     func pullRequestFileContents(scope: FeaturePullRequestScope, number: Int, expectedURL: String, input: PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents {

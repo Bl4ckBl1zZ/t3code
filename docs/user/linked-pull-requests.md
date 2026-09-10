@@ -95,3 +95,15 @@ The count updates while saving and returns to its previous state if the host ref
 Use **Request reviewers** on iOS to search the people and teams your host lists. A checkmark means
 a review is already requested; tap again to withdraw the request. If the list is incomplete, the
 picker says so—search filters that list, and other reviewers can be managed on the host.
+
+Use **Open in agent** on iOS to ask about a PR, explain its changes, fix review findings and failing
+checks, or resolve conflicts. From the PR workspace, Ask and Explain open a thread without changing
+the checkout. Fixing work prepares a separate worktree by default; choosing **Local repository**
+switches the branch in the project repository. **Check out pull request** opens a thread on the
+prepared branch without adding a task.
+
+When you are already viewing a thread’s PR, agent tasks go into that thread’s composer. Read and
+edit the staged text before sending. Your existing text and attachments are preserved; choosing
+another task replaces an untouched previous handoff. If an existing worktree could not advance to
+the PR’s current head, a warning explains that the checkout may contain older code. A failed checkout
+or thread attachment keeps the empty thread and shows the recovery action without staging the task.

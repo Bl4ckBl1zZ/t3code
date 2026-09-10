@@ -22,6 +22,7 @@ protocol FeatureProjectPullRequestManaging: AnyObject, Sendable {
 /// project. A workspace browse never creates a dummy thread just to read a PR.
 @MainActor
 struct FeaturePullRequestAccess {
+    let scope: FeaturePullRequestScope
     let reviewers: ((Int, String) -> FeaturePullRequestReviewerAccess)?
     let react: ((Int, String, PullRequestReactionRequest) async throws -> Void)?
     let editing: ((Int, String) -> FeaturePullRequestEditingAccess)?
@@ -39,6 +40,7 @@ struct FeaturePullRequestAccess {
     let runStackAction: (Int, PullRequestStack, String, String?) async throws -> Void
 
     init(client: any FeatureClient, threadID: String) {
+        scope = .thread(threadID)
         if let cache = client as? any FeaturePullRequestCacheInvalidating {
             invalidate = { try await cache.invalidatePullRequest(scope: .thread(threadID), number: $0) }
         } else { invalidate = nil }
@@ -63,6 +65,7 @@ struct FeaturePullRequestAccess {
     }
 
     init(manager: any FeatureProjectPullRequestManaging, scope: FeaturePullRequestProjectScope) {
+        self.scope = .project(scope)
         if let cache = manager as? any FeaturePullRequestCacheInvalidating {
             invalidate = { try await cache.invalidatePullRequest(scope: .project(scope), number: $0) }
         } else { invalidate = nil }

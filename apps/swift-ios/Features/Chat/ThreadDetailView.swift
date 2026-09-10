@@ -19,6 +19,8 @@ public struct ThreadDetailView: View {
 
     @SwiftUI.Environment(\.openURL) private var openURL
 
+    @State private var lastPullRequestPrompt: String?
+    @State private var pullRequestCheckoutWarning: String?
     @State private var citationPreview: AssistantCitation?
     @State private var citationError: String?
     @State private var draft = ""
@@ -65,6 +67,16 @@ public struct ThreadDetailView: View {
     }
 
     public var body: some View {
+        threadContent
+        .onChange(of: model.pendingPullRequestPrompts[thread.id]?.id) { consumePullRequestPrompt() }
+        .alert("Pull request checkout", isPresented: Binding(get: { pullRequestCheckoutWarning != nil }, set: { if !$0 { pullRequestCheckoutWarning = nil } })) {
+            Button("OK") { pullRequestCheckoutWarning = nil }
+        } message: { Text(pullRequestCheckoutWarning ?? "") }
+        .onChange(of: isSending) { if !isSending { consumePullRequestPrompt() } }
+        .onChange(of: isSwappingDraft) { if !isSwappingDraft { consumePullRequestPrompt() } }
+    }
+
+    private var threadContent: some View {
         Group {
             if isLoading {
                 FeatureThreadOpeningView(isRefreshing: detail != nil)
@@ -1168,6 +1180,17 @@ public struct ThreadDetailView: View {
         }
     }
 
+    private func consumePullRequestPrompt() {
+        guard didRestoreDraft, !isSending, !isSwappingDraft, let request = model.pendingPullRequestPrompts[thread.id] else { return }
+        draft = PullRequestHandoffPrompt.merge(existing: draft, last: lastPullRequestPrompt, incoming: request.text)
+        lastPullRequestPrompt = request.text
+        pullRequestCheckoutWarning = request.warning
+        model.pendingPullRequestPrompts[thread.id] = nil
+        toolSurface = nil
+        composerFocused = true
+        scheduleDraftSave()
+    }
+
     private var draftKey: String {
         FeatureComposerDraftStore.threadKey(currentThread)
     }
@@ -1189,6 +1212,7 @@ public struct ThreadDetailView: View {
         draft = restored.text
         attachments = restored.attachments
         didRestoreDraft = true
+        consumePullRequestPrompt()
 
         // Changes made while the file read or thread refresh was in flight did
         // not pass the didRestoreDraft gate, so enqueue their first save now.

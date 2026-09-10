@@ -16,6 +16,12 @@ struct PullRequestDetailSheet: View {
         self.number = number
     }
 
+    @SwiftUI.Environment(\.pullRequestHandoff) private var handoff
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+    @State private var handoffKind: PullRequestHandoffKind?
+    @State private var handoffMode = PullRequestCheckoutMode.worktree
+    @State private var handoffPending = false
+    @State private var handoffError: String?
     @State private var editingLabels = false
     @State private var reviewing = false
     @State private var choosingReviewers = false
@@ -68,6 +74,39 @@ struct PullRequestDetailSheet: View {
             }
         }
         .task(id: displayedNumber) { await load() }
+        .sheet(item: $handoffKind) { kind in
+            NavigationStack {
+                Form {
+                    Section { Text(overview?.detail.title ?? "") }
+                    Section {
+                        Text(kind.label)
+                        Text("The task will be staged in the composer for you to review and send.").foregroundStyle(T3Colors.textSecondary)
+                        if kind.needsCheckout, case .project = access.scope {
+                            Picker("Checkout", selection: $handoffMode) {
+                                Text("Separate worktree").tag(PullRequestCheckoutMode.worktree)
+                                Text("Local repository").tag(PullRequestCheckoutMode.local)
+                            }.disabled(handoffPending)
+                            Text(handoffMode == .local ? "This switches the branch in the project repository, affecting other threads using it." : "Prepare or reuse a worktree for this pull request.").font(T3Typography.supporting)
+                        }
+                        if let handoffError { Text(handoffError).foregroundStyle(T3Colors.warning) }
+                    }
+                    Button(handoffPending ? "Preparing…" : "Continue") {
+                        guard let overview, let handoff, !handoffPending else { return }
+                        handoffPending = true; handoffError = nil
+                        Task {
+                            defer { handoffPending = false }
+                            do {
+                                try await handoff.perform(access.scope, overview, kind, handoffMode)
+                                handoffKind = nil
+                                dismiss()
+                            } catch { handoffError = error.localizedDescription }
+                        }
+                    }.disabled(handoffPending)
+                }.navigationTitle("Open in agent").navigationBarTitleDisplayMode(.inline).t3NavigationChrome()
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { handoffKind = nil }.disabled(handoffPending) } }
+                    .interactiveDismissDisabled(handoffPending)
+            }
+        }
         .sheet(item: $pendingStackAction, onDismiss: { Task { await load() } }) { request in
             PullRequestStackActionSheet(request: request, access: access) {
                 pendingStackAction = nil
@@ -173,6 +212,15 @@ struct PullRequestDetailSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(overview.detail)
+                if handoff != nil {
+                    Menu("Open in agent", systemImage: "text.bubble") {
+                        ForEach(PullRequestHandoffKind.allCases) { kind in
+                            if kind != .conflicts || overview.detail.mergeability == .conflicting {
+                                Button(kind.label) { handoffMode = .worktree; handoffError = nil; handoffKind = kind }
+                            }
+                        }
+                    }.frame(minHeight: 44)
+                }
                 if access.editing != nil, PullRequestEditingLogic.canEditChangeRequest(overview.detail) {
                     Menu("Edit pull request", systemImage: "pencil") {
                         Button("Edit title") { textEdit = .title(overview.detail.title) }

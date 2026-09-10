@@ -227,6 +227,13 @@ public actor T3Client {
         )
     }
 
+    public func preparePullRequestCheckout(cwd: String, reference: String, mode: PullRequestCheckoutMode, threadID: String) async throws -> PullRequestCheckoutResult {
+        try await rpc.request("git.preparePullRequestThread", payload: .object([
+            "cwd": .string(cwd), "reference": .string(reference),
+            "mode": .string(mode.rawValue), "threadId": .string(threadID),
+        ]), as: PullRequestCheckoutResult.self)
+    }
+
     /// Sends an orchestration V2 command.
     ///
     /// WebSocket only. This fork's `EnvironmentOrchestrationHttpApi` serves the
