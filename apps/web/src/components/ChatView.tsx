@@ -4938,6 +4938,22 @@ function ChatViewContent(props: ChatViewProps) {
     // activeThreadRef resets transitively with the active thread.
   }, [activeThread?.id, markProgrammaticTimelineScroll]);
 
+  const planPanelChoiceRef = useRef<{
+    threadKey: string;
+    runId: string | null;
+    revision: number;
+  } | null>(null);
+  useEffect(() => {
+    planPanelChoiceRef.current =
+      activeThreadRef && activeThreadKey
+        ? {
+            threadKey: activeThreadKey,
+            runId: activeLatestRun?.runId ?? null,
+            revision: useRightPanelStore.getState().getUserActionRevision(activeThreadRef),
+          }
+        : null;
+  }, [activeThreadKey, activeThreadRef, activeLatestRun?.runId]);
+
   // Auto-open the plan sidebar when plan/todo steps arrive for the current turn.
   // Don't auto-open for plans carried over from a previous turn (the user can open manually).
   useEffect(() => {
@@ -4949,12 +4965,18 @@ function ChatViewContent(props: ChatViewProps) {
     const turnKey = activePlan.runId ?? sidebarProposedPlan?.runId ?? "__dismissed__";
     if (planSidebarDismissedForTurnRef.current === turnKey) return;
     if (activeThreadRef) {
-      useRightPanelStore.getState().open(activeThreadRef, "plan");
+      const observed = planPanelChoiceRef.current;
+      if (!observed || observed.threadKey !== activeThreadKey || observed.runId !== latestRunId)
+        return;
+      useRightPanelStore
+        .getState()
+        .openProactive(activeThreadRef, { id: "plan", kind: "plan" }, observed.revision);
     }
   }, [
     activePlan,
     activeLatestRun?.runId,
     activeThreadRef,
+    activeThreadKey,
     autoOpenPlanSidebar,
     planSidebarOpen,
     sidebarProposedPlan?.runId,

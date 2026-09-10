@@ -192,3 +192,5 @@ Completed web conversations keep the final response visible. Expand **Worked for
 interim responses and completed tools. Resource cards remain visible outside that fold.
 
 On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same eight-attachment limit applies to the picker and dropped files.
+
+If you choose another panel while a turn is working, its arriving plan will not replace your choice. A later turn can open its plan again when automatic plan opening is enabled.

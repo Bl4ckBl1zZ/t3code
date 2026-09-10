@@ -675,3 +675,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   attachment processors and upload queue. Preparation reserves attachment slots, reads temporary
   provider files before their callback expires, and discards results after composer navigation.
   This does not yet add drop-to-open behavior to native sidebar rows.
+
+- Ports upstream panel user-choice revisions (`bccad27046`) while retaining the fork’s
+  independent thread-details visibility. V2 automatic plan panels respect choices made during
+  their run; resource reconciliation never counts as a manual choice. The proactive panel API
+  gives linked PRs precedence over automatic plan/diff panels. Automatic PR discovery and
+  completed-run diff opening remain separate integrations.
