@@ -9,7 +9,7 @@ Attachments work in the chat composer on web, desktop, and mobile.
 - **Web and desktop**: drag files onto the composer, paste them, or use **+ → Attach files**.
 - **Mobile**: tap the attach button for **Camera**, **Photos**, or **Files**, or share a file into T3 Code from another app.
 
-You can attach up to 8 files per message. Images can be up to 10 MB and other files up to 20 MB. Large images are scaled down to fit rather than rejected.
+You can attach up to 8 files per message. Images can be up to 10 MB and other files up to 50 MB on current servers. Large images are scaled down to fit rather than rejected.
 
 Any file type works — PDFs, spreadsheets, CSVs, logs, archives, audio, source files. There is no longer a separate list of file types per provider.
 
@@ -43,3 +43,6 @@ In web and desktop, open an image from the conversation, then click it to zoom i
 to fit. Scroll to zoom and drag to pan. With the image focused, **+** and **−** change zoom
 and **0** returns to fit. Arrow keys pan while zoomed and move between images while fitted.
 Downloading still saves the original image.
+
+Uploads show progress in the web composer. If an upload fails, retry it from its chip or
+remove it; the draft stays available. Older servers may accept smaller files.

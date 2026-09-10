@@ -658,7 +658,7 @@ enum FeatureImageAttachmentError: LocalizedError, Equatable {
 /// Turns a picked file into a draft attachment without re-encoding it.
 ///
 /// The size cap comes from the classified kind rather than a single constant:
-/// the contract gives PDFs, video and generic files 20 MB while images keep the
+/// the contract gives PDFs, video and generic files 50 MB while images keep the
 /// tighter 10 MB limit, and validating here means a rejection is a picker error
 /// instead of a failed turn.
 enum FeatureDocumentProcessor {

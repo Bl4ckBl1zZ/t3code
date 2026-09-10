@@ -84,10 +84,7 @@ import {
   startAttachmentUpload,
   useAttachmentUploadStore,
 } from "../../lib/attachmentUploadQueue";
-import {
-  attachmentUploadBlockReason,
-  formatAttachmentUploadProgress,
-} from "../../lib/attachmentUploadState";
+import { attachmentUploadBlockReason } from "../../lib/attachmentUploadState";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
 import { resolveShortcutCommand } from "../../keybindings";
@@ -569,6 +566,7 @@ export interface ChatComposerProps {
   environmentId: EnvironmentId;
   attachmentUploadsCapabilityKnown: boolean;
   supportsAttachmentUploads: boolean;
+  supportsFileAttachmentUploads?: boolean;
   routeKind: "server" | "draft";
   draftId: DraftId | null;
 
@@ -713,6 +711,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentId,
     attachmentUploadsCapabilityKnown,
     supportsAttachmentUploads,
+    supportsFileAttachmentUploads = false,
     routeKind,
     draftId,
     activeThreadId,
@@ -802,7 +801,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const uploadsByImageId = useAttachmentUploadStore((state) => state.uploadsByImageId);
   const attachmentBlockReason = supportsAttachmentUploads
     ? attachmentUploadBlockReason({
-        imageIds: composerImages.map((image) => image.id),
+        imageIds: composerImages
+          .filter((image) => image.type === "image" || supportsFileAttachmentUploads)
+          .map((image) => image.id),
         uploadsByImageId,
         environmentId,
       })
@@ -854,14 +855,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       return;
     }
-    // Image-only: the signed-upload contract accepts image mime types alone,
-    // so the composer's file/pdf/video attachments still ride the send path's
-    // inline encoding.
     for (const image of composerImages) {
-      if (image.type !== "image") continue;
+      if (image.type !== "image" && !supportsFileAttachmentUploads) continue;
       startAttachmentUpload({ environmentId, image });
     }
-  }, [attachmentUploadsCapabilityKnown, composerImages, environmentId, supportsAttachmentUploads]);
+  }, [
+    attachmentUploadsCapabilityKnown,
+    composerImages,
+    environmentId,
+    supportsAttachmentUploads,
+    supportsFileAttachmentUploads,
+  ]);
 
   // ------------------------------------------------------------------
   // Model state
@@ -3504,9 +3508,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       mimeType: image.mimeType,
                       sizeBytes: image.sizeBytes,
                       previewUrl: image.previewUrl,
+                      upload:
+                        uploadsByImageId[image.id]?.environmentId === environmentId
+                          ? uploadsByImageId[image.id]
+                          : undefined,
                     }))}
                   nonPersistedIds={nonPersistedComposerImageIdSet}
                   onRemove={removeComposerImage}
+                  onRetry={(id) => {
+                    const image = composerImages.find((item) => item.id === id);
+                    if (image) retryAttachmentUpload({ environmentId, image });
+                  }}
                   onPreview={(id) => {
                     const preview = buildExpandedImagePreview(composerImages, id);
                     if (!preview) return;

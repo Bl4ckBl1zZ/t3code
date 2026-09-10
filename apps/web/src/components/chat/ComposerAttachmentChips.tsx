@@ -7,9 +7,13 @@
  */
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { formatAttachmentSize, middleTruncateFileName } from "@t3tools/shared/composerAttachments";
-import { CircleAlertIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
+import {
+  formatAttachmentUploadProgress,
+  type AttachmentUploadState,
+} from "../../lib/attachmentUploadState";
 import { useTheme } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -31,11 +35,13 @@ export interface ComposerAttachmentChip {
   readonly mimeType: string;
   readonly sizeBytes: number;
   readonly previewUrl?: string | undefined;
+  readonly upload?: AttachmentUploadState | undefined;
 }
 
 export function ComposerAttachmentChips(props: {
   readonly attachments: ReadonlyArray<ComposerAttachmentChip>;
   readonly nonPersistedIds: ReadonlySet<string>;
+  readonly onRetry?: (id: string) => void;
   readonly onRemove: (id: string) => void;
   readonly onPreview: (id: string) => void;
   readonly onFocusEditor: () => void;
@@ -165,6 +171,37 @@ export function ComposerAttachmentChips(props: {
                     </span>
                   </TooltipTrigger>
                   <TooltipPopup side="top">{attachment.name}</TooltipPopup>
+                </Tooltip>
+              )}
+
+              {attachment.upload?.status === "uploading" && (
+                <span
+                  role="progressbar"
+                  aria-label={`Uploading ${attachment.name}`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.floor(attachment.upload.progress * 100)}
+                  className="pointer-events-none absolute inset-x-0 bottom-0 bg-background/90 px-1 text-center text-[10px] tabular-nums"
+                >
+                  {formatAttachmentUploadProgress(attachment.upload.progress)}
+                </span>
+              )}
+              {attachment.upload?.status === "failed" && props.onRetry && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        className="absolute bottom-1 left-1 bg-background/95 text-destructive"
+                        aria-label={`Retry upload for ${attachment.name}`}
+                        onClick={() => props.onRetry?.(attachment.id)}
+                      />
+                    }
+                  >
+                    <RefreshCwIcon />
+                  </TooltipTrigger>
+                  <TooltipPopup>{attachment.upload.reason}</TooltipPopup>
                 </Tooltip>
               )}
 

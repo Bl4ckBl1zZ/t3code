@@ -1,5 +1,8 @@
 import type { UploadChatAttachment, UploadChatImageAttachment } from "@t3tools/contracts";
-import { classifyComposerAttachment } from "@t3tools/shared/composerAttachments";
+import {
+  classifyComposerAttachment,
+  validateComposerAttachment,
+} from "@t3tools/shared/composerAttachments";
 
 /**
  * Pure attachment-kind helpers, kept free of native imports so they stay
@@ -63,3 +66,17 @@ export function toUploadChatAttachments(
 
 /** @deprecated Use toUploadChatAttachments — kept for the document-only path. */
 export const toUploadChatDocumentAttachments = toUploadChatAttachments;
+
+/** The frozen Expo composer still sends inline base64, capped below 28M characters. */
+export function validateInlineComposerAttachment(
+  input: Parameters<typeof validateComposerAttachment>[0],
+): ReturnType<typeof validateComposerAttachment> {
+  const result = validateComposerAttachment(input);
+  if (result.accepted && result.type !== "image" && input.sizeBytes > 20 * 1024 * 1024) {
+    return {
+      accepted: false,
+      message: `'${result.name}' exceeds this client's 20 MB attachment limit.`,
+    };
+  }
+  return result;
+}

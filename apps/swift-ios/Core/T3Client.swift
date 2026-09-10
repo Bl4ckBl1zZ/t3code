@@ -287,6 +287,14 @@ public actor T3Client {
         attachments: [UploadChatAttachment]
     ) async throws -> [JSONValue] {
         guard !attachments.isEmpty else { return [] }
+        let capabilities = environment.descriptor?.capabilities
+        if capabilities?.attachmentUploads == true, let fileLimit = capabilities?.fileAttachments?.maxUploadBytes {
+            return try await persistSignedAttachments(attachments, fileLimit: fileLimit)
+        }
+        for attachment in attachments where attachment.type != .image && attachment.sizeBytes > 20 * 1024 * 1024 {
+            throw ImageAttachmentError.tooLarge(actualBytes: attachment.sizeBytes, maximumBytes: 20 * 1024 * 1024)
+        }
+
         let result = try await rpc.request(
             RPCMethod.assetsPersistChatAttachments.rawValue,
             payload: .object([
@@ -302,6 +310,49 @@ public actor T3Client {
             )
         }
         return persisted
+    }
+
+    private func persistSignedAttachments(_ attachments: [UploadChatAttachment], fileLimit: Int) async throws -> [JSONValue] {
+        var minted: [String] = []
+        do {
+            var persisted: [JSONValue] = []
+            // Bound memory and transfers: a phone sends one file at a time.
+            for attachment in attachments {
+                try Task.checkCancellation()
+                let limit = attachment.type == .image ? ComposerAttachments.maximumImageBytes : min(fileLimit, ComposerAttachments.maximumFileBytes)
+                guard attachment.sizeBytes <= limit else {
+                    throw ImageAttachmentError.tooLarge(actualBytes: attachment.sizeBytes, maximumBytes: limit)
+                }
+                guard let comma = attachment.dataUrl.firstIndex(of: ","),
+                      let bytes = Data(base64Encoded: String(attachment.dataUrl[attachment.dataUrl.index(after: comma)...])),
+                      bytes.count == attachment.sizeBytes else {
+                    throw RPCError.protocolViolation("The attachment data is invalid.")
+                }
+                let result = try await rpc.request(
+                    "attachments.createUploadUrl",
+                    payload: .object([
+                        "type": .string(attachment.type == .image ? "image" : "file"),
+                        "name": .string(attachment.name), "mimeType": .string(attachment.mimeType),
+                        "sizeBytes": .number(Double(attachment.sizeBytes)),
+                    ]), as: AttachmentUploadURLResult.self
+                )
+                minted.append(result.attachmentId)
+                try await api.uploadAttachment(for: environment, relativeURL: result.relativeUrl, data: bytes, mimeType: attachment.mimeType)
+                persisted.append(.object([
+                    "type": .string(attachment.type.rawValue), "id": .string(result.attachmentId),
+                    "name": .string(attachment.name), "mimeType": .string(attachment.mimeType),
+                    "sizeBytes": .number(Double(attachment.sizeBytes)),
+                ]))
+            }
+            return persisted
+        } catch {
+            // Only pending uploads from this attempt are eligible for deletion.
+            // The server also expires abandoned uploads if the connection failed.
+            for id in minted {
+                _ = try? await rpc.request("attachments.delete", payload: .object(["attachmentId": .string(id)]), as: JSONValue.self)
+            }
+            throw error
+        }
     }
 
     /// Hands the thread to the provider as feedback and returns the identifier

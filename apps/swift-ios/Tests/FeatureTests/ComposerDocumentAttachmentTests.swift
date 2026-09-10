@@ -88,7 +88,7 @@ final class ComposerDocumentAttachmentTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? FeatureDocumentAttachmentError,
-                .tooLarge(name: "big.pdf", maximumBytes: 20 * 1024 * 1024)
+                .tooLarge(name: "big.pdf", maximumBytes: 50 * 1024 * 1024)
             )
         }
     }

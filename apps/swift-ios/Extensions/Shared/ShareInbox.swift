@@ -222,7 +222,7 @@ enum T3IncomingShareStore {
     // ExtensionContractTests asserts they agree, the same way it pins the app
     // group identifier that also lives in three places.
     static let maximumImageBytes = 10 * 1_024 * 1_024
-    static let maximumFileBytes = 20 * 1_024 * 1_024
+    static let maximumFileBytes = 50 * 1_024 * 1_024
 
     static func maximumBytes(isImage: Bool) -> Int {
         isImage ? maximumImageBytes : maximumFileBytes

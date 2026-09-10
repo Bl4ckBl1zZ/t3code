@@ -2341,6 +2341,9 @@ function ChatViewContent(props: ChatViewProps) {
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsAttachmentUploads =
     attachmentEnvironmentConfig?.environment.capabilities.attachmentUploads === true;
+  const supportsFileAttachmentUploads =
+    supportsAttachmentUploads &&
+    attachmentEnvironmentConfig?.environment.capabilities.fileAttachments !== undefined;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -6255,11 +6258,27 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
 
+    const fileLimit = supportsFileAttachmentUploads
+      ? Math.min(
+          50 * 1024 * 1024,
+          attachmentEnvironmentConfig?.environment.capabilities.fileAttachments?.maxUploadBytes ??
+            20 * 1024 * 1024,
+        )
+      : 20 * 1024 * 1024;
+    const oversizedFile = composerImagesSnapshot.find(
+      (attachment) => attachment.type !== "image" && attachment.sizeBytes > fileLimit,
+    );
+    if (oversizedFile) {
+      setThreadError(
+        threadIdForSend,
+        `'${oversizedFile.name}' exceeds this server's ${Math.floor(fileLimit / 1024 / 1024)} MB file limit.`,
+      );
+      return;
+    }
+
     sendInFlightRef.current = true;
-    // Only images have a signed-upload path; the composer's other attachment
-    // kinds are still encoded inline below.
     const uploadableImagesSnapshot = composerImagesSnapshot.filter(
-      (image): image is ComposerImageAttachment => image.type === "image",
+      (image) => image.type === "image" || supportsFileAttachmentUploads,
     );
     if (supportsAttachmentUploads && uploadableImagesSnapshot.length > 0) {
       for (const image of uploadableImagesSnapshot) {
@@ -6268,7 +6287,10 @@ function ChatViewContent(props: ChatViewProps) {
       await awaitAttachmentUploads(uploadableImagesSnapshot.map((image) => image.id));
       if (getUploadedAttachments({ environmentId, images: uploadableImagesSnapshot }) === null) {
         sendInFlightRef.current = false;
-        setThreadError(threadIdForSend, "Retry or remove failed image uploads before sending.");
+        setThreadError(
+          threadIdForSend,
+          "Retry or remove failed attachment uploads before sending.",
+        );
         return;
       }
     }
@@ -6306,10 +6328,13 @@ function ChatViewContent(props: ChatViewProps) {
     const messageCreatedAt = new Date().toISOString();
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => {
-        if (supportsAttachmentUploads && image.type === "image") {
+        if (
+          supportsAttachmentUploads &&
+          (image.type === "image" || supportsFileAttachmentUploads)
+        ) {
           const uploaded = getUploadedAttachments({ environmentId, images: [image] })?.[0];
           if (!uploaded) {
-            throw new Error(`Image '${image.name}' did not finish uploading.`);
+            throw new Error(`Attachment '${image.name}' did not finish uploading.`);
           }
           return uploaded;
         }
@@ -7784,6 +7809,7 @@ function ChatViewContent(props: ChatViewProps) {
                             environmentId={environmentId}
                             attachmentUploadsCapabilityKnown={attachmentUploadsCapabilityKnown}
                             supportsAttachmentUploads={supportsAttachmentUploads}
+                            supportsFileAttachmentUploads={supportsFileAttachmentUploads}
                             routeKind={routeKind}
                             draftId={draftId}
                             activeThreadId={activeThreadId}

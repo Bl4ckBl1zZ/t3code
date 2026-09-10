@@ -86,14 +86,13 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   because the union's open member is typed `type: string` and defeats literal narrowing. The
   composer's own attachment types are drawn from `ChatKnownAttachment`: composer attachments are
   always locally created and validated, so an unknown kind can never reach them.
-- Keeps `PROVIDER_SEND_TURN_MAX_FILE_BYTES` at 20MB rather than upstream's 50MB (`8f49132214`).
-  Upstream raised the cap alongside a streaming upload path for generic files; on this fork the
-  composer still sends file/pdf/video attachments through the inline base64 path, whose
-  `PROVIDER_SEND_TURN_MAX_DATA_URL_CHARS` cap tops out around 21MB, so advertising 50MB would
-  promise a size the client cannot send. The signed-upload contract widening itself is carried
-  (`assets.ts` accepts `type: "file"` uploads, `AssetAccess` mints download disposition and
-  filename/mime claims, `attachmentStore` encodes the extension in the attachment id, and
-  `http.ts` serves range requests for inline video).
+- Ports upstream's 50 MB file limit through signed HTTP uploads in web/desktop and Swift.
+  PDF/video/file discriminators are preserved in V2 message references. Images retain 10 MB;
+  the OpenCode native part limit remains 20 MB (larger files use workspace materialization).
+  Native share intake follows 50 MB, and older servers still enforce their advertised limit
+  or the 20 MB inline fallback. Inline base64 limits are not widened. Web chips display upload
+  progress and retry, preserving the fork's attachment keyboard and local-persistence behavior.
+  The frozen Expo picker/share intake explicitly retains its 20 MB inline transport limit.
 - Does not carry upstream's "retry failed thread bootstraps with a fresh id" (`8824f8f24f`).
   It reports a deleted bootstrap thread through the V1 `OrchestrationDispatchCommandError`, which
   the fork does not define; the fork launches threads through V2 `launchThread`, which keeps the
@@ -240,10 +239,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   uploads into the thread inside the V1 `Normalizer`; the fork claims them in `ws.ts` on the V2
   `dispatchCommand` (`message.dispatch`) and `launchThread` handlers, releasing the claimed copies
   when the dispatch fails. `launchThread` can only claim when the caller named the thread id — a
-  server-allocated id has nothing to claim into yet. The upload contract accepts image mime types
-  only, so the composer's file/pdf/video attachments still ride the inline base64 path, and the
-  fork does not carry upstream's per-chip upload progress UI (it belongs to the composer drawer
-  redesign the fork already declined).
+  server-allocated id has nothing to claim into yet. Signed uploads now handle all known attachment kinds, with per-chip progress and retry.
+  Pending claims remain at the V2 command boundary; no V1 normalizer is restored.
 - Does not carry upstream's Codex MCP-elicitation approvals end to end (`7c6163c67`). The contract
   widening (`ProviderRequestKind`'s `mcp-elicitation`, `ProviderApprovalDecision`'s `acceptAlways`,
   `ProviderApprovalOption`) lives in the fork's `providerPolicy.ts` rather than upstream's

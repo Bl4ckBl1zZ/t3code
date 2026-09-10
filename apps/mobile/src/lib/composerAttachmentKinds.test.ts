@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { documentAttachmentKind, toUploadChatDocumentAttachments } from "./composerAttachmentKinds";
+import {
+  documentAttachmentKind,
+  toUploadChatDocumentAttachments,
+  validateInlineComposerAttachment,
+} from "./composerAttachmentKinds";
 
 describe("documentAttachmentKind", () => {
   it("splits kinds the way the attachment contract does", () => {
@@ -54,4 +58,21 @@ describe("documentAttachmentKind agreement with web", () => {
     // Android content:// URIs do this constantly.
     expect(documentAttachmentKind("", "itinerary.pdf")).toBe("pdf");
   });
+});
+
+it("keeps inline Expo files within the transport limit after the shared file cap increases", () => {
+  expect(
+    validateInlineComposerAttachment({
+      name: "large.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 25 * 1024 * 1024,
+    }),
+  ).toMatchObject({ accepted: false, message: expect.stringContaining("20 MB") });
+  expect(
+    validateInlineComposerAttachment({
+      name: "small.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 20 * 1024 * 1024,
+    }),
+  ).toMatchObject({ accepted: true, type: "pdf" });
 });

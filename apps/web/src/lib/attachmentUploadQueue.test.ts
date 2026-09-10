@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { ComposerImageAttachment } from "../composerDraftStore";
+import type { ComposerImageAttachment, ComposerAttachment } from "../composerDraftStore";
 
 const mocks = vi.hoisted(() => ({
   createUploadUrl: Symbol("create-upload-url"),
@@ -188,6 +188,54 @@ describe("attachmentUploadQueue", () => {
       expect.anything(),
     );
   });
+
+  it.each([
+    ["file", "archive.zip", "application/zip"],
+    ["pdf", "spec.pdf", "application/pdf"],
+    ["video", "demo.mp4", "video/mp4"],
+  ] as const)(
+    "uploads %s bytes separately and retains the message kind",
+    async (type, name, mimeType) => {
+      const file = new File([new Uint8Array(25 * 1024 * 1024)], name, { type: mimeType });
+      const attachment: ComposerAttachment = {
+        type,
+        id: "document",
+        name,
+        mimeType,
+        sizeBytes: file.size,
+        file,
+        previewUrl: "",
+        role: "upload",
+      };
+      startAttachmentUpload({ environmentId: firstEnvironment, image: attachment });
+      await Promise.resolve();
+      expect(mocks.runAtomCommand).toHaveBeenCalledWith(
+        expect.anything(),
+        mocks.createUploadUrl,
+        {
+          environmentId: firstEnvironment,
+          input: { type: "file", name, mimeType, sizeBytes: file.size },
+        },
+        expect.anything(),
+      );
+      const settled = awaitAttachmentUploads([attachment.id]);
+      TestXmlHttpRequest.requests[0]!.complete();
+      await settled;
+      expect(
+        getUploadedAttachments({ environmentId: firstEnvironment, images: [attachment] }),
+      ).toEqual([
+        {
+          type,
+          id: `pending-environment-1-${name}`,
+          name,
+          mimeType,
+          sizeBytes: file.size,
+          role: "upload",
+        },
+      ]);
+      releaseAttachmentUploads([attachment]);
+    },
+  );
 
   it("retries rejected uploads", async () => {
     const image = makeImage("image-retry");
