@@ -42,3 +42,7 @@ For Claude, **Context** controls when conversation compaction happens. The model
 its largest supported window; selecting 250K, 500K, or 750K sets an earlier compaction
 threshold, while 1M leaves the model's own limit in control. An account-level compaction
 limit can set a lower ceiling.
+
+An empty new-thread draft follows updated project or machine defaults until you
+choose a model or adjust its options. Your explicit choice survives reopening the
+draft and moving its unfinished prompt to another project.

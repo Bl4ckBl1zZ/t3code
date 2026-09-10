@@ -5,7 +5,7 @@ import type {
   ProjectId,
   ScopedProjectRef,
 } from "@t3tools/contracts";
-import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { ComposerThreadDraftState, DraftThreadEnvMode } from "../composerDraftStore";
 
 interface ThreadContextLike {
   environmentId: EnvironmentId;
@@ -48,6 +48,24 @@ export function resolveNewThreadModelSelectionOverride(input: {
   return (
     input.projectDefaultSelection ??
     (input.carrySourceDraftId === input.destinationDraftId ? null : input.carrySelection)
+  );
+}
+
+export function hasExplicitComposerModelSelection(
+  draft:
+    | Pick<
+        ComposerThreadDraftState,
+        "activeProvider" | "modelSelectionByProvider" | "modelSelectionExplicit"
+      >
+    | null
+    | undefined,
+): boolean {
+  const activeProvider = draft?.activeProvider;
+  return (
+    draft?.modelSelectionExplicit === true &&
+    activeProvider !== null &&
+    activeProvider !== undefined &&
+    draft.modelSelectionByProvider[activeProvider] !== undefined
   );
 }
 

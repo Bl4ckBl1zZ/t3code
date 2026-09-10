@@ -30,7 +30,11 @@ import {
 } from "../logicalProject";
 import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
 import { readThreadShell, useProjects, useThreadShell } from "../state/entities";
-import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
+import {
+  hasExplicitComposerModelSelection,
+  resolveNewThreadModelSelectionOverride,
+  resolveNewDraftStartFromOrigin,
+} from "../lib/chatThreadActions";
 import { readT3ProjectFileDefaultThreadEnvMode } from "../lib/t3ProjectFileDefaults";
 import { environmentServerConfigsAtom, primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
@@ -173,13 +177,34 @@ export function useNewThreadHandler() {
         targetConfig?.environment.capabilities.projectDefaults === true
           ? targetConfig.settings
           : primaryServerSettings;
-      const nextModelSelection =
+      const carriedExplicitSelection =
+        options?.carryComposerContent && hasExplicitComposerModelSelection(carrySourceComposer)
+          ? carryModelSelection
+          : null;
+      const resolveModelSelectionOverride = (destinationDraftId: DraftId) =>
         options?.modelSelection ??
-        project?.defaultModelSelection ??
-        (targetConfig?.environment.capabilities.projectDefaults === true
-          ? targetSettings.defaultModelSelection
-          : null) ??
-        carryModelSelection;
+        carriedExplicitSelection ??
+        resolveNewThreadModelSelectionOverride({
+          projectDefaultSelection:
+            project?.defaultModelSelection ??
+            (targetConfig?.environment.capabilities.projectDefaults === true
+              ? targetSettings.defaultModelSelection
+              : null),
+          carrySelection: carryModelSelection,
+          carrySourceDraftId:
+            currentRouteTarget?.kind === "draft" ? currentRouteTarget.draftId : null,
+          destinationDraftId,
+        });
+      const seedModelSelection = (draftId: DraftId) => {
+        if (hasExplicitComposerModelSelection(getComposerDraft(draftId))) return;
+        applyStickyState(draftId);
+        const selection = resolveModelSelectionOverride(draftId);
+        if (selection)
+          setModelSelection(draftId, selection, {
+            replaceOptions: true,
+            ...(carriedExplicitSelection ? { explicit: true } : {}),
+          });
+      };
       // Every new-thread surface funnels through here, so this is the one
       // place that has to remember the choice: the next composer the user
       // opens without naming a project lands back on this one. Unknown refs
@@ -307,15 +332,8 @@ export function useNewThreadHandler() {
               ...(carryRuntimeMode ? { runtimeMode: carryRuntimeMode } : {}),
               ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
             });
-            if (nextModelSelection) {
-              // The carried selection is a complete snapshot of the viewed
-              // thread's model state: absent options mean "no options", not
-              // "keep the stale draft's options".
-              setModelSelection(emptyStoredDraftThread.draftId, nextModelSelection, {
-                replaceOptions: true,
-              });
-            }
           }
+          seedModelSelection(emptyStoredDraftThread.draftId);
           // The workspace context must also ride along here: when projectRef
           // targets a different physical member of the logical project,
           // createDraftThreadState treats the remap as a project change and
@@ -373,6 +391,7 @@ export function useNewThreadHandler() {
         ) {
           setDraftThreadContext(currentRouteTarget.draftId, pickExplicitWorkspaceOptions(options));
         }
+        seedModelSelection(currentRouteTarget.draftId);
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, currentRouteTarget.draftId, {
           threadId: latestActiveDraftThread.threadId,
           createdAt: latestActiveDraftThread.createdAt,
@@ -446,15 +465,7 @@ export function useNewThreadHandler() {
           runtimeMode: carryRuntimeMode ?? DEFAULT_RUNTIME_MODE,
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
         });
-        applyStickyState(draftId);
-        if (nextModelSelection) {
-          // After sticky state so the viewed thread's exact selection
-          // (model + options like effort and context window) wins over the
-          // globally sticky one. replaceOptions: the carried selection is a
-          // complete snapshot — absent options mean "no options", not "keep
-          // whatever sticky state just wrote".
-          setModelSelection(draftId, nextModelSelection, { replaceOptions: true });
-        }
+        seedModelSelection(draftId);
         carryComposerContentTo(draftId);
 
         await router.navigate({

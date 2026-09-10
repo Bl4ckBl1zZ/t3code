@@ -49,6 +49,8 @@ const testState = vi.hoisted(() => {
       router.navigate.mockClear();
       draftStore.setLogicalProjectDraftThreadId.mockClear();
       draftStore.setModelSelection.mockClear();
+      draftStore.applyStickyState.mockClear();
+      draftStore.getComposerDraft.mockReset().mockReturnValue({});
       projectFileRead = new Promise<null>((resolve) => {
         completeProjectFileRead = resolve;
       });
@@ -94,10 +96,9 @@ vi.mock("../composerDraftStore", () => {
     useComposerDraftStore,
   };
 });
-vi.mock("../lib/chatThreadActions", () => ({
-  hasExplicitComposerModelSelection: () => false,
+vi.mock("../lib/chatThreadActions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/chatThreadActions")>()),
   resolveNewDraftStartFromOrigin: () => false,
-  resolveNewThreadModelSelectionOverride: () => null,
 }));
 vi.mock("../lib/t3ProjectFileDefaults", () => ({
   readT3ProjectFileDefaultThreadEnvMode: () => testState.projectFileRead,
@@ -174,6 +175,60 @@ describe("useNewThreadHandler", () => {
     expect(testState.draftStore.setModelSelection).toHaveBeenCalledWith("draft-delayed", choice, {
       replaceOptions: true,
     });
+  });
+
+  it.each([false, true])(
+    "refreshes a reused draft seed while preserving explicit picks (%s)",
+    async (explicit) => {
+      testState.reset({
+        draftId: "draft-existing",
+        environmentId: "environment-ssh",
+        promotedTo: null,
+        threadId: "thread-existing",
+      });
+      testState.draftStore.getComposerDraft.mockReturnValue({
+        modelSelectionExplicit: explicit,
+        activeProvider: "codex",
+        modelSelectionByProvider: { codex: { instanceId: "codex", model: "old-model" } },
+      });
+      const pending = useNewThreadHandler()({
+        environmentId: "environment-ssh",
+        projectId: "project-remote",
+      } as never);
+      testState.completeProjectFileRead(null);
+      await pending;
+      if (explicit) {
+        expect(testState.draftStore.setModelSelection).not.toHaveBeenCalled();
+        expect(testState.draftStore.applyStickyState).not.toHaveBeenCalled();
+      } else {
+        expect(testState.draftStore.setModelSelection).toHaveBeenCalledWith(
+          "draft-existing",
+          testState.remoteConfig.settings.defaultModelSelection,
+          { replaceOptions: true },
+        );
+      }
+    },
+  );
+
+  it("preserves a model picked while workspace defaults are loading", async () => {
+    testState.reset({
+      draftId: "draft-existing",
+      environmentId: "environment-ssh",
+      promotedTo: null,
+      threadId: "thread-existing",
+    });
+    const pending = useNewThreadHandler()({
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never);
+    testState.draftStore.getComposerDraft.mockReturnValue({
+      modelSelectionExplicit: true,
+      activeProvider: "codex",
+      modelSelectionByProvider: { codex: { instanceId: "codex", model: "picked-during-load" } },
+    });
+    testState.completeProjectFileRead(null);
+    await pending;
+    expect(testState.draftStore.setModelSelection).not.toHaveBeenCalled();
   });
 
   it.each([

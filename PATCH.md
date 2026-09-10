@@ -1053,3 +1053,15 @@ in the V2 SDK settings. This preserves the existing working Context control inst
 of restoring upstream's ineffective 200k selector on natively-1M models. No V1 runtime
 or migration is introduced. Web/desktop and Swift render manifest-driven New badges;
 the frozen Expo client accepts the additive contract fields.
+
+## Explicit draft model choices
+
+Web/desktop draft persistence distinguishes a human model/trait choice from a
+project, machine, or sticky seed. Reopening an empty draft refreshes seeds without
+replacing explicit picks, including picks made while workspace defaults load.
+Moving typed draft content between projects carries an explicit model choice.
+The browser storage migration removes only model seeds on empty local draft
+sessions; invested drafts, real threads, and instance-scoped sticky preferences
+remain intact. V2 persisted thread selections still outrank browser composer state.
+Swift already records `selectionIsExplicit` and persists only explicit draft model
+choices, so this port aligns web behavior without changing its native composer.
