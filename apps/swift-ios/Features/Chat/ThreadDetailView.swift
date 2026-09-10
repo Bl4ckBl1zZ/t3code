@@ -2792,7 +2792,7 @@ struct FeatureMessageView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
                         if !message.text.isEmpty {
-                            CitationAwareMessageText(
+                            ReviewContextMessageText(
                                 source: message.text,
                                 isStreaming: message.state == .streaming
                             )
@@ -2820,7 +2820,7 @@ struct FeatureMessageView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     FeatureMessageAttachmentsView(attachments: message.attachments)
                     if !message.text.isEmpty {
-                        CitationAwareMessageText(
+                        ReviewContextMessageText(
                             source: message.text,
                             isStreaming: message.state == .streaming
                         )

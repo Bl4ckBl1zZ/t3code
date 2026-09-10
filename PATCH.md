@@ -874,3 +874,14 @@ text/attachments and signed upload behavior are preserved. Eight-file batches, a
 pending destinations, file-size validation and visible overflow/errors bound the handoff.
 Archived rows, links and selection mode reject drops. Queue state is session-local; received
 attachments use the existing persisted composer draft. No provider or V1 runtime changes.
+
+### Native PR review-context chips
+
+Native PR identity, selected code and inline findings use the existing web `review_comment`
+message format. Draft/stash/send keep the original readable blocks; the composer separates them
+from editable prompt text into inspect/edit/remove chips, and sent messages render context cards.
+Ask leaves an empty question field. Original diff sides, revision, outdated status and excerpt
+bounds are preserved; fileless findings/checks stay in general context. Bounded parsing leaves
+malformed blocks visible, escaping reserved host tags prevents nested forged chips, and longer
+backtick fences preserve code. Swift↔web serialization was exercised in both directions. No new
+server capability, schema or V1 runtime is required.

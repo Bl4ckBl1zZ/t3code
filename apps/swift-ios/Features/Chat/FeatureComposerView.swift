@@ -35,8 +35,11 @@ struct FeatureComposerView: View {
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding private var storedText: String
     private var text: String {
-        get { AssistantCitation.removingMarkers(from: storedText) }
-        nonmutating set { storedText = AssistantCitation.replacingPlainText(in: storedText, with: newValue) }
+        get { ReviewCommentContext.removingBlocks(from: AssistantCitation.removingMarkers(from: storedText)) }
+        nonmutating set {
+            storedText = ReviewCommentContext.replacingPlainText(in: storedText,
+                with: AssistantCitation.replacingPlainText(in: storedText, with: newValue))
+        }
     }
     private var textBinding: Binding<String> { Binding(get: { text }, set: { text = $0 }) }
     @Binding private var selection: FeatureSelection?
@@ -157,6 +160,9 @@ struct FeatureComposerView: View {
             }
             if !AssistantCitation.matches(in: storedText).isEmpty {
                 AssistantCitationChips(text: $storedText).disabled(isSending || isStashing)
+            }
+            if !ReviewCommentContext.matches(in: storedText).isEmpty {
+                ReviewCommentContextChips(text: $storedText).disabled(isSending || isStashing)
             }
             composerSurface
         }

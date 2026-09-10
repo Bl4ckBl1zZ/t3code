@@ -8,6 +8,7 @@ struct PullRequestHandoffSelection: Equatable, Sendable {
     var location: String? = nil
     var url: String? = nil
     var truncated = false
+    var reviewContext: ReviewCommentContext? = nil
 
     var context: String {
         let limit = kind == .code ? 16_000 : 8_000
@@ -32,7 +33,12 @@ struct PullRequestHandoffSelection: Equatable, Sendable {
         }.joined(separator: "\n")
         return Self(kind: .code, label: "Selected pull-request diff", body: text,
             location: "\(file.path) · old lines \(span(old)) · new lines \(span(new))\nRevision: \(commit ?? "whole pull-request diff as loaded; revision not supplied")",
-            truncated: range.count > selected.count)
+            truncated: range.count > selected.count,
+            reviewContext: ReviewCommentContext(sectionID: commit ?? "whole-pr", sectionTitle: "Pull request diff", filePath: file.path,
+                startIndex: min(first, last), endIndex: min(first, last) + selected.count - 1,
+                rangeLabel: "old lines \(span(old)) · new lines \(span(new))",
+                text: "Revision: \(commit ?? "whole pull-request diff as loaded; revision not supplied")" + (range.count > selected.count ? "\nThis excerpt was shortened. Inspect the original before changing code." : ""),
+                diff: String(text.prefix(16_000)) + (text.count > 16_000 ? "\n… excerpt shortened" : "")))
     }
 
     static func comment(_ comment: PullRequestComment) -> Self {
@@ -40,8 +46,18 @@ struct PullRequestHandoffSelection: Equatable, Sendable {
     }
     static func comment(_ comment: PullRequestThreadComment, thread: PullRequestReviewThread) -> Self {
         Self(kind: .comment, label: "Review finding from \(comment.author?.login ?? "unknown")", body: comment.body,
-            location: "\(thread.path):\(thread.line.map(String.init) ?? "unknown") [\(thread.side)\(thread.isOutdated ? ", outdated" : "")\(thread.isResolved ? ", resolved" : "")]", url: comment.url)
+            location: "\(thread.path):\(thread.line.map(String.init) ?? "unknown") [\(thread.side)\(thread.isOutdated ? ", outdated" : "")\(thread.isResolved ? ", resolved" : "")]", url: comment.url,
+            reviewContext: reviewThreadContext(thread, comments: [comment]))
     }
+    static func reviewThreadContext(_ thread: PullRequestReviewThread, comments: [PullRequestThreadComment]? = nil) -> ReviewCommentContext {
+        let index = max(0, (thread.line ?? 1) - 1)
+        let status = "\(thread.side)\(thread.isOutdated ? ", outdated" : "")\(thread.isResolved ? ", resolved" : "")"
+        let body = (comments ?? thread.comments).map { "\($0.author?.login ?? "unknown"): \($0.body)" + ($0.url.map { "\n" + $0 } ?? "") }.joined(separator: "\n")
+        return ReviewCommentContext(sectionID: "review:" + thread.id, sectionTitle: "Review finding", filePath: thread.path,
+            startIndex: index, endIndex: index, rangeLabel: "\(thread.line.map { "L\($0)" } ?? "file") [\(status)]",
+            text: String(body.prefix(8_000)) + (body.count > 8_000 ? "\nThis excerpt was shortened." : "") + (thread.nextCommentsCursor == nil ? "" : "\nMore comments exist on the host."), diff: "")
+    }
+
     static func check(_ check: PullRequestCheck) -> Self {
         Self(kind: .check, label: "Check: \(check.name) (\(check.status.rawValue))", body: check.description ?? "The host did not supply detailed output.", url: check.url)
     }

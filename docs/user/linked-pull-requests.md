@@ -119,3 +119,10 @@ Choose **Done selecting** to return to normal line-comment controls.
 
 **Copy checkout command** provides the command for the reported source-control host.
 Copying does not run it or change your checkout.
+
+Native agent handoffs attach PR identity, inline findings and selected code as review-context
+chips above the composer. Tap a chip to inspect its file, original range, comment and diff;
+you can edit its comment or remove it. **Ask** leaves the text field empty for your question.
+Review-context cards remain inspectable in sent messages and are compatible with web and desktop.
+Findings without a file location and check output stay in the PR context rather than gaining an
+invented line number.
