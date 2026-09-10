@@ -8,6 +8,7 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveLiveWorkEntry,
+  resolveHistoricalWorkSummary,
   resolveAssistantMessageCopyState,
   resolveTimelineToolPresentation,
   shouldPreserveAssistantLineBreaks,
@@ -2107,6 +2108,18 @@ describe("V2 live work focus", () => {
       rows([work(entry("done"))], false).find((row) => row.kind === "work")?.liveEntry,
     ).toBeUndefined();
   });
+  it("keeps an ordinary failed tool outside a later successful or live group", () => {
+    const result = rows([
+      work(entry("failed", "failed")),
+      work(entry("done")),
+      work(entry("running", "inProgress")),
+    ]);
+    const groups = result.filter((row) => row.kind === "work");
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.groupedEntries.map((entry) => entry.id)).toEqual(["failed"]);
+    expect(groups[0]?.liveEntry).toBeUndefined();
+    expect(groups[1]?.liveEntry?.id).toBe("running");
+  });
   it("separates errors and compaction from a later live operation", () => {
     const result = rows([
       work(entry("error", "failed", { tone: "error" })),
@@ -2117,5 +2130,56 @@ describe("V2 live work focus", () => {
     expect(
       result.filter((row) => row.kind === "work").find((row) => row.liveEntry)?.liveEntry?.id,
     ).toBe("next");
+  });
+});
+
+describe("V2 historical tool summaries", () => {
+  const entry = (extra: Partial<WorkLogEntry> = {}): WorkLogEntry => ({
+    id: "tool",
+    createdAt: "2026-09-10T00:00:00Z",
+    label: "Tool",
+    tone: "tool",
+    toolLifecycleStatus: "completed",
+    ...extra,
+  });
+  it("summarizes commands and unique changed files in encounter order", () => {
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ itemType: "command_execution" }),
+        entry({ itemType: "file_change", changedFiles: ["a.ts", "b.ts"] }),
+        entry({ itemType: "file_change", changedFiles: ["a.ts"] }),
+      ]),
+    ).toBe("Ran 1 command and changed 2 files");
+  });
+  it("counts code and web searches separately", () => {
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ itemType: "file_search" }),
+        entry({ itemType: "web_search" }),
+        entry(),
+      ]),
+    ).toBe("Searched code 1 time, searched the web 1 time, and used 1 tool");
+  });
+  it("keeps individual calls and failed, declined or active tools visible", () => {
+    expect(resolveHistoricalWorkSummary([entry()])).toBeNull();
+    for (const status of ["failed", "declined", "inProgress"] as const) {
+      expect(
+        resolveHistoricalWorkSummary([entry(), entry({ toolLifecycleStatus: status })]),
+      ).toBeNull();
+    }
+  });
+  it("never folds compaction or background work into a completed summary", () => {
+    expect(
+      resolveHistoricalWorkSummary([entry(), entry({ sourceItemType: "compaction" })]),
+    ).toBeNull();
+    const background = {
+      item: { type: "command_execution", status: "waiting", background: true },
+    } as never;
+    expect(
+      resolveHistoricalWorkSummary([entry(), entry({ projectedItem: background })]),
+    ).toBeNull();
+  });
+  it("leaves non-tool bookkeeping visible", () => {
+    expect(resolveHistoricalWorkSummary([entry(), entry({ tone: "info" })])).toBeNull();
   });
 });

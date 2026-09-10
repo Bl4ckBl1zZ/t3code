@@ -1,3 +1,5 @@
+import { HammerIcon } from "lucide-react";
+import { resolveHistoricalWorkSummary } from "./MessagesTimeline.logic";
 import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
@@ -2251,6 +2253,10 @@ const WorkGroupSection = memo(function WorkGroupSection({
     () => groupedEntries.filter(workLogEntryIsVisible),
     [groupedEntries],
   );
+  const historicalSummary = useMemo(
+    () => resolveHistoricalWorkSummary(nonEmptyEntries),
+    [nonEmptyEntries],
+  );
   const hasOverflow = nonEmptyEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleEntries = useMemo(
     () =>
@@ -2309,41 +2315,88 @@ const WorkGroupSection = memo(function WorkGroupSection({
 
   return (
     <section ref={sectionRef} className="-mx-1 space-y-0.5 px-1 py-0.5" aria-label={groupLabel}>
-      {!onlyToolEntries && (
-        <p className="px-0.5 pb-0.5 font-medium text-[11px] text-muted-foreground/65">
-          {groupLabel}
-        </p>
-      )}
-      <div className="space-y-px">
-        {visibleEntries.map((workEntry) => (
-          <SimpleWorkEntryRow
-            key={workEntry.id}
-            workEntry={workEntry}
-            workspaceRoot={workspaceRoot}
-          />
-        ))}
-      </div>
-      {hasOverflow && showOverflowControl && (
-        <button
-          type="button"
-          className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-          onClick={toggleExpanded}
-        >
-          <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
-            {isExpanded ? (
-              <ChevronUpIcon className="size-3.5 shrink-0 opacity-70" />
-            ) : (
-              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
-            )}
-          </span>
-          {isExpanded ? (
-            <span className="font-medium text-foreground/82">Show fewer tool calls</span>
-          ) : (
-            <span className="font-medium text-foreground/82">
-              +{hiddenCount} previous tool {hiddenCount === 1 ? "call" : "calls"}
-            </span>
+      {historicalSummary ? (
+        <>
+          <button
+            type="button"
+            aria-expanded={isExpanded}
+            onClick={() => setIsExpanded((value) => !value)}
+            className="flex min-h-7 w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+          >
+            <WorkEntryIconSvg
+              name={
+                new Set(nonEmptyEntries.map(workEntryIconName)).size === 1
+                  ? workEntryIconName(nonEmptyEntries[0]!)
+                  : "hammer"
+              }
+              className="size-4 shrink-0 opacity-70"
+            />
+            <span className="min-w-0 flex-1 truncate">{historicalSummary}</span>
+            <ChevronRightIcon
+              aria-hidden
+              className={cn(
+                "size-3.5 shrink-0 transition-transform motion-reduce:transition-none",
+                isExpanded && "rotate-90",
+              )}
+            />
+          </button>
+          {isExpanded && (
+            <div
+              className="overflow-hidden rounded-md border border-border/50"
+              role="region"
+              aria-label="Completed tool activity"
+            >
+              <LegendList
+                data={nonEmptyEntries}
+                keyExtractor={(item) => item.id}
+                estimatedItemSize={40}
+                style={{ height: Math.min(320, Math.max(80, nonEmptyEntries.length * 40)) }}
+                renderItem={({ item }) => (
+                  <SimpleWorkEntryRow workEntry={item} workspaceRoot={workspaceRoot} />
+                )}
+              />
+            </div>
           )}
-        </button>
+        </>
+      ) : (
+        <>
+          {!onlyToolEntries && (
+            <p className="px-0.5 pb-0.5 font-medium text-[11px] text-muted-foreground/65">
+              {groupLabel}
+            </p>
+          )}
+          <div className="space-y-px">
+            {visibleEntries.map((workEntry) => (
+              <SimpleWorkEntryRow
+                key={workEntry.id}
+                workEntry={workEntry}
+                workspaceRoot={workspaceRoot}
+              />
+            ))}
+          </div>
+          {hasOverflow && showOverflowControl && (
+            <button
+              type="button"
+              className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+              onClick={toggleExpanded}
+            >
+              <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
+                {isExpanded ? (
+                  <ChevronUpIcon className="size-3.5 shrink-0 opacity-70" />
+                ) : (
+                  <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
+                )}
+              </span>
+              {isExpanded ? (
+                <span className="font-medium text-foreground/82">Show fewer tool calls</span>
+              ) : (
+                <span className="font-medium text-foreground/82">
+                  +{hiddenCount} previous tool {hiddenCount === 1 ? "call" : "calls"}
+                </span>
+              )}
+            </button>
+          )}
+        </>
       )}
     </section>
   );
@@ -2922,6 +2975,7 @@ function formatWorkingTimerNow(startIso: string): string {
 }
 
 type WorkEntryIconName =
+  | "hammer"
   | "bot"
   | "check"
   | "circle-alert"
@@ -2936,6 +2990,8 @@ type WorkEntryIconName =
 
 function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; className: string }) {
   switch (name) {
+    case "hammer":
+      return <HammerIcon className={className} aria-hidden />;
     case "bot":
       return <BotIcon className={className} aria-hidden />;
     case "check":

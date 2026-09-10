@@ -84,7 +84,22 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
 
     var liveFocusItem: ThreadLiveWorkItem {
         ThreadLiveWorkItem(id: id, runID: runID, running: inProgress, successful: status == .success,
-            background: isLiveBackgroundCommand, boundary: prominent || item.type == "error" || item.type == "compaction")
+            background: isLiveBackgroundCommand, boundary: prominent || status == .failure || item.type == "error" || item.type == "compaction")
+    }
+
+    var historicalSummaryItem: ThreadHistoricalWorkItem {
+        let action: ThreadHistoricalWorkItem.Action
+        var files: [String] = []
+        switch item.payload {
+        case .commandExecution: action = .command
+        case .fileChange(let file, _, _, _, _, _): action = .edit; files = [file]
+        case .fileSearch: action = .codeSearch
+        case .webSearch: action = .webSearch
+        case .dynamicTool(_, let input, _): action = DynamicToolInputPreview.resolve(input)?.kind == .path ? .read : .tool
+        default: action = .tool
+        }
+        return ThreadHistoricalWorkItem(action: action, files: files, successful: toolLike && status == .success,
+            running: inProgress, persistent: prominent || isLiveBackgroundCommand || item.type == "compaction")
     }
 
     public static func make(_ row: OrchestrationV2ProjectedTurnItem) -> ThreadWorkLogRow {
@@ -809,6 +824,8 @@ struct ThreadWorkLog: View {
         !visibleCandidates.isEmpty && visibleCandidates.allSatisfy(\.toolLike)
     }
 
+    private var historicalSummary: String? { ThreadHistoricalWorkSummary.label(visibleCandidates.map(\.historicalSummaryItem)) }
+
     private var displayedRows: [ThreadWorkLogRow] {
         isExpanded ? visibleCandidates : ThreadWorkLogPresentation.collapsed(visibleCandidates)
     }
@@ -847,13 +864,24 @@ struct ThreadWorkLog: View {
                     } else {
                         ForEach(visibleCandidates.filter(\.isLiveBackgroundCommand)) { rowView($0) }
                     }
+                } else if let summary = historicalSummary {
+                    Button { overflowExpanded = !isExpanded } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: Set(visibleCandidates.map(\.icon)).count == 1 ? (visibleCandidates.first?.icon.symbolName ?? "hammer") : "hammer")
+                            Text(summary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
+                        }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
+                    }.buttonStyle(.plain).accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                    if isExpanded {
+                        ScrollView { LazyVStack(alignment: .leading, spacing: 1) { ForEach(visibleCandidates) { rowView($0) } } }.frame(maxHeight: 320)
+                    }
                 } else {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(displayedRows) { row in rowView(row) }
                     }
                 }
 
-                if liveEntryID == nil, visibleCandidates.count > ThreadWorkLogPresentation.maxVisibleEntries,
+                if liveEntryID == nil, historicalSummary == nil, visibleCandidates.count > ThreadWorkLogPresentation.maxVisibleEntries,
                     isExpanded || !hiddenRows.isEmpty {
                     overflowToggle
                 }

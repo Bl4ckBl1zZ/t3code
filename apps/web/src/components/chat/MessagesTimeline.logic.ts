@@ -1,8 +1,10 @@
+import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import * as Equal from "effect/Equal";
 import {
   formatDuration,
   workLogEntryIsVisible,
   workEntryIndicatesToolSuccess,
+  workEntryIndicatesToolFailure,
   timelineEntryIsPersistentResourceCard,
   type TimelineEntry,
   type WorkLogEntry,
@@ -110,6 +112,68 @@ export function resolveLiveWorkEntry(
   if (running) return running;
   const latest = foreground.at(-1);
   return latest && workEntryIndicatesToolSuccess(latest) ? latest : null;
+}
+
+/** V2 projects each tool call once. Only successful, settled tool groups
+ * earn a past-tense summary; errors and live resources keep their own rows. */
+export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry>): string | null {
+  if (
+    entries.length < 2 ||
+    entries.some(
+      (entry) =>
+        !workEntryIndicatesToolSuccess(entry) ||
+        entry.tone === "error" ||
+        entry.sourceItemType === "compaction",
+    )
+  )
+    return null;
+  const counts = new Map<string, number>();
+  const files = new Set<string>();
+  const add = (action: string, count = 1) => counts.set(action, (counts.get(action) ?? 0) + count);
+  for (const entry of entries) {
+    const item = entry.projectedItem?.item;
+    if (item && orchestrationV2CommandExecutionIsLiveInBackground(item)) return null;
+    if (entry.itemType === "file_change" || (entry.changedFiles?.length ?? 0) > 0) {
+      if (entry.changedFiles?.length) {
+        for (const path of entry.changedFiles)
+          if (!files.has(path)) {
+            files.add(path);
+            add("edit");
+          }
+      } else add("edit");
+    } else if (entry.itemType === "command_execution" || entry.command) add("command");
+    else if (entry.itemType === "file_search") add("code-search");
+    else if (entry.itemType === "web_search") add("search");
+    else if (
+      entry.requestKind === "file-read" ||
+      (item?.type === "dynamic_tool" && dynamicToolInputPreview(item.input)?.kind === "path")
+    )
+      add("read");
+    else add("tool");
+  }
+  const labels = [...counts]
+    .map(([action, count]) => {
+      switch (action) {
+        case "edit":
+          return `Changed ${count} ${count === 1 ? "file" : "files"}`;
+        case "command":
+          return `Ran ${count} ${count === 1 ? "command" : "commands"}`;
+        case "code-search":
+          return `Searched code ${count} ${count === 1 ? "time" : "times"}`;
+        case "search":
+          return `Searched the web ${count} ${count === 1 ? "time" : "times"}`;
+        case "read":
+          return `Read ${count} ${count === 1 ? "file" : "files"}`;
+        default:
+          return `Used ${count} ${count === 1 ? "tool" : "tools"}`;
+      }
+    })
+    .map((label, index) => (index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1)));
+  return labels.length < 2
+    ? (labels[0] ?? null)
+    : labels.length === 2
+      ? labels.join(" and ")
+      : `${labels.slice(0, -1).join(", ")}, and ${labels.at(-1)}`;
 }
 
 export function shouldPreserveAssistantLineBreaks(text: string): boolean {
@@ -736,8 +800,8 @@ export function deriveMessagesTimelineRows(input: {
           supersededFoldsByAnchorEntryId.has(nextEntry.id) ||
           nextEntry.attempt?.id !== timelineEntry.attempt?.id ||
           nextEntry.entry.runId !== timelineEntry.entry.runId ||
-          timelineEntry.entry.tone === "error" ||
-          nextEntry.entry.tone === "error" ||
+          workEntryIndicatesToolFailure(timelineEntry.entry) ||
+          workEntryIndicatesToolFailure(nextEntry.entry) ||
           timelineEntry.entry.sourceItemType === "compaction" ||
           nextEntry.entry.sourceItemType === "compaction" ||
           timelineEntryIsPersistentResourceCard(timelineEntry) ||

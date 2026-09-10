@@ -329,6 +329,16 @@ final class ThreadWorkLogTests: XCTestCase {
         XCTAssertEqual(groups.map(\.count), [1, 1, 1])
     }
 
+    func testFailedToolStandsApartFromLaterSuccessfulWork() {
+        let groups = ThreadWorkLogRow.groups([
+            row(command(id: "failed", input: "false", status: "failed")),
+            row(command(id: "done", input: "ls")),
+            row(command(id: "next", input: "pwd")),
+        ])
+        XCTAssertEqual(groups.map(\.count), [1, 2])
+        XCTAssertEqual(groups.first?.first?.status, .failure)
+    }
+
     // MARK: - Collapsing
 
     /// A background command is usually launched early in a turn, so keeping

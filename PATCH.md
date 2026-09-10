@@ -815,3 +815,12 @@ re-read server settings, preserve unknown fields and other accounts, and reject 
 in edited fields. Built-in account IDs remain stable. The custom-model-definition capability
 conservatively gates this editor on older paired servers, matching the native provider-map
 write boundary. No V1 runtime behavior is introduced.
+
+### V2 historical tool-group summaries
+
+Web and native Swift summarize successful completed tool groups with V2 item types,
+unique edited-file counts and bounded expanded histories. Single tools keep their own
+labels; failed/declined calls form separate groups, and live work, compaction and persistent
+resource cards stay visible. This ports upstream completed-group presentation without
+V1 work-log ingestion or subagent observability. Full upstream integration-specific group
+labels and expanded-history scroll-position persistence are not yet carried.
