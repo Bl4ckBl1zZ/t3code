@@ -45,6 +45,39 @@ const testLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect(
+    "returns bounded header dimensions for workspace and host images, with a malformed-header fallback",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-image-dimensions-" });
+        const image = path.join(root, "preview.png");
+        const header = new Uint8Array(24);
+        header.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+        header.set([0x49, 0x48, 0x44, 0x52], 12);
+        const view = new DataView(header.buffer);
+        view.setUint32(16, 1600);
+        view.setUint32(20, 900);
+        yield* fs.writeFile(image, header);
+        for (const tag of ["workspace-file", "media-file"] as const) {
+          const input = {
+            resource: { _tag: tag, threadId: ThreadId.make("thread-1"), path: image },
+            workspaceRoot: root,
+          };
+          expect((yield* issueAssetUrl(input)).imageDimensions).toEqual({
+            width: 1600,
+            height: 900,
+          });
+          yield* fs.writeFileString(image, "not an image");
+          const malformed = yield* issueAssetUrl(input);
+          expect(malformed.imageDimensions).toBeUndefined();
+          expect(malformed.relativeUrl).toContain(ASSET_ROUTE_PREFIX);
+          yield* fs.writeFile(image, header);
+        }
+      }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("serves document attachments inline when a viewer requests it", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;

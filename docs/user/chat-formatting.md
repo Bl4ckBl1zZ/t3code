@@ -61,3 +61,8 @@ In the native iOS app, opening a quote's source briefly highlights the matching 
 inside the original response, including lists, tables and code blocks. If an edited
 response no longer has an unambiguous match, the app opens the response and explains
 that it could not mark the exact quote. Your saved quote remains unchanged.
+
+Images keep their proportions while loading when the server can read their size. Explicit HTML
+image dimensions take precedence. Local image paths can point outside the workspace when the
+connected server supports host-file previews. The iOS transcript keeps a stable media frame;
+tap an image to inspect it at full size.

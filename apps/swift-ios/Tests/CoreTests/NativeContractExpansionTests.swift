@@ -138,6 +138,11 @@ final class NativeContractExpansionTests: XCTestCase {
         )
         XCTAssertEqual(result.relativeUrl, "/api/assets/signed/image.png")
         XCTAssertEqual(result.expiresAt, 1_785_466_800_000)
+        XCTAssertNil(result.imageDimensions)
+        let fixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/assetImageDimensions.json")
+        let sized = try JSONDecoder.t3.decode(AssetCreateURLResult.self, from: Data(contentsOf: fixtureURL))
+        XCTAssertEqual(sized.imageDimensions?.width, 1600)
+        XCTAssertEqual(sized.imageDimensions?.height, 900)
         XCTAssertEqual(
             RPCMethod.reviewDiffFileContents.rawValue,
             "review.getDiffFileContents"

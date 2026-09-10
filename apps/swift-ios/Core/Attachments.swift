@@ -117,15 +117,22 @@ public enum AssetResource: Equatable, Sendable {
     }
 }
 
+public struct AssetImageDimensions: Codable, Equatable, Sendable {
+    public let width: Int
+    public let height: Int
+}
+
 public struct AssetCreateURLResult: Codable, Equatable, Sendable {
     public let relativeUrl: String
     /// Unix epoch milliseconds from the server contract.
     public let expiresAt: Double
+    public var imageDimensions: AssetImageDimensions? = nil
 }
 
 public struct ResolvedAssetURL: Equatable, Sendable {
     public let url: URL
     public let expiresAt: Date
+    public var imageDimensions: AssetImageDimensions? = nil
 }
 
 /// A composer attachment of any kind.

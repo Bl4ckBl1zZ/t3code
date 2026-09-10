@@ -1169,7 +1169,8 @@ public actor T3Client {
         }
         return ResolvedAssetURL(
             url: url,
-            expiresAt: Date(timeIntervalSince1970: result.expiresAt / 1_000)
+            expiresAt: Date(timeIntervalSince1970: result.expiresAt / 1_000),
+            imageDimensions: result.imageDimensions
         )
     }
 

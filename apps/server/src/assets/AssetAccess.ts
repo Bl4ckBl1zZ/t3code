@@ -1,3 +1,8 @@
+import {
+  IMAGE_DIMENSIONS_HEADER_BYTES,
+  readImageDimensions,
+  type ImageDimensions,
+} from "@t3tools/shared/imageDimensions";
 import Mime from "@effect/platform-node/Mime";
 import type { AssetResource } from "@t3tools/contracts";
 import {
@@ -50,7 +55,24 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
-import { openMediaFile, type OpenMediaFile } from "./MediaFile.ts";
+import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
+
+const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+
+const imageDimensionsFromOpenFile = (filePath: string, file: OpenMediaFile) =>
+  readMediaFileHeader(filePath, file, IMAGE_DIMENSIONS_HEADER_BYTES).pipe(
+    Effect.map(readImageDimensions),
+    Effect.orElseSucceed(() => null),
+  );
+
+const imageDimensionsFromHeader = (filePath: string) =>
+  openMediaFile(filePath).pipe(
+    Effect.flatMap((file) =>
+      file === null ? Effect.succeed(null) : imageDimensionsFromOpenFile(filePath, file),
+    ),
+    Effect.scoped,
+    Effect.orElseSucceed(() => null),
+  );
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
@@ -315,6 +337,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   let claims: AssetClaims;
   let fileName: string;
   let sourcePath: string | undefined;
+  let imageDimensions: ImageDimensions | null = null;
 
   switch (input.resource._tag) {
     case "media-file": {
@@ -345,13 +368,18 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
       }
       const opened = yield* openMediaFile(canonicalFile).pipe(
-        Effect.map((file) =>
+        Effect.flatMap((file) =>
           file === null
-            ? null
-            : {
-                device: file.info.dev.toString(),
-                inode: file.info.ino.toString(),
-              },
+            ? Effect.succeed(null)
+            : (HEADER_IMAGE_EXTENSIONS.has(path.extname(canonicalFile).toLowerCase())
+                ? imageDimensionsFromOpenFile(canonicalFile, file)
+                : Effect.succeed(null)
+              ).pipe(
+                Effect.map((dimensions) => ({
+                  identity: { device: file.info.dev.toString(), inode: file.info.ino.toString() },
+                  dimensions,
+                })),
+              ),
         ),
         Effect.scoped,
         Effect.mapError(
@@ -361,7 +389,8 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       if (!opened) {
         return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
       }
-      const identity = opened;
+      const identity = opened.identity;
+      imageDimensions = opened.dimensions;
       sourcePath = canonicalFile;
       claims = {
         version: 1,
@@ -450,6 +479,9 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
               baseRelativePath: path.dirname(resolved.relativePath),
               expiresAt,
             };
+      if (HEADER_IMAGE_EXTENSIONS.has(path.extname(canonicalFile).toLowerCase())) {
+        imageDimensions = yield* imageDimensionsFromHeader(canonicalFile);
+      }
       fileName = path.basename(resolved.relativePath);
       break;
     }
@@ -470,6 +502,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       // asked for inline and the stored extension is one a browser can show.
       const extension = parseAttachmentFileExtension(input.resource.attachmentId);
       const isGenericFile = extension !== null;
+      if (!isGenericFile) imageDimensions = yield* imageDimensionsFromHeader(attachmentPath);
       const videoMimeType = input.resource.mimeType?.split(";", 1)[0]?.trim() ?? "";
       const isVideo = INLINE_VIDEO_MIME_TYPE_PATTERN.test(videoMimeType);
       const inlineDocumentMimeType =
@@ -647,6 +680,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
     expiresAt,
     ...(sourcePath !== undefined ? { sourcePath } : {}),
+    ...(imageDimensions !== null ? { imageDimensions } : {}),
   };
 });
 

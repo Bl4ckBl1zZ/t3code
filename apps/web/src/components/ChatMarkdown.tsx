@@ -2060,11 +2060,14 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         </code>
       );
     },
-    img({ node: _node, src, alt }) {
+    img({ node: _node, src, alt, width, height }) {
       return (
         <MarkdownMedia
           src={typeof src === "string" ? src : undefined}
           alt={alt}
+          width={width}
+          height={height}
+          hostFilePreviews={hostFilePreviews}
           threadRef={threadRef}
           baseDirectory={imageBaseDir}
         />
@@ -2077,6 +2080,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
           threadRef={threadRef}
           baseDirectory={imageBaseDir}
           kind="video"
+          hostFilePreviews={hostFilePreviews}
         />
       );
     },

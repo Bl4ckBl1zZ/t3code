@@ -29,6 +29,7 @@ import {
   ExecutionEnvironmentDescriptor,
   ExecutionEnvironmentCapabilities,
   AssetResource,
+  AssetCreateUrlResult,
   EnvironmentId,
   ServerProviderUsageLimits,
   ServerProvider,
@@ -1336,3 +1337,18 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(projectActionsFixturePath, projectActionsFixture);
+
+const assetImageDimensionsPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "assetImageDimensions.json",
+);
+const assetImageDimensionsSerialized = `${JSON.stringify(Schema.encodeSync(AssetCreateUrlResult)({ relativeUrl: "/api/assets/signed/image.png", expiresAt: 1785466800000, imageDimensions: { width: 1600, height: 900 } }), null, 2)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(assetImageDimensionsPath) ||
+    NodeFS.readFileSync(assetImageDimensionsPath, "utf8") !== assetImageDimensionsSerialized
+  ) {
+    console.error("[swift-fixtures] assetImageDimensions.json is stale; regenerate fixtures.");
+    process.exitCode = 1;
+  }
+} else NodeFS.writeFileSync(assetImageDimensionsPath, assetImageDimensionsSerialized);

@@ -1076,3 +1076,13 @@ nothing was saved. The fork's machine-targeted settings continue to write to the
 explicit environment; no arbitrary remote becomes the primary fallback. The same
 rule covers fork-owned worktree-retention controls. Client-local auto-settlement
 preferences remain editable pending their separate V2 server lifecycle port.
+
+### Image header metadata (2026-09-11 parity port)
+
+Signed asset responses include optional PNG/GIF/WebP/JPEG dimensions from at most 256 KiB
+of header data. Host-file dimensions use the same identity-checked descriptor as URL minting;
+malformed, unreadable or unsupported headers omit metadata without breaking previews. The fork's
+MarkdownMedia renderer reserves the natural aspect ratio within its existing height cap, with
+authored HTML dimensions taking precedence. Host-file previews are capability-gated. Swift
+mirrors the optional contract and keeps its fixed transcript media frame to avoid collection-view
+remeasurement. No V1 runtime or database migration is involved.

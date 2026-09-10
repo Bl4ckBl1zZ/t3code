@@ -11,7 +11,7 @@ import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { AssetResource, ScopedThreadRef } from "@t3tools/contracts";
 import { isWorkspaceVideoPreviewPath } from "@t3tools/shared/filePreview";
-import { memo, useState } from "react";
+import { memo, useState, type CSSProperties } from "react";
 import { markdownImageGallery, markdownImageItems } from "./markdownImageGallery";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { createPortal } from "react-dom";
@@ -31,6 +31,9 @@ interface MarkdownMediaProps {
   alt?: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
   kind?: "image" | "video" | undefined;
+  width?: string | number | undefined;
+  height?: string | number | undefined;
+  hostFilePreviews?: boolean;
 }
 
 function safeDecode(value: string): string {
@@ -68,6 +71,7 @@ export function resolveMarkdownMediaSource(
   src: string,
   threadRef: ScopedThreadRef,
   baseDirectory?: string,
+  hostFilePreviews = false,
 ): ResolvedMarkdownMediaSource {
   if (DIRECT_MEDIA_SRC_PATTERN.test(src)) {
     return { _tag: "direct", url: src };
@@ -83,11 +87,33 @@ export function resolveMarkdownMediaSource(
     resource: artifactFileName
       ? { _tag: "browser-artifact", fileName: artifactFileName }
       : {
-          _tag: "workspace-file",
+          _tag: hostFilePreviews ? "media-file" : "workspace-file",
           threadId: threadRef.threadId,
           path: path.startsWith("./") ? path.slice(2) : path,
         },
   };
+}
+
+// An authored size wins over the file's natural size. Fold the height cap into
+// the width so a tall image reserves the same box that object-contain draws.
+function imageSizeStyle(
+  width: string | number | undefined,
+  height: string | number | undefined,
+): CSSProperties | undefined {
+  const w = Number(width);
+  const h = Number(height);
+  const hasWidth = Number.isFinite(w) && w > 0;
+  const hasHeight = Number.isFinite(h) && h > 0;
+  if (hasWidth && hasHeight)
+    return {
+      width: w,
+      height: "auto",
+      aspectRatio: `${w} / ${h}`,
+      maxWidth: `min(100%, 30rem, ${(24 * w) / h}rem)`,
+    };
+  if (hasWidth) return { maxWidth: `min(100%, 30rem, ${w}px)` };
+  if (hasHeight) return { maxHeight: `min(24rem, ${h}px)` };
+  return undefined;
 }
 
 function MediaUnavailable({ name }: { name: string }) {
@@ -106,6 +132,8 @@ function ResolvedMedia({
   reference,
   asset,
   onRetry,
+  imageDimensions,
+  authoredStyle,
 }: {
   url: string;
   name: string;
@@ -113,6 +141,8 @@ function ResolvedMedia({
   reference?: MediaReference;
   asset?: { environmentId: ScopedThreadRef["environmentId"]; resource: AssetResource };
   onRetry?: () => Promise<void>;
+  imageDimensions?: { readonly width: number; readonly height: number } | undefined;
+  authoredStyle?: CSSProperties | undefined;
 }) {
   const [expanded, setExpanded] = useState<ExpandedImagePreview | null>(null);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -171,6 +201,9 @@ function ResolvedMedia({
             src={url}
             alt={name}
             loading="lazy"
+            width={imageDimensions?.width}
+            height={imageDimensions?.height}
+            style={authoredStyle ?? imageSizeStyle(imageDimensions?.width, imageDimensions?.height)}
             className={MEDIA_FRAME_CLASS_NAME}
             onError={() => setFailedUrl(url)}
           />
@@ -190,11 +223,13 @@ function ResourceMedia({
   resource,
   name,
   isVideo,
+  authoredStyle,
 }: {
   threadRef: ScopedThreadRef;
   resource: AssetResource;
   name: string;
   isVideo: boolean;
+  authoredStyle?: CSSProperties | undefined;
 }) {
   const assetUrl = useAssetUrlState(threadRef.environmentId, resource);
   const refresh = useAtomQueryRunner(assetEnvironment.createUrl, {
@@ -242,6 +277,8 @@ function ResourceMedia({
   return (
     <ResolvedMedia
       url={assetUrl.url}
+      imageDimensions={assetUrl.imageDimensions}
+      authoredStyle={authoredStyle}
       name={name}
       isVideo={isVideo}
       {...(assetUrl.sourcePath ? { reference: mediaFileReference(assetUrl.sourcePath) } : {})}
@@ -257,16 +294,21 @@ export const MarkdownMedia = memo(function MarkdownMedia({
   threadRef,
   kind,
   baseDirectory,
+  width,
+  height,
+  hostFilePreviews = false,
 }: MarkdownMediaProps) {
   if (!src) {
     return null;
   }
+  const authoredStyle = imageSizeStyle(width, height);
   const name = alt && alt.trim().length > 0 ? alt.trim() : mediaFileName(src);
   const isVideo = kind === "video" || (kind === undefined && isWorkspaceVideoPreviewPath(src));
   if (!threadRef) {
     return DIRECT_MEDIA_SRC_PATTERN.test(src) ? (
       <ResolvedMedia
         url={src}
+        authoredStyle={authoredStyle}
         name={name}
         isVideo={isVideo}
         {...(mediaUrlReference(src) ? { reference: mediaUrlReference(src)! } : {})}
@@ -275,10 +317,11 @@ export const MarkdownMedia = memo(function MarkdownMedia({
       <MediaUnavailable name={name} />
     );
   }
-  const resolved = resolveMarkdownMediaSource(src, threadRef, baseDirectory);
+  const resolved = resolveMarkdownMediaSource(src, threadRef, baseDirectory, hostFilePreviews);
   return resolved._tag === "direct" ? (
     <ResolvedMedia
       url={resolved.url}
+      authoredStyle={authoredStyle}
       name={name}
       isVideo={isVideo}
       {...(mediaUrlReference(resolved.url) ? { reference: mediaUrlReference(resolved.url)! } : {})}
@@ -287,6 +330,7 @@ export const MarkdownMedia = memo(function MarkdownMedia({
     <ResourceMedia
       threadRef={threadRef}
       resource={resolved.resource}
+      authoredStyle={authoredStyle}
       name={name}
       isVideo={isVideo}
     />
