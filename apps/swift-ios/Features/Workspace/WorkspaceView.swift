@@ -719,7 +719,7 @@ public struct WorkspaceView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(T3Colors.textTertiary)
-            TextField("Search tasks and projects", text: $searchText)
+            TextField("Search tasks, projects and PRs", text: $searchText)
                 .font(.subheadline)
                 .foregroundStyle(T3Colors.textPrimary)
                 .focused($isSearchFocused)

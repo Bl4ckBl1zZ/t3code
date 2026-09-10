@@ -270,6 +270,13 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// branch-derived one: the row shows it, and it is what the merge settle
     /// rule watches.
     public var linkedPullRequest: FeatureLinkedPullRequest?
+    public var linkedPullRequests: [FeatureLinkedPullRequest]? = nil
+    public var supportsMultiplePullRequests: Bool? = nil
+    public var supportsPullRequestStackActions: Bool? = nil
+
+    public var allLinkedPullRequests: [FeatureLinkedPullRequest] {
+        linkedPullRequests ?? linkedPullRequest.map { [$0] } ?? []
+    }
     /// Whether this thread's server persists a pull-request link. Resolved from
     /// the environment's capabilities at map time, so the action is hidden
     /// rather than offered and refused.
@@ -325,6 +332,9 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         isRegeneratingTitle: Bool = false,
         supportsTitleRegeneration: Bool? = nil,
         linkedPullRequest: FeatureLinkedPullRequest? = nil,
+        linkedPullRequests: [FeatureLinkedPullRequest]? = nil,
+        supportsMultiplePullRequests: Bool? = nil,
+        supportsPullRequestStackActions: Bool? = nil,
         supportsPullRequestLinking: Bool? = nil,
         attentionAt: Date? = nil,
         workingStartedAt: Date? = nil,
@@ -372,6 +382,9 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.isRegeneratingTitle = isRegeneratingTitle
         self.supportsTitleRegeneration = supportsTitleRegeneration
         self.linkedPullRequest = linkedPullRequest
+        self.linkedPullRequests = linkedPullRequests
+        self.supportsMultiplePullRequests = supportsMultiplePullRequests
+        self.supportsPullRequestStackActions = supportsPullRequestStackActions
         self.supportsPullRequestLinking = supportsPullRequestLinking
         self.attentionAt = attentionAt
         self.workingStartedAt = workingStartedAt

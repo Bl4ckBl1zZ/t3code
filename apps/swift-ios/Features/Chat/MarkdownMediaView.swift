@@ -340,9 +340,7 @@ struct FeatureImagePreviewSheet: View {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFit()
+                            ZoomableMessageImage(image: image)
                         case .failure:
                             ContentUnavailableView(
                                 "Image unavailable",
@@ -403,7 +401,7 @@ struct MarkdownGallerySheet: View {
                         } else if let url = urls[page] {
                             AsyncImage(url: url) { phase in
                                 switch phase {
-                                case let .success(image): image.resizable().scaledToFit()
+                                case let .success(image): ZoomableMessageImage(image: image, isCurrentPage: page == index)
                                 case .failure: ContentUnavailableView("Image unavailable", systemImage: "photo")
                                 default: ProgressView()
                                 }

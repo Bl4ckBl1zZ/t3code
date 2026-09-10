@@ -1,3 +1,9 @@
+import { runGitHubStackAction, type GitHubStackActionError } from "./githubStackActions.ts";
+import {
+  decodePullRequestStacksJson,
+  type GitHubPullRequestStack,
+} from "./gitHubPullRequestJson.ts";
+import type { PullRequestStackHead } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -241,6 +247,7 @@ export class GitHubSubjectScopeError extends Schema.TaggedErrorClass<GitHubSubje
 }
 
 export type GitHubPullRequestCliError =
+  | GitHubStackActionError
   | GitHubCli.GitHubCliError
   | GitHubPullRequestReadError
   | GitHubDiffCursorError
@@ -477,12 +484,21 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly requested: boolean;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
 
+    readonly getPullRequestStack: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly includeDetails?: boolean;
+    }) => Effect.Effect<GitHubPullRequestStack | null, GitHubPullRequestCliError>;
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly host: string;
       readonly number: number;
       readonly action: PullRequestAction;
+      readonly stackNumber?: number;
+      readonly expectedStackHeads?: ReadonlyArray<PullRequestStackHead>;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
@@ -1696,7 +1712,73 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.asVoid);
     },
 
+    getPullRequestStack: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return github
+        .execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            "--hostname",
+            input.host,
+            `repos/${owner}/${name}/stacks?pull_request=${input.number}`,
+          ],
+        })
+        .pipe(
+          Effect.flatMap((result) => {
+            const decoded = decodePullRequestStacksJson(result.stdout.trim());
+            return Result.isSuccess(decoded)
+              ? Effect.succeed(decoded.success)
+              : Effect.fail(
+                  new GitHubPullRequestReadError({
+                    command: "gh",
+                    cwd: input.cwd,
+                    operation: "getPullRequestStack",
+                    cause: decoded.failure,
+                  }),
+                );
+          }),
+          Effect.flatMap((stack) => {
+            if (!input.includeDetails || stack === null) return Effect.succeed(stack);
+            return github
+              .execute({
+                cwd: input.cwd,
+                args: [
+                  "api",
+                  "--hostname",
+                  input.host,
+                  `repos/${owner}/${name}/stacks/${stack.number}`,
+                ],
+              })
+              .pipe(
+                Effect.flatMap((result) => {
+                  const decoded = decodePullRequestStacksJson(`[${result.stdout.trim()}]`);
+                  return Result.isSuccess(decoded)
+                    ? Effect.succeed(decoded.success)
+                    : Effect.fail(
+                        new GitHubPullRequestReadError({
+                          command: "gh",
+                          cwd: input.cwd,
+                          operation: "getPullRequestStack",
+                          cause: decoded.failure,
+                        }),
+                      );
+                }),
+              );
+          }),
+          // Hosts without the stacks preview return 404. Other failures must preserve the
+          // previously synced stack and let the caller retry.
+          Effect.catchTags({
+            GitHubPullRequestNotFoundError: () => Effect.succeed(null),
+          }),
+        );
+    },
+
     runPullRequestAction: (input) => {
+      if (input.stackNumber !== undefined)
+        return runGitHubStackAction({ ...input, stackNumber: input.stackNumber }).pipe(
+          Effect.provideService(GitHubCli.GitHubCli, github),
+        );
       const [subcommand, ...flags] = actionArgs(
         input.action,
         input.mergeMethod,

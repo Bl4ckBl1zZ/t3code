@@ -16,6 +16,7 @@
  */
 import {
   ServerProviderUsageLimits,
+  PullRequestStack,
   CheckpointId,
   CheckpointScopeId,
   ContextHandoffId,
@@ -286,6 +287,18 @@ const projection = {
     interactionMode: "default" as const,
     branch: null,
     worktreePath: null,
+    linkedPullRequests: [41, 42].map((number) => ({
+      projectId,
+      repository: "example/repo",
+      number,
+      url: `https://github.com/example/repo/pull/${number}`,
+    })),
+    linkedPullRequest: {
+      projectId,
+      repository: "example/repo",
+      number: 41,
+      url: "https://github.com/example/repo/pull/41",
+    },
     activeProviderThreadId: providerThreadId,
     activeOrderKey: "n",
     lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
@@ -399,4 +412,36 @@ if (process.argv.includes("--check")) {
   }
 } else {
   NodeFS.writeFileSync(limitsPath, limitsSerialized);
+}
+
+const stackPath = NodePath.join(NodePath.dirname(outputPath), "pullRequestStack.json");
+const stackSerialized = `${JSON.stringify(
+  Schema.encodeSync(PullRequestStack)({
+    id: "stack-1",
+    number: 1,
+    url: "https://github.com/o/r/stack/1",
+    base: "main",
+    layers: [
+      { number: 1, headBranch: "one", state: "merged" },
+      {
+        number: 2,
+        headBranch: "two",
+        title: "Second layer",
+        isDraft: false,
+        state: "open",
+        headSha: "abc",
+      },
+      { number: 3, headBranch: "three", state: "open", headSha: "def" },
+    ],
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (!NodeFS.existsSync(stackPath) || NodeFS.readFileSync(stackPath, "utf8") !== stackSerialized) {
+    console.error("[swift-fixtures] pullRequestStack.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(stackPath, stackSerialized);
 }

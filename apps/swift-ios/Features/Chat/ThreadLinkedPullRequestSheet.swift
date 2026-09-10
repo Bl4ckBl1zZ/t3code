@@ -24,11 +24,13 @@ struct ThreadLinkedPullRequestSheet: View {
     @FocusState private var isFieldFocused: Bool
 
     private var linked: FeatureLinkedPullRequest? { thread.linkedPullRequest }
+    private var links: [FeatureLinkedPullRequest] { thread.allLinkedPullRequests }
+    @State private var selectedLink: FeatureLinkedPullRequest?
 
     /// Hidden when the branch's request is already the linked one: "Link #12"
     /// under a row that says #12 is linked reads as a bug.
     private var linkableBranchPullRequest: ThreadDetailsPullRequest? {
-        guard let branchPullRequest, branchPullRequest.number != linked?.number else { return nil }
+        guard let branchPullRequest, !links.contains(where: { $0.number == branchPullRequest.number }) else { return nil }
         return branchPullRequest
     }
 
@@ -37,30 +39,16 @@ struct ThreadLinkedPullRequestSheet: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let linked {
-                    ThreadDetailsSection(
-                        title: "Linked",
-                        footer: """
-                        This thread follows pull request #\(linked.number) instead of whatever \
-                        its branch points at.
-                        """
-                    ) {
-                        ThreadDetailsRow(
-                            systemImage: "arrow.triangle.pull",
-                            title: "#\(linked.number)",
-                            subtitle: linked.repository,
-                            showsChevron: false
-                        )
-                        ThreadDetailsDivider()
-                        ThreadDetailsRow(
-                            systemImage: "link.badge.plus",
-                            iconTint: T3Colors.danger,
-                            title: "Unlink",
-                            subtitle: "Go back to following the branch",
-                            isDisabled: isBusy,
-                            showsChevron: false,
-                            action: { commit(number: nil) }
-                        )
+                if !links.isEmpty {
+                    ThreadDetailsSection(title: "Linked pull requests", footer: "The task stays active while any linked pull request is open.") {
+                        ForEach(links, id: \.self) { link in
+                            ThreadDetailsRow(systemImage: "arrow.triangle.pull", title: "#\(link.number)", subtitle: link.repository,
+                                action: { selectedLink = link })
+                            ThreadDetailsRow(systemImage: "link.badge.plus", iconTint: T3Colors.danger,
+                                title: "Unlink #\(link.number)", isDisabled: isBusy, showsChevron: false,
+                                action: { unlink(link) })
+                            if link != links.last { ThreadDetailsDivider() }
+                        }
                     }
                 }
 
@@ -78,7 +66,7 @@ struct ThreadLinkedPullRequestSheet: View {
                 }
 
                 ThreadDetailsSection(
-                    title: linked == nil ? "Link a pull request" : "Link a different one",
+                    title: thread.supportsMultiplePullRequests == true ? "Add a pull request" : (linked == nil ? "Link a pull request" : "Link a different one"),
                     footer: """
                     Enter a number or paste a pull request URL. It has to belong to this \
                     thread's project.
@@ -119,13 +107,27 @@ struct ThreadLinkedPullRequestSheet: View {
         .scrollDismissesKeyboard(.interactively)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(T3Colors.background)
-        .navigationTitle("Pull request")
+        .navigationTitle("Pull requests")
+        .navigationDestination(item: $selectedLink) { link in
+            PullRequestDetailSheet(client: client, threadID: thread.id, number: link.number)
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Done") { onFinished() }
                     .disabled(isBusy)
             }
+        }
+    }
+
+    private func unlink(_ link: FeatureLinkedPullRequest) {
+        guard !isBusy else { return }
+        if thread.supportsMultiplePullRequests != true { commit(number: nil); return }
+        isBusy = true; errorMessage = nil
+        Task { @MainActor in
+            do { try await client.removeThreadPullRequest(threadID: thread.id, link: link); onFinished() }
+            catch { errorMessage = error.localizedDescription }
+            isBusy = false
         }
     }
 
@@ -137,10 +139,11 @@ struct ThreadLinkedPullRequestSheet: View {
         errorMessage = nil
         Task { @MainActor in
             do {
-                _ = try await client.setThreadLinkedPullRequest(
-                    threadID: thread.id,
-                    number: number
-                )
+                if thread.supportsMultiplePullRequests == true, let number {
+                    _ = try await client.addThreadPullRequest(threadID: thread.id, number: number)
+                } else {
+                    _ = try await client.setThreadLinkedPullRequest(threadID: thread.id, number: number)
+                }
                 onFinished()
             } catch {
                 errorMessage = error.localizedDescription

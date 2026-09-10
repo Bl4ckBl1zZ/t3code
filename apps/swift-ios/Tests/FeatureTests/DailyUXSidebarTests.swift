@@ -4,6 +4,25 @@ import Testing
 
 @Suite("Sidebar v2")
 struct DailyUXSidebarTests {
+    @Test func unavailableLinkedRequestsBlockInactivitySettlement() {
+        var item = thread(id: "linked", created: -500, updated: -500)
+        item.linkedPullRequests = [41, 42].map { FeatureLinkedPullRequest(projectID: item.projectID, repository: "example/repo", number: $0, url: "https://github.com/example/repo/pull/\($0)") }
+        let later = now.addingTimeInterval(10 * 24 * 60 * 60)
+        #expect(!item.isEffectivelySettled(at: later))
+        #expect(!item.isEffectivelySettled(at: later, changeRequest: FeaturePullRequest(number: 41, title: "Unavailable", state: "unknown")))
+        item.isSettled = true
+        #expect(item.isEffectivelySettled(at: later))
+    }
+
+    @Test func searchesEveryLinkedPullRequest() {
+        var item = thread(id: "linked", created: -100, updated: -50)
+        item.linkedPullRequests = [41, 42].map { FeatureLinkedPullRequest(projectID: item.projectID, repository: "example/repo", number: $0, url: "https://github.com/example/repo/pull/\($0)") }
+        for query in ["#41", "#42", "example/repo#42", "https://github.com/example/repo/pull/42"] {
+            #expect(DailyUXSidebarIndex.matchingThreads([item], snapshot: FeatureSnapshot(threads: [item]), query: query).map(\.id) == ["linked"])
+        }
+        #expect(DailyUXSidebarIndex.matchingThreads([item], snapshot: FeatureSnapshot(threads: [item]), query: "#43").isEmpty)
+    }
+
     private let now = Date(timeIntervalSince1970: 2_000_000)
 
     @Test func manualOrderKeepsNewAndReopenedThreadsFirst() {

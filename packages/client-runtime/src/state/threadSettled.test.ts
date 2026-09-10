@@ -17,6 +17,11 @@ const FRESH = "2026-04-09T00:00:00.000Z";
 const STALE = "2026-04-06T23:59:59.999Z";
 
 describe("changeRequestAutoSettles", () => {
+  it("does not settle a collection from a legacy primary-only status read", () => {
+    expect(
+      changeRequestAutoSettles({ state: "merged" }, { thread: { linkedPullRequests: [{}, {}] } }),
+    ).toBe(false);
+  });
   it.each([
     ["open", true, false],
     ["merged", true, true],
@@ -193,6 +198,16 @@ describe("threadLastActivityAt", () => {
 });
 
 describe("effectiveSettled", () => {
+  it("blocks inactivity settlement for collections but honors explicit settlement", () => {
+    const shell = { ...makeShell({ activityAt: STALE }), linkedPullRequests: [{}, {}] };
+    const options = {
+      now: NOW,
+      autoSettleAfterDays: 1,
+      changeRequest: { state: "merged" as const },
+    };
+    expect(effectiveSettled(shell, options)).toBe(false);
+    expect(effectiveSettled({ ...shell, settledOverride: "settled" }, options)).toBe(true);
+  });
   const overrideCases = [null, "settled", "active"] as const;
   const changeRequestStates = [undefined, "open", "merged"] as const;
   const inactivityCases = [

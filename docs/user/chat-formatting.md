@@ -30,3 +30,10 @@ open local files. A preview is separate from a saved file, and showing one
 does not mean the assistant has tested the saved result.
 
 These instructions guide future answers; they do not rewrite earlier messages.
+
+## Inspecting images on iOS
+
+Open an image to view it full screen. Pinch to zoom, drag to pan while zoomed,
+or double-tap to toggle zoom. Fit image restores the full image. At its fitted
+size, swipe between images in the message's gallery. VoiceOver offers zoom
+adjustments and a Fit image action. Saving or sharing keeps the original image.

@@ -496,10 +496,8 @@ struct ThreadDetailsSheet: View {
                     ThreadDetailsDivider()
                     ThreadDetailsRow(
                         systemImage: "link",
-                        title: "Linked pull request",
-                        subtitle: ThreadDetailsGit.linkedPullRequestSubtitle(
-                            thread.linkedPullRequest
-                        ),
+                        title: thread.supportsMultiplePullRequests == true ? "Linked pull requests" : "Linked pull request",
+                        subtitle: thread.allLinkedPullRequests.isEmpty ? "None" : thread.allLinkedPullRequests.map { "#\($0.number)" }.joined(separator: ", "),
                         action: { isEditingLinkedPullRequest = true }
                     )
                 }

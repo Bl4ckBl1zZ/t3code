@@ -50,6 +50,8 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         /// Absent on older servers, so the link action stays hidden rather than
         /// sending a command the server will reject.
         public let threadPullRequestLinking: Bool?
+        public let threadPullRequestsV2: Bool?
+        public let pullRequestStackActions: Bool?
         public let pullRequests: Bool?
         public let serverSelfUpdate: String?
         public let serverSelfUpdateProgress: Bool?
@@ -62,6 +64,8 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadPinning, threadActiveOrderV2, threadQuestionActionsV2
             case threadTitleRegeneration
             case threadPullRequestLinking
+            case threadPullRequestsV2
+            case pullRequestStackActions
             case pullRequests
             case serverSelfUpdate
             case serverSelfUpdateProgress
@@ -81,6 +85,8 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
                 Bool.self,
                 forKey: .threadTitleRegeneration
             )
+            threadPullRequestsV2 = try container.decodeIfPresent(Bool.self, forKey: .threadPullRequestsV2)
+            pullRequestStackActions = try container.decodeIfPresent(Bool.self, forKey: .pullRequestStackActions)
             threadPullRequestLinking = try container.decodeIfPresent(
                 Bool.self,
                 forKey: .threadPullRequestLinking

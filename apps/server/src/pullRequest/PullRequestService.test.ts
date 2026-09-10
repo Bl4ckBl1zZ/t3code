@@ -3420,3 +3420,71 @@ it.effect("names the signed-in account in the detail, and says nothing where the
     assert.strictEqual(unnamed.viewer, undefined);
   }),
 );
+
+it.effect("routes stack reads and preserves reviewed heads through action authorization", () =>
+  Effect.gen(function* () {
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 2 };
+    const heads = [
+      { number: 1, headSha: "abc" },
+      { number: 2, headSha: "def" },
+    ];
+    const stack = {
+      id: "stack-1",
+      number: 1,
+      url: "https://github.com/acme/web/stack/1",
+      base: "main",
+      layers: [],
+    };
+    let calls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getStack: (input) => {
+            assert.equal(input.number, 2);
+            return Effect.succeed(stack);
+          },
+          runAction: (input) => {
+            calls++;
+            assert.equal(input.stackNumber, 1);
+            assert.deepEqual(input.expectedStackHeads, heads);
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    assert.deepEqual(yield* service.stack(reference), stack);
+    yield* service.runAction({
+      ...reference,
+      stackNumber: 1,
+      expectedStackHeads: heads,
+      action: "merge",
+      mergeMethod: "merge",
+    });
+    assert.equal(calls, 1);
+  }),
+);
+
+it.effect("returns no stack and refuses stack mutations on unsupported hosts", () =>
+  Effect.gen(function* () {
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 2 };
+    let calls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          runAction: () => {
+            calls++;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    assert.isNull(yield* service.stack(reference));
+    const error = yield* Effect.flip(
+      service.runAction({ ...reference, stackNumber: 1, action: "merge" }),
+    );
+    assert.equal(error._tag, "PullRequestOperationError");
+    assert.equal(calls, 0);
+  }),
+);

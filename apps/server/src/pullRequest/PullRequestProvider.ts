@@ -1,3 +1,4 @@
+import type { PullRequestStack, PullRequestStackHead } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type {
@@ -356,10 +357,16 @@ export interface PullRequestProviderApi {
     },
   ) => Effect.Effect<ProviderDiffFileContents, PullRequestProviderError>;
 
+  readonly getStack?: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<PullRequestStack | null, PullRequestProviderError>;
+
   readonly runAction: (
     input: ProviderRepositoryRef & {
       readonly number: number;
       readonly action: PullRequestAction;
+      readonly stackNumber?: number;
+      readonly expectedStackHeads?: ReadonlyArray<PullRequestStackHead>;
       /** Meaningful for `merge` and `enable-auto-merge`; absent takes the host's own default. */
       readonly mergeMethod?: PullRequestMergeMethod;
       /** Only meaningful for `update-branch`; absent takes the host's own default. */

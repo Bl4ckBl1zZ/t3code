@@ -182,6 +182,7 @@ export type BuildThreadActionItemsThread = Pick<
   updatedAt: string;
   latestUserMessageAt?: string | null;
   linkedPullRequest?: SidebarThreadSummary["linkedPullRequest"];
+  linkedPullRequests?: SidebarThreadSummary["linkedPullRequests"];
 };
 
 export function buildThreadActionItems<TThread extends BuildThreadActionItemsThread>(input: {

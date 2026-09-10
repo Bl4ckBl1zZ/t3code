@@ -326,6 +326,9 @@ export const OrchestrationV2AppThread = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  linkedPullRequests: Schema.optional(
+    Schema.Array(ThreadLinkedPullRequest).check(Schema.isMaxLength(50)),
+  ),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
@@ -1638,6 +1641,9 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  linkedPullRequests: Schema.optional(
+    Schema.Array(ThreadLinkedPullRequest).check(Schema.isMaxLength(50)),
+  ),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2453,6 +2459,9 @@ export const OrchestrationV2Command = Schema.Union([
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     /** Absent leaves the link alone; null unlinks. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Atomic collection edits; older clients keep using the single-link field. */
+    linkPullRequest: Schema.optional(ThreadLinkedPullRequest),
+    unlinkPullRequest: Schema.optional(ThreadLinkedPullRequest),
     pinned: Schema.optional(Schema.Boolean),
     /** Fractional key placing this thread within the pinned run. Sent alone to
         reorder, or alongside `pinned: true` to place a fresh pin. */

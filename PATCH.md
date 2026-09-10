@@ -379,22 +379,27 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     `buildToolCallExpandedBody` / projected-item disclosure; the fork has no
     `commandMatchesVisibleLabel` expansion guard. Android feed positioning (`75e4ceb964`)
     and glass backing (`383cc40f4d`) remain excluded under the Expo freeze.
-  - Multiple linked PRs (`afb84898be`) remain deferred for a coordinated V2/Swift port:
-    upstream introduces host-level link identity, stack-dismissal tombstones, cached snapshots,
-    multi-PR settlement, automatic linking after creation, and credential-scoped MCP tools.
-    These must land together on V2's JSON projection and existing MCP capability model.
-    `050_ProjectionThreadPullRequests` targets V1 tables and collides with a fork-owned number;
-    it is dropped. The `threadPullRequests` capability, V1 link/unlink commands, RPCs,
-    provider instructions, client-runtime commands and dependent UI are not advertised/carried.
-  - GitHub stack navigation/merge/rebase (`de37964db2`) remains deferred with the multi-PR
-    stack service. A dedicated port must retain reviewed-head checks, branch permissions,
-    partial-rebase reporting and remote-only operations, then adapt the fork's panel stores
-    and native client. The `pullRequestStackActions` capability is not carried.
-  - Restart-persistent PR reads (`33242d0164`) cache the upstream `summary` / `stack` service
-    methods that the fork does not have (its earlier PR-discovery port is also deferred).
-    Do not add an unused cache layer or replace the fork's detail-cache semantics by inference.
-    Carry this with the missing service, including expiry and mutation/in-flight invalidation.
-    Advancing this sync marker records review of these deferred commits, not feature support.
+  - The approved native parity follow-up now supports multiple explicit PR links on V2:
+    `thread.metadata.update` adds/removes one link atomically, with a 50-link limit and
+    host/repository/number identity. The JSON projection carries `linkedPullRequests` while
+    `linkedPullRequest` remains the primary for older clients. Legacy edits preserve other links.
+    Swift gates collection editing on `threadPullRequestsV2`, searches every link, and requires
+    every linked PR to read as terminal before settling. Link changes restart its observations.
+    Web/Expo still render the primary and conservatively avoid automatic settlement for collections.
+    Automatic discovery/linking after creation, stack-dismissal tombstones, cached snapshots and
+    credential-scoped MCP link tools remain unported. Upstream's `threadPullRequests` flag and V1
+    commands stay excluded; `050_ProjectionThreadPullRequests` is dropped, with no new migration.
+  - GitHub stack navigation/merge/rebase (`de37964db2`) is now available to Swift through
+    `pullRequests.stack` and `pullRequestStackActions`. The standalone GitHub action implementation
+    retains reviewed-head checks, per-branch permissions, partial-rebase reporting and remote-only
+    operations. Confirmation holds the reviewed stack immutable; mutations invalidate every
+    reviewed PR's cached reads even after partial failure. Web/Expo stack controls remain unported.
+  - Restart-persistent PR summary/stack reads (`33242d0164`) remain excluded. Stack reads are
+    on demand; the earlier V2 background PR-discovery/summary service is still missing. Carry a
+    durable read cache with that service, including expiry and mutation/in-flight invalidation.
+    Advancing this sync marker records review of deferred work, not full upstream feature support.
+  - Swift's existing image galleries now support pinch/pan, double-tap zoom and an accessible
+    fit action while retaining original-byte export and current/adjacent-page loading.
 - The 2026-09-09 sync (`223ff4490f..e16b8b059c`, 185 upstream commits) manually carries
   independent correctness fixes while retaining the boundaries above:
   - `thread.stop` (`09e8de9c65`) uses web/desktop's existing V2 `interruptThreadTurn` path.

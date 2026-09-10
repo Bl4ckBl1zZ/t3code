@@ -1,16 +1,17 @@
 import SwiftUI
 
-// A read-only, native view of one change request: the summary the host's page
-// leads with, and the conversation-plus-commits chronology under it. Opened
-// from the thread details sheet's Version Control section; anything beyond
-// reading — reviews, merges, comments — stays in the browser, one tap away.
-//
-// Every rule lives in PullRequestDetailSections.swift; this file is the view.
+// Native PR details and reviewed, remote-only GitHub stack actions.
 
 struct PullRequestDetailSheet: View {
     let client: any FeatureClient
     let threadID: String
     let number: Int
+
+    @State private var selectedNumber: Int?
+    @State private var stack: PullRequestStack?
+    @State private var stackError: String?
+    @State private var pendingStackAction: NativeStackAction?
+    private var displayedNumber: Int { selectedNumber ?? number }
 
     @State private var overview: FeaturePullRequestOverview?
     @State private var loadError: String?
@@ -29,7 +30,7 @@ struct PullRequestDetailSheet: View {
             }
         }
         .background(T3Colors.background)
-        .navigationTitle("Pull Request #\(number)")
+        .navigationTitle("Pull Request #\(displayedNumber)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -43,15 +44,35 @@ struct PullRequestDetailSheet: View {
                 }
             }
         }
-        .task { await load() }
+        .task(id: displayedNumber) { await load() }
+        .sheet(item: $pendingStackAction, onDismiss: { Task { await load() } }) { request in
+            PullRequestStackActionSheet(request: request, client: client, threadID: threadID) {
+                pendingStackAction = nil
+            }
+        }
         .accessibilityIdentifier("pull-request-detail-sheet")
     }
 
     private func load() async {
+        let requestedNumber = displayedNumber
         loadError = nil
+        overview = nil
+        stack = nil
+        stackError = nil
         do {
-            overview = try await client.pullRequestOverview(threadID: threadID, number: number)
+            let result = try await client.pullRequestOverview(threadID: threadID, number: requestedNumber)
+            guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
+            overview = result
+            do {
+                let loadedStack = try await client.pullRequestStack(threadID: threadID, number: requestedNumber)
+                guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
+                stack = loadedStack
+            } catch {
+                guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
+                stackError = error.localizedDescription
+            }
         } catch {
+            guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
             loadError = error.localizedDescription
         }
     }
@@ -77,6 +98,11 @@ struct PullRequestDetailSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(overview.detail)
+                if let stack { stackSection(stack, detail: overview.detail) }
+                if let stackError {
+                    Text("Could not load stack: \(stackError)").font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
+                    Button("Retry stack") { Task { await load() } }
+                }
 
                 Picker("Section", selection: $tab) {
                     ForEach(PullRequestDetailTab.allCases, id: \.self) { tab in
@@ -97,6 +123,28 @@ struct PullRequestDetailSheet: View {
             .padding(.bottom, 36)
         }
         .scrollIndicators(.hidden)
+    }
+
+    private func stackSection(_ stack: PullRequestStack, detail: PullRequestDetail) -> some View {
+        ThreadDetailsSection(title: "Stack · \(stack.layers.count) layers", footer: "Layers run from base to top. Actions update GitHub without changing your checkout.") {
+            ForEach(stack.layers) { layer in
+                ThreadDetailsRow(systemImage: layer.number == displayedNumber ? "checkmark.circle.fill" : "arrow.triangle.pull",
+                    title: "#\(layer.number) \(layer.title ?? layer.headBranch)", subtitle: layer.state.rawValue.capitalized,
+                    showsChevron: layer.number != displayedNumber, action: { selectedNumber = layer.number })
+            }
+            if detail.state == .open, let capabilities = detail.capabilities, let viewer = detail.viewerPermissions {
+                if capabilities.actions.contains("merge"), viewer.actions.contains("merge") {
+                    ThreadDetailsRow(systemImage: "arrow.triangle.merge", title: "Review merge through #\(displayedNumber)…",
+                        action: { pendingStackAction = NativeStackAction(stack: stack, number: displayedNumber, action: "merge", mergeMethods: capabilities.mergeMethods) })
+                }
+                if stack.layers.last?.number == displayedNumber,
+                   capabilities.actions.contains("update-branch"), viewer.actions.contains("update-branch"),
+                   capabilities.updateMethods?.contains("rebase") == true, viewer.updateMethods?.contains("rebase") == true {
+                    ThreadDetailsRow(systemImage: "arrow.triangle.branch", title: "Review stack rebase…",
+                        action: { pendingStackAction = NativeStackAction(stack: stack, number: displayedNumber, action: "update-branch", mergeMethods: []) })
+                }
+            }
+        }
     }
 
     private func header(_ detail: PullRequestDetail) -> some View {

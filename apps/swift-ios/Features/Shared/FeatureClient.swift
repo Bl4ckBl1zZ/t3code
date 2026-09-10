@@ -72,6 +72,10 @@ public protocol FeatureClient: AnyObject {
         threadID: String,
         number: Int?
     ) async throws -> FeatureLinkedPullRequest?
+    func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest?
+    func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws
+    func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack?
+    func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws
     /// Persists the model and its options (effort, context window) on the
@@ -256,6 +260,10 @@ public extension FeatureClient {
     ) async throws -> FeatureLinkedPullRequest? {
         throw FeatureCapabilityUnavailable("Pull request linking")
     }
+    func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest? { throw FeatureCapabilityUnavailable("Multiple pull requests") }
+    func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws { throw FeatureCapabilityUnavailable("Multiple pull requests") }
+    func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack? { nil }
+    func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws { throw FeatureCapabilityUnavailable("Stack actions") }
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
     func setModelSelection(id: String, selection: FeatureSelection) async throws {}

@@ -25,6 +25,7 @@ interface QueuedThreadShell {
 }
 
 interface SettlementThreadShell extends QueuedThreadShell {
+  readonly linkedPullRequests?: readonly unknown[] | undefined;
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
   readonly hasPendingApprovals: boolean;
@@ -45,6 +46,7 @@ export interface ChangeRequestSettleSource {
 
 /** What the settle rules need to know about the thread's own timeline. */
 export interface ThreadActivitySource {
+  readonly linkedPullRequests?: readonly unknown[] | undefined;
   readonly createdAt?: string | null;
   readonly latestUserMessageAt?: string | null;
   readonly latestRun?: SettlementRunLike | null;
@@ -90,6 +92,8 @@ export function changeRequestAutoSettles(
   } = {},
 ): boolean {
   if (changeRequest == null) return false;
+  // Legacy clients only read the primary PR; they cannot settle an entire collection from it.
+  if ((options.thread?.linkedPullRequests?.length ?? 0) > 1) return false;
   const terminal =
     changeRequest.state === "closed" ||
     (changeRequest.state === "merged" && options.autoSettleOnMerge !== false);
@@ -382,6 +386,8 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
+  // Primary-only status cannot establish that every linked request has finished.
+  if ((shell.linkedPullRequests?.length ?? 0) > 1) return false;
   if (
     changeRequestAutoSettles(options.changeRequest, {
       autoSettleOnMerge: options.autoSettleOnMerge,

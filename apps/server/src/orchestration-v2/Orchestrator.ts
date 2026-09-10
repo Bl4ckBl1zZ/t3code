@@ -1,3 +1,4 @@
+import { updateLinkedPullRequests } from "@t3tools/shared/threadPullRequests";
 import {
   type ChatAttachment,
   CommandId,
@@ -1449,6 +1450,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
     const thread = projection.thread;
+    if (command.type === "thread.metadata.update") {
+      const edits = [
+        command.linkedPullRequest,
+        command.linkPullRequest,
+        command.unlinkPullRequest,
+      ].filter((value) => value !== undefined);
+      if (
+        edits.length > 1 ||
+        updateLinkedPullRequests(thread, command).linkedPullRequests.length > 50
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "Send one pull-request edit at a time; a thread can link at most 50 pull requests.",
+        });
+      }
+    }
     if (thread.deletedAt !== null && command.type !== "thread.delete") {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -1730,9 +1749,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ? {}
               : { activeOrderKey: command.activeOrderKey }),
             // Absent leaves the link alone; null unlinks.
-            ...(command.linkedPullRequest === undefined
+            ...(command.linkedPullRequest === undefined &&
+            command.linkPullRequest === undefined &&
+            command.unlinkPullRequest === undefined
               ? {}
-              : { linkedPullRequest: command.linkedPullRequest }),
+              : updateLinkedPullRequests(thread, command)),
             ...(command.workInboxRole === undefined
               ? {}
               : {

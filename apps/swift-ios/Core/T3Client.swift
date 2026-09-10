@@ -742,6 +742,28 @@ public actor T3Client {
         )
     }
 
+    public func pullRequestStack(projectID: String, repository: String, number: Int) async throws -> PullRequestStack? {
+        try await rpc.request("pullRequests.stack", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ]), as: Optional<PullRequestStack>.self)
+    }
+
+    public func runPullRequestStackAction(projectID: String, repository: String, number: Int,
+        stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
+        let heads = stack.affectedLayers(number: number, action: action)
+        guard !heads.isEmpty, heads.allSatisfy({ $0.headSha != nil }) else {
+            throw RPCError.remote("Refresh the stack before performing this action.")
+        }
+        var fields: [String: JSONValue] = [
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "stackNumber": .number(Double(stack.number)), "action": .string(action),
+            "expectedStackHeads": .array(heads.map { .object(["number": .number(Double($0.number)), "headSha": .string($0.headSha!)]) }),
+        ]
+        if let mergeMethod { fields["mergeMethod"] = .string(mergeMethod) }
+        if action == "update-branch" { fields["updateMethod"] = .string("rebase") }
+        let _: JSONValue = try await rpc.request("pullRequests.runAction", payload: .object(fields), as: JSONValue.self)
+    }
+
     public func pullRequestActivity(
         projectID: String,
         repository: String,

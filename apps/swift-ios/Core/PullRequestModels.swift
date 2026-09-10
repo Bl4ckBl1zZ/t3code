@@ -2,9 +2,8 @@ import Foundation
 
 // Pull-request detail and activity, as `packages/contracts/src/pullRequest.ts`
 // reports them over the `pullRequests.detail` and `pullRequests.activity` WS
-// RPCs. Only the fields the read-only sheet renders are modelled; the
-// capability, permission and merge-method blocks the actions UI would need are
-// left undeclared, which `JSONDecoder` simply skips.
+// RPCs. The detail sheet also decodes host capabilities and viewer permissions
+// to gate reviewed stack actions. Unused response fields are skipped.
 //
 // Dates stay ISO strings, matching how the other Core models carry
 // `IsoDateTime`.
@@ -106,6 +105,8 @@ public enum PullRequestMergeability: String, Codable, Sendable {
 }
 
 public struct PullRequestDetail: Codable, Equatable, Sendable {
+    public var capabilities: NativePullRequestCapabilities? = nil
+    public var viewerPermissions: NativePullRequestViewerPermissions? = nil
     public let projectId: String
     public let projectTitle: String
     public let repository: String
@@ -145,4 +146,39 @@ public struct PullRequestActivity: Codable, Equatable, Sendable {
     public let commentsTruncated: Bool
     public let reviewThreads: [PullRequestReviewThread]
     public let commits: [PullRequestCommit]
+}
+
+public struct PullRequestStack: Codable, Equatable, Sendable {
+    public let id: String
+    public let number: Int
+    public let url: String
+    public let base: String
+    public let layers: [Layer]
+
+    public struct Layer: Codable, Equatable, Sendable, Identifiable {
+        public var id: Int { number }
+        public let number: Int
+        public let title: String?
+        public let isDraft: Bool?
+        public let headSha: String?
+        public let headBranch: String
+        public let state: PullRequestState
+    }
+
+    /// Only the reviewed open layers travel; the server revalidates each revision before writing.
+    public func affectedLayers(number: Int, action: String) -> [Layer] {
+        guard let index = layers.firstIndex(where: { $0.number == number }) else { return [] }
+        return (action == "merge" ? Array(layers.prefix(index + 1)) : layers).filter { $0.state != .merged }
+    }
+}
+
+public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
+    public let actions: [String]
+    public let mergeMethods: [String]
+    public let updateMethods: [String]?
+}
+
+public struct NativePullRequestViewerPermissions: Codable, Equatable, Sendable {
+    public let actions: [String]
+    public let updateMethods: [String]?
 }

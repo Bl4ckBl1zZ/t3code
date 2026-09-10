@@ -1259,12 +1259,41 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refresh(client: route.client)
     }
 
+    func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest? {
+        try await changeThreadLinkedPullRequest(threadID: threadID, number: number, adding: true)
+    }
+
+    func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws {
+        let route = try threadRoute(for: threadID)
+        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.threadPullRequestsV2 == true else {
+            throw FeatureCapabilityUnavailable("Multiple pull requests")
+        }
+        guard let shell = shellsByEnvironmentID[route.environmentID],
+              let thread = shell.threads.first(where: { $0.id == route.wireID }),
+              let wire = (thread.linkedPullRequests ?? thread.linkedPullRequest.map { [$0] } ?? []).first(where: { $0.number == link.number && $0.url == link.url }) else {
+            throw NativeFeatureClientError.workspaceNotFound
+        }
+        _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(threadID: route.wireID, fields: ["unlinkPullRequest": try JSONValue.encode(wire)]))
+        try? await refresh(client: route.client)
+    }
+
     @discardableResult
-    func setThreadLinkedPullRequest(
+    func setThreadLinkedPullRequest(threadID: String, number: Int?) async throws -> FeatureLinkedPullRequest? {
+        try await changeThreadLinkedPullRequest(threadID: threadID, number: number, adding: false)
+    }
+
+    @discardableResult
+    private func changeThreadLinkedPullRequest(
         threadID: String,
-        number: Int?
+        number: Int?,
+        adding: Bool
     ) async throws -> FeatureLinkedPullRequest? {
         let route = try threadRoute(for: threadID)
+        if adding {
+            guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.threadPullRequestsV2 == true else {
+                throw FeatureCapabilityUnavailable("Multiple pull requests")
+            }
+        }
         guard let number else {
             _ = try await route.client.setLinkedPullRequest(
                 threadID: route.wireID,
@@ -1290,15 +1319,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             repository: repository,
             number: number
         )
-        _ = try await route.client.setLinkedPullRequest(
-            threadID: route.wireID,
-            pullRequest: OrchestrationV2ThreadLinkedPullRequest(
-                projectId: project.id,
-                repository: repository,
-                number: detail.number,
-                url: detail.url
-            )
-        )
+        let link = OrchestrationV2ThreadLinkedPullRequest(projectId: project.id, repository: repository, number: detail.number, url: detail.url)
+        _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(threadID: route.wireID,
+            fields: [adding ? "linkPullRequest" : "linkedPullRequest": try JSONValue.encode(link)]))
         try? await refresh(client: route.client)
         return FeatureLinkedPullRequest(
             projectID: FeatureScopedID.project(
@@ -1983,6 +2006,29 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return detail
     }
 
+    func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack? {
+        let route = try threadRoute(for: threadID)
+        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { return nil }
+        guard let shell = shellsByEnvironmentID[route.environmentID],
+              let thread = shell.threads.first(where: { $0.id == route.wireID }),
+              let project = shell.projects.first(where: { $0.id == thread.projectId }),
+              let repository = project.repositoryIdentity?.displayName else { throw NativeFeatureClientError.repositoryIdentityUnavailable }
+        return try await route.client.pullRequestStack(projectID: project.id, repository: repository, number: number)
+    }
+
+    func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
+        let route = try threadRoute(for: threadID)
+        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else {
+            throw FeatureCapabilityUnavailable("Stack actions")
+        }
+        guard let shell = shellsByEnvironmentID[route.environmentID],
+              let thread = shell.threads.first(where: { $0.id == route.wireID }),
+              let project = shell.projects.first(where: { $0.id == thread.projectId }),
+              let repository = project.repositoryIdentity?.displayName else { throw NativeFeatureClientError.repositoryIdentityUnavailable }
+        try await route.client.runPullRequestStackAction(projectID: project.id, repository: repository, number: number,
+            stack: stack, action: action, mergeMethod: mergeMethod)
+    }
+
     func pullRequestOverview(threadID: String, number: Int) async throws
         -> FeaturePullRequestOverview
     {
@@ -2049,19 +2095,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         // A linked pull request is the thread's own answer and outranks whatever
         // its worktree's branch happens to point at: the same branch can back
         // several requests, and a thread whose worktree is gone still has one.
-        var linkedByThreadID: [String: LinkedChangeRequestSubscription] = [:]
+        var linkedByThreadID: [String: [LinkedChangeRequestSubscription]] = [:]
         for threadID in threadIDs {
             guard let route = try? threadRoute(for: threadID),
                   let shell = shellsByEnvironmentID[route.environmentID],
                   let thread = shell.threads.first(where: { $0.id == route.wireID })
             else { continue }
-            if let linked = thread.linkedPullRequest {
-                linkedByThreadID[threadID] = LinkedChangeRequestSubscription(
-                    environmentID: route.environmentID,
-                    projectWireID: linked.projectId,
-                    repository: linked.repository,
-                    number: linked.number
-                )
+            let links = thread.linkedPullRequests ?? thread.linkedPullRequest.map { [$0] } ?? []
+            if !links.isEmpty {
+                linkedByThreadID[threadID] = links.map { linked in
+                    LinkedChangeRequestSubscription(environmentID: route.environmentID,
+                        projectWireID: linked.projectId, repository: linked.repository, number: linked.number)
+                }
                 continue
             }
             guard let context = try? workspaceContext(route: route),
@@ -2144,28 +2189,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// within half a minute instead of at the next app launch.
     private func pollLinkedChangeRequest(
         threadID: String,
-        subscription: LinkedChangeRequestSubscription,
+        subscription: [LinkedChangeRequestSubscription],
         accumulator: ChangeRequestAccumulator,
         into continuation: AsyncStream<[String: FeaturePullRequest]>.Continuation
     ) async {
         while !Task.isCancelled {
-            guard let client = environmentClients[subscription.environmentID] else { return }
-            let detail = try? await client.pullRequestDetail(
-                projectID: subscription.projectWireID,
-                repository: subscription.repository,
-                number: subscription.number
-            )
-            if Task.isCancelled { return }
-            // A failed read leaves the previous answer in place. The host is
-            // reached through the `gh` CLI, so a flaky read is ordinary; blanking
-            // the badge on one would make a merged row bounce back to Active.
-            if let detail,
-               let merged = accumulator.applyLinked(
-                   threadID: threadID,
-                   pullRequest: NativeWorkspaceMapper.pullRequest(detail)
-               ) {
-                continuation.yield(merged)
+            guard let first = subscription.first, let client = environmentClients[first.environmentID] else { return }
+            var reads: [FeaturePullRequest?] = []
+            for link in subscription {
+                let detail = try? await client.pullRequestDetail(projectID: link.projectWireID, repository: link.repository, number: link.number)
+                if Task.isCancelled { return }
+                reads.append(detail.map(NativeWorkspaceMapper.pullRequest))
             }
+            let summary = FeatureLinkedPullRequestSettlement.aggregate(reads) ?? FeaturePullRequest(number: first.number, title: "Pull requests unavailable", state: "unknown")
+            if let merged = accumulator.applyLinked(threadID: threadID, pullRequest: summary) { continuation.yield(merged) }
             try? await Task.sleep(for: .seconds(30))
         }
     }
@@ -4595,6 +4632,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 thread.linkedPullRequest,
                 environment: environment
             ),
+            linkedPullRequests: thread.linkedPullRequests.map { links in links.compactMap { mapLinkedPullRequest($0, environment: environment) } },
+            supportsMultiplePullRequests: environment.descriptor?.capabilities.threadPullRequestsV2,
+            supportsPullRequestStackActions: environment.descriptor?.capabilities.pullRequestStackActions,
             supportsPullRequestLinking: environment.descriptor?.capabilities
                 .threadPullRequestLinking,
             attentionAt: latestRun?.status == "failed"
@@ -4724,6 +4764,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 thread.linkedPullRequest,
                 environment: environment
             ),
+            linkedPullRequests: thread.linkedPullRequests.map { links in links.compactMap { mapLinkedPullRequest($0, environment: environment) } },
+            supportsMultiplePullRequests: environment.descriptor?.capabilities.threadPullRequestsV2,
+            supportsPullRequestStackActions: environment.descriptor?.capabilities.pullRequestStackActions,
             supportsPullRequestLinking: environment.descriptor?.capabilities
                 .threadPullRequestLinking,
             // A failed run is the only thing that earns an attention marker; a

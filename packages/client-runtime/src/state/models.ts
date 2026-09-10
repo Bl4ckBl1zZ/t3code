@@ -80,6 +80,7 @@ export interface EnvironmentThreadShell {
   readonly worktreePath: string | null;
   /** Pull request a user pinned to this thread; null when nothing is linked. */
   readonly linkedPullRequest: ThreadLinkedPullRequest | null;
+  readonly linkedPullRequests?: readonly ThreadLinkedPullRequest[] | undefined;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
@@ -231,6 +232,9 @@ export function presentThreadShell(
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     linkedPullRequest: thread.linkedPullRequest ?? null,
+    ...(thread.linkedPullRequests === undefined
+      ? {}
+      : { linkedPullRequests: thread.linkedPullRequests }),
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
     activeProviderThreadId: thread.activeProviderThreadId,

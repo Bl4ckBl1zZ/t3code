@@ -1,0 +1,27 @@
+{
+  "id": "stack-1",
+  "number": 1,
+  "url": "https://github.com/o/r/stack/1",
+  "base": "main",
+  "layers": [
+    {
+      "number": 1,
+      "headBranch": "one",
+      "state": "merged"
+    },
+    {
+      "number": 2,
+      "title": "Second layer",
+      "isDraft": false,
+      "headSha": "abc",
+      "headBranch": "two",
+      "state": "open"
+    },
+    {
+      "number": 3,
+      "headSha": "def",
+      "headBranch": "three",
+      "state": "open"
+    }
+  ]
+}

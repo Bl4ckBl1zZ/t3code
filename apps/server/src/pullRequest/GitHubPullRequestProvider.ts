@@ -414,6 +414,10 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("setReviewerRequest"))),
 
+    getStack: (input) =>
+      cli
+        .getPullRequestStack({ ...input, includeDetails: true })
+        .pipe(Effect.mapError(fail("getStack"))),
     runAction: (input) =>
       cli
         .runPullRequestAction({
@@ -422,6 +426,10 @@ export const make = Effect.gen(function* () {
           host: input.host,
           number: input.number,
           action: input.action,
+          ...(input.stackNumber === undefined ? {} : { stackNumber: input.stackNumber }),
+          ...(input.expectedStackHeads === undefined
+            ? {}
+            : { expectedStackHeads: input.expectedStackHeads }),
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
           ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
         })

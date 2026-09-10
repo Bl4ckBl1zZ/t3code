@@ -44,6 +44,8 @@ final class OrchestrationV2ContractTests: XCTestCase {
     func testNativeParityFieldsDecodeFromServerContract() throws {
         let projection = try projection()
         XCTAssertEqual(projection.thread.activeOrderKey, "n")
+        XCTAssertEqual(projection.thread.linkedPullRequests?.map(\.number), [41, 42])
+        XCTAssertEqual(projection.thread.linkedPullRequest?.number, 41)
         XCTAssertEqual(projection.runtimeRequests.first?.responseMode, "message")
         let dismiss = OrchestrationCommands.respondToUserInput(threadID: "t", requestID: "q", answers: [:], dismiss: true)
         XCTAssertEqual(dismiss["dismiss"], .bool(true))

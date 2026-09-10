@@ -1,3 +1,4 @@
+import type { PullRequestStack } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -135,6 +136,9 @@ export class PullRequestService extends Context.Service<
     readonly diffFileContents: (
       input: PullRequestDiffFileContentsInput,
     ) => Effect.Effect<PullRequestDiffFileContentsResult, PullRequestError>;
+    readonly stack: (
+      input: PullRequestRef,
+    ) => Effect.Effect<PullRequestStack | null, PullRequestError>;
     readonly runAction: (input: PullRequestActionInput) => Effect.Effect<void, PullRequestError>;
     readonly update: (input: PullRequestUpdateInput) => Effect.Effect<void, PullRequestError>;
     readonly comment: (input: PullRequestCommentInput) => Effect.Effect<void, PullRequestError>;
@@ -441,6 +445,7 @@ function withRateLimitBackoff(
     ...(api.getDiffFileContents === undefined
       ? {}
       : { getDiffFileContents: wrap("getDiffFileContents", api.getDiffFileContents) }),
+    ...(api.getStack === undefined ? {} : { getStack: wrap("getStack", api.getStack) }),
     runAction: interactive("runAction", api.runAction),
     ...(api.updateChangeRequest === undefined
       ? {}
@@ -1296,9 +1301,33 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const stack: PullRequestService["Service"]["stack"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project) =>
+        project.api.getStack
+          ? project.api
+              .getStack({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+              })
+              .pipe(Effect.mapError(toPullRequestError("stack")))
+          : Effect.succeed(null),
+      ),
+    );
+
   const runAction: PullRequestService["Service"]["runAction"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        if (input.stackNumber !== undefined && !project.api.getStack) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "runAction",
+              detail: "This host does not support stack actions.",
+            }),
+          );
+        }
         // The surface hides what a host cannot do, and this refuses it as well: a request that
         // reached here anyway must not be handed to a provider that never claimed the action.
         if (!project.api.capabilities.actions.includes(input.action)) {
@@ -1367,6 +1396,10 @@ export const make = Effect.gen(function* () {
                 host: project.host,
                 number: input.number,
                 action: input.action,
+                ...(input.stackNumber === undefined ? {} : { stackNumber: input.stackNumber }),
+                ...(input.expectedStackHeads === undefined
+                  ? {}
+                  : { expectedStackHeads: input.expectedStackHeads }),
                 ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
                 ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
               })
@@ -2101,7 +2134,20 @@ export const make = Effect.gen(function* () {
     threadComments,
     diff,
     diffFileContents,
-    runAction: invalidatedByMutation(runAction),
+    stack,
+    runAction: (input) =>
+      invalidatedByMutation(runAction)(input).pipe(
+        Effect.ensuring(
+          input.stackNumber === undefined
+            ? Effect.void
+            : Effect.sync(() => {
+                // A rebase can fail after updating earlier layers. Invalidate every reviewed layer.
+                for (const head of input.expectedStackHeads ?? [])
+                  bumpRefEpoch({ ...input, number: head.number });
+                listingsEpoch = ++epochCounter;
+              }),
+        ),
+      ),
     update: invalidatedByMutation(update),
     comment: invalidatedByMutation(comment),
     updateComment: invalidatedByMutation(updateComment),
