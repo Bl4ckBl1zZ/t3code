@@ -35,6 +35,8 @@ import {
   PullRequestDetail,
   PullRequestActionInput,
   PullRequestUpdateInput,
+  PullRequestReaction,
+  PullRequestReactionInput,
   UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
@@ -936,3 +938,30 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestActionsPath, pullRequestActionsSerialized);
+
+const pullRequestReactionsPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "pullRequestReactions.json",
+);
+const pullRequestReactionsSerialized = `${JSON.stringify(
+  Schema.encodeSync(
+    Schema.Struct({
+      reactions: Schema.Array(PullRequestReaction),
+      input: PullRequestReactionInput,
+    }),
+  )({
+    reactions: [{ content: "heart", count: 3, actors: ["a", "b"], viewerHasReacted: true }],
+    input: { projectId, repository: "owner/repo", number: 42, content: "heart", reacted: false },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestReactionsPath) ||
+    NodeFS.readFileSync(pullRequestReactionsPath, "utf8") !== pullRequestReactionsSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestReactions.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestReactionsPath, pullRequestReactionsSerialized);

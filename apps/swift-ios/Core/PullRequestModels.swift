@@ -43,6 +43,7 @@ public enum PullRequestCommentKind: String, Codable, Sendable {
 }
 
 public struct PullRequestComment: Codable, Equatable, Sendable, Identifiable {
+    public var reactions: [PullRequestReaction]? = nil
     public let id: String
     public let kind: PullRequestCommentKind
     public let author: PullRequestActor?
@@ -63,6 +64,7 @@ public struct PullRequestCommit: Codable, Equatable, Sendable {
 }
 
 public struct PullRequestThreadComment: Codable, Equatable, Sendable, Identifiable {
+    public var reactions: [PullRequestReaction]? = nil
     public let id: String
     public let author: PullRequestActor?
     public var body: String
@@ -137,6 +139,7 @@ public struct PullRequestDetail: Codable, Equatable, Sendable {
 /// The slower, conversation-shaped half of a change request, read separately so
 /// a deeply paginated review history cannot hold the summary off screen.
 public struct PullRequestActivity: Codable, Equatable, Sendable {
+    public var reactions: [PullRequestReaction]? = nil
     /// Optional enrichments: GitHub's conversation query carries avatars and
     /// completed reviewers that its basic detail does not.
     public let author: PullRequestActor?
@@ -175,6 +178,7 @@ public struct PullRequestStack: Codable, Equatable, Sendable {
 }
 
 public struct NativePullRequestCapabilities: Codable, Equatable, Sendable {
+    public var reactions: Bool? = nil
     public var comment: Bool? = nil
     public var edit: NativePullRequestEditCapabilities? = nil
     public var diff: Bool? = nil

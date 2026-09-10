@@ -766,3 +766,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   review-conversation comments share the editor; loaded-page edits survive the subsequent refresh.
   New top-level comments use the host comment endpoint. Failed saves keep editor text and show the
   error, and every write validates current repository identity before submission.
+
+- Native reaction pills cover PR descriptions, timeline remarks and review-conversation comments.
+  Eight host reaction types have a native picker, selected state, counts and accessible actor names.
+  Optimistic changes are scoped per reaction; failures restore the preceding acknowledged state,
+  and in-flight presses cannot race the same reaction. Description requests omit `subjectId`;
+  comment requests carry the host ID. Mutation availability follows the host reaction capability.

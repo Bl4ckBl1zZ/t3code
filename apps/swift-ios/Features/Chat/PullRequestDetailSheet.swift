@@ -227,6 +227,7 @@ struct PullRequestDetailSheet: View {
                                         canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,
                                         canResolve: overview.detail.capabilities?.review?.resolve == true && overview.detail.viewerPermissions?.resolve == true,
                                         editing: access.editing?(displayedNumber, overview.detail.url),
+                                        reactions: reactionContext(overview.detail),
                                         canEditComment: { PullRequestEditingLogic.canEditComment(detail: overview.detail, author: $0.author, kind: "review-comment") },
                                         onReplied: { await load(preserveContent: true) })
                                 }
@@ -244,6 +245,7 @@ struct PullRequestDetailSheet: View {
                                 canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,
                                 canResolve: overview.detail.capabilities?.review?.resolve == true && overview.detail.viewerPermissions?.resolve == true,
                                 editing: access.editing?(displayedNumber, overview.detail.url),
+                                reactions: reactionContext(overview.detail),
                                 canEditComment: { PullRequestEditingLogic.canEditComment(detail: overview.detail, author: $0.author, kind: "review-comment") },
                                 refresh: { await load(preserveContent: true) }),
                             canComment: access.submitReview != nil && overview.detail.capabilities?.review?.inlineComment == true && overview.detail.viewerPermissions?.comment == true && !PullRequestReviewDraftModel.verdicts(capabilities: overview.detail.capabilities, viewer: overview.detail.viewerPermissions).isEmpty)
@@ -343,6 +345,8 @@ struct PullRequestDetailSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
+        if let activity { reactionBar(activity.reactions ?? [], subjectID: nil, detail: detail) }
+
         if !detail.labels.isEmpty || detail.capabilities?.labels == true {
             section("Labels") {
                 Text(detail.labels.map(\.name).joined(separator: " · "))
@@ -397,6 +401,18 @@ struct PullRequestDetailSheet: View {
                     }
                 }
             }
+        }
+    }
+
+    private func reactionContext(_ detail: PullRequestDetail) -> PullRequestReactionContext {
+        PullRequestReactionContext(canReact: detail.capabilities?.reactions == true,
+            set: access.react.map { react in { request in try await react(detail.number, detail.url, request) } },
+            refresh: { await load(preserveContent: true) })
+    }
+
+    @ViewBuilder private func reactionBar(_ reactions: [PullRequestReaction], subjectID: String?, detail: PullRequestDetail) -> some View {
+        if detail.capabilities?.reactions == true || !reactions.isEmpty {
+            PullRequestReactionBar(reactions: reactions, subjectID: subjectID, context: reactionContext(detail))
         }
     }
 
@@ -541,6 +557,7 @@ struct PullRequestDetailSheet: View {
                     MarkdownMessageView(comment.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                if let detail = overview?.detail { reactionBar(comment.reactions ?? [], subjectID: comment.id, detail: detail) }
                 if let detail = overview?.detail, access.editing != nil,
                    PullRequestEditingLogic.canEditComment(detail: detail, author: comment.author, kind: comment.kind.rawValue) {
                     Button("Edit comment", systemImage: "pencil") { textEdit = .comment(id: comment.id, kind: comment.kind.rawValue, body: comment.body) }

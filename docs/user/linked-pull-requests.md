@@ -87,3 +87,7 @@ On iOS, **Edit pull request** changes the title or description when your host an
 it. Saving one leaves the other untouched, and an empty description clears it. In **Timeline**, use
 **Add comment** to post a remark. Your own editable remarks have **Edit comment**, including those
 inside review conversations. Failed saves keep the editor’s text so you can retry.
+
+Reaction pills on iOS show each host count and whether you reacted. Tap a pill to add or remove your
+reaction, or open the smile menu to choose another. Long-press a pill to see the reported names.
+The count updates while saving and returns to its previous state if the host refuses the change.

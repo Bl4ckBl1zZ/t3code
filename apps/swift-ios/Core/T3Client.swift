@@ -841,6 +841,12 @@ public actor T3Client {
         let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object([:]), as: JSONValue.self)
     }
 
+    public func setPullRequestReaction(projectID: String, repository: String, number: Int, request: PullRequestReactionRequest) async throws {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "content": .string(request.content), "reacted": .bool(request.reacted)]
+        if let subjectId = request.subjectId { payload["subjectId"] = .string(subjectId) }
+        let _: JSONValue = try await rpc.request("pullRequests.setReaction", payload: .object(payload), as: JSONValue.self)
+    }
+
     public func updatePullRequestText(projectID: String, repository: String, number: Int, update: PullRequestTextUpdate) async throws {
         var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
         if let title = update.title { payload["title"] = .string(title) }

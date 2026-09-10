@@ -1,0 +1,20 @@
+{
+  "reactions": [
+    {
+      "content": "heart",
+      "count": 3,
+      "actors": [
+        "a",
+        "b"
+      ],
+      "viewerHasReacted": true
+    }
+  ],
+  "input": {
+    "projectId": "project-v2",
+    "repository": "owner/repo",
+    "number": 42,
+    "content": "heart",
+    "reacted": false
+  }
+}

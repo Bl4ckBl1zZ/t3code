@@ -6,14 +6,15 @@ struct PullRequestThreadCard: View {
     let canReply: Bool
     let canResolve: Bool
     let editing: FeaturePullRequestEditingAccess?
+    let reactions: PullRequestReactionContext
     let canEditComment: (PullRequestThreadComment) -> Bool
     let onReplied: () async -> Void
     @State private var textEdit: PullRequestTextEdit?
     @State private var model: PullRequestThreadModel
     @State private var expanded: Bool
 
-    init(thread: PullRequestReviewThread, access: FeaturePullRequestThreadAccess?, canReply: Bool, canResolve: Bool, editing: FeaturePullRequestEditingAccess?, canEditComment: @escaping (PullRequestThreadComment) -> Bool, onReplied: @escaping () async -> Void) {
-        self.thread = thread; self.access = access; self.canReply = canReply; self.canResolve = canResolve; self.editing = editing; self.canEditComment = canEditComment; self.onReplied = onReplied
+    init(thread: PullRequestReviewThread, access: FeaturePullRequestThreadAccess?, canReply: Bool, canResolve: Bool, editing: FeaturePullRequestEditingAccess?, reactions: PullRequestReactionContext, canEditComment: @escaping (PullRequestThreadComment) -> Bool, onReplied: @escaping () async -> Void) {
+        self.thread = thread; self.access = access; self.canReply = canReply; self.canResolve = canResolve; self.editing = editing; self.reactions = reactions; self.canEditComment = canEditComment; self.onReplied = onReplied
         _model = State(initialValue: PullRequestThreadModel(thread: thread))
         _expanded = State(initialValue: !thread.isResolved)
     }
@@ -35,6 +36,9 @@ struct PullRequestThreadCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(comment.author?.login ?? "Unknown").font(T3Typography.supportingStrong)
                         MarkdownMessageView(comment.body)
+                        if reactions.canReact || !(comment.reactions ?? []).isEmpty {
+                            PullRequestReactionBar(reactions: comment.reactions ?? [], subjectID: comment.id, context: reactions)
+                        }
                         if editing != nil, canEditComment(comment) {
                             Button("Edit comment", systemImage: "pencil") { textEdit = .comment(id: comment.id, kind: "review-comment", body: comment.body) }
                                 .font(T3Typography.supporting).frame(minHeight: 44)
@@ -82,6 +86,7 @@ struct PullRequestConversationContext {
     let canReply: Bool
     let canResolve: Bool
     let editing: FeaturePullRequestEditingAccess?
+    let reactions: PullRequestReactionContext
     let canEditComment: (PullRequestThreadComment) -> Bool
     let refresh: () async -> Void
 }

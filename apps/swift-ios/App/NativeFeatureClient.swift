@@ -2141,6 +2141,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await route.client.setPullRequestThreadResolution(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, resolved: resolved)
     }
 
+    func setPullRequestReaction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestReactionRequest) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        try await route.client.setPullRequestReaction(projectID: route.projectID, repository: route.repository, number: number, request: request)
+    }
+
     func updatePullRequestText(scope: FeaturePullRequestScope, number: Int, expectedURL: String, update: PullRequestTextUpdate) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.updatePullRequestText(projectID: route.projectID, repository: route.repository, number: number, update: update)
