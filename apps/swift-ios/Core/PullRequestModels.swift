@@ -102,6 +102,11 @@ public enum PullRequestMergeability: String, Codable, Sendable {
 }
 
 public struct PullRequestDetail: Codable, Equatable, Sendable {
+    public var mergeCapabilities: [String: Bool]? = nil
+    public var baseComparison: String? = nil
+    public var behindBy: Int? = nil
+    public var autoMergeEnabled: Bool? = nil
+    public var viewer: String? = nil
     public var capabilities: NativePullRequestCapabilities? = nil
     public var viewerPermissions: NativePullRequestViewerPermissions? = nil
     public let projectId: String

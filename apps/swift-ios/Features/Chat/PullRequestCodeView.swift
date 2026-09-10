@@ -4,6 +4,8 @@ import UIKit
 struct PullRequestCodeView: View {
     let number: Int
     let updatedAt: String
+    let refreshRevision: Int
+    let refreshHost: () async -> Void
     let commits: [PullRequestCommit]
     let load: (Int, String?, String?) async throws -> PullRequestDiffResult
     let fileContents: ((PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents)?
@@ -41,7 +43,7 @@ struct PullRequestCodeView: View {
             HStack {
                 Text("\(model.files.count) files\(model.nextCursor == nil ? "" : "+")")
                 Spacer()
-                Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }
+                Button("Refresh", systemImage: "arrow.clockwise") { Task { await refreshHost() } }
                     .disabled(model.loading)
             }.font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
             if model.truncated {
@@ -95,7 +97,7 @@ struct PullRequestCodeView: View {
                     .frame(minHeight: 44).disabled(model.loading)
             }
         }
-        .task(id: "\(number):\(updatedAt):\(selectedCommit ?? "all")") { await refresh() }
+        .task(id: "\(number):\(updatedAt):\(selectedCommit ?? "all"):\(refreshRevision)") { await refresh() }
         .onChange(of: commits.map(\.oid)) { _, ids in
             if let selectedCommit, !ids.contains(selectedCommit) { self.selectedCommit = nil }
         }

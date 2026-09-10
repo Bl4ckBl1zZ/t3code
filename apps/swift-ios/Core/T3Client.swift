@@ -831,6 +831,23 @@ public actor T3Client {
         ]), as: JSONValue.self)
     }
 
+    public func invalidatePullRequest(projectID: String, repository: String, number: Int) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object(["reference": .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ])]), as: JSONValue.self)
+    }
+
+    public func invalidatePullRequestListings() async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object([:]), as: JSONValue.self)
+    }
+
+    public func runPullRequestAction(projectID: String, repository: String, number: Int, request: PullRequestActionRequest) async throws {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "action": .string(request.action)]
+        if let method = request.mergeMethod { payload["mergeMethod"] = .string(method) }
+        if let method = request.updateMethod { payload["updateMethod"] = .string(method) }
+        let _: JSONValue = try await rpc.request("pullRequests.runAction", payload: .object(payload), as: JSONValue.self)
+    }
+
     public func submitPullRequestReview(projectID: String, repository: String, number: Int, submission: PullRequestReviewSubmission) async throws {
         let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(submission))
         guard case var .object(payload) = encoded else { throw CocoaError(.coderInvalidValue) }

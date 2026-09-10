@@ -18,6 +18,11 @@ struct PullRequestDetailSheet: View {
 
     @State private var editingLabels = false
     @State private var reviewing = false
+    @State private var selectedAction: NativePullRequestAction?
+    @State private var actionPending = false
+    @State private var hostRefreshRevision = 0
+    @State private var refreshingHost = false
+    @State private var actionError: String?
     @State private var reviewDraft: PullRequestReviewDraftModel?
     @State private var selectedNumber: Int?
     @State private var stack: PullRequestStack?
@@ -46,6 +51,10 @@ struct PullRequestDetailSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Button("Refresh from host", systemImage: "arrow.clockwise") { Task { await refreshFromHost() } }
+                    .disabled(refreshingHost || actionPending)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 if let address = overview?.detail.url, let url = URL(string: address) {
                     Button {
                         openURL(url)
@@ -72,25 +81,36 @@ struct PullRequestDetailSheet: View {
                 }
             }
         }
+        .sheet(item: $selectedAction) { action in
+            if let detail = overview?.detail, let run = access.runAction {
+                PullRequestActionSheet(action: action, detail: detail, perform: { try await run(detail.number, detail.url, $0) }) {
+                    Task { await load() }
+                }
+            }
+        }
         .accessibilityIdentifier("pull-request-detail-sheet")
     }
 
-    private func load(preserveContent: Bool = false) async {
+    private func load(preserveContent: Bool = false, force: Bool = false) async {
         let requestedNumber = displayedNumber
         loadError = nil
-        if !preserveContent { overview = nil; stack = nil; stackError = nil }
+        if !preserveContent { overview = nil; stack = nil; stackError = nil; actionError = nil }
         do {
+            if force { try await access.invalidate?(requestedNumber) }
             let result = try await access.overview(requestedNumber)
             guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
             let draftKey = "\(access.draftKey):\(result.detail.url)"
             if reviewDraft?.key != "swift-ios.pullRequests.reviewDraft.\(draftKey)" {
                 reviewDraft = PullRequestReviewDraftModel(key: draftKey)
             }
+            if tab == .code, result.detail.capabilities?.diff != true { tab = .summary }
             overview = result
+            if force { hostRefreshRevision += 1 }
             do {
                 let loadedStack = try await access.stack(requestedNumber)
                 guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
                 stack = loadedStack
+                stackError = nil
             } catch {
                 guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
                 stackError = error.localizedDescription
@@ -99,6 +119,23 @@ struct PullRequestDetailSheet: View {
             guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
             loadError = error.localizedDescription
         }
+    }
+
+    private func refreshFromHost() async {
+        guard !refreshingHost, !actionPending else { return }
+        refreshingHost = true
+        defer { refreshingHost = false }
+        await load(preserveContent: true, force: true)
+    }
+
+    private func perform(_ action: NativePullRequestAction, detail: PullRequestDetail) async {
+        guard !actionPending, let run = access.runAction else { return }
+        actionPending = true; actionError = nil
+        defer { actionPending = false }
+        do {
+            try await run(detail.number, detail.url, .init(action: action.rawValue, mergeMethod: nil, updateMethod: nil))
+            if displayedNumber == detail.number { await load(preserveContent: true) }
+        } catch { if displayedNumber == detail.number { actionError = error.localizedDescription } }
     }
 
     private func errorView(_ message: String) -> some View {
@@ -122,6 +159,20 @@ struct PullRequestDetailSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(overview.detail)
+                if access.runAction != nil, !PullRequestActionLogic.offered(overview.detail).isEmpty {
+                    Menu {
+                        ForEach(PullRequestActionLogic.offered(overview.detail)) { action in
+                            Button(action.label, role: action == .close ? .destructive : nil) {
+                                if action.needsReview { selectedAction = action }
+                                else { Task { await perform(action, detail: overview.detail) } }
+                            }
+                        }
+                    } label: {
+                        Label(actionPending ? "Updating…" : "Actions", systemImage: "ellipsis.circle")
+                            .frame(minHeight: 44)
+                    }.disabled(actionPending)
+                }
+                if let actionError { Text(actionError).font(T3Typography.supporting).foregroundStyle(T3Colors.warning) }
                 if let loadError {
                     Text("Refresh failed: \(loadError)").font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
                     Button("Retry refresh") { Task { await load(preserveContent: true) } }
@@ -167,7 +218,8 @@ struct PullRequestDetailSheet: View {
                     }
                 case .code:
                     if overview.detail.capabilities?.diff == true, let diff = access.diff {
-                        PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, commits: overview.activity?.commits ?? [], load: diff,
+                        PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, refreshRevision: hostRefreshRevision,
+                            refreshHost: { await refreshFromHost() }, commits: overview.activity?.commits ?? [], load: diff,
                             fileContents: access.fileContents.map { read in { input in try await read(displayedNumber, overview.detail.url, input) } },
                             reviewDraft: reviewDraft,
                             conversations: PullRequestConversationContext(threads: overview.activity?.reviewThreads ?? [],
@@ -197,9 +249,9 @@ struct PullRequestDetailSheet: View {
                     showsChevron: layer.number != displayedNumber, action: { selectedNumber = layer.number })
             }
             if detail.state == .open, let capabilities = detail.capabilities, let viewer = detail.viewerPermissions {
-                if capabilities.actions.contains("merge"), viewer.actions.contains("merge") {
+                if capabilities.actions.contains("merge"), viewer.actions.contains("merge"), !PullRequestActionLogic.mergeMethods(detail).isEmpty {
                     ThreadDetailsRow(systemImage: "arrow.triangle.merge", title: "Review merge through #\(displayedNumber)…",
-                        action: { pendingStackAction = NativeStackAction(stack: stack, number: displayedNumber, action: "merge", mergeMethods: capabilities.mergeMethods) })
+                        action: { pendingStackAction = NativeStackAction(stack: stack, number: displayedNumber, action: "merge", mergeMethods: PullRequestActionLogic.mergeMethods(detail)) })
                 }
                 if stack.layers.last?.number == displayedNumber,
                    capabilities.actions.contains("update-branch"), viewer.stackRebase == true,
@@ -227,6 +279,17 @@ struct PullRequestDetailSheet: View {
                     .truncationMode(.middle)
             }
 
+            if detail.state == .open, detail.mergeability == .conflicting {
+                Label("Conflicts with \(detail.baseBranch)", systemImage: "exclamationmark.triangle")
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
+            } else if detail.state == .open, detail.baseComparison == "behind" {
+                Label(detail.behindBy.map { "\($0) commits behind \(detail.baseBranch)" } ?? "Behind \(detail.baseBranch)", systemImage: "arrow.triangle.branch")
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+            }
+            if detail.state == .open, detail.autoMergeEnabled == true {
+                Label("Auto-merge enabled", systemImage: "arrow.triangle.merge")
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.accent)
+            }
             Text(PullRequestDetailSections.statsLine(detail))
                 .font(T3Typography.supporting)
                 .monospacedDigit()

@@ -32,6 +32,8 @@ import {
   PullRequestDiffFileContentsResult,
   PullRequestSubmitReviewInput,
   PullRequestThreadCommentsResult,
+  PullRequestDetail,
+  PullRequestActionInput,
   UsageModelPriceOverride,
   CheckpointId,
   CheckpointScopeId,
@@ -823,3 +825,103 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestThreadPath, pullRequestThreadSerialized);
+
+const pullRequestActionsPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "pullRequestActions.json",
+);
+const pullRequestActionsSerialized = `${JSON.stringify(
+  Schema.encodeSync(Schema.Struct({ detail: PullRequestDetail, input: PullRequestActionInput }))({
+    detail: {
+      provider: "github",
+      projectId,
+      projectTitle: "Project",
+      workspaceRoot: "/workspace",
+      repository: "owner/repo",
+      number: 42,
+      title: "Update the UI",
+      body: "Description",
+      url: "https://github.com/owner/repo/pull/42",
+      author: { login: "octocat", name: null, avatarUrl: null },
+      state: "open",
+      isDraft: false,
+      mergeability: "mergeable",
+      additions: 3,
+      deletions: 1,
+      changedFiles: 1,
+      headBranch: "feature",
+      baseBranch: "main",
+      createdAt: "2026-09-10T00:00:00Z",
+      updatedAt: "2026-09-10T01:00:00Z",
+      mergedAt: null,
+      closedAt: null,
+      reviewers: [],
+      labels: [],
+      checks: [],
+      mergeCapabilities: { merge: false, squash: true, rebase: false },
+      viewer: "octocat",
+      baseComparison: "behind",
+      behindBy: 3,
+      autoMergeEnabled: false,
+      capabilities: {
+        diff: true,
+        comment: true,
+        actions: [
+          "merge",
+          "ready",
+          "draft",
+          "close",
+          "reopen",
+          "update-branch",
+          "enable-auto-merge",
+          "disable-auto-merge",
+        ],
+        mergeMethods: ["merge", "squash", "rebase"],
+        updateMethods: ["merge", "rebase"],
+        search: true,
+        review: {
+          inlineComment: true,
+          reply: true,
+          resolve: true,
+          verdicts: ["comment", "approve", "request-changes"],
+        },
+        reviewers: { request: true, listCandidates: true },
+      },
+      viewerPermissions: {
+        actions: [
+          "merge",
+          "ready",
+          "draft",
+          "close",
+          "reopen",
+          "update-branch",
+          "enable-auto-merge",
+          "disable-auto-merge",
+        ],
+        comment: true,
+        resolve: true,
+        verdicts: ["comment", "approve"],
+        requestReviewers: true,
+        updateMethods: ["merge"],
+      },
+    },
+    input: {
+      projectId,
+      repository: "owner/repo",
+      number: 42,
+      action: "update-branch",
+      updateMethod: "merge",
+    },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestActionsPath) ||
+    NodeFS.readFileSync(pullRequestActionsPath, "utf8") !== pullRequestActionsSerialized
+  ) {
+    console.error("[swift-fixtures] pullRequestActions.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestActionsPath, pullRequestActionsSerialized);

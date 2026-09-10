@@ -73,3 +73,12 @@ In an iOS PR file, **Show full file context** reads the host’s previous and ne
 selected comparison. **Show changed hunks** returns to the compact diff. If the PR changed while
 you were reading, refresh it before expanding. When the host withheld the hunks, you can switch
 between labelled previous and new file versions; those snapshots are not presented as a diff.
+
+The iOS **Actions** menu offers the operations your host and account allow: merge, mark ready,
+convert to draft, close/reopen, update the branch, and enable/disable auto-merge. Merge choices
+follow repository settings. Review the target branch and method before merging or updating;
+auto-merge can finish immediately when the host’s requirements already pass. Conflict, base
+freshness and enabled auto-merge status appear below the PR heading.
+
+**Refresh from host** reloads current details and code. Pulling down in the PR workspace refreshes
+its host listings, including the signed-in identity and change counts.

@@ -751,3 +751,11 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   coordinates before they are joined; a changed revision asks for refresh. Files without supplied
   hunks show labelled old/new snapshots instead of fabricated unchanged lines. Added context does
   not acquire review targets that were absent from the original patch. No local checkout reads.
+
+- Native PR management offers merge, ready/draft, close/reopen, branch update and auto-merge only
+  where host capabilities and viewer permissions agree. Merge methods are narrowed by repository
+  settings, including reviewed stack merges; branch-update methods also intersect viewer access.
+  Conflicts, base freshness and auto-merge state are visible. Unknown auto-merge state is not treated
+  as off. Merge/close/update/auto-merge use concrete review sheets; reverse actions remain reachable.
+  Explicit workspace/detail/Code refreshes invalidate the appropriate server cache, while normal
+  browsing retains cache sharing. Identity preflight invalidates before reading current host metadata.

@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeatureWorkspaceAssetResolving,
+    FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
     FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -2114,8 +2114,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await route.client.pullRequestThreadComments(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, cursor: cursor)
     }
 
+    func invalidatePullRequest(scope: FeaturePullRequestScope, number: Int) async throws {
+        let route = try pullRequestRoute(scope: scope)
+        try await route.client.invalidatePullRequest(projectID: route.projectID, repository: route.repository, number: number)
+    }
+
+    func invalidatePullRequestListings(environmentID: String) async throws {
+        try await environmentClient(id: environmentID).invalidatePullRequestListings()
+    }
+
     private func validatedPullRequestRoute(scope: FeaturePullRequestScope, number: Int, expectedURL: String) async throws -> (client: T3Client, projectID: String, repository: String) {
         let route = try pullRequestRoute(scope: scope)
+        try await route.client.invalidatePullRequest(projectID: route.projectID, repository: route.repository, number: number)
         let current = try await route.client.pullRequestDetail(projectID: route.projectID, repository: route.repository, number: number)
         guard current.url == expectedURL else { throw FeatureCapabilityUnavailable("The pull request repository changed. Reopen the review") }
         return route
@@ -2129,6 +2139,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func setPullRequestThreadResolution(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, resolved: Bool) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
         try await route.client.setPullRequestThreadResolution(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, resolved: resolved)
+    }
+
+    func runPullRequestAction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestActionRequest) async throws {
+        let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
+        try await route.client.runPullRequestAction(projectID: route.projectID, repository: route.repository, number: number, request: request)
+        pullRequestPreviewCache.removeAll(keepingCapacity: true)
     }
 
     func submitPullRequestReview(scope: FeaturePullRequestScope, number: Int, expectedURL: String, submission: PullRequestReviewSubmission) async throws {

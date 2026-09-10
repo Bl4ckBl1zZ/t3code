@@ -22,6 +22,8 @@ protocol FeatureProjectPullRequestManaging: AnyObject, Sendable {
 /// project. A workspace browse never creates a dummy thread just to read a PR.
 @MainActor
 struct FeaturePullRequestAccess {
+    let invalidate: ((Int) async throws -> Void)?
+    let runAction: ((Int, String, PullRequestActionRequest) async throws -> Void)?
     let threads: ((Int, String) -> FeaturePullRequestThreadAccess)?
     let draftKey: String
     let submitReview: ((Int, String, PullRequestReviewSubmission) async throws -> Void)?
@@ -34,11 +36,15 @@ struct FeaturePullRequestAccess {
     let runStackAction: (Int, PullRequestStack, String, String?) async throws -> Void
 
     init(client: any FeatureClient, threadID: String) {
+        if let cache = client as? any FeaturePullRequestCacheInvalidating {
+            invalidate = { try await cache.invalidatePullRequest(scope: .thread(threadID), number: $0) }
+        } else { invalidate = nil }
         draftKey = "thread:\(threadID)"
         if let reviewer = client as? any FeaturePullRequestReviewWriting {
+            runAction = { try await reviewer.runPullRequestAction(scope: .thread(threadID), number: $0, expectedURL: $1, request: $2) }
             threads = { FeaturePullRequestThreadAccess(writer: reviewer, scope: .thread(threadID), number: $0, expectedURL: $1) }
             submitReview = { try await reviewer.submitPullRequestReview(scope: .thread(threadID), number: $0, expectedURL: $1, submission: $2) }
-        } else { submitReview = nil; threads = nil }
+        } else { submitReview = nil; threads = nil; runAction = nil }
         if let reader = client as? any FeaturePullRequestCodeReading {
             fileContents = { try await reader.pullRequestFileContents(scope: .thread(threadID), number: $0, expectedURL: $1, input: $2) }
             diff = { try await reader.pullRequestDiff(scope: .thread(threadID), number: $0, cursor: $1, commit: $2) }
@@ -51,11 +57,15 @@ struct FeaturePullRequestAccess {
     }
 
     init(manager: any FeatureProjectPullRequestManaging, scope: FeaturePullRequestProjectScope) {
+        if let cache = manager as? any FeaturePullRequestCacheInvalidating {
+            invalidate = { try await cache.invalidatePullRequest(scope: .project(scope), number: $0) }
+        } else { invalidate = nil }
         draftKey = "project:\(scope.projectID):\(scope.canonicalKey)"
         if let reviewer = manager as? any FeaturePullRequestReviewWriting {
+            runAction = { try await reviewer.runPullRequestAction(scope: .project(scope), number: $0, expectedURL: $1, request: $2) }
             threads = { FeaturePullRequestThreadAccess(writer: reviewer, scope: .project(scope), number: $0, expectedURL: $1) }
             submitReview = { try await reviewer.submitPullRequestReview(scope: .project(scope), number: $0, expectedURL: $1, submission: $2) }
-        } else { submitReview = nil; threads = nil }
+        } else { submitReview = nil; threads = nil; runAction = nil }
         if let reader = manager as? any FeaturePullRequestCodeReading {
             fileContents = { try await reader.pullRequestFileContents(scope: .project(scope), number: $0, expectedURL: $1, input: $2) }
             diff = { try await reader.pullRequestDiff(scope: .project(scope), number: $0, cursor: $1, commit: $2) }
@@ -82,6 +92,7 @@ protocol FeaturePullRequestCodeReading: AnyObject, Sendable {
 
 @MainActor
 protocol FeaturePullRequestReviewWriting: AnyObject, Sendable {
+    func runPullRequestAction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestActionRequest) async throws
     func pullRequestThreadComments(scope: FeaturePullRequestScope, number: Int, threadID: String, cursor: String) async throws -> PullRequestThreadCommentsResult
     func replyToPullRequestThread(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, body: String) async throws
     func setPullRequestThreadResolution(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, resolved: Bool) async throws
@@ -98,4 +109,10 @@ struct FeaturePullRequestThreadAccess {
         reply = { try await writer.replyToPullRequestThread(scope: scope, number: number, expectedURL: expectedURL, threadID: $0, body: $1) }
         resolve = { try await writer.setPullRequestThreadResolution(scope: scope, number: number, expectedURL: expectedURL, threadID: $0, resolved: $1) }
     }
+}
+
+@MainActor
+protocol FeaturePullRequestCacheInvalidating: AnyObject, Sendable {
+    func invalidatePullRequest(scope: FeaturePullRequestScope, number: Int) async throws
+    func invalidatePullRequestListings(environmentID: String) async throws
 }

@@ -18,6 +18,8 @@ struct PullRequestWorkspaceView: View {
             + "|" + model.snapshot.projects.map { "\($0.id):\($0.repositoryCanonicalKey ?? "")" }.sorted().joined(separator: ",")
     }
 
+    @State private var refreshError: String?
+
     var body: some View {
         NavigationStack {
             content
@@ -30,6 +32,9 @@ struct PullRequestWorkspaceView: View {
                         Button { showingFilters = true } label: { Image(systemName: "line.3.horizontal.decrease") }
                             .accessibilityLabel("Filter and sort pull requests")
                     }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    if let refreshError { Text(refreshError).font(T3Typography.supporting).foregroundStyle(T3Colors.warning).padding(12).background(T3Colors.background) }
                 }
                 .t3NavigationChrome()
                 .sheet(isPresented: $showingFilters) {
@@ -95,7 +100,7 @@ struct PullRequestWorkspaceView: View {
                     if rows.isEmpty && !feed.loading {
                         ContentUnavailableView("No matching pull requests", systemImage: "arrow.triangle.pull",
                             description: Text("Change the filters or refresh your environments."))
-                        Button("Refresh") { Task { await reload() } }.frame(maxWidth: .infinity, minHeight: 44)
+                        Button("Refresh") { Task { await reload(force: true) } }.frame(maxWidth: .infinity, minHeight: 44)
                     }
                     ForEach(preferences.involvement == "all" ? [0, 1, 2] : [0], id: \.self) { group in
                         let entries = preferences.involvement == "all" ? rows.filter { $0.group == group } : rows
@@ -130,11 +135,20 @@ struct PullRequestWorkspaceView: View {
                         Text("Loading change sizes…").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(18)
                     }
                 }.padding(.bottom, 24)
-            }.refreshable { await reload() }
+            }.refreshable { await reload(force: true) }
         }
     }
 
-    private func reload() async {
+    private func reload(force: Bool = false) async {
+        if force, let cache = manager as? any FeaturePullRequestCacheInvalidating {
+            var failures: [String] = []
+            for environment in supportedEnvironments where preferences.environmentID == nil || preferences.environmentID == environment.id {
+                do { try await cache.invalidatePullRequestListings(environmentID: environment.id) }
+                catch { failures.append("\(environment.name): \(error.localizedDescription)") }
+            }
+            refreshError = failures.isEmpty ? nil : failures.joined(separator: "\n")
+        }
+        guard !Task.isCancelled else { return }
         await feed.reload(manager: manager, environments: model.snapshot.environments, projects: model.snapshot.projects, preferences: preferences)
     }
 }
