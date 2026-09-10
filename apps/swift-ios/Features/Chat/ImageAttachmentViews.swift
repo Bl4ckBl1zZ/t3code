@@ -705,8 +705,19 @@ enum FeatureDocumentAttachmentError: LocalizedError, Equatable {
 /// NSItemProvider deletes its temporary file as soon as the callback returns.
 /// Read and process inside that callback, never pass the temporary URL to a Task.
 enum FeatureDroppedAttachment {
+    static func presentationURL(temporaryURL: URL, suggestedName: String?, typeIdentifier: String) -> URL {
+        let suggested = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = suggested.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0).lastPathComponent } ?? temporaryURL.lastPathComponent
+        var result = URL(fileURLWithPath: name.isEmpty ? "Attachment" : name)
+        if result.pathExtension.isEmpty, let suffix = UTType(typeIdentifier)?.preferredFilenameExtension {
+            result.appendPathExtension(suffix)
+        }
+        return result
+    }
+
     static func load(_ provider: NSItemProvider, typeIdentifier: String) async throws -> FeatureDraftAttachment {
-        try await withCheckedThrowingContinuation { continuation in
+        let suggestedName = provider.suggestedName
+        return try await withCheckedThrowingContinuation { continuation in
             provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
                 do {
                     if let error { throw error }
@@ -718,9 +729,12 @@ enum FeatureDroppedAttachment {
                         throw FeatureDocumentAttachmentError.tooLarge(name: url.lastPathComponent, maximumBytes: maximum)
                     }
                     let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                    let document = try FeatureDocumentProcessor.attachment(from: data, url: url)
+                    let namedURL = presentationURL(temporaryURL: url, suggestedName: suggestedName, typeIdentifier: typeIdentifier)
+                    let document = try FeatureDocumentProcessor.attachment(from: data, url: namedURL)
                     if ComposerAttachments.classify(mimeType: document.mimeType, name: document.filename) == .image {
-                        continuation.resume(returning: try FeatureImageProcessor.attachment(from: data, ordinal: 1, sourceMIMEType: document.mimeType))
+                        var image = try FeatureImageProcessor.attachment(from: data, ordinal: 1, sourceMIMEType: document.mimeType)
+                        image.filename = namedURL.deletingPathExtension().lastPathComponent + ".jpg"
+                        continuation.resume(returning: image)
                     } else {
                         continuation.resume(returning: document)
                     }
