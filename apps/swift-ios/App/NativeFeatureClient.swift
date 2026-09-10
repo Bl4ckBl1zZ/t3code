@@ -5784,6 +5784,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         case "cursor": "Cursor"
         case "grok": "Grok"
         case "opencode": "OpenCode"
+        case "pi": "Pi"
         default: id
         }
     }

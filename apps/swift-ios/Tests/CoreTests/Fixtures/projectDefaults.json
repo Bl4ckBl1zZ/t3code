@@ -112,6 +112,12 @@
         "binaryPath": "",
         "customModels": []
       },
+      "pi": {
+        "enabled": false,
+        "binaryPath": "pi",
+        "launchArgs": "",
+        "customModels": []
+      },
       "opencode": {
         "enabled": false,
         "binaryPath": "opencode",

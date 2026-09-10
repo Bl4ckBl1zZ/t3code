@@ -8,6 +8,7 @@ import {
   HermesSettings,
   OpenClawSettings,
   OpenCodeSettings,
+  PiSettings,
   ProviderDriverKind,
   type ProviderInstanceConfig,
 } from "@t3tools/contracts";
@@ -142,6 +143,12 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
     value: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
     settingsSchema: AntigravitySettings,
+  },
+  {
+    value: ProviderDriverKind.make("pi"),
+    label: "Pi",
+    badgeLabel: "Early Access",
+    settingsSchema: PiSettings,
   },
   {
     value: ProviderDriverKind.make("opencode"),
