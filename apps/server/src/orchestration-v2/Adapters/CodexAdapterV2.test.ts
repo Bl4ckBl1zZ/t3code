@@ -1189,6 +1189,71 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       };
     });
 
+  for (const malformed of [false, true]) {
+    it.effect(
+      `resumes metadata independently of historical error enums (malformed=${malformed})`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const nativeThreadId = "resume-saved-thread";
+            const transcript = makeCodexReplayTranscript({
+              scenario: `resume-metadata-${malformed}`,
+              entries: [
+                ...codexReplayPreamble({
+                  nativeThreadId,
+                  nativeTurnId: "old-turn",
+                  prompt: "unused",
+                }).slice(0, 5),
+                {
+                  type: "expect_outbound",
+                  label: "resume metadata",
+                  frame: {
+                    id: 3,
+                    method: "thread/resume",
+                    params: { threadId: nativeThreadId, excludeTurns: true },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "historical unknown error",
+                  frame: {
+                    id: 3,
+                    result: {
+                      thread: {
+                        id: malformed ? null : nativeThreadId,
+                        updatedAt: 1782622450,
+                        turns: [
+                          {
+                            id: "old-turn",
+                            status: "failed",
+                            error: {
+                              message: "Historical failure",
+                              codexErrorInfo: "misalignment_policy_violation",
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              ],
+            });
+            const h = yield* makeCodexReplayHarness(transcript);
+            const resume = h.runtime.resumeThread({ providerThread: h.providerThread });
+            if (malformed) {
+              const error = yield* Effect.flip(resume);
+              assert.equal(error._tag, "ProviderAdapterResumeThreadError");
+            } else {
+              const resumed = yield* resume;
+              assert.equal(resumed.nativeThreadRef?.nativeId, nativeThreadId);
+              assert.equal(resumed.id, h.providerThread.id);
+              assert.equal(DateTime.toEpochMillis(resumed.updatedAt), 1782622450000);
+            }
+          }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+        ),
+    );
+  }
+
   const assistantMessages = (events: ReadonlyArray<ProviderAdapterV2Event>) =>
     events.filter(
       (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>

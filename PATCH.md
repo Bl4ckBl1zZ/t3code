@@ -1171,3 +1171,11 @@ serialized context guards; it does not import V1 snapshot queries or thread disp
 identify fork-target repositories, with a validated configured-host fallback for self-hosted GitHub.
 Existing links retain their source and failures preserve the successful Git result. No migration
 is required. Full hosted-reference detail routing remains separate parity work.
+
+### Codex resume metadata on V2 (2026-09-11 parity port)
+
+The metadata-only resume fix from upstream `1abc717f0d` is carried in `CodexAdapterV2`.
+Resume requests exclude historical turns and validate only the native thread identity and optional
+update timestamp used by V2. Unknown historical error enums cannot prevent a valid resume; malformed
+identity metadata remains an error and never starts a fresh thread silently. Automatic restart
+continuation itself remains separate work.

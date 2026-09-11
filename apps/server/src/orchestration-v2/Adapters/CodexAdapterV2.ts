@@ -137,6 +137,14 @@ export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
+const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    thread: Schema.Struct({
+      id: Schema.String.check(Schema.isMinLength(1)),
+      updatedAt: Schema.optional(Schema.Number),
+    }),
+  }),
+);
 const CodexBackgroundTerminalTerminateResponse = Schema.Struct({
   terminated: Schema.Boolean,
 });
@@ -4930,7 +4938,8 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
 
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
-                  client.request("thread/resume", {
+                  client.raw.request("thread/resume", {
+                    excludeTurns: true,
                     threadId: nativeThreadId,
                     ...codexThreadRuntimeParams({
                       threadId: threadInput.threadId ?? threadInput.providerThread.appThreadId,
@@ -4943,6 +4952,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     }),
                   }),
                 ),
+                Effect.flatMap(decodeCodexResumeMetadata),
               );
               return {
                 ...threadInput.providerThread,
