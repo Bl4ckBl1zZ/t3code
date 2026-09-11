@@ -329,7 +329,10 @@ function itemToolPresentation(item: OrchestrationV2TurnItem): T3McpToolPresentat
   if (item.type !== "dynamic_tool") {
     return null;
   }
-  return resolveT3McpToolPresentation(item.toolName) ?? resolveT3McpToolPresentation(item.title);
+  return (
+    resolveT3McpToolPresentation(item.toolName, item.status, item.input) ??
+    resolveT3McpToolPresentation(item.title, item.status, item.input)
+  );
 }
 
 function itemSummary(

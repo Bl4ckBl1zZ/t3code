@@ -1,3 +1,4 @@
+import { GitPullRequestIcon } from "lucide-react";
 import {
   WorkGroupHistoryState,
   captureWorkGroupAnchor,
@@ -3050,6 +3051,7 @@ function formatWorkingTimerNow(startIso: string): string {
 }
 
 type WorkEntryIconName =
+  | "pull-request"
   | "hammer"
   | "bot"
   | "check"
@@ -3065,6 +3067,8 @@ type WorkEntryIconName =
 
 function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; className: string }) {
   switch (name) {
+    case "pull-request":
+      return <GitPullRequestIcon className={className} aria-hidden />;
     case "hammer":
       return <HammerIcon className={className} aria-hidden />;
     case "bot":
@@ -3249,6 +3253,14 @@ const toolCallExpandedBodyClassName =
   "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
+  const item = workEntry.projectedItem?.item;
+  const presentation = resolveTimelineToolPresentation(
+    item?.type === "dynamic_tool" ? item.toolName : (workEntry.toolTitle ?? workEntry.label),
+    workEntry.toolLifecycleStatus,
+    item?.type === "dynamic_tool" ? item.input : undefined,
+  );
+  if (presentation?.logo === "pull-request") return "pull-request";
+  if (presentation?.logo === "browser") return "globe";
   if (workEntry.itemType === "user_input_request") {
     return "message-circle";
   }
@@ -3327,7 +3339,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = false;
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
-  const toolPresentation = resolveTimelineToolPresentation(workEntry.toolTitle ?? workEntry.label);
+  const item = workEntry.projectedItem?.item;
+  const toolPresentation = resolveTimelineToolPresentation(
+    item?.type === "dynamic_tool" ? item.toolName : (workEntry.toolTitle ?? workEntry.label),
+    workEntry.toolLifecycleStatus,
+    item?.type === "dynamic_tool" ? item.input : undefined,
+  );
   const heading = toolPresentation?.displayName ?? toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
   const preview =

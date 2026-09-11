@@ -213,7 +213,7 @@ final class ThreadWorkLogTests: XCTestCase {
             id: "a", type: "dynamic_tool",
             extra: ["toolName": .string("mcp__t3-code__delegate_task")]
         )
-        XCTAssertEqual(row(item).summary, "Delegate a child task")
+        XCTAssertEqual(row(item).summary, "Delegated a child task")
 
         XCTAssertEqual(
             T3McpToolPresentation.displayName(for: "mcp__t3_code__task_status"),
@@ -230,6 +230,23 @@ final class ThreadWorkLogTests: XCTestCase {
         )
         XCTAssertNil(T3McpToolPresentation.displayName(for: "mcp__other__delegate_task"))
         XCTAssertNil(T3McpToolPresentation.displayName(for: "Bash"))
+    }
+
+    func testPullRequestToolIntentUsesStateAndURLBeforeNumber() {
+        for (status, label) in [("running", "Linking PR #42"), ("completed", "Linked PR #42"), ("failed", "Failed to link PR #42"), ("cancelled", "Stopped linking PR #42")] {
+            let item = V2Fixture.turnItem(id: "pr", type: "dynamic_tool", status: status,
+                extra: ["toolName": .string("t3-code · link_pull_request"), "input": .object([
+                    "url": .string("https://github.com/org/repo/pull/42/files"), "number": .number(9)
+                ])])
+            XCTAssertEqual(row(item).summary, label)
+            XCTAssertEqual(row(item).icon, .pullRequest)
+            XCTAssertEqual(row(item).historicalSummaryItem.action, .linkPR)
+        }
+        XCTAssertEqual(T3McpToolPresentation.displayName(for: "unlink_pull_request", status: "completed",
+            input: .object(["url": .string("https://example.com/org/repo/pull/42"), "number": .number(-1)])), "Unlinked a pull request")
+        let browser = V2Fixture.turnItem(id: "browser", type: "dynamic_tool", extra: ["toolName": .string("preview_snapshot")])
+        XCTAssertEqual(row(browser).summary, "Took a snapshot of the preview page")
+        XCTAssertEqual(row(browser).icon, .globe)
     }
 
     /// Provider failures arrive wrapped in adapter names and run ids; the row

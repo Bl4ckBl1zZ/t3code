@@ -2151,6 +2151,21 @@ describe("V2 historical tool summaries", () => {
       ]),
     ).toBe("Ran 1 command and changed 2 files");
   });
+  it("preserves pull-request and browser intent in grouped history", () => {
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ toolTitle: "t3-code.link_pull_request" }),
+        entry({ toolTitle: "t3-code.link_pull_request" }),
+        entry({ toolTitle: "t3-code.preview_click" }),
+      ]),
+    ).toBe("Linked 2 pull requests and used browser 1 time");
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ toolTitle: "unlink_pull_request" }),
+        entry({ toolTitle: "list_thread_pull_requests" }),
+      ]),
+    ).toBe("Unlinked 1 pull request and checked linked pull requests");
+  });
   it("counts code and web searches separately", () => {
     expect(
       resolveHistoricalWorkSummary([

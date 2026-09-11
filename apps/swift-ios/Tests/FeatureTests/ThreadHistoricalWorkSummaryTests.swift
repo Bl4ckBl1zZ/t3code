@@ -25,4 +25,8 @@ struct ThreadHistoricalWorkSummaryTests {
     @Test func pluralReadsAndCommandsKeepEncounterOrder() {
         #expect(ThreadHistoricalWorkSummary.label([.init(action: .read), .init(action: .read), .init(action: .command), .init(action: .command)]) == "Read 2 files and ran 2 commands")
     }
+    @Test func pullRequestsAndBrowserKeepTheirIntent() {
+        #expect(ThreadHistoricalWorkSummary.label([.init(action: .linkPR), .init(action: .linkPR), .init(action: .browser)]) == "Linked 2 pull requests and used the browser 1 time")
+        #expect(ThreadHistoricalWorkSummary.label([.init(action: .unlinkPR), .init(action: .listPRs)]) == "Unlinked 1 pull request and checked linked pull requests 1 time")
+    }
 }

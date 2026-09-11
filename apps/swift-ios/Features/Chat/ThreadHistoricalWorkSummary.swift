@@ -1,7 +1,7 @@
 import Foundation
 
 struct ThreadHistoricalWorkItem: Equatable, Sendable {
-    enum Action: String, Sendable { case read, edit, command, codeSearch, webSearch, tool }
+    enum Action: String, Sendable { case read, edit, command, codeSearch, webSearch, tool, linkPR, unlinkPR, listPRs, browser }
     let action: Action
     var files: [String] = []
     var successful = true
@@ -30,6 +30,10 @@ enum ThreadHistoricalWorkSummary {
             case .command: label = "Ran \(count) \(count == 1 ? "command" : "commands")"
             case .codeSearch: label = "Searched code \(count) \(count == 1 ? "time" : "times")"
             case .webSearch: label = "Searched the web \(count) \(count == 1 ? "time" : "times")"
+            case .linkPR: label = "Linked \(count) \(count == 1 ? "pull request" : "pull requests")"
+            case .unlinkPR: label = "Unlinked \(count) \(count == 1 ? "pull request" : "pull requests")"
+            case .listPRs: label = "Checked linked pull requests \(count) \(count == 1 ? "time" : "times")"
+            case .browser: label = "Used the browser \(count) \(count == 1 ? "time" : "times")"
             case .tool: label = "Used \(count) \(count == 1 ? "tool" : "tools")"
             }
             return index == 0 ? label : label.prefix(1).lowercased() + label.dropFirst()

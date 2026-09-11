@@ -133,6 +133,19 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
   for (const entry of entries) {
     const item = entry.projectedItem?.item;
     if (item && orchestrationV2CommandExecutionIsLiveInBackground(item)) return null;
+    const presentation = resolveT3McpToolPresentation(
+      item?.type === "dynamic_tool" ? item.toolName : (entry.toolTitle ?? entry.label),
+      entry.toolLifecycleStatus,
+      item?.type === "dynamic_tool" ? item.input : undefined,
+    );
+    if (presentation?.action) {
+      add(presentation.action);
+      continue;
+    }
+    if (presentation?.logo === "browser") {
+      add("browser");
+      continue;
+    }
     if (entry.itemType === "file_change" || (entry.changedFiles?.length ?? 0) > 0) {
       if (entry.changedFiles?.length) {
         for (const path of entry.changedFiles)
@@ -154,6 +167,16 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
   const labels = [...counts]
     .map(([action, count]) => {
       switch (action) {
+        case "link-pr":
+          return `Linked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
+        case "unlink-pr":
+          return `Unlinked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
+        case "list-prs":
+          return count === 1
+            ? "Checked linked pull requests"
+            : `Checked linked pull requests ${count} times`;
+        case "browser":
+          return `Used browser ${count} ${count === 1 ? "time" : "times"}`;
         case "edit":
           return `Changed ${count} ${count === 1 ? "file" : "files"}`;
         case "command":

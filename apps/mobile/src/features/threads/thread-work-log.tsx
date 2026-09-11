@@ -362,7 +362,13 @@ function WorkRowIcon(props: {
 
   return (
     <SymbolView
-      name={workRowSymbolName(props.row.icon)}
+      name={
+        props.row.logo === "browser"
+          ? "globe"
+          : props.row.logo === "pull-request"
+            ? "arrow.triangle.pull"
+            : workRowSymbolName(props.row.icon)
+      }
       size={14}
       weight="medium"
       tintColor={iconIsDestructive ? "#e11d48" : props.iconSubtleColor}

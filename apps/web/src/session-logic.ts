@@ -12,6 +12,7 @@ import {
   type RunId,
   type ThreadId,
 } from "@t3tools/contracts";
+import { resolveT3McpToolPresentation } from "@t3tools/shared/t3McpToolPresentation";
 import { resolveOrchestrationV2ItemAttempt } from "@t3tools/shared/orchestrationV2Timeline";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type {
@@ -512,7 +513,12 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
     case "dynamic_tool":
       return {
         ...common,
-        label: title ?? item.toolName ?? "Tool call",
+        label:
+          resolveT3McpToolPresentation(item.toolName ?? title, item.status, item.input)
+            ?.displayName ??
+          title ??
+          item.toolName ??
+          "Tool call",
         toolTitle: title ?? item.toolName ?? "Tool",
         toolData: { input: item.input, output: item.output },
       };

@@ -20,7 +20,7 @@ public struct ThreadWorkLogDiffStat: Equatable, Sendable {
 /// One line of the work log: what a turn item did, in the terms a reader scans.
 public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public enum Icon: String, Equatable, Sendable {
-        case agent, alert, check, command, edit, eye, globe, hammer, message, warning, wrench, zap
+        case agent, alert, check, command, edit, eye, globe, hammer, message, warning, wrench, zap, pullRequest
 
         var symbolName: String {
             switch self {
@@ -36,6 +36,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
             case .warning: "xmark"
             case .wrench: "wrench"
             case .zap: "bolt"
+            case .pullRequest: "arrow.triangle.pull"
             }
         }
     }
@@ -95,7 +96,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         case .fileChange(let file, _, _, _, _, _): action = .edit; files = [file]
         case .fileSearch: action = .codeSearch
         case .webSearch: action = .webSearch
-        case .dynamicTool(_, let input, _): action = DynamicToolInputPreview.resolve(input)?.kind == .path ? .read : .tool
+        case .dynamicTool(_, let input, _): action = T3McpToolPresentation.historicalAction(for: item) ?? (DynamicToolInputPreview.resolve(input)?.kind == .path ? .read : .tool)
         default: action = .tool
         }
         return ThreadHistoricalWorkItem(action: action, files: files, successful: toolLike && status == .success,
@@ -211,7 +212,7 @@ public enum ThreadWorkLogPresentation {
         case .approvalRequest, .userInputRequest, .userMessage, .assistantMessage: .message
         // Read-style tool calls (a file/notebook path argument) present as reads.
         case let .dynamicTool(_, input, _):
-            DynamicToolInputPreview.resolve(input)?.kind == .path ? .eye : .wrench
+            T3McpToolPresentation.icon(for: item) ?? (DynamicToolInputPreview.resolve(input)?.kind == .path ? .eye : .wrench)
         case .subagent: .hammer
         case .runInterruptRequest, .runInterruptResult: .warning
         case .error: .alert
@@ -436,50 +437,114 @@ public enum DynamicToolInputPreview {
 public enum T3McpToolPresentation {
     private static let serverAliases: Set<String> = ["t3-code", "t3_code", "t3code"]
 
-    private static let displayNames: [String: String] = [
-        "orchestrator_capabilities": "Get orchestration capabilities",
-        "delegate_task": "Delegate a child task",
-        "task_status": "Get delegated task status",
-        "task_cancel": "Cancel delegated task",
-        "schedule_task": "Schedule a recurring task",
-        "list_scheduled_tasks": "List scheduled tasks",
-        "update_scheduled_task": "Update a scheduled task",
-        "delete_scheduled_task": "Delete a scheduled task",
-        "create_threads": "Create T3 threads",
-        "t3_thread_start": "Start a T3 thread",
-        "t3_thread_list": "List T3 threads",
-        "t3_thread_read": "Read a T3 thread",
-        "t3_thread_send": "Send to a T3 thread",
-        "t3_thread_wait": "Wait for a T3 thread",
-        "t3_thread_interrupt": "Interrupt a T3 thread",
-        "t3_worktree_handoff": "Hand off thread to a git worktree",
-        "t3_worktree_status": "Get thread worktree status",
-        "preview_status": "Get preview browser status",
-        "preview_open": "Open a page in the preview browser",
-        "preview_navigate": "Navigate the preview browser",
-        "preview_snapshot": "Snapshot the preview page",
-        "preview_click": "Click in the preview browser",
-        "preview_press": "Press a key in the preview browser",
-        "preview_type": "Type in the preview browser",
-        "preview_scroll": "Scroll the preview browser",
-        "preview_resize": "Resize the preview browser",
-        "preview_evaluate": "Evaluate script in the preview browser",
-        "preview_wait_for": "Wait for the preview page",
-        "preview_set_appearance": "Set preview browser appearance",
-        "preview_recording_start": "Start recording the preview browser",
-        "preview_recording_stop": "Stop recording the preview browser",
+    private static let labels: [String: (String, String, String, String)] = [
+        "link_pull_request": ("Link", "Linking", "Linked", "a pull request"),
+        "unlink_pull_request": ("Unlink", "Unlinking", "Unlinked", "a pull request"),
+        "list_thread_pull_requests": ("Check", "Checking", "Checked", "linked pull requests"),
+        "orchestrator_capabilities": ("Get", "Getting", "Got", "orchestration capabilities"),
+        "delegate_task": ("Delegate", "Delegating", "Delegated", "a child task"),
+        "task_status": ("Get", "Getting", "Got", "delegated task status"),
+        "task_cancel": ("Cancel", "Canceling", "Canceled", "delegated task"),
+        "schedule_task": ("Schedule", "Scheduling", "Scheduled", "a recurring task"),
+        "list_scheduled_tasks": ("List", "Listing", "Listed", "scheduled tasks"),
+        "update_scheduled_task": ("Update", "Updating", "Updated", "a scheduled task"),
+        "delete_scheduled_task": ("Delete", "Deleting", "Deleted", "a scheduled task"),
+        "create_threads": ("Create", "Creating", "Created", "T3 threads"),
+        "t3_thread_start": ("Start", "Starting", "Started", "a T3 thread"),
+        "t3_thread_list": ("List", "Listing", "Listed", "T3 threads"),
+        "t3_thread_read": ("Read", "Reading", "Read", "a T3 thread"),
+        "t3_thread_send": ("Send", "Sending", "Sent", "to a T3 thread"),
+        "t3_thread_wait": ("Wait", "Waiting", "Waited", "for a T3 thread"),
+        "t3_thread_interrupt": ("Interrupt", "Interrupting", "Interrupted", "a T3 thread"),
+        "t3_worktree_handoff": ("Hand off", "Handing off", "Handed off", "thread to a git worktree"),
+        "t3_worktree_status": ("Get", "Getting", "Got", "thread worktree status"),
+        "preview_status": ("Get", "Getting", "Got", "preview browser status"),
+        "preview_open": ("Open", "Opening", "Opened", "a page in the preview browser"),
+        "preview_navigate": ("Navigate", "Navigating", "Navigated", "the preview browser"),
+        "preview_snapshot": ("Take a snapshot of", "Taking a snapshot of", "Took a snapshot of", "the preview page"),
+        "preview_click": ("Click", "Clicking", "Clicked", "in the preview browser"),
+        "preview_press": ("Press", "Pressing", "Pressed", "a key in the preview browser"),
+        "preview_type": ("Type", "Typing", "Typed", "in the preview browser"),
+        "preview_scroll": ("Scroll", "Scrolling", "Scrolled", "the preview browser"),
+        "preview_resize": ("Resize", "Resizing", "Resized", "the preview browser"),
+        "preview_evaluate": ("Evaluate", "Evaluating", "Evaluated", "script in the preview browser"),
+        "preview_wait_for": ("Wait", "Waiting", "Waited", "for the preview page"),
+        "preview_set_appearance": ("Set", "Setting", "Set", "preview browser appearance"),
+        "preview_recording_start": ("Start", "Starting", "Started", "recording the preview browser"),
+        "preview_recording_stop": ("Stop", "Stopping", "Stopped", "recording the preview browser"),
     ]
 
-    /// Only dynamic tool rows carry an MCP tool name; every other item type
-    /// keeps its own title.
     public static func displayName(for item: OrchestrationV2TurnItem) -> String? {
-        guard case let .dynamicTool(toolName, _, _) = item.payload else { return nil }
-        return displayName(for: toolName) ?? displayName(for: item.base.title)
+        guard case let .dynamicTool(toolName, input, _) = item.payload else { return nil }
+        return displayName(for: toolName, status: item.status.rawValue, input: input)
+            ?? displayName(for: item.base.title, status: item.status.rawValue, input: input)
     }
 
-    public static func displayName(for toolName: String?) -> String? {
-        guard let toolName, let resolved = resolveToolName(toolName) else { return nil }
-        return displayNames[resolved]
+    public static func displayName(for toolName: String?, status: String? = nil, input: JSONValue? = nil) -> String? {
+        guard let toolName, let resolved = resolveToolName(toolName), let (action, running, completed, detail) = labels[resolved] else { return nil }
+        let verb: String
+        switch status {
+        case "running", "waiting", "pending", "inProgress": verb = running
+        case "completed": verb = completed
+        case "failed": verb = "Failed to \(action.lowercased())"
+        case "declined": verb = "Declined to \(action.lowercased())"
+        case "stopped", "cancelled", "interrupted": verb = "Stopped \(running.lowercased())"
+        default: verb = action
+        }
+        let target: String
+        if ["link_pull_request", "unlink_pull_request"].contains(resolved), let number = pullRequestNumber(input) {
+            target = "PR #\(number)"
+        } else { target = detail }
+        return "\(verb) \(target)"
+    }
+
+    static func historicalAction(for item: OrchestrationV2TurnItem) -> ThreadHistoricalWorkItem.Action? {
+        guard case let .dynamicTool(toolName, _, _) = item.payload,
+            let name = [toolName, item.base.title].compactMap({ $0 }).compactMap(resolveToolName).first(where: { labels[$0] != nil }),
+            labels[name] != nil else { return nil }
+        switch name {
+        case "link_pull_request": return .linkPR
+        case "unlink_pull_request": return .unlinkPR
+        case "list_thread_pull_requests": return .listPRs
+        default: return name.hasPrefix("preview_") ? .browser : nil
+        }
+    }
+
+    static func icon(for item: OrchestrationV2TurnItem) -> ThreadWorkLogRow.Icon? {
+        switch historicalAction(for: item) {
+        case .linkPR, .unlinkPR, .listPRs: .pullRequest
+        case .browser: .globe
+        default: nil
+        }
+    }
+
+    private static func pullRequestNumber(_ input: JSONValue?) -> Int64? {
+        if let text = input?["url"]?.stringValue, let number = changeRequestNumber(text) { return number }
+        switch input?["number"] {
+        case .integer(let number) where number > 0 && number <= 9_007_199_254_740_991: return number
+        case .unsignedInteger(let number) where number > 0 && number <= 9_007_199_254_740_991: return Int64(number)
+        case .number(let number) where number.isFinite && number > 0 && number <= 9_007_199_254_740_991 && number.rounded() == number: return Int64(number)
+        default: return nil
+        }
+    }
+
+    /// Match the shared change-request parser's host and route rules, including self-hosted GitLab.
+    private static func changeRequestNumber(_ text: String) -> Int64? {
+        guard let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host?.lowercased() else { return nil }
+        func isHost(_ apex: String, _ label: String? = nil) -> Bool {
+            host == apex || host.hasSuffix("." + apex) || (label.map { host.split(separator: ".").contains(Substring($0)) } ?? false)
+        }
+        let pattern: String
+        if isHost("github.com", "github") { pattern = #"^/[^/]+/[^/]+/pull/(\d+)(?:/|$)"# }
+        else if url.path.contains("/-/merge_requests/") { pattern = #"^/[^/]+(?:/[^/]+)+/-/merge_requests/(\d+)(?:/|$)"# }
+        else if isHost("bitbucket.org", "bitbucket") { pattern = #"^/[^/]+/[^/]+/pull-requests/(\d+)(?:/|$)"# }
+        else if isHost("dev.azure.com") || host.hasSuffix(".visualstudio.com") { pattern = #"^/(?:[^/]+/)*_git/[^/]+/pullrequest/(\d+)(?:/|$)"# }
+        else { return nil }
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(in: url.path, range: NSRange(url.path.startIndex..., in: url.path)),
+            let range = Range(match.range(at: 1), in: url.path),
+            let number = Int64(url.path[range]), number > 0, number <= 9_007_199_254_740_991 else { return nil }
+        return number
     }
 
     private static func resolveToolName(_ value: String) -> String? {
@@ -492,7 +557,7 @@ public enum T3McpToolPresentation {
             return serverAliases.contains(server) && !tool.isEmpty ? tool : nil
         }
         for alias in serverAliases {
-            for separator in [".", ":", "/"] {
+            for separator in [".", ":", "/", " · ", "·"] {
                 let prefix = alias + separator
                 if label.lowercased().hasPrefix(prefix) {
                     let tool = String(label.dropFirst(prefix.count))
@@ -500,7 +565,7 @@ public enum T3McpToolPresentation {
                 }
             }
         }
-        return displayNames[label] != nil ? label : nil
+        return labels[label] != nil ? label : nil
     }
 
     /// Providers append a completion word to the tool label once it settles.

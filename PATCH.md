@@ -1105,3 +1105,9 @@ its measured frame to restore the reading position; changed row heights clamp sa
 iOS 17-compatible observer reads only the inner scroll view and leaves SwiftUI's delegate intact.
 User dragging cancels pending restoration. Measurements are transient and do not invalidate the
 whole transcript on every scroll. No simulator or browser was launched for verification.
+
+- T3 MCP activity intent labels, PR/browser icons and completed-group summaries are ported
+  onto projected V2 items on web and native Swift. Labels follow item status, including
+  failure/cancellation, and recognize provider namespace aliases. The shared URL parser
+  supports GitHub, GitLab, Bitbucket and Azure change-request routes; Swift mirrors those
+  rules for tool labels. This presentation does not advertise new PR MCP capabilities.
