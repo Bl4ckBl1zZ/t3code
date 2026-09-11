@@ -1,4 +1,4 @@
-import { siblingPullRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { parseChangeRequestUrl, siblingPullRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import {
   CommandId,
   type OrchestrationV2ThreadShell,
@@ -334,6 +334,10 @@ export const make = Effect.gen(function* () {
   const start: PullRequestSyncReactor["Service"]["start"] = Effect.fn(
     "PullRequestSyncReactor.start",
   )(function* () {
+    const merges = yield* pullRequests.subscribeMerges;
+    yield* forkParked(
+      Stream.runForEach(merges, (event) => requestSync(parseChangeRequestUrl(event.url) ?? event)),
+    );
     yield* forkParked(
       Stream.runForEach(threads.streamDomainEvents, (event) => {
         if (

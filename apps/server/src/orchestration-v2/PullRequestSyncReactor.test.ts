@@ -13,8 +13,12 @@ import { updateLinkedPullRequests } from "@t3tools/shared/threadPullRequests";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
-import { PullRequestService } from "../pullRequest/PullRequestService.ts";
+import {
+  type PullRequestMergeEvent,
+  PullRequestService,
+} from "../pullRequest/PullRequestService.ts";
 import { make } from "./PullRequestSyncReactor.ts";
 
 const projectId = ProjectId.make("p");
@@ -63,6 +67,7 @@ function harness(
   initial: OrchestrationV2ThreadShell[],
   read: Effect.Effect<PullRequestSummary> = Effect.succeed(overview),
   nativeStack: PullRequestStack | null = null,
+  merges: Stream.Stream<PullRequestMergeEvent> = Stream.empty,
 ) {
   let shells = initial;
   const summary = vi.fn(() => read);
@@ -84,6 +89,7 @@ function harness(
   );
   const layer = Layer.mergeAll(
     Layer.mock(ThreadManagementService)({
+      streamDomainEvents: Stream.empty,
       getShellSnapshot: () =>
         Effect.succeed({
           threads: shells,
@@ -94,7 +100,12 @@ function harness(
       getThreadShell: (id) => Effect.succeed(shells.find((thread) => thread.id === id) ?? null),
       dispatch,
     }),
-    Layer.mock(PullRequestService)({ summary, stack: stackRead, invalidate: () => Effect.void }),
+    Layer.mock(PullRequestService)({
+      summary,
+      stack: stackRead,
+      invalidate: () => Effect.void,
+      subscribeMerges: Effect.succeed(merges),
+    }),
     NodeServices.layer,
   );
   return {
@@ -193,5 +204,36 @@ it.effect("preserves dismissed native stack members and guards additions by thei
       expectedPullRequestLink: { number: 1, source: "manual", linkedAt: at },
       linkPullRequestSource: "stack",
     });
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a merge notification refreshes an otherwise idle merged link", () =>
+  Effect.gen(function* () {
+    const notified = yield* Deferred.make<PullRequestMergeEvent>();
+    const read = yield* Deferred.make<void>();
+    const thread = shell("merged");
+    const merged = { ...overview, state: "merged" as const, mergedAt: at };
+    const h = harness(
+      [
+        {
+          ...thread,
+          pullRequests:
+            thread.pullRequests?.map((link) => ({
+              ...link,
+              snapshot: { ...merged, isDraft: false, closedAt: null, syncedAt: at },
+            })) ?? [],
+        },
+      ],
+      Deferred.succeed(read, undefined).pipe(Effect.as({ ...merged, title: "Confirmed merge" })),
+      null,
+      Stream.fromEffect(Deferred.await(notified)),
+    );
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.start();
+    yield* Deferred.succeed(notified, { ...ref, host: key.host, mergedAt: at });
+    yield* Deferred.await(read);
+    yield* reactor.drain;
+    expect(h.shells()[0]?.pullRequests?.[0]?.snapshot?.title).toBe("Confirmed merge");
+    expect(h.summary).toHaveBeenCalledTimes(1);
   }).pipe(Effect.scoped),
 );

@@ -76,3 +76,10 @@ Native Settings → Thread organization edits these sparse preferences on a sele
 Pending request summaries include optional `responseMode`. Blocking requests outrank newer
 asynchronous messages in both SQL and in-memory shell projections. Message-mode questions remain
 answerable in the transcript without falsely blocking settlement or sidebar status.
+
+Successful merge actions perform an uncached host confirmation before publishing an internal
+merge event. Auto-merge and queue admission do not publish a completed merge. The event retains
+the host terminal timestamp and captured repository identity; a failed confirmation does not
+report the already successful host action as failed. PR sync consumes the event, while settlement
+invalidates matching checkout status caches and requests a sweep. Subsequent snapshot events
+re-evaluate settlement when host refresh finishes after that sweep.

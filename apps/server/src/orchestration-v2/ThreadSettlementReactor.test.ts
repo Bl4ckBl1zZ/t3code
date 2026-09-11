@@ -5,14 +5,20 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2Command,
+  type Project,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Stream from "effect/Stream";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
 import { ProjectService } from "../project/ProjectService.ts";
-import { PullRequestService } from "../pullRequest/PullRequestService.ts";
+import {
+  type PullRequestMergeEvent,
+  PullRequestService,
+} from "../pullRequest/PullRequestService.ts";
 import { GitManager } from "../git/GitManager.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { make } from "./ThreadSettlementReactor.ts";
@@ -135,5 +141,64 @@ it.effect("unknown explicit link snapshots keep quiet work active without re-rea
     expect(h.dispatch).not.toHaveBeenCalled();
     expect(h.summary).not.toHaveBeenCalled();
     expect(h.branch).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a confirmed merge invalidates the matching checkout before scheduling settlement", () =>
+  Effect.gen(function* () {
+    const notified = yield* Deferred.make<PullRequestMergeEvent>();
+    const invalidated = yield* Deferred.make<void>();
+    const thread = fixture();
+    const project: Project = {
+      id: thread.projectId,
+      title: "Repo",
+      workspaceRoot: "/merge-checkout",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "1970-01-01T00:00:00Z",
+      updatedAt: "1970-01-01T00:00:00Z",
+      deletedAt: null,
+    };
+    const invalidate = vi.fn((cwd: string) => {
+      expect(cwd).toBe(project.workspaceRoot);
+      return Deferred.succeed(invalidated, undefined).pipe(Effect.asVoid);
+    });
+    const layer = Layer.mergeAll(
+      Layer.mock(ThreadManagementService)({
+        streamDomainEvents: Stream.empty,
+        getShellSnapshot: () =>
+          Effect.succeed({
+            schemaVersion: 1,
+            snapshotSequence: 1,
+            threads: [thread],
+            archivedThreads: [],
+          }),
+      }),
+      Layer.mock(ProjectService)({
+        snapshot: Effect.succeed({ projects: [project], updatedAt: project.updatedAt }),
+      }),
+      Layer.mock(PullRequestService)({
+        subscribeMerges: Effect.succeed(Stream.fromEffect(Deferred.await(notified))),
+      }),
+      Layer.mock(GitManager)({ invalidateStatus: invalidate }),
+      ServerSettings.layerTest({
+        sidebarAutoSettleOnMerge: false,
+        sidebarAutoSettleAfterDays: null,
+      }),
+      NodeServices.layer,
+    );
+    const reactor = yield* make.pipe(Effect.provide(layer));
+    yield* reactor.start();
+    yield* Deferred.succeed(notified, {
+      projectId: project.id,
+      host: "github.com",
+      repository: "org/repo",
+      number: 1,
+      url: "https://github.com/org/repo/pull/1",
+      mergedAt: "2026-09-11T00:00:00Z",
+    });
+    yield* Deferred.await(invalidated);
+    yield* reactor.drain;
+    expect(invalidate).toHaveBeenCalledTimes(1);
   }).pipe(Effect.scoped),
 );

@@ -1,3 +1,5 @@
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { canonicalRepositoryKey } from "@t3tools/shared/sourceControl";
 import { CommandId, type OrchestrationV2ThreadShell, type Project } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequestChains";
@@ -177,6 +179,58 @@ export const make = Effect.gen(function* () {
   });
   const start = Effect.fn("ThreadSettlementReactor.start")(function* () {
     const changes = yield* settingsService.subscribeChanges;
+    const merges = yield* pullRequests.subscribeMerges;
+    yield* forkParked(
+      Stream.runForEach(merges, (event) =>
+        Effect.gen(function* () {
+          const parsed = parseChangeRequestUrl(event.url) ?? event;
+          const repositoryKey = canonicalRepositoryKey(
+            `${parsed.host}/${parsed.repository}`.toLowerCase(),
+          );
+          const projectSnapshot = yield* projects.snapshot;
+          const matchingProjects = new Map(
+            projectSnapshot.projects
+              .filter(
+                (project) =>
+                  project.id === event.projectId ||
+                  (project.repositoryIdentity != null &&
+                    canonicalRepositoryKey(
+                      project.repositoryIdentity.canonicalKey.toLowerCase(),
+                    ) === repositoryKey),
+              )
+              .map((project) => [project.id, project]),
+          );
+          const snapshot = yield* engine.getShellSnapshot({ location: "active" });
+          const cwds = new Set<string>();
+          for (const thread of snapshot.threads) {
+            const project = matchingProjects.get(thread.projectId);
+            if (project === undefined || thread.deletedAt !== null || thread.archivedAt !== null)
+              continue;
+            const hasWorktree =
+              thread.worktreePath !== null && (yield* fileSystem.exists(thread.worktreePath));
+            cwds.add(
+              hasWorktree && thread.worktreePath !== null
+                ? thread.worktreePath
+                : project.workspaceRoot,
+            );
+          }
+          yield* Effect.forEach(cwds, (cwd) => git.invalidateStatus(cwd), {
+            concurrency: 8,
+            discard: true,
+          });
+          yield* enqueue;
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("merged pull request settlement refresh failed", {
+                  cause: Cause.pretty(cause),
+                }),
+          ),
+        ),
+      ),
+    );
+
     yield* forkParked(Stream.runForEach(changes, () => enqueue));
     // Pushed host snapshots and completed runs make the decision promptly; no client is required.
     yield* forkParked(

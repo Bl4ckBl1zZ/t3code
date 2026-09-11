@@ -1158,5 +1158,7 @@ Environment preferences and `threadAutoSettlement` keep web, Expo compatibility 
 same persisted classification. Legacy servers keep device-local rules. Native Thread organization
 settings expose machine selection, merge opt-out and nullable inactivity periods. Pending request
 summaries now distinguish message-mode questions; blocking requests win summary selection. No
-SQLite migration or retired V1 runtime import is needed. Immediate host-merge notifications and
-cross-machine shared preference propagation remain separate parity work; sweeps run each minute.
+SQLite migration or retired V1 runtime import is needed. Confirmed host merges immediately
+request linked snapshot refresh and invalidate matching checkout caches before settlement. Queued
+merges remain open, and host timestamps are preserved. Cross-machine shared preference propagation
+remains separate parity work; periodic sweeps run each minute.

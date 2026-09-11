@@ -1,3 +1,5 @@
+import * as Stream from "effect/Stream";
+import * as Option from "effect/Option";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -3852,4 +3854,61 @@ it.effect("keeps lightweight stack reads separate from hydrated panel stacks", (
     yield* service.stack(ref, { includeDetails: false });
     assert.deepEqual(reads, [false, true]);
   }),
+);
+
+it.effect("publishes only confirmed merges with the host terminal timestamp", () =>
+  Effect.gen(function* () {
+    const mergedAt = "2026-09-10T10:00:00Z";
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "merge-project",
+          title: "Repo",
+          workspaceRoot: "/repo",
+          repository: "acme/repo",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: ({ number }) =>
+            Effect.succeed({
+              ...changeRequest(number, "2026-09-11T12:00:00Z"),
+              body: "",
+              changedFiles: 0,
+              closedAt: null,
+              reviewers: [],
+              checks: [],
+              mergeCapabilities: { merge: true, squash: true, rebase: true },
+              viewerPermissions: {
+                actions: [],
+                comment: true,
+                resolve: true,
+                verdicts: [],
+                requestReviewers: true,
+              },
+              state: number === 1 ? "open" : "merged",
+              mergedAt: number === 1 ? null : mergedAt,
+              url: `https://github.com/acme/repo/pull/${number}`,
+            }),
+        }),
+      ],
+    });
+    const merges = yield* service.subscribeMerges;
+    const ref = {
+      projectId: "merge-project" as ProjectId,
+      repository: "acme/repo",
+      action: "merge" as const,
+    };
+    yield* service.runAction({ ...ref, number: 1 });
+    yield* service.runAction({ ...ref, number: 2 });
+    const event = yield* Stream.runHead(merges);
+    assert.deepEqual(Option.getOrThrow(event), {
+      projectId: ref.projectId,
+      repository: ref.repository,
+      host: "github.com",
+      number: 2,
+      url: "https://github.com/acme/repo/pull/2",
+      mergedAt,
+    });
+  }).pipe(Effect.scoped),
 );
