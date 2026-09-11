@@ -4945,6 +4945,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             activeOrderKey: thread.activeOrderKey,
             supportsActiveOrder: environment.descriptor?.capabilities.threadActiveOrderV2,
             supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
+            serverAutoSettlement: environment.descriptor?.capabilities.threadAutoSettlement,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
@@ -5079,7 +5080,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             updatedAt: parseDate(thread.updatedAt),
             state: mapThreadState(
                 status: thread.status,
-                pendingRequestKind: thread.pendingRuntimeRequest?.kind
+                pendingRequestKind: thread.pendingRuntimeRequest?.responseMode == "message" ? nil : thread.pendingRuntimeRequest?.kind
             ),
             providerID: thread.modelSelection.instanceId,
             providerName: threadProviderName(modelSelection: thread.modelSelection),
@@ -5108,6 +5109,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             activeOrderKey: thread.activeOrderKey,
             supportsActiveOrder: environment.descriptor?.capabilities.threadActiveOrderV2,
             supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
+            serverAutoSettlement: environment.descriptor?.capabilities.threadAutoSettlement,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             // The two fields the workspaces sort on: `workInboxRole` is what
             // gives the T3 Work inbox a Main section at all, and

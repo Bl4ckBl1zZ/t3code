@@ -42,6 +42,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let repositoryIdentity: Bool
         public let connectionProbe: Bool?
         public let threadSettlement: Bool?
+        public var threadAutoSettlement: Bool? = nil
         public let threadSnooze: Bool?
         public let threadPinning: Bool?
         public let threadActiveOrderV2: Bool?
@@ -75,6 +76,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         private enum CodingKeys: String, CodingKey {
             case repositoryIdentity
             case connectionProbe
+            case threadAutoSettlement
             case threadSettlement
             case threadSnooze
             case threadPinning, threadActiveOrderV2, threadQuestionActionsV2
@@ -104,6 +106,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             repositoryIdentity =
                 try container.decodeIfPresent(Bool.self, forKey: .repositoryIdentity) ?? false
             connectionProbe = try container.decodeIfPresent(Bool.self, forKey: .connectionProbe)
+            threadAutoSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadAutoSettlement)
             threadSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadSettlement)
             threadSnooze = try container.decodeIfPresent(Bool.self, forKey: .threadSnooze)
             threadPinning = try container.decodeIfPresent(Bool.self, forKey: .threadPinning)

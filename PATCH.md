@@ -1075,8 +1075,8 @@ presentation. Primary-server controls are inert with a keyboard-reachable explan
 on hosted clients that have no primary. Attempted primary-only writes report that
 nothing was saved. The fork's machine-targeted settings continue to write to their
 explicit environment; no arbitrary remote becomes the primary fallback. The same
-rule covers fork-owned worktree-retention controls. Client-local auto-settlement
-preferences remain editable pending their separate V2 server lifecycle port.
+rule covers fork-owned worktree-retention controls. Legacy auto-settlement preferences remain client-local for old servers; capable V2 servers own
+their environment settings and persisted automatic decisions.
 
 ### Image header metadata (2026-09-11 parity port)
 
@@ -1133,8 +1133,7 @@ Workers start after recovery, share branch/status caches and host-error backoff,
 fork's persistent read cache for cheap summaries and separate lightweight/hydrated stack reads.
 MCP PR tools are credential-thread-scoped. Web linked badges and the web/Swift collection views
 use cached snapshots and ordered chains, with source/check/diff signals. Native fixtures mirror
-the optional wire fields. Server automatic settlement and full cross-repository detail routing
-remain follow-up parity work; no V1 thread imports or new migrations are introduced.
+the optional wire fields. Full cross-repository detail routing remains follow-up parity work; no V1 thread imports or new migrations are introduced.
 
 ### PR indicator parity
 
@@ -1146,3 +1145,18 @@ icons share the detail presentation, and cached draft changes invalidate row sna
 PR stack counts now use the fork’s web collection popover from sidebar/header controls and
 native sidebar chain presentation. Native draft metadata survives both VCS/detail and pushed
 V2 snapshot mappings. The upstream standalone hydrated collection panel remains unported.
+
+### Automatic settlement on V2 (2026-09-11 parity port)
+
+Upstream server-side settlement is implemented with V2 shell state and serialized dispatch, not
+V1 deciders/projectors. The worker evaluates persisted PR snapshots and inactivity before host
+lookups, preserves activity timestamps and pins, and rejects stale decisions using the thread event
+sequence. Runs, blocking requests, queued messages, V2 background work, snoozes and explicit active
+state govern eligibility. Actual merge/close timestamps prevent re-settling resumed work.
+
+Environment preferences and `threadAutoSettlement` keep web, Expo compatibility and Swift on the
+same persisted classification. Legacy servers keep device-local rules. Native Thread organization
+settings expose machine selection, merge opt-out and nullable inactivity periods. Pending request
+summaries now distinguish message-mode questions; blocking requests win summary selection. No
+SQLite migration or retired V1 runtime import is needed. Immediate host-merge notifications and
+cross-machine shared preference propagation remain separate parity work; sweeps run each minute.

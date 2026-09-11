@@ -17,6 +17,8 @@
     }
   },
   "settings": {
+    "sidebarAutoSettleAfterDays": 3,
+    "sidebarAutoSettleOnMerge": true,
     "enableLegacyTokenStreaming": false,
     "enableHermes": false,
     "enableRemoteHermes": false,

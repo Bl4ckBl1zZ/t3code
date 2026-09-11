@@ -82,3 +82,17 @@ Existing text and attachments stay in place, and the message remains unsent. Pre
 the same file-size and eight-attachment limits as the composer. If you leave while files are
 being prepared, return to that thread to finish adding the pending files during this app session.
 Archived rows and batch-selection mode do not accept drops.
+
+## Automatic organization
+
+Current servers move finished or inactive threads into **Settled** even when no client is open.
+These settings belong to the selected environment and apply to every connected device. On native
+iOS, open **Settings → Thread organization**, choose the machine, and configure merge settlement
+or an inactivity period from 1 to 90 days. Turn off inactivity settlement to keep quiet threads
+active indefinitely. Older servers keep their existing device-local behavior.
+
+Running or queued work, blocking approvals and unanswered blocking questions stay visible.
+Asynchronous questions do not block the thread. Open linked pull requests keep their thread active;
+a stack is not finished until every visible linked request is terminal. A merge or close from before
+your latest engagement does not settle resumed work again. Manually reopen any settled thread to
+bring it back to the active list. Automatic settlement retains its pin and ordering metadata.

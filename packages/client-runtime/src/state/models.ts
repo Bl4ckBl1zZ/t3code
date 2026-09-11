@@ -69,6 +69,7 @@ export function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]):
 }
 
 export interface EnvironmentThreadShell {
+  readonly serverAutoSettlement?: boolean | undefined;
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -206,6 +207,7 @@ export function scopeProject(
 export function presentThreadShell(
   environmentId: EnvironmentId,
   thread: OrchestrationV2ThreadShell,
+  serverAutoSettlement = false,
 ): EnvironmentThreadShell {
   const updatedAt = iso(thread.updatedAt);
   const latestRun =
@@ -225,6 +227,7 @@ export function presentThreadShell(
           assistantMessageId: null,
         } satisfies ThreadRunSummary);
   return {
+    serverAutoSettlement,
     environmentId,
     id: thread.id,
     projectId: thread.projectId,
@@ -258,9 +261,12 @@ export function presentThreadShell(
           },
     hasPendingApprovals:
       thread.pendingRuntimeRequest !== null &&
+      thread.pendingRuntimeRequest.responseMode !== "message" &&
       thread.pendingRuntimeRequest.kind !== "user_input" &&
       thread.pendingRuntimeRequest.kind !== "auth_refresh",
-    hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
+    hasPendingUserInput:
+      thread.pendingRuntimeRequest?.kind === "user_input" &&
+      thread.pendingRuntimeRequest.responseMode !== "message",
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     backgroundProcessCount: thread.backgroundProcessCount ?? 0,
     activeAgentCount: thread.activeAgentCount ?? 0,

@@ -46,9 +46,33 @@ link is selected. Swift observes candidates separately from its explicit collect
 V2 snapshots for linked status; only branch candidates and legacy environments retain host polling.
 Web sidebar multi-link controls reuse the lazy collection popover; native rows show chain counts
 and preserve draft state through cached and host-read mappings.
-Server settlement and full hosted-reference detail routing remain
-separate parity work. Expo retains compatibility through the derived legacy references.
+Full hosted-reference detail routing remains separate parity work. Expo retains compatibility through the derived legacy references.
 
 `pullRequests.stack` also supports on-demand hydrated stack details. `pullRequestStackActions`
 gates reviewed remote-only merge/rebase controls. Mutations carry immutable `expectedStackHeads`,
 re-read membership/revisions/permissions, and invalidate reads even after partial failure.
+
+## Automatic settlement on V2
+
+`ThreadSettlementReactor` starts after recovery and sweeps without client demand. Local inactivity
+and persisted linked-PR decisions finish before branch/host lookups, which share discovery caches.
+`ThreadSettlementPolicy` checks V2 run/request state, queued messages, background processes,
+delegated agents and snooze wake conditions. Explicit keep-active and Work main threads remain
+active. All visible explicit links must have terminal snapshots; dismissed stack members do not
+participate. A PR only settles resumed work if its actual merge/close time follows the user anchor.
+
+The worker captures the thread event sequence before reading its shell. `thread.settle.automatic`
+carries that sequence into the existing serialized V2 dispatch; changed threads are rejected.
+Automatic settlement records the last activity time and preserves pin metadata. Manual settlement
+keeps its existing semantics. A new user turn or explicit reopen uses the existing V2 wake path.
+
+`threadAutoSettlement` advertises server ownership. Shared web/Expo shell atoms observe capability
+changes independently of projection identity; Swift maps the same capability. Capable clients
+classify persisted state, while older servers retain client-side automatic rules. Environment-owned
+`sidebarAutoSettleAfterDays` and `sidebarAutoSettleOnMerge` govern the worker. Web settings route to
+the server only when it advertises the capability; retained legacy preferences serve older servers.
+Native Settings → Thread organization edits these sparse preferences on a selected machine.
+
+Pending request summaries include optional `responseMode`. Blocking requests outrank newer
+asynchronous messages in both SQL and in-memory shell projections. Message-mode questions remain
+answerable in the transcript without falsely blocking settlement or sidebar status.

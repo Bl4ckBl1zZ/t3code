@@ -480,6 +480,9 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// whatever another client changed in between. Add a field here — and one line
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
+    /// Outer nil omits the preference; a present nil disables inactivity settlement.
+    public var sidebarAutoSettleAfterDays: Double??
+    public var sidebarAutoSettleOnMerge: Bool?
     /// Outer nil omits the field; a present nil restores automatic selection.
     public var defaultModelSelection: ModelSelection??
     public var defaultThreadEnvMode: ServerThreadEnvironmentMode?
@@ -502,6 +505,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var hiddenModelsByProvider: [String: [String]]?
 
     public init(
+        sidebarAutoSettleAfterDays: Double?? = nil,
+        sidebarAutoSettleOnMerge: Bool? = nil,
         defaultModelSelection: ModelSelection?? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode? = nil,
         defaultProjectScripts: [ProjectScript]? = nil,
@@ -517,6 +522,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         claudeAutoCompactWindow: String? = nil,
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
+        self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
+        self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
         self.defaultModelSelection = defaultModelSelection
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.defaultProjectScripts = defaultProjectScripts
@@ -535,6 +542,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
 
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
+        if let sidebarAutoSettleAfterDays { fields["sidebarAutoSettleAfterDays"] = sidebarAutoSettleAfterDays.map(JSONValue.number) ?? .null }
+        if let sidebarAutoSettleOnMerge { fields["sidebarAutoSettleOnMerge"] = .bool(sidebarAutoSettleOnMerge) }
         if let defaultModelSelection {
             if let selection = defaultModelSelection {
                 var value: [String: JSONValue] = ["instanceId": .string(selection.instanceId), "model": .string(selection.model)]

@@ -198,6 +198,22 @@ describe("threadLastActivityAt", () => {
 });
 
 describe("effectiveSettled", () => {
+  it("uses persisted settlement on capable servers and retains legacy local rules", () => {
+    const shell = makeShell({ activityAt: STALE });
+    const options = {
+      now: NOW,
+      autoSettleAfterDays: 1,
+      changeRequest: { state: "merged" as const },
+    };
+    expect(effectiveSettled(shell, options)).toBe(true);
+    expect(effectiveSettled({ ...shell, serverAutoSettlement: true }, options)).toBe(false);
+    expect(
+      effectiveSettled(
+        { ...shell, serverAutoSettlement: true, settledOverride: "settled" },
+        options,
+      ),
+    ).toBe(true);
+  });
   it("blocks inactivity settlement for collections but honors explicit settlement", () => {
     const shell = { ...makeShell({ activityAt: STALE }), linkedPullRequests: [{}, {}] };
     const options = {

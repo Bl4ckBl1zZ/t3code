@@ -261,6 +261,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// Unlike ``supportsPinning``, absence is treated as "no": see
     /// ``canShelveSettled``.
     public var supportsSettlement: Bool?
+    public var serverAutoSettlement: Bool? = nil
     public var supportsSnooze: Bool?
     /// `main` marks the thread the T3 Work inbox pins to the top as the current
     /// main line of work. Absent means an ordinary thread. The inbox's Main
@@ -341,6 +342,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         activeOrderKey: String? = nil,
         supportsActiveOrder: Bool? = nil,
         supportsSettlement: Bool? = nil,
+        serverAutoSettlement: Bool? = nil,
         supportsSnooze: Bool? = nil,
         workInboxRole: String? = nil,
         relationshipToParent: String? = nil,
@@ -392,6 +394,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.activeOrderKey = activeOrderKey
         self.supportsActiveOrder = supportsActiveOrder
         self.supportsSettlement = supportsSettlement
+        self.serverAutoSettlement = serverAutoSettlement
         self.supportsSnooze = supportsSnooze
         self.workInboxRole = workInboxRole
         self.relationshipToParent = relationshipToParent

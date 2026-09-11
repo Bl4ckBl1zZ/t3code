@@ -936,6 +936,7 @@ export function threadShellFromProjection(
       .filter((request) => request.status === "pending")
       .toSorted(
         (left, right) =>
+          Number(left.responseMode === "message") - Number(right.responseMode === "message") ||
           DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
       )[0] ?? null;
   const latestVisibleMessage =
@@ -1003,6 +1004,9 @@ export function threadShellFromProjection(
         : {
             id: pendingRuntimeRequest.id,
             kind: pendingRuntimeRequest.kind,
+            ...(pendingRuntimeRequest.responseMode === undefined
+              ? {}
+              : { responseMode: pendingRuntimeRequest.responseMode }),
             createdAt: pendingRuntimeRequest.createdAt,
           },
     latestVisibleMessage:
@@ -1199,6 +1203,9 @@ function shellFromState(input: {
         : {
             id: input.state.pendingRuntimeRequest.id,
             kind: input.state.pendingRuntimeRequest.kind,
+            ...(input.state.pendingRuntimeRequest.responseMode === undefined
+              ? {}
+              : { responseMode: input.state.pendingRuntimeRequest.responseMode }),
             createdAt: input.state.pendingRuntimeRequest.createdAt,
           },
     latestVisibleMessage:
@@ -2443,7 +2450,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 FROM orchestration_v2_projection_runtime_requests request
                 WHERE request.thread_id = t.thread_id
                   AND request.status = 'pending'
-                ORDER BY request.created_at DESC, request.runtime_request_id DESC
+                ORDER BY CASE WHEN json_extract(request.payload_json, '$.responseMode') = 'message' THEN 1 ELSE 0 END,
+                  request.created_at DESC, request.runtime_request_id DESC
                 LIMIT 1
               ) AS pending_request_payload_json,
               (

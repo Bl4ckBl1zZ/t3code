@@ -60,6 +60,23 @@ describe("scoped entity keys", () => {
 });
 
 describe("V2 client presentation", () => {
+  it("keeps asynchronous questions out of blocking sidebar status", () => {
+    const request = {
+      id: RuntimeRequestId.make("async"),
+      kind: "user_input" as const,
+      createdAt: v2ThreadShell.createdAt,
+    };
+    expect(
+      presentThreadShell(environmentId, { ...v2ThreadShell, pendingRuntimeRequest: request })
+        .hasPendingUserInput,
+    ).toBe(true);
+    const asynchronous = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      pendingRuntimeRequest: { ...request, responseMode: "message" },
+    });
+    expect(asynchronous.hasPendingUserInput).toBe(false);
+    expect(asynchronous.hasPendingApprovals).toBe(false);
+  });
   it("presents shell timestamps and status without constructing V1 state", () => {
     const shell = presentThreadShell(environmentId, v2ThreadShell);
     expect(shell.environmentId).toBe(environmentId);

@@ -14,6 +14,7 @@ public struct SettingsView: View {
     @State private var showingAgents = false
     @State private var showingSetup = false
     @State private var showingProjectDefaults = false
+    @State private var showingThreadOrganization = false
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
     @State private var showingHermesRuns = false
@@ -118,6 +119,11 @@ public struct SettingsView: View {
                         showingAddEnvironment = false
                     }
                 )
+            }
+            .sheet(isPresented: $showingThreadOrganization) {
+                NavigationStack { SettingsThreadOrganizationView(model: model)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingThreadOrganization = false } } }
+                }
             }
             .sheet(isPresented: $showingProjectDefaults) {
                 NavigationStack {
@@ -468,6 +474,11 @@ public struct SettingsView: View {
     private var configurationSection: some View {
         SettingsSection(title: "Features") {
             VStack(spacing: 0) {
+                Button { showingThreadOrganization = true } label: {
+                    SettingsNavigationRow(title: "Thread organization", systemImage: "tray.full")
+                }.buttonStyle(.plain)
+                settingsDivider
+
                 Button { showingProjectDefaults = true } label: {
                     SettingsNavigationRow(title: "Project defaults", systemImage: "arrow.down.circle")
                 }.buttonStyle(.plain)

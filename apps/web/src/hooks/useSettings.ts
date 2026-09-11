@@ -36,7 +36,11 @@ import {
   themeAllowsSidebarArtwork,
 } from "~/themePalette";
 import * as Struct from "effect/Struct";
-import { primaryServerSettingsAtom, serverEnvironment } from "~/state/server";
+import {
+  environmentServerConfigsAtom,
+  primaryServerSettingsAtom,
+  serverEnvironment,
+} from "~/state/server";
 import { usePrimaryEnvironment } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useTheme } from "./useTheme";
@@ -228,14 +232,21 @@ export async function persistClientSettingsUpdate(
 
 const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
 
-function splitPatch(patch: UnifiedSettingsPatch): {
+function splitPatch(
+  patch: UnifiedSettingsPatch,
+  serverAutoSettlement = true,
+): {
   serverPatch: ServerSettingsPatch;
   clientPatch: ClientSettingsPatch;
 } {
   const serverPatch: Record<string, unknown> = {};
   const clientPatch: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(patch)) {
-    if (SERVER_SETTINGS_KEYS.has(key)) {
+    if (
+      SERVER_SETTINGS_KEYS.has(key) &&
+      (serverAutoSettlement ||
+        (key !== "sidebarAutoSettleAfterDays" && key !== "sidebarAutoSettleOnMerge"))
+    ) {
       serverPatch[key] = value;
     } else {
       clientPatch[key] = value;
@@ -296,6 +307,7 @@ function useClientSettingsValue(): ClientSettings {
 export function mergeEnvironmentSettings(
   serverSettings: ServerSettings,
   clientSettings: ClientSettings,
+  serverAutoSettlement = true,
 ): UnifiedSettings {
   return {
     ...serverSettings,
@@ -305,18 +317,25 @@ export function mergeEnvironmentSettings(
     // migration can find it. Client keys win in the spread above, so without
     // this the stale device-local map would shadow the synced one forever.
     providerModelPreferences: serverSettings.providerModelPreferences,
+    ...(serverAutoSettlement
+      ? {
+          sidebarAutoSettleAfterDays: serverSettings.sidebarAutoSettleAfterDays,
+          sidebarAutoSettleOnMerge: serverSettings.sidebarAutoSettleOnMerge,
+        }
+      : {}),
   };
 }
 
 function useMergedSettings<T>(
   serverSettings: ServerSettings,
   selector: ((settings: UnifiedSettings) => T) | undefined,
+  serverAutoSettlement: boolean,
 ): T {
   const clientSettings = useClientSettingsValue();
 
   const merged = useMemo<UnifiedSettings>(
-    () => mergeEnvironmentSettings(serverSettings, clientSettings),
-    [clientSettings, serverSettings],
+    () => mergeEnvironmentSettings(serverSettings, clientSettings, serverAutoSettlement),
+    [clientSettings, serverSettings, serverAutoSettlement],
   );
 
   return useMemo(() => (selector ? selector(merged) : (merged as T)), [merged, selector]);
@@ -384,14 +403,26 @@ export function useEnvironmentSettings<T = UnifiedSettings>(
   selector?: (settings: UnifiedSettings) => T,
 ): T {
   const serverSettings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
-  return useMergedSettings(serverSettings ?? DEFAULT_SERVER_SETTINGS, selector);
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  return useMergedSettings(
+    serverSettings ?? DEFAULT_SERVER_SETTINGS,
+    selector,
+    configs.get(environmentId)?.environment.capabilities.threadAutoSettlement === true,
+  );
 }
 
 /** Primary-only settings access for the settings UI and other explicitly global surfaces. */
 export function usePrimarySettings<T = UnifiedSettings>(
   selector?: (settings: UnifiedSettings) => T,
 ): T {
-  return useMergedSettings(useAtomValue(primaryServerSettingsAtom), selector);
+  const primary = usePrimaryEnvironment();
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  return useMergedSettings(
+    useAtomValue(primaryServerSettingsAtom),
+    selector,
+    primary != null &&
+      configs.get(primary.environmentId)?.environment.capabilities.threadAutoSettlement === true,
+  );
 }
 
 export const PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE =
@@ -415,13 +446,17 @@ export function usePrimarySettingsAvailable(): boolean {
  * persisted via RPC. Client keys go through client persistence.
  */
 function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const serverAutoSettlement =
+    environmentId !== null &&
+    configs.get(environmentId)?.environment.capabilities.threadAutoSettlement === true;
   const persistServerSettings = useAtomCommand(
     serverEnvironment.updateSettings,
     "server settings update",
   );
   const updateSettings = useCallback(
     (patch: UnifiedSettingsPatch) => {
-      const { serverPatch, clientPatch } = splitPatch(patch);
+      const { serverPatch, clientPatch } = splitPatch(patch, serverAutoSettlement);
 
       if (Object.keys(serverPatch).length > 0) {
         if (environmentId) {
@@ -443,7 +478,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         void persistClientSettingsPatch(clientPatch);
       }
     },
-    [environmentId, persistServerSettings],
+    [environmentId, persistServerSettings, serverAutoSettlement],
   );
 
   return updateSettings;

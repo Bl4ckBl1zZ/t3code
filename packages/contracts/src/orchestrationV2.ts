@@ -1624,6 +1624,7 @@ export const OrchestrationV2ShellThreadStatus = Schema.Union([
 export type OrchestrationV2ShellThreadStatus = typeof OrchestrationV2ShellThreadStatus.Type;
 
 export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
+  responseMode: Schema.optional(Schema.Literals(["callback", "message"])),
   id: RuntimeRequestId,
   kind: OrchestrationV2RuntimeRequest.fields.kind,
   createdAt: Schema.DateTimeUtc,
@@ -2428,6 +2429,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+    automatic: Schema.optional(Schema.Struct({ expectedSequence: NonNegativeInt })),
     // Historical settle time supplied by provider imports so imported
     // threads keep their upstream age instead of the import wall-clock.
     settledAt: Schema.optional(IsoDateTime),

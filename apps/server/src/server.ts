@@ -1,3 +1,4 @@
+import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
@@ -757,9 +758,11 @@ export const makeServerLayer = Layer.unwrap(
       ).pipe(Effect.asVoid),
     }).pipe(
       Layer.provide(
-        Layer.mergeAll(PullRequestSyncReactor.layer, ThreadPullRequestReactor.layer).pipe(
-          Layer.provide(PullRequestServiceLive),
-        ),
+        Layer.mergeAll(
+          PullRequestSyncReactor.layer,
+          ThreadPullRequestReactor.layer,
+          ThreadSettlementReactor.layer,
+        ).pipe(Layer.provide(PullRequestServiceLive)),
       ),
       Layer.provideMerge(RuntimeDependenciesLive),
       Layer.provide(launcherLayer),

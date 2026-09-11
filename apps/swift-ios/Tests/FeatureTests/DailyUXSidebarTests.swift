@@ -36,6 +36,15 @@ struct DailyUXSidebarTests {
         #expect(item.observedPullRequests == [candidate])
     }
 
+    @Test func capableServersOwnAutomaticSettlement() {
+        var item = thread(id: "server-settlement", created: -500, updated: -500)
+        let later = now.addingTimeInterval(10 * 24 * 60 * 60)
+        item.serverAutoSettlement = true
+        #expect(!item.isEffectivelySettled(at: later, changeRequest: FeaturePullRequest(number: 1, title: "Merged", state: "merged")))
+        item.isSettled = true
+        #expect(item.isEffectivelySettled(at: later))
+    }
+
     private let now = Date(timeIntervalSince1970: 2_000_000)
 
     @Test func manualOrderKeepsNewAndReopenedThreadsFirst() {

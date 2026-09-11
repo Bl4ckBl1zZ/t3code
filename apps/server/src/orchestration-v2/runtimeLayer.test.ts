@@ -1606,6 +1606,145 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("rejects stale automatic settlement and preserves its activity timestamp", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-auto-settle-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-auto-settle-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-auto-settle-project"),
+        title: "Auto settle",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const sink = yield* EventSinkV2;
+      const now = yield* DateTime.now;
+      const nodeId = NodeId.make("auto-settle-question-node");
+      const blocking = {
+        id: RuntimeRequestId.make("auto-settle-blocking"),
+        nodeId,
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "user_input" as const,
+        status: "pending" as const,
+        responseMode: "callback" as const,
+        responseCapability: {
+          type: "live" as const,
+          providerSessionId: ProviderSessionId.make("auto-settle-session"),
+        },
+        createdAt: now,
+        resolvedAt: null,
+      };
+      yield* sink.write({
+        commandId: CommandId.make("auto-settle-request-seed"),
+        events: [
+          {
+            id: EventId.make("auto-settle-blocking-event"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: blocking,
+          },
+          {
+            id: EventId.make("auto-settle-message-event"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              ...blocking,
+              id: RuntimeRequestId.make("auto-settle-message"),
+              responseMode: "message",
+              createdAt: DateTime.add(now, { seconds: 1 }),
+            },
+          },
+        ],
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pendingRuntimeRequest?.id,
+        blocking.id,
+      );
+      yield* sink.write({
+        commandId: CommandId.make("auto-settle-request-resolve"),
+        events: [
+          {
+            id: EventId.make("auto-settle-resolved-event"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: { ...blocking, status: "resolved", resolvedAt: now },
+          },
+        ],
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pendingRuntimeRequest?.responseMode,
+        "message",
+      );
+      const sequence = yield* orchestrator.getThreadEventSequence(threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-auto-settle-edit"),
+        threadId,
+        title: "Changed",
+      });
+      const stale = yield* orchestrator
+        .dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("runtime-layer-auto-settle-stale"),
+          threadId,
+          automatic: { expectedSequence: sequence },
+        })
+        .pipe(Effect.flip);
+      assert.equal(stale._tag, "OrchestratorDispatchError");
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-auto-settle-pin"),
+        threadId,
+        pinned: true,
+      });
+      const settledAt = DateTime.formatIso(
+        (yield* orchestrator.getThreadProjection(threadId)).thread.createdAt,
+      );
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("runtime-layer-auto-settle-fresh"),
+        threadId,
+        automatic: { expectedSequence: yield* orchestrator.getThreadEventSequence(threadId) },
+        settledAt,
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(projection.thread.settledOverride, "settled");
+      assert.isNotNull(projection.thread.pinnedAt);
+      assert.equal(DateTime.formatIso(projection.thread.settledAt!), settledAt);
+      assert.equal(DateTime.formatIso(projection.thread.updatedAt), settledAt);
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("runtime-layer-auto-settle-resume"),
+        threadId,
+        reason: "user",
+      });
+      const pinned = yield* orchestrator
+        .dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("runtime-layer-auto-settle-active"),
+          threadId,
+          automatic: { expectedSequence: yield* orchestrator.getThreadEventSequence(threadId) },
+        })
+        .pipe(Effect.flip);
+      assert.equal(pinned._tag, "OrchestratorDispatchError");
+    }),
+  );
+
   it.effect("rejects settling a thread while a run is active", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

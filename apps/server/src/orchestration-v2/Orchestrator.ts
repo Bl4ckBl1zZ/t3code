@@ -1,3 +1,4 @@
+import { isAutoSettlementCandidate } from "./ThreadSettlementPolicy.ts";
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequestChains";
 import {
   allThreadPullRequestsOf,
@@ -1605,6 +1606,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : null;
 
     const now = yield* DateTime.now;
+    if (command.type === "thread.settle" && command.automatic !== undefined) {
+      const sequence = yield* eventSink
+        .latestSequence({ threadId: command.threadId })
+        .pipe(mapDispatchError(command));
+      const shell = yield* projectionStore
+        .getThreadShell(command.threadId)
+        .pipe(mapDispatchError(command));
+      if (
+        sequence !== command.automatic.expectedSequence ||
+        shell === null ||
+        !isAutoSettlementCandidate(shell, now)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "The thread changed before automatic settlement or has work that must stay visible.",
+        });
+      }
+    }
+
     let snoozedUntil: DateTime.Utc | null = null;
     if (command.type === "thread.snooze") {
       const parsedSnoozedUntil = DateTime.make(command.snoozedUntil);
@@ -1683,7 +1705,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : settledAt,
             unsettledAt: null,
-            pinnedAt: null,
+            pinnedAt: command.automatic !== undefined ? thread.pinnedAt : null,
             updatedAt: alreadySettled ? thread.updatedAt : settledAt,
           };
         }

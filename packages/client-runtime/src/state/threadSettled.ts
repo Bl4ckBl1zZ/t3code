@@ -25,6 +25,7 @@ interface QueuedThreadShell {
 }
 
 interface SettlementThreadShell extends QueuedThreadShell {
+  readonly serverAutoSettlement?: boolean | undefined;
   readonly linkedPullRequests?: readonly unknown[] | undefined;
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
@@ -385,7 +386,7 @@ export function effectiveSettled(
   if (shell.settledOverride === "settled") return true;
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
-  if (shell.settledOverride === "active") return false;
+  if (shell.settledOverride === "active" || shell.serverAutoSettlement === true) return false;
   // Primary-only status cannot establish that every linked request has finished.
   if ((shell.linkedPullRequests?.length ?? 0) > 1) return false;
   if (

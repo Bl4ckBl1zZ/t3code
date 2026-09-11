@@ -645,7 +645,7 @@ extension FeatureThread {
         if isSettled {
             return true
         }
-        if keepsActive {
+        if keepsActive || serverAutoSettlement == true {
             return false
         }
         if hasUnresolvedLinkedPullRequests(changeRequest) { return false }

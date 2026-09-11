@@ -1265,6 +1265,7 @@ public struct OrchestrationV2ThreadDetailSnapshot: Codable, Equatable, Sendable 
 // MARK: - Shell
 
 public struct OrchestrationV2PendingRuntimeRequestSummary: Codable, Equatable, Sendable {
+    public var responseMode: String? = nil
     public let id: String
     public let kind: String
     public let createdAt: OrchestrationV2Timestamp
