@@ -1292,6 +1292,7 @@ public actor T3Client {
 
     public func runGitAction(
         cwd: String,
+        threadID: String? = nil,
         action: GitStackedAction,
         commitMessage: String? = nil,
         featureBranch: Bool? = nil,
@@ -1303,6 +1304,7 @@ public actor T3Client {
             "cwd": .string(cwd),
             "action": .string(action.rawValue),
         ]
+        if let threadID { payload["threadId"] = .string(threadID) }
         if let commitMessage { payload["commitMessage"] = .string(commitMessage) }
         if let featureBranch { payload["featureBranch"] = .bool(featureBranch) }
         if let filePaths { payload["filePaths"] = .array(filePaths.map(JSONValue.string)) }

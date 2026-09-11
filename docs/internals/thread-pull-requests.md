@@ -83,3 +83,10 @@ the host terminal timestamp and captured repository identity; a failed confirmat
 report the already successful host action as failed. PR sync consumes the event, while settlement
 invalidates matching checkout status caches and requests a sweep. Subsequent snapshot events
 re-evaluate settlement when host refresh finishes after that sweep.
+
+Git stacked actions accept an optional `threadId` from web, Expo and Swift. Successful PR creation
+or opening of an existing PR links its URL-derived host/repository identity through V2 metadata
+with source `created`. The wrapper captures the originating checkout before the action and checks
+project, worktree and branch again before serialized dispatch. Feature-branch results may match
+the newly saved branch. Drafts without a durable thread stay unlinked. Link failures do not turn
+successful Git work into a reported failure; duplicate links retain their existing source.

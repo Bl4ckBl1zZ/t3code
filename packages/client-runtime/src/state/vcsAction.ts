@@ -6,6 +6,7 @@ import {
   type GitRunStackedActionInput,
   type GitRunStackedActionResult,
   GitStackedAction,
+  type ThreadId,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -71,6 +72,7 @@ export interface BeginVcsActionInput {
 }
 
 export interface RunVcsStackedActionInput {
+  readonly threadId?: ThreadId;
   readonly actionId: string;
   readonly action: GitStackedAction;
   readonly commitMessage?: string;
@@ -460,6 +462,7 @@ export function createVcsActionManager<R, E>(
         );
 
         const rpcInput: GitRunStackedActionInput = {
+          ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
           actionId: transportActionId,
           cwd: target.cwd,
           action: input.action,

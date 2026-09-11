@@ -111,6 +111,7 @@ export const VcsPullInput = Schema.Struct({
 export type VcsPullInput = typeof VcsPullInput.Type;
 
 export const GitRunStackedActionInput = Schema.Struct({
+  threadId: Schema.optional(ThreadId),
   actionId: TrimmedNonEmptyStringSchema,
   cwd: TrimmedNonEmptyStringSchema,
   action: GitStackedAction,

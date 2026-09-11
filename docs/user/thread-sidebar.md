@@ -96,3 +96,8 @@ Asynchronous questions do not block the thread. Open linked pull requests keep t
 a stack is not finished until every visible linked request is terminal. A merge or close from before
 your latest engagement does not settle resumed work again. Manually reopen any settled thread to
 bring it back to the active list. Automatic settlement retains its pin and ordering metadata.
+
+Pull requests created or opened through a thread’s Git actions are automatically linked to that
+thread. They appear in its pull-request collection, including requests targeting an upstream
+repository. Existing manual links keep their labels. Actions from an unsent draft have no saved
+thread to attach to.

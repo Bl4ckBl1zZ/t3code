@@ -1162,3 +1162,12 @@ SQLite migration or retired V1 runtime import is needed. Confirmed host merges i
 request linked snapshot refresh and invalidate matching checkout caches before settlement. Queued
 merges remain open, and host timestamps are preserved. Cross-machine shared preference propagation
 remains separate parity work; periodic sweeps run each minute.
+
+### Created PR links on V2 (2026-09-11 parity port)
+
+Git stacked-action thread attribution is carried from web, Expo compatibility and Swift. The
+upstream created-link hook is implemented through V2 metadata, with originating-checkout and
+serialized context guards; it does not import V1 snapshot queries or thread dispatch. PR URLs
+identify fork-target repositories, with a validated configured-host fallback for self-hosted GitHub.
+Existing links retain their source and failures preserve the successful Git result. No migration
+is required. Full hosted-reference detail routing remains separate parity work.

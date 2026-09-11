@@ -1347,6 +1347,7 @@ export default function GitActionsControl({
       const actionId = randomUUID();
 
       const result = await runImmediateGitAction.run({
+        ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
         actionId,
         action,
         ...(commitMessage ? { commitMessage } : {}),

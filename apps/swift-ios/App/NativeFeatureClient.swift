@@ -2524,6 +2524,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         } else {
             let progress = try await client.runGitAction(
                 cwd: context.cwd,
+                threadID: route.wireID,
                 action: NativeWorkspaceMapper.gitAction(action),
                 commitMessage: message
             )
