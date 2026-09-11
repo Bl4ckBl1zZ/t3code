@@ -478,9 +478,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     thread.environmentId,
     thread.linkedPullRequest,
     thread.pullRequests,
+    thread.branchPullRequest,
   );
   const pr =
-    thread.linkedPullRequest == null
+    thread.linkedPullRequest == null && thread.branchPullRequest == null
       ? resolveThreadPr({ threadBranch: thread.branch, gitStatus: gitStatus.data })
       : (linkedPullRequestStatus?.pr ?? null);
   const prStatus = prStatusIndicator(
@@ -747,7 +748,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               <TooltipPopup side="top">Open parent thread</TooltipPopup>
             </Tooltip>
           ) : null}
-          {prStatus && (
+          {prStatus && pr && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -760,7 +761,11 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={handlePrClick}
                   >
-                    <ChangeRequestStatusIcon className="size-3" />
+                    <ChangeRequestStatusIcon
+                      state={pr.state}
+                      isDraft={pr.isDraft}
+                      className="size-3"
+                    />
                   </a>
                 }
               />

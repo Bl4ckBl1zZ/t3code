@@ -121,7 +121,7 @@ public final class FeatureRootModel {
     /// threads keeps the existing subscriptions rather than restarting them.
     public func observeChangeRequests(threadIDs: [String]) {
         let observed = Set(threadIDs)
-        let links = Dictionary(uniqueKeysWithValues: snapshot.threads.filter { observed.contains($0.id) }.map { ($0.id, $0.allLinkedPullRequests) })
+        let links = Dictionary(uniqueKeysWithValues: snapshot.threads.filter { observed.contains($0.id) }.map { ($0.id, $0.observedPullRequests) })
         guard threadIDs != changeRequestThreadIDs || links != changeRequestLinks else { return }
         let previousLinks = changeRequestLinks
         changeRequestLinks = links

@@ -142,3 +142,7 @@ request changes only the thread association, not the request on its host.
 
 Agents can link, unlink, and list pull requests for their current task using the built-in PR tools.
 The tools do not create, close, or merge a request.
+
+Thread indicators can keep showing the request for the thread’s saved branch when the checkout
+moves elsewhere. Linking a request explicitly still takes priority. Draft requests have their
+own label and icon in desktop indicators. Native linked status updates arrive with the thread.

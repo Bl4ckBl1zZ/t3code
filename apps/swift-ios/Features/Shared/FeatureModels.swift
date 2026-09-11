@@ -281,11 +281,16 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// rule watches.
     public var linkedPullRequest: FeatureLinkedPullRequest?
     public var linkedPullRequests: [FeatureLinkedPullRequest]? = nil
+    public var branchPullRequest: FeatureLinkedPullRequest? = nil
     public var supportsMultiplePullRequests: Bool? = nil
     public var supportsPullRequestStackActions: Bool? = nil
 
     public var allLinkedPullRequests: [FeatureLinkedPullRequest] {
         linkedPullRequests ?? linkedPullRequest.map { [$0] } ?? []
+    }
+    /// Candidates are observed without becoming explicit links or appearing in unlink controls.
+    public var observedPullRequests: [FeatureLinkedPullRequest] {
+        allLinkedPullRequests.isEmpty ? branchPullRequest.map { [$0] } ?? [] : allLinkedPullRequests
     }
     /// Whether this thread's server persists a pull-request link. Resolved from
     /// the environment's capabilities at map time, so the action is hidden
@@ -343,6 +348,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         supportsTitleRegeneration: Bool? = nil,
         linkedPullRequest: FeatureLinkedPullRequest? = nil,
         linkedPullRequests: [FeatureLinkedPullRequest]? = nil,
+        branchPullRequest: FeatureLinkedPullRequest? = nil,
         supportsMultiplePullRequests: Bool? = nil,
         supportsPullRequestStackActions: Bool? = nil,
         supportsPullRequestLinking: Bool? = nil,
@@ -393,6 +399,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.supportsTitleRegeneration = supportsTitleRegeneration
         self.linkedPullRequest = linkedPullRequest
         self.linkedPullRequests = linkedPullRequests
+        self.branchPullRequest = branchPullRequest
         self.supportsMultiplePullRequests = supportsMultiplePullRequests
         self.supportsPullRequestStackActions = supportsPullRequestStackActions
         self.supportsPullRequestLinking = supportsPullRequestLinking

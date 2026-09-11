@@ -41,8 +41,10 @@ thread and changes only the local association; no PR is created or mutated on th
 Web sidebar/command-palette badges use persisted linked snapshots. The web collection and
 Swift linked-PR sheet display sources, cached state, checks, diff counts, and native/derived
 chain order. Native mirrors are covered by generated wire fixtures and host-side ordering tests.
-Swift still uses its existing visible-task host subscriptions for automatic settlement;
-server settlement, full hosted-reference detail routing and richer sidebar stack badges remain
+Web sidebar, chat and command-palette indicators consume saved branch candidates when no explicit
+link is selected. Swift observes candidates separately from its explicit collection and uses pushed
+V2 snapshots for linked status; only branch candidates and legacy environments retain host polling.
+Server settlement, full hosted-reference detail routing and richer sidebar stack badges remain
 separate parity work. Expo retains compatibility through the derived legacy references.
 
 `pullRequests.stack` also supports on-demand hydrated stack details. `pullRequestStackActions`

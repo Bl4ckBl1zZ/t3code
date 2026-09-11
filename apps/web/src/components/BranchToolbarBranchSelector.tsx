@@ -759,7 +759,11 @@ export function BranchToolbarBranchSelector({
                 />
               }
             >
-              <ChangeRequestStatusIcon className="size-3" />
+              <ChangeRequestStatusIcon
+                state={branchPr.state}
+                isDraft={branchPr.isDraft}
+                className="size-3"
+              />
               <span>#{branchPr.number}</span>
             </TooltipTrigger>
             <TooltipPopup side="top">{branchPrTooltip}</TooltipPopup>
@@ -820,6 +824,8 @@ export function BranchToolbarBranchSelector({
               }
             >
               <ChangeRequestStatusIcon
+                state={branchPr.state}
+                isDraft={branchPr.isDraft}
                 className={cn(THREAD_DETAILS_PANEL_ICON_CLASS, branchPrStatus.colorClass)}
               />
               <span className="min-w-0 flex-1 truncate text-left">{panelPrLabel}</span>

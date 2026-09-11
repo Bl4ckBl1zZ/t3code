@@ -23,6 +23,19 @@ struct DailyUXSidebarTests {
         #expect(DailyUXSidebarIndex.matchingThreads([item], snapshot: FeatureSnapshot(threads: [item]), query: "#43").isEmpty)
     }
 
+    @Test func branchCandidatesAreObservedWithoutBecomingExplicitLinks() {
+        var item = thread(id: "candidate", created: -500, updated: -100)
+        let candidate = FeatureLinkedPullRequest(projectID: item.projectID, repository: "example/repo", number: 41, url: "https://github.com/example/repo/pull/41")
+        item.branchPullRequest = candidate
+        #expect(item.allLinkedPullRequests.isEmpty)
+        #expect(item.observedPullRequests == [candidate])
+        let explicit = FeatureLinkedPullRequest(projectID: item.projectID, repository: "example/repo", number: 42, url: "https://github.com/example/repo/pull/42")
+        item.linkedPullRequests = [explicit]
+        #expect(item.observedPullRequests == [explicit])
+        item.linkedPullRequests = []
+        #expect(item.observedPullRequests == [candidate])
+    }
+
     private let now = Date(timeIntervalSince1970: 2_000_000)
 
     @Test func manualOrderKeepsNewAndReopenedThreadsFirst() {

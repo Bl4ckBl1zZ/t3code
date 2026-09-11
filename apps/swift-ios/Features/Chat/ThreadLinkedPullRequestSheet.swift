@@ -30,7 +30,7 @@ struct ThreadLinkedPullRequestSheet: View {
     /// Hidden when the branch's request is already the linked one: "Link #12"
     /// under a row that says #12 is linked reads as a bug.
     private var linkableBranchPullRequest: ThreadDetailsPullRequest? {
-        guard let branchPullRequest, !links.contains(where: { $0.number == branchPullRequest.number }) else { return nil }
+        guard let branchPullRequest, !links.contains(where: { $0.number == branchPullRequest.number && $0.url == branchPullRequest.url }) else { return nil }
         return branchPullRequest
     }
 

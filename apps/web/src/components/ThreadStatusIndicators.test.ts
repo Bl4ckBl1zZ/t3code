@@ -12,6 +12,7 @@ import {
   resolveThreadPr,
   settledPrHoverColorClass,
   threadChangeRequestSnapshotsAtom,
+  threadChangeRequestSnapshotsEqual,
   type ThreadChangeRequestSnapshot,
 } from "./ThreadStatusIndicators";
 
@@ -579,6 +580,28 @@ describe("prStatusIndicator", () => {
       tooltipLead: "PR #42 - Open",
       tooltipTitle: "PR branch",
     });
+  });
+
+  it("keeps draft status distinct and lets terminal states outrank it", () => {
+    const pr = status().pr!;
+    expect(prStatusIndicator({ ...pr, isDraft: true }, undefined)).toMatchObject({
+      label: "PR draft",
+      tooltipLead: "PR #42 - Draft",
+      colorClass: "text-zinc-500 dark:text-zinc-400/80",
+    });
+    expect(prStatusIndicator({ ...pr, state: "merged", isDraft: true }, undefined)?.label).toBe(
+      "PR merged",
+    );
+    expect(prStatusIndicator({ ...pr, state: "closed", isDraft: true }, undefined)?.label).toBe(
+      "PR closed",
+    );
+    const original = snapshotFor("feature/current", pr);
+    expect(
+      threadChangeRequestSnapshotsEqual(original, { ...original, pr: { ...pr, isDraft: true } }),
+    ).toBe(false);
+    expect(
+      threadChangeRequestSnapshotsEqual(original, { ...original, pr: { ...pr, isDraft: false } }),
+    ).toBe(true);
   });
 
   it("uses red for closed pull requests", () => {

@@ -1135,3 +1135,10 @@ MCP PR tools are credential-thread-scoped. Web linked badges and the web/Swift c
 use cached snapshots and ordered chains, with source/check/diff signals. Native fixtures mirror
 the optional wire fields. Server automatic settlement and full cross-repository detail routing
 remain follow-up parity work; no V1 thread imports or new migrations are introduced.
+
+### PR indicator parity
+
+Saved V2 branch candidates feed web sidebar/chat/command-palette status and native thread details
+and sidebar observations without becoming explicit links. Native explicit links use pushed V2
+snapshots; legacy and branch-only references retain scoped host reads. Web draft/closed/merged
+icons share the detail presentation, and cached draft changes invalidate row snapshots.

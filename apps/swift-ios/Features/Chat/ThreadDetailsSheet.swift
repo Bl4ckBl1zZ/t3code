@@ -153,7 +153,7 @@ struct ThreadDetailsSheet: View {
             NavigationStack {
                 ThreadLinkedPullRequestSheet(
                     thread: thread,
-                    branchPullRequest: gitStatus?.pullRequest,
+                    branchPullRequest: thread.branchPullRequest.map { ThreadDetailsPullRequest(number: $0.number, state: "", url: $0.url) } ?? gitStatus?.pullRequest,
                     client: client,
                     onFinished: { isEditingLinkedPullRequest = false }
                 )
@@ -597,7 +597,7 @@ struct ThreadDetailsSheet: View {
     /// and it is what the sidebar badge and the merge settle rule already
     /// follow.
     private var displayedPullRequest: ThreadDetailsPullRequest? {
-        guard let linked = thread.linkedPullRequest else { return gitStatus?.pullRequest }
+        guard let linked = thread.linkedPullRequest ?? thread.branchPullRequest else { return gitStatus?.pullRequest }
         return ThreadDetailsPullRequest(
             number: linked.number,
             state: branchPullRequestState(matching: linked) ?? "",
@@ -610,16 +610,18 @@ struct ThreadDetailsSheet: View {
     /// linked request from elsewhere has no state to report here — naming the
     /// repository is more use than an empty line or a guessed "Open".
     private var displayedPullRequestSubtitle: String {
-        guard let linked = thread.linkedPullRequest else {
+        guard let linked = thread.linkedPullRequest ?? thread.branchPullRequest else {
             return gitStatus?.pullRequest?.state.capitalized ?? ""
         }
+        if let snapshot = linked.snapshot, snapshot.state == "open", snapshot.isDraft { return "Draft" }
         return branchPullRequestState(matching: linked)?.capitalized ?? linked.repository
     }
 
     private func branchPullRequestState(
         matching linked: FeatureLinkedPullRequest
     ) -> String? {
-        guard let branch = gitStatus?.pullRequest, branch.number == linked.number else {
+        if let snapshot = linked.snapshot { return snapshot.state }
+        guard let branch = gitStatus?.pullRequest, branch.number == linked.number, branch.url == linked.url else {
             return nil
         }
         return branch.state

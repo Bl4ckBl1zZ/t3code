@@ -5355,13 +5355,14 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadRef?.environmentId ?? null,
     linkedThreadPullRequest,
     activeThreadShell?.pullRequests,
+    activeThreadShell?.branchPullRequest,
   );
   const activeThreadPr = resolveDisplayedThreadPr({
     threadBranch: activeThread?.branch ?? null,
     gitStatus: gitStatusQuery.data ?? null,
     snapshot: activeThreadKey ? changeRequestSnapshotByKey.get(activeThreadKey) : undefined,
     retainTerminalOnBranchMismatch: activeThread?.worktreePath === null,
-    linkedPullRequest: linkedThreadPullRequest,
+    linkedPullRequest: linkedThreadPullRequest ?? activeThreadShell?.branchPullRequest,
     linkedPullRequestStatus,
   });
   // The right panel offers the thread's own change request, so it can only offer it once the

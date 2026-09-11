@@ -2388,12 +2388,29 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         // its worktree's branch happens to point at: the same branch can back
         // several requests, and a thread whose worktree is gone still has one.
         var linkedByThreadID: [String: [LinkedChangeRequestSubscription]] = [:]
+        var cachedByThreadID: [String: FeaturePullRequest] = [:]
         for threadID in threadIDs {
             guard let route = try? threadRoute(for: threadID),
                   let shell = shellsByEnvironmentID[route.environmentID],
                   let thread = shell.threads.first(where: { $0.id == route.wireID })
             else { continue }
-            let links = thread.linkedPullRequests ?? thread.linkedPullRequest.map { [$0] } ?? []
+            if let metadata = thread.pullRequests {
+                let visible = metadata.filter { $0.source != "stack-dismissed" }
+                if let first = visible.first {
+                    let reads = visible.map { link in
+                        link.snapshot.map { snapshot in
+                            FeaturePullRequest(number: link.number, title: snapshot.title,
+                                state: snapshot.state.rawValue, url: URL(string: link.url),
+                                updatedAt: snapshot.updatedAt.flatMap(NativeWorkspaceMapper.isoDate))
+                        }
+                    }
+                    cachedByThreadID[threadID] = FeatureLinkedPullRequestSettlement.aggregate(reads)
+                        ?? FeaturePullRequest(number: first.number, title: "Pull request status pending", state: "unknown", url: URL(string: first.url))
+                    continue
+                }
+            }
+            let explicit = thread.pullRequests == nil ? thread.linkedPullRequests ?? thread.linkedPullRequest.map { [$0] } ?? [] : []
+            let links = explicit.isEmpty ? thread.branchPullRequest.map { [$0] } ?? [] : explicit
             if !links.isEmpty {
                 linkedByThreadID[threadID] = links.map { linked in
                     LinkedChangeRequestSubscription(environmentID: route.environmentID,
@@ -2411,16 +2428,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             )
             threadIDsBySubscription[subscription, default: []].append(threadID)
         }
-        guard !threadIDsBySubscription.isEmpty || !linkedByThreadID.isEmpty else { return }
 
         // Threads that lost their route (or their branch, or their link) since
         // the seed was captured have no subscription to correct a stale entry,
         // so they are dropped rather than carried forward indefinitely.
-        let accumulator = ChangeRequestAccumulator(
-            seed: seed.filter {
-                branchesByThreadID[$0.key] != nil || linkedByThreadID[$0.key] != nil
-            }
-        )
+        var initial = seed.filter {
+            branchesByThreadID[$0.key] != nil || linkedByThreadID[$0.key] != nil
+        }
+        initial.merge(cachedByThreadID) { _, snapshot in snapshot }
+        let accumulator = ChangeRequestAccumulator(seed: initial)
+        continuation.yield(initial)
         await withTaskGroup(of: Void.self) { group in
             for (threadID, linked) in linkedByThreadID {
                 group.addTask { @MainActor [weak self] in
@@ -2470,15 +2487,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
-    /// Keeps a linked pull request current for as long as its thread is on
-    /// screen.
-    ///
-    /// There is no push channel for change requests — the branch-derived path
-    /// only gets updates because it rides the workspace's VCS status
-    /// subscription, and a linked request may belong to a repository no open
-    /// worktree points at. Polling is therefore the mechanism, at web's cadence
-    /// (`createLinkedPullRequestDetailAtomFamily`), so a merge settles the row
-    /// within half a minute instead of at the next app launch.
+    /// Legacy environments and branch-only candidates still need host reads.
+    /// Explicit V2 links above use pushed projection snapshots instead.
     private func pollLinkedChangeRequest(
         threadID: String,
         subscription: [LinkedChangeRequestSubscription],
@@ -4946,6 +4956,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 metadata: thread.pullRequests?.first { $0.number == thread.linkedPullRequest?.number && $0.url == thread.linkedPullRequest?.url }
             ),
             linkedPullRequests: mapThreadPullRequests(thread.pullRequests, legacy: thread.linkedPullRequests, projectID: thread.projectId, environment: environment),
+            branchPullRequest: mapLinkedPullRequest(thread.branchPullRequest, environment: environment),
             supportsMultiplePullRequests: environment.descriptor?.capabilities.threadPullRequestsV2,
             supportsPullRequestStackActions: environment.descriptor?.capabilities.pullRequestStackActions,
             supportsPullRequestLinking: environment.descriptor?.capabilities
@@ -5112,6 +5123,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 metadata: thread.pullRequests?.first { $0.number == thread.linkedPullRequest?.number && $0.url == thread.linkedPullRequest?.url }
             ),
             linkedPullRequests: mapThreadPullRequests(thread.pullRequests, legacy: thread.linkedPullRequests, projectID: thread.projectId, environment: environment),
+            branchPullRequest: mapLinkedPullRequest(thread.branchPullRequest, environment: environment),
             supportsMultiplePullRequests: environment.descriptor?.capabilities.threadPullRequestsV2,
             supportsPullRequestStackActions: environment.descriptor?.capabilities.pullRequestStackActions,
             supportsPullRequestLinking: environment.descriptor?.capabilities
