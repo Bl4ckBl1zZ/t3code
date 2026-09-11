@@ -616,6 +616,32 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
     });
   });
 
+  it("carries MCP presentation beside the output into V2", () => {
+    const projection = projectCodexDynamicToolItem({
+      type: "mcpToolCall",
+      id: "browser",
+      server: "browser",
+      tool: "js",
+      status: "completed",
+      arguments: { title: "Review page" },
+      result: {
+        content: [],
+        _meta: {
+          "codex/toolSurface": {
+            kind: "browserUse",
+            backend: "safari",
+            openTabs: [{ url: "https://example.com" }],
+          },
+        },
+      },
+    });
+    assert.equal(projection.toolSurface, "browser");
+    assert.equal(projection.title, "Review page");
+    assert.equal(projection.toolSource?.name, "Safari");
+    assert.deepEqual(projection.toolIcon, { _tag: "website", pageUrl: "https://example.com/" });
+    assert.deepEqual(projection.output, []);
+  });
+
   it("preserves namespaced dynamic tool output", () => {
     const projection = projectCodexDynamicToolItem({
       type: "dynamicToolCall",

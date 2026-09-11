@@ -501,6 +501,9 @@ public struct OrchestrationV2CommandLiveness: Codable, Equatable, Sendable {
 public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiable {
     public let base: OrchestrationV2TurnItemBase
     public let payload: Payload
+    public var toolSurface: String? = nil
+    public var toolIcon: ToolActivityIcon? = nil
+    public var toolSource: ToolActivitySource? = nil
 
     public init(type: String, base: OrchestrationV2TurnItemBase, payload: Payload) {
         self.type = type
@@ -560,7 +563,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case source, targetThreadId, providerThreadId
         case targetRunId, targetProviderInstanceId, targetModel
         case subagentId, origin, providerInstanceId, childThreadId, progress, result
-        case toolName
+        case toolName, toolSurface, toolIcon, toolSource
     }
 
     public init(from decoder: any Decoder) throws {
@@ -568,6 +571,11 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         self.type = type
+        if type == "dynamic_tool" {
+            toolSurface = try container.decodeIfPresent(String.self, forKey: .toolSurface)
+            toolIcon = try container.decodeIfPresent(ToolActivityIcon.self, forKey: .toolIcon)
+            toolSource = try container.decodeIfPresent(ToolActivitySource.self, forKey: .toolSource)
+        }
 
         switch type {
         case "user_message":
@@ -721,6 +729,11 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         try base.encode(to: encoder)
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
+        if type == "dynamic_tool" {
+            try container.encodeIfPresent(toolSurface, forKey: .toolSurface)
+            try container.encodeIfPresent(toolIcon, forKey: .toolIcon)
+            try container.encodeIfPresent(toolSource, forKey: .toolSource)
+        }
 
         switch payload {
         case let .userMessage(messageID, intent, text, attachments):

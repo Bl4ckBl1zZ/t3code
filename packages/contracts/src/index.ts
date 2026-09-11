@@ -52,3 +52,5 @@ export * from "./hermesSkills.ts";
 export * from "./hermesSessions.ts";
 
 export * from "./providerUsageLimits.ts";
+
+export * from "./toolActivity.ts";

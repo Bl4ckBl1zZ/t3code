@@ -29,4 +29,10 @@ struct ThreadHistoricalWorkSummaryTests {
         #expect(ThreadHistoricalWorkSummary.label([.init(action: .linkPR), .init(action: .linkPR), .init(action: .browser)]) == "Linked 2 pull requests and used the browser 1 time")
         #expect(ThreadHistoricalWorkSummary.label([.init(action: .unlinkPR), .init(action: .listPRs)]) == "Unlinked 1 pull request and checked linked pull requests 1 time")
     }
+    @Test func integrationSourcesDeduplicateButPRsKeepTheirIntent() {
+        let source = ToolActivitySource(key: "browser-use:chrome", name: "Chrome", kind: "integration", icon: nil)
+        #expect(ThreadHistoricalWorkSummary.label([
+            .init(action: .tool, source: source), .init(action: .tool, source: source), .init(action: .linkPR, source: source)
+        ]) == "Used Chrome integration and linked 1 pull request")
+    }
 }

@@ -7,6 +7,7 @@ struct ThreadHistoricalWorkItem: Equatable, Sendable {
     var successful = true
     var running = false
     var persistent = false
+    var source: ToolActivitySource? = nil
 }
 
 enum ThreadHistoricalWorkSummary {
@@ -15,13 +16,18 @@ enum ThreadHistoricalWorkSummary {
         var order: [ThreadHistoricalWorkItem.Action] = []
         var counts: [ThreadHistoricalWorkItem.Action: Int] = [:]
         var files = Set<String>()
+        var sources: [ToolActivitySource] = []
         for item in items {
+            if let source = item.source, ![.linkPR, .unlinkPR, .listPRs].contains(item.action) {
+                if !sources.contains(where: { $0.key == source.key }) { sources.append(source) }
+                continue
+            }
             if counts[item.action] == nil { order.append(item.action); counts[item.action] = 0 }
             if item.action == .edit, !item.files.isEmpty {
                 for file in item.files where files.insert(file).inserted { counts[.edit, default: 0] += 1 }
             } else { counts[item.action, default: 0] += 1 }
         }
-        let labels = order.enumerated().map { index, action in
+        var labels = order.map { action in
             let count = counts[action, default: 0]
             let label: String
             switch action {
@@ -36,8 +42,15 @@ enum ThreadHistoricalWorkSummary {
             case .browser: label = "Used the browser \(count) \(count == 1 ? "time" : "times")"
             case .tool: label = "Used \(count) \(count == 1 ? "tool" : "tools")"
             }
-            return index == 0 ? label : label.prefix(1).lowercased() + label.dropFirst()
+            return label
         }
+        if !sources.isEmpty {
+            let names = sources.map(\.name)
+            let joined = names.count < 3 ? names.joined(separator: " and ") : names.dropLast().joined(separator: ", ") + ", and " + (names.last ?? "")
+            let suffix = sources.allSatisfy { $0.kind == "integration" } ? (sources.count == 1 ? " integration" : " integrations") : ""
+            labels.insert("Used " + joined + suffix, at: 0)
+        }
+        labels = labels.enumerated().map { index, label in index == 0 ? label : label.prefix(1).lowercased() + label.dropFirst() }
         if labels.count == 1 { return labels[0] }
         if labels.count == 2 { return labels.joined(separator: " and ") }
         return labels.dropLast().joined(separator: ", ") + ", and " + (labels.last ?? "")

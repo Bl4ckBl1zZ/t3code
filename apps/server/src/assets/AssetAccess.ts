@@ -1,3 +1,5 @@
+import { ToolActivityNativeAppReference } from "@t3tools/contracts";
+import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import {
   IMAGE_DIMENSIONS_HEADER_BYTES,
   readImageDimensions,
@@ -103,6 +105,12 @@ const PREVIEW_ASSET_EXTENSIONS = new Set([
 ]);
 
 const AssetClaimsSchema = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("native-app-icon"),
+    app: ToolActivityNativeAppReference,
+    expiresAt: Schema.Number,
+  }),
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("workspace-file"),
@@ -551,6 +559,11 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       fileName = artifactFileName;
       break;
     }
+    case "native-app-icon": {
+      claims = { version: 1, kind: "native-app-icon", app: input.resource.app, expiresAt };
+      fileName = "native-app-icon.png";
+      break;
+    }
     case "project-favicon": {
       const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(input.resource.cwd).pipe(
         Effect.mapError(
@@ -667,7 +680,11 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         }),
     ),
   );
-  if (claims.kind === "project-favicon" || claims.kind === "project-favicon-external") {
+  if (
+    claims.kind === "project-favicon" ||
+    claims.kind === "project-favicon-external" ||
+    claims.kind === "native-app-icon"
+  ) {
     const issuedAt = yield* Clock.currentTimeMillis;
     expiresAt =
       (Math.floor(issuedAt / PROJECT_FAVICON_TOKEN_BUCKET_MS) + 2) *
@@ -701,6 +718,13 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
 
   const claims = decodeClaims(encodedPayload);
   if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
+
+  if (claims.kind === "native-app-icon") {
+    if (relativePath !== "native-app-icon.png") return null;
+    const resolver = yield* NativeAppIconResolver.NativeAppIconResolver;
+    const iconPath = yield* resolver.resolve(claims.app);
+    return iconPath ? ({ kind: "file", path: iconPath } satisfies ResolvedAsset) : null;
+  }
 
   if (claims.kind === "attachment") {
     const config = yield* ServerConfig.ServerConfig;

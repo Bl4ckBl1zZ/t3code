@@ -1111,3 +1111,11 @@ whole transcript on every scroll. No simulator or browser was launched for verif
   failure/cancellation, and recognize provider namespace aliases. The shared URL parser
   supports GitHub, GitLab, Bitbucket and Azure change-request routes; Swift mirrors those
   rules for tool labels. This presentation does not advertise new PR MCP capabilities.
+
+- Codex browser/computer tool-source metadata is normalized at the V2 adapter boundary
+  into independent `toolActivity` contracts and optional V2 item fields. It survives JSON
+  projection persistence and reaches web/Swift icons and source-aware group summaries.
+  V1 item-lifecycle events are not reintroduced. Native app references resolve through
+  signed asset URLs and a bounded macOS icon cache; clients never receive application
+  bundle paths. Other host platforms retain glyph fallbacks, as upstream does. Swift
+  decodes older items without metadata and scopes native-icon requests by environment.

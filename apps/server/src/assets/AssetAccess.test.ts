@@ -1,3 +1,4 @@
+import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 // @effect-diagnostics nodeBuiltinImport:off - tests inject swaps at the native open boundary.
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeFSP from "node:fs/promises";
@@ -34,6 +35,9 @@ const configLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
 });
 const testLayer = Layer.mergeAll(
+  Layer.succeed(NativeAppIconResolver.NativeAppIconResolver, {
+    resolve: () => Effect.succeed(null),
+  }),
   NodeHttpPlatform.layer,
   configLayer,
   WorkspacePaths.layer,
@@ -45,6 +49,35 @@ const testLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect("signs native app references and resolves only the icon route", () =>
+    Effect.gen(function* () {
+      const app = { _tag: "display-name", displayName: "Google Chrome" } as const;
+      const issued = yield* issueAssetUrl({ resource: { _tag: "native-app-icon", app } });
+      const suffix = issued.relativeUrl.slice(ASSET_ROUTE_PREFIX.length + 1);
+      const separator = suffix.indexOf("/");
+      const token = suffix.slice(0, separator);
+      const resolve = (tokenValue: string, name: string) =>
+        resolveAsset(tokenValue, name).pipe(
+          Effect.provideService(NativeAppIconResolver.NativeAppIconResolver, {
+            resolve: (requested) =>
+              Effect.sync(() => {
+                expect(requested).toEqual(app);
+                return "/cache/opaque-icon.png";
+              }),
+          }),
+        );
+      expect(yield* resolve(token, "native-app-icon.png")).toEqual({
+        kind: "file",
+        path: "/cache/opaque-icon.png",
+      });
+      expect(yield* resolve(token, "different.png")).toBeNull();
+      expect(yield* resolve(`${token}tampered`, "native-app-icon.png")).toBeNull();
+      expect(yield* resolveAsset(token, "native-app-icon.png")).toBeNull();
+      yield* TestClock.adjust("3 hours");
+      expect(yield* resolve(token, "native-app-icon.png")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect(
     "returns bounded header dimensions for workspace and host images, with a malformed-header fallback",
     () =>

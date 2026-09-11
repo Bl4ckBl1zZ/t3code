@@ -2166,6 +2166,16 @@ describe("V2 historical tool summaries", () => {
       ]),
     ).toBe("Unlinked 1 pull request and checked linked pull requests");
   });
+  it("deduplicates integration sources without swallowing PR intent", () => {
+    const source = { key: "browser-use:chrome", name: "Chrome", kind: "integration" } as const;
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ toolSource: source }),
+        entry({ toolSource: source }),
+        entry({ toolSource: source, toolTitle: "link_pull_request" }),
+      ]),
+    ).toBe("Used Chrome integration and linked 1 pull request");
+  });
   it("counts code and web searches separately", () => {
     expect(
       resolveHistoricalWorkSummary([

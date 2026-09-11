@@ -1,4 +1,9 @@
 import {
+  codexMcpToolPresentation,
+  codexMcpIntentTitle,
+  type McpToolPresentation,
+} from "./codexToolPresentation.ts";
+import {
   CodexUsageLimitListener,
   type CodexRateLimitSnapshot,
 } from "../../provider/providerUsageLimits.ts";
@@ -370,7 +375,8 @@ export function codexBackgroundCommandDetail(item: {
   return outputTail.length === 0 ? header : `${header}\n\nOutput tail:\n${outputTail}`;
 }
 
-export interface CodexDynamicToolProjection {
+export interface CodexDynamicToolProjection extends McpToolPresentation {
+  readonly title?: string;
   readonly toolName: string;
   readonly input: unknown;
   readonly output?: unknown;
@@ -413,10 +419,14 @@ export function projectCodexDynamicToolItem(
     item.type === "mcpToolCall"
       ? `${item.server}.${item.tool}`
       : [trimText(item.namespace), item.tool].filter(Boolean).join(".");
+  const presentation = item.type === "mcpToolCall" ? codexMcpToolPresentation(item) : {};
+  const title = item.type === "mcpToolCall" ? codexMcpIntentTitle(item, presentation) : undefined;
   const projection: CodexDynamicToolProjection = {
     toolName,
     input: item.arguments,
     status: codexItemStatus(item.status).turnItem,
+    ...presentation,
+    ...(title ? { title } : {}),
   };
   return output === undefined ? projection : { ...projection, output };
 }
@@ -3057,11 +3067,14 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               parentItemId: null,
               ordinal,
               status: projection.status,
-              title: null,
+              title: projection.title ?? null,
               startedAt: context.startedAt,
               completedAt,
               updatedAt,
               type: "dynamic_tool",
+              ...(projection.toolSurface ? { toolSurface: projection.toolSurface } : {}),
+              ...(projection.toolIcon ? { toolIcon: projection.toolIcon } : {}),
+              ...(projection.toolSource ? { toolSource: projection.toolSource } : {}),
               toolName: projection.toolName,
               input: projection.input,
               ...(projection.output === undefined ? {} : { output: projection.output }),

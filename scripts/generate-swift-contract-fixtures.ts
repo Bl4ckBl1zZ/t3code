@@ -312,6 +312,18 @@ const turnItems: OrchestrationV2TurnItem[] = [
     ...base("item-dynamic-tool"),
     type: "dynamic_tool",
     toolName: "t3-code__delegate_task",
+    toolSurface: "browser",
+    toolIcon: {
+      _tag: "website",
+      pageUrl: "https://github.com/org/repo",
+      faviconUrlDark: "https://github.githubassets.com/favicons/favicon-dark.svg",
+    },
+    toolSource: {
+      key: "browser-use:chrome",
+      name: "Chrome",
+      kind: "integration",
+      icon: { _tag: "native-app", app: { _tag: "display-name", displayName: "Google Chrome" } },
+    },
     input: { task: "go" },
     output: { ok: true },
   },

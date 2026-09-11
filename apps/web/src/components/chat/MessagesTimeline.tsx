@@ -1,3 +1,7 @@
+import { useAssetUrlState } from "../../assets/assetUrls";
+import type { ToolActivityIcon } from "@t3tools/contracts";
+import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
+import { MonitorIcon } from "lucide-react";
 import { GitPullRequestIcon } from "lucide-react";
 import {
   WorkGroupHistoryState,
@@ -2409,8 +2413,18 @@ const WorkGroupSection = memo(function WorkGroupSection({
             onClick={toggleHistoryExpanded}
             className="flex min-h-7 w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
           >
-            <WorkEntryIconSvg
-              name={
+            <ToolSourceIcon
+              icon={
+                nonEmptyEntries.every(
+                  (entry) =>
+                    entry.toolSource?.key &&
+                    entry.toolSource.key === nonEmptyEntries[0]?.toolSource?.key &&
+                    workEntryIconName(entry) !== "pull-request",
+                )
+                  ? nonEmptyEntries[0]?.toolSource?.icon
+                  : undefined
+              }
+              fallbackName={
                 new Set(nonEmptyEntries.map(workEntryIconName)).size === 1
                   ? workEntryIconName(nonEmptyEntries[0]!)
                   : "hammer"
@@ -3052,6 +3066,7 @@ function formatWorkingTimerNow(startIso: string): string {
 
 type WorkEntryIconName =
   | "pull-request"
+  | "computer"
   | "hammer"
   | "bot"
   | "check"
@@ -3067,6 +3082,8 @@ type WorkEntryIconName =
 
 function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; className: string }) {
   switch (name) {
+    case "computer":
+      return <MonitorIcon className={className} aria-hidden />;
     case "pull-request":
       return <GitPullRequestIcon className={className} aria-hidden />;
     case "hammer":
@@ -3260,7 +3277,8 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
     item?.type === "dynamic_tool" ? item.input : undefined,
   );
   if (presentation?.logo === "pull-request") return "pull-request";
-  if (presentation?.logo === "browser") return "globe";
+  if (presentation?.logo === "browser" || workEntry.toolSurface === "browser") return "globe";
+  if (workEntry.toolSurface === "computer") return "computer";
   if (workEntry.itemType === "user_input_request") {
     return "message-circle";
   }
@@ -3422,8 +3440,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           {toolPresentation?.logo === "t3-code" ? (
             <T3CodeToolLogo />
           ) : (
-            <WorkEntryIconSvg
-              name={entryIconName}
+            <ToolSourceIcon
+              icon={workEntry.toolIcon ?? workEntry.toolSource?.icon}
+              fallbackName={entryIconName}
               className="block size-3.5 shrink-0 stroke-[1.8] opacity-80"
             />
           )}
@@ -3579,3 +3598,89 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     </div>
   );
 });
+
+function ToolSourceIcon({
+  icon,
+  fallbackName,
+  className,
+}: {
+  icon: ToolActivityIcon | undefined;
+  fallbackName: WorkEntryIconName;
+  className: string;
+}) {
+  const { resolvedTheme } = use(TimelineRowCtx);
+  if (icon?._tag === "native-app")
+    return <NativeAppSourceIcon app={icon.app} fallbackName={fallbackName} className={className} />;
+  return (
+    <ToolSourceImageIcon
+      icon={icon}
+      fallbackName={fallbackName}
+      className={className}
+      resolvedTheme={resolvedTheme}
+    />
+  );
+}
+
+function ToolSourceImageIcon({
+  icon,
+  fallbackName,
+  className,
+  resolvedTheme,
+}: {
+  icon: ToolActivityIcon | undefined;
+  fallbackName: WorkEntryIconName;
+  className: string;
+  resolvedTheme: "light" | "dark";
+}) {
+  const src =
+    icon?._tag === "website"
+      ? toolActivityFaviconUrl(icon, resolvedTheme)
+      : icon?._tag === "themed-logo"
+        ? resolvedTheme === "dark"
+          ? (icon.logoUrlDark ?? icon.logoUrl)
+          : icon.logoUrl
+        : null;
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  if (!src || failedSrc === src)
+    return <WorkEntryIconSvg name={fallbackName} className={className} />;
+  return (
+    <span className={cn(className, "relative inline-block")}>
+      {loadedSrc !== src && <WorkEntryIconSvg name={fallbackName} className="size-full" />}
+      <img
+        src={src}
+        alt=""
+        aria-hidden
+        decoding="async"
+        referrerPolicy="no-referrer"
+        className={cn(
+          "absolute inset-0 size-full rounded-[3px] object-contain",
+          loadedSrc !== src && "opacity-0",
+        )}
+        onLoad={() => setLoadedSrc(src)}
+        onError={() => setFailedSrc(src)}
+      />
+    </span>
+  );
+}
+
+function NativeAppSourceIcon({
+  app,
+  fallbackName,
+  className,
+}: {
+  app: Extract<ToolActivityIcon, { _tag: "native-app" }>["app"];
+  fallbackName: WorkEntryIconName;
+  className: string;
+}) {
+  const { activeThreadEnvironmentId, resolvedTheme } = use(TimelineRowCtx);
+  const asset = useAssetUrlState(activeThreadEnvironmentId, { _tag: "native-app-icon", app });
+  return (
+    <ToolSourceImageIcon
+      icon={asset._tag === "Success" ? { _tag: "themed-logo", logoUrl: asset.url } : undefined}
+      fallbackName={fallbackName}
+      className={className}
+      resolvedTheme={resolvedTheme}
+    />
+  );
+}

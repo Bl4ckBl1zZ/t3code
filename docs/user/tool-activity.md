@@ -21,3 +21,8 @@ Known T3 tools use readable action names and reflect whether the call is running
 failed or canceled. Pull-request actions show the request number when available and use a
 pull-request icon; preview-browser actions use a browser icon. Completed history summaries
 keep those actions distinct from other tools.
+
+When a supported provider identifies the browser or app behind a tool call, activity shows
+its icon when available. Grouped history names the apps used, such as “Used Chrome
+integration,” while pull-request actions stay separately identified. App icons come from
+the connected Mac; an unavailable icon falls back to the browser or computer symbol.

@@ -304,7 +304,11 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
       return "message";
     case "dynamic_tool":
       // Read-style tool calls (a file/notebook path argument) present as reads.
-      return dynamicToolInputPreview(item.input)?.kind === "path" ? "eye" : "wrench";
+      return item.toolSurface === "browser"
+        ? "globe"
+        : dynamicToolInputPreview(item.input)?.kind === "path"
+          ? "eye"
+          : "wrench";
     case "subagent":
       return "hammer";
     case "run_interrupt_request":

@@ -52,6 +52,20 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertNil(dismiss["answers"])
     }
 
+    func testToolPresentationMetadataRoundTripsAndOldRowsRemainReadable() throws {
+        let item = try XCTUnwrap(try projection().turnItems.first { $0.type == "dynamic_tool" })
+        XCTAssertEqual(item.toolSurface, "browser")
+        XCTAssertEqual(item.toolSource?.name, "Chrome")
+        XCTAssertEqual(item.toolSource?.icon?.app?.displayName, "Google Chrome")
+        XCTAssertEqual(item.toolIcon?.pageUrl, "https://github.com/org/repo")
+        XCTAssertEqual(try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONEncoder().encode(item)), item)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any])
+        for key in ["toolSurface", "toolIcon", "toolSource"] { legacy.removeValue(forKey: key) }
+        let decoded = try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(decoded.toolSource)
+        XCTAssertEqual(decoded.payload, item.payload)
+    }
+
     func testApprovalOptionsRoundTripAndUnknownDecisionsStayUnavailable() throws {
         let projection = try projection()
         let item = try XCTUnwrap(projection.turnItems.first { $0.type == "approval_request" })

@@ -14,6 +14,7 @@ public struct ThreadDetailView: View {
     /// only reports which thread was asked for. `isArchived` routes to the
     /// archive, which is the only place an archived thread can be shown.
     let onOpenRelatedThread: (_ threadID: String, _ isArchived: Bool) -> Void
+    @State private var nativeToolIcons = NativeAppToolIconStore()
     @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
 
@@ -66,6 +67,12 @@ public struct ThreadDetailView: View {
         self.draftStore = draftStore
     }
 
+    private var nativeToolIconContext: NativeAppToolIconContext? {
+        guard let environmentID = threadEnvironment?.id ?? currentThread.environmentID,
+            let client = model.client as? any FeatureNativeAppIconResolving else { return nil }
+        return NativeAppToolIconContext(environmentID: environmentID, store: nativeToolIcons, client: client)
+    }
+
     public var body: some View {
         threadContent
         .onChange(of: model.pendingPullRequestPrompts[thread.id]?.id) { consumePullRequestPrompt() }
@@ -91,6 +98,7 @@ public struct ThreadDetailView: View {
             }
         }
         .background(T3Colors.background)
+        .environment(\.nativeAppToolIconContext, nativeToolIconContext)
         .safeAreaInset(edge: .top, spacing: 0) {
             if let submission = model.outboxSubmissions.first(where: { $0.threadID == thread.id }) {
                 Label(model.outboxStatus(submission), systemImage: "tray.and.arrow.up")
@@ -1700,6 +1708,7 @@ private struct ThreadTimelineEntryView: View {
 /// A recycled transcript surface. SwiftUI still owns each entry's rendering,
 /// while UIKit keeps offscreen entries out of the active view hierarchy.
 private struct FeatureTranscriptCollectionView: UIViewRepresentable {
+    @SwiftUI.Environment(\.nativeAppToolIconContext) private var nativeAppIcons
     private static let loadEarlierID = "__t3-load-earlier__"
 
     private enum Section: Hashable {
@@ -1795,6 +1804,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 currentWireThreadID: wireThreadID,
                 markdownMedia: markdownMedia,
                 pullRequests: pullRequests,
+                nativeAppIcons: nativeAppIcons,
                 onRollback: onRollback,
                 workspaceRoot: workspaceRoot,
                 alwaysExpandActivity: alwaysExpandActivity,
@@ -1862,6 +1872,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             /// puts there reaches these cells.
             var markdownMedia: MarkdownMediaContext?
             var pullRequests: MarkdownPullRequestContext?
+            var nativeAppIcons: NativeAppToolIconContext?
             var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
             var workspaceRoot: String?
             var alwaysExpandActivity = false
@@ -2037,6 +2048,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.assistantCitationContext, context.citationContext)
                     .environment(\.assistantCitationHighlight, highlight)
                     .environment(\.threadWorkLogHistory, toolHistory)
+                    .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
                     .environment(\.openURL, OpenURLAction { url in
                         if let citation = AssistantCitation.parse(url.absoluteString) {
@@ -2082,6 +2094,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             in collectionView: UICollectionView
         ) {
             guard let dataSource else { return }
+            let iconEnvironmentChanged = self.rowContext.nativeAppIcons?.environmentID != rowContext.nativeAppIcons?.environmentID
             self.rowContext = rowContext
             self.onLoadEarlier = onLoadEarlier
             self.onDismissKeyboard = onDismissKeyboard
@@ -2096,7 +2109,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             }
             let foldChoiceChanged = renderedFoldChoiceRevision != foldChoiceRevision
             let threadChanged = currentThreadID != threadID
-            let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
+            let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize || iconEnvironmentChanged
             // Same treatment as the type size: it changes how every row renders
             // rather than what any row contains, so nothing else in this update
             // would report it.

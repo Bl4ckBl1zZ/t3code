@@ -1,3 +1,4 @@
+import type { ToolActivitySurface, ToolActivityIcon, ToolActivitySource } from "@t3tools/contracts";
 import {
   orchestrationV2CommandExecutionIsLiveInBackground,
   ProviderDriverKind,
@@ -79,6 +80,9 @@ export interface WorkLogEntry {
   readonly changedFiles?: ReadonlyArray<string>;
   readonly tone: "thinking" | "tool" | "info" | "error";
   readonly toolTitle?: string;
+  readonly toolSurface?: ToolActivitySurface;
+  readonly toolIcon?: ToolActivityIcon;
+  readonly toolSource?: ToolActivitySource;
   readonly toolData?: unknown;
   readonly requestKind?: string;
   readonly itemType?: OrchestrationV2TurnItem["type"];
@@ -520,6 +524,9 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
           item.toolName ??
           "Tool call",
         toolTitle: title ?? item.toolName ?? "Tool",
+        ...(item.toolSurface ? { toolSurface: item.toolSurface } : {}),
+        ...(item.toolIcon ? { toolIcon: item.toolIcon } : {}),
+        ...(item.toolSource ? { toolSource: item.toolSource } : {}),
         toolData: { input: item.input, output: item.output },
       };
     default:

@@ -1,3 +1,4 @@
+import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import { EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
@@ -489,6 +490,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
+  Layer.provideMerge(NativeAppIconResolver.layer),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),

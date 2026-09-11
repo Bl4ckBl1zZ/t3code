@@ -16,7 +16,7 @@ extension FeatureInputAnswer {
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
-    FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
+    FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
     /// Visible turn items requested on a cold load. The server reports what it
@@ -566,6 +566,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             untilDay: untilDay,
             timeZone: timeZone
         )
+    }
+
+    func nativeAppIconURL(environmentID: String, app: ToolActivityNativeAppReference) async throws -> URL? {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.resolvedAssetURL(resource: .nativeAppIcon(app))
     }
 
     func projectFaviconURL(

@@ -68,6 +68,7 @@ public struct UploadChatImageAttachment: Codable, Equatable, Sendable {
 }
 
 public enum AssetResource: Equatable, Sendable {
+    case nativeAppIcon(ToolActivityNativeAppReference)
     case workspaceFile(threadID: String, path: String)
     case mediaFile(threadID: String, path: String)
     case documentAttachment(id: String, name: String, mimeType: String)
@@ -83,6 +84,8 @@ public enum AssetResource: Equatable, Sendable {
 
     var jsonValue: JSONValue {
         switch self {
+        case let .nativeAppIcon(app):
+            .object(["_tag": .string("native-app-icon"), "app": .object(["_tag": .string(app._tag)].merging(app.appId.map { ["appId": JSONValue.string($0)] } ?? [:]) { current, _ in current }.merging(app.displayName.map { ["displayName": JSONValue.string($0)] } ?? [:]) { current, _ in current })])
         case let .workspaceFile(threadID, path):
             .object([
                 "_tag": .string("workspace-file"),

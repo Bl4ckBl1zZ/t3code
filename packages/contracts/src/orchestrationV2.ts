@@ -1,3 +1,4 @@
+import { ToolActivitySurface, ToolActivityIcon, ToolActivitySource } from "./toolActivity.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -1313,6 +1314,9 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("dynamic_tool"),
+    toolSurface: Schema.optional(ToolActivitySurface),
+    toolIcon: Schema.optional(ToolActivityIcon),
+    toolSource: Schema.optional(ToolActivitySource),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
@@ -2118,6 +2122,9 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("dynamic_tool"),
+    toolSurface: Schema.optional(ToolActivitySurface),
+    toolIcon: Schema.optional(ToolActivityIcon),
+    toolSource: Schema.optional(ToolActivitySource),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),

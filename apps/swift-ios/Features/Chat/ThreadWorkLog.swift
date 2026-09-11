@@ -20,7 +20,7 @@ public struct ThreadWorkLogDiffStat: Equatable, Sendable {
 /// One line of the work log: what a turn item did, in the terms a reader scans.
 public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public enum Icon: String, Equatable, Sendable {
-        case agent, alert, check, command, edit, eye, globe, hammer, message, warning, wrench, zap, pullRequest
+        case agent, alert, check, command, edit, eye, globe, hammer, message, warning, wrench, zap, pullRequest, computer
 
         var symbolName: String {
             switch self {
@@ -37,6 +37,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
             case .wrench: "wrench"
             case .zap: "bolt"
             case .pullRequest: "arrow.triangle.pull"
+            case .computer: "desktopcomputer"
             }
         }
     }
@@ -62,6 +63,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public let projectedItem: OrchestrationV2ProjectedTurnItem
 
     public var item: OrchestrationV2TurnItem { projectedItem.item }
+    var activityIcon: ToolActivityIcon? { icon == .pullRequest ? nil : item.toolIcon ?? item.toolSource?.icon }
 
     /// A `file_change` row headlines its own diffstat.
     public var diffStat: ThreadWorkLogDiffStat? {
@@ -100,7 +102,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         default: action = .tool
         }
         return ThreadHistoricalWorkItem(action: action, files: files, successful: toolLike && status == .success,
-            running: inProgress, persistent: prominent || isLiveBackgroundCommand || item.type == "compaction")
+            running: inProgress, persistent: prominent || isLiveBackgroundCommand || item.type == "compaction", source: item.toolSource)
     }
 
     public static func make(_ row: OrchestrationV2ProjectedTurnItem) -> ThreadWorkLogRow {
@@ -212,7 +214,7 @@ public enum ThreadWorkLogPresentation {
         case .approvalRequest, .userInputRequest, .userMessage, .assistantMessage: .message
         // Read-style tool calls (a file/notebook path argument) present as reads.
         case let .dynamicTool(_, input, _):
-            T3McpToolPresentation.icon(for: item) ?? (DynamicToolInputPreview.resolve(input)?.kind == .path ? .eye : .wrench)
+            T3McpToolPresentation.icon(for: item) ?? (item.toolSurface == "browser" ? .globe : item.toolSurface == "computer" ? .computer : DynamicToolInputPreview.resolve(input)?.kind == .path ? .eye : .wrench)
         case .subagent: .hammer
         case .runInterruptRequest, .runInterruptResult: .warning
         case .error: .alert
@@ -895,7 +897,7 @@ struct ThreadWorkLog: View {
                     Button { history.groupExpanded = !isExpanded } label: {
                         HStack(spacing: 8) {
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
-                            Image(systemName: focus.icon.symbolName)
+                            ThreadToolActivityIcon(icon: focus.activityIcon, fallback: focus.icon.symbolName)
                             Text(focus.summary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                             Text("\(visibleCandidates.count)").monospacedDigit().foregroundStyle(T3Colors.textTertiary)
                         }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
@@ -909,7 +911,7 @@ struct ThreadWorkLog: View {
                 } else if let summary = historicalSummary {
                     Button { history.groupExpanded = !isExpanded } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: Set(visibleCandidates.map(\.icon)).count == 1 ? (visibleCandidates.first?.icon.symbolName ?? "hammer") : "hammer")
+                            ThreadToolActivityIcon(icon: visibleCandidates.allSatisfy { $0.icon != .pullRequest && $0.item.toolSource?.key != nil && $0.item.toolSource?.key == visibleCandidates.first?.item.toolSource?.key } ? visibleCandidates.first?.item.toolSource?.icon : nil, fallback: Set(visibleCandidates.map(\.icon)).count == 1 ? (visibleCandidates.first?.icon.symbolName ?? "hammer") : "hammer")
                             Text(summary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
                         }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
@@ -1098,7 +1100,7 @@ private struct WorkLogRowButton: View {
     var body: some View {
         Button(action: onToggle) {
             HStack(spacing: 6) {
-                Image(systemName: row.icon.symbolName)
+                ThreadToolActivityIcon(icon: row.activityIcon, fallback: row.icon.symbolName)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isDestructive ? T3Colors.danger : T3Colors.textTertiary)
                     .frame(width: 20, height: 20)
@@ -1645,5 +1647,22 @@ private struct ThreadWorkLogScrollObserver: UIViewRepresentable {
             onResolve = nil
             onScroll = nil
         }
+    }
+}
+
+
+private struct ThreadToolActivityIcon: View {
+    let icon: ToolActivityIcon?
+    let fallback: String
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    var body: some View {
+        if icon?._tag == "native-app", let app = icon?.app {
+            NativeAppToolIcon(app: app, fallback: fallback)
+        } else if let url = icon?.imageURL(dark: colorScheme == .dark) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image { image.resizable().scaledToFit() }
+                else { Image(systemName: fallback) }
+            }.frame(width: 16, height: 16).accessibilityHidden(true)
+        } else { Image(systemName: fallback).accessibilityHidden(true) }
     }
 }

@@ -1,3 +1,4 @@
+import type { ToolActivitySource } from "@t3tools/contracts";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import * as Equal from "effect/Equal";
 import {
@@ -128,6 +129,7 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
   )
     return null;
   const counts = new Map<string, number>();
+  const sources = new Map<string, ToolActivitySource>();
   const files = new Set<string>();
   const add = (action: string, count = 1) => counts.set(action, (counts.get(action) ?? 0) + count);
   for (const entry of entries) {
@@ -140,6 +142,10 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
     );
     if (presentation?.action) {
       add(presentation.action);
+      continue;
+    }
+    if (entry.toolSource) {
+      sources.set(entry.toolSource.key, entry.toolSource);
       continue;
     }
     if (presentation?.logo === "browser") {
@@ -164,39 +170,54 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
       add("read");
     else add("tool");
   }
-  const labels = [...counts]
-    .map(([action, count]) => {
-      switch (action) {
-        case "link-pr":
-          return `Linked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
-        case "unlink-pr":
-          return `Unlinked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
-        case "list-prs":
-          return count === 1
-            ? "Checked linked pull requests"
-            : `Checked linked pull requests ${count} times`;
-        case "browser":
-          return `Used browser ${count} ${count === 1 ? "time" : "times"}`;
-        case "edit":
-          return `Changed ${count} ${count === 1 ? "file" : "files"}`;
-        case "command":
-          return `Ran ${count} ${count === 1 ? "command" : "commands"}`;
-        case "code-search":
-          return `Searched code ${count} ${count === 1 ? "time" : "times"}`;
-        case "search":
-          return `Searched the web ${count} ${count === 1 ? "time" : "times"}`;
-        case "read":
-          return `Read ${count} ${count === 1 ? "file" : "files"}`;
-        default:
-          return `Used ${count} ${count === 1 ? "tool" : "tools"}`;
-      }
-    })
-    .map((label, index) => (index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1)));
-  return labels.length < 2
-    ? (labels[0] ?? null)
-    : labels.length === 2
-      ? labels.join(" and ")
-      : `${labels.slice(0, -1).join(", ")}, and ${labels.at(-1)}`;
+  const labels = [...counts].map(([action, count]) => {
+    switch (action) {
+      case "link-pr":
+        return `Linked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
+      case "unlink-pr":
+        return `Unlinked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
+      case "list-prs":
+        return count === 1
+          ? "Checked linked pull requests"
+          : `Checked linked pull requests ${count} times`;
+      case "browser":
+        return `Used browser ${count} ${count === 1 ? "time" : "times"}`;
+      case "edit":
+        return `Changed ${count} ${count === 1 ? "file" : "files"}`;
+      case "command":
+        return `Ran ${count} ${count === 1 ? "command" : "commands"}`;
+      case "code-search":
+        return `Searched code ${count} ${count === 1 ? "time" : "times"}`;
+      case "search":
+        return `Searched the web ${count} ${count === 1 ? "time" : "times"}`;
+      case "read":
+        return `Read ${count} ${count === 1 ? "file" : "files"}`;
+      default:
+        return `Used ${count} ${count === 1 ? "tool" : "tools"}`;
+    }
+  });
+  if (sources.size > 0) {
+    const values = [...sources.values()];
+    const names = values.map((source) => source.name);
+    const joined =
+      names.length < 3
+        ? names.join(" and ")
+        : `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
+    const suffix = values.every((source) => source.kind === "integration")
+      ? values.length === 1
+        ? " integration"
+        : " integrations"
+      : "";
+    labels.unshift(`Used ${joined}${suffix}`);
+  }
+  const sentenceLabels = labels.map((label, index) =>
+    index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1),
+  );
+  return sentenceLabels.length < 2
+    ? (sentenceLabels[0] ?? null)
+    : sentenceLabels.length === 2
+      ? sentenceLabels.join(" and ")
+      : `${sentenceLabels.slice(0, -1).join(", ")}, and ${sentenceLabels.at(-1)}`;
 }
 
 export function shouldPreserveAssistantLineBreaks(text: string): boolean {
