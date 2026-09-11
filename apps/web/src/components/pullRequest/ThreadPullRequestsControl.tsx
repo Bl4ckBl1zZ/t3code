@@ -1,6 +1,7 @@
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import {
   resolveThreadPullRequestChains,
+  resolveThreadPullRequestBadge,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequestChains";
 import { pullRequestListLines } from "./pullRequestListLines";
@@ -154,7 +155,13 @@ function LinkRow({
 }
 
 /** V2 snapshots render immediately; older environments query only while the list is open. */
-export function ThreadPullRequestsControl({ threadRef }: { threadRef: ScopedThreadRef }) {
+export function ThreadPullRequestsControl({
+  threadRef,
+  compact = false,
+}: {
+  threadRef: ScopedThreadRef;
+  compact?: boolean;
+}) {
   const thread = useThreadShell(threadRef);
   const configs = useServerConfigs();
   const [open, setOpen] = useState(false);
@@ -167,15 +174,34 @@ export function ThreadPullRequestsControl({ threadRef }: { threadRef: ScopedThre
   const lines = pullRequestListLines(
     resolveThreadPullRequestChains(visibleThreadPullRequests(allThreadPullRequestsOf(thread))),
   );
+  const badge = resolveThreadPullRequestBadge(thread.pullRequests);
+  const isStack = badge?.kind === "stack";
+  const tone = isStack
+    ? {
+        open: "text-emerald-600 dark:text-emerald-300/90",
+        merged: "text-violet-600 dark:text-violet-300/90",
+        closed: "text-red-600 dark:text-red-300/90",
+      }[badge.state]
+    : "text-muted-foreground";
+  const label = isStack
+    ? `Stack of ${badge.layers} pull requests, ${badge.state}`
+    : `Linked pull requests (${links.length})`;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
-          <Button variant="ghost" size="sm" aria-label={`Linked pull requests (${links.length})`} />
+          <Button
+            variant="ghost"
+            size={compact ? "xs" : "sm"}
+            aria-label={label}
+            className={compact ? `h-auto gap-0.5 px-0.5 py-0 text-xs ${tone}` : tone}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          />
         }
       >
-        <LinkIcon className="size-3.5" />
-        <span className="tabular-nums">{links.length}</span>
+        {isStack ? <LayersIcon className="size-3.5" /> : <LinkIcon className="size-3.5" />}
+        <span className="tabular-nums">{isStack ? badge.layers : links.length}</span>
       </PopoverTrigger>
       <PopoverPopup align="end" className="w-[min(28rem,calc(100vw-2rem))]">
         <div className="mb-2 flex items-center justify-between gap-2">

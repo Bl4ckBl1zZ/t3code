@@ -2401,7 +2401,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         link.snapshot.map { snapshot in
                             FeaturePullRequest(number: link.number, title: snapshot.title,
                                 state: snapshot.state.rawValue, url: URL(string: link.url),
-                                updatedAt: snapshot.updatedAt.flatMap(NativeWorkspaceMapper.isoDate))
+                                updatedAt: snapshot.updatedAt.flatMap(NativeWorkspaceMapper.isoDate),
+                                isDraft: snapshot.isDraft)
                         }
                     }
                     cachedByThreadID[threadID] = FeatureLinkedPullRequestSettlement.aggregate(reads)

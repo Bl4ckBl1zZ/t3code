@@ -897,6 +897,7 @@ public struct FeaturePullRequest: Sendable, Equatable, Hashable, Codable {
     public var number: Int
     public var title: String
     public var state: String
+    public var isDraft: Bool? = nil
     public var url: URL?
     /// Last provider-side activity. For a merged or closed request this bounds
     /// when it reached that state, which is what
@@ -910,13 +911,15 @@ public struct FeaturePullRequest: Sendable, Equatable, Hashable, Codable {
         title: String,
         state: String,
         url: URL? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        isDraft: Bool? = nil
     ) {
         self.number = number
         self.title = title
         self.state = state
         self.url = url
         self.updatedAt = updatedAt
+        self.isDraft = isDraft
     }
 }
 

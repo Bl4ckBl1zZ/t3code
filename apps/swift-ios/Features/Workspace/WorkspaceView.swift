@@ -1523,12 +1523,20 @@ struct FeatureThreadRow: View, Equatable {
                 // row does not already say. Once the work has a change request,
                 // that is what this line reports instead.
                 if let pullRequest = context.pullRequest {
-                    Image(systemName: "arrow.triangle.pull")
+                    let stackSize = FeaturePullRequestLines.stackSize(thread.allLinkedPullRequests)
+                    let draft = pullRequest.state == "open" && pullRequest.isDraft == true
+                    let icon = stackSize != nil ? "square.3.layers.3d" : pullRequest.state == "merged" ? "arrow.triangle.merge" : pullRequest.state == "closed" ? "xmark.circle" : draft ? "pencil.circle" : "arrow.triangle.pull"
+                    let color = draft ? T3Colors.textSecondary : Self.pullRequestColor(pullRequest.state)
+                    Image(systemName: icon)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Self.pullRequestColor(pullRequest.state))
-                    Text("#\(pullRequest.number)")
+                        .foregroundStyle(color)
+                    Text(stackSize.map { "\($0)" } ?? "#\(pullRequest.number)")
                         .monospacedDigit()
-                        .foregroundStyle(Self.pullRequestColor(pullRequest.state))
+                        .foregroundStyle(color)
+                    if stackSize == nil && thread.allLinkedPullRequests.count > 1 {
+                        Text("+\(thread.allLinkedPullRequests.count - 1)")
+                            .foregroundStyle(T3Colors.textSecondary)
+                    }
                     Text(pullRequest.title)
                         .lineLimit(1)
                 } else {
@@ -1887,7 +1895,7 @@ struct FeatureThreadRow: View, Equatable {
             }
             if let pullRequest = context.pullRequest {
                 values.append(
-                    "Pull request #\(pullRequest.number) \(pullRequest.state). \(pullRequest.title)"
+                    "Pull request #\(pullRequest.number) \(pullRequest.state == "open" && pullRequest.isDraft == true ? "draft" : pullRequest.state). \(pullRequest.title)"
                 )
             } else {
                 values.append(

@@ -1,3 +1,4 @@
+import { ThreadPullRequestsControl } from "./pullRequest/ThreadPullRequestsControl";
 import {
   applyDurableThreadOrder,
   planDurableThreadReorder,
@@ -1376,7 +1377,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // A real link so cmd/ctrl+click and middle-click open the host in the
   // browser. A plain click still opens T3's pull request view.
   const prBadge =
-    prStatus && pr ? (
+    (thread.linkedPullRequests?.length ?? 0) > 1 ? (
+      <ThreadPullRequestsControl threadRef={threadRef} compact />
+    ) : prStatus && pr ? (
       <a
         href={pr.url}
         target="_blank"
@@ -1407,14 +1410,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const prLine =
     !isHermes && prStatus && pr ? (
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left">
-        <button
-          type="button"
-          onClick={handlePrClick}
-          className={cn("shrink-0 tabular-nums hover:underline", prStatus.colorClass)}
-          aria-label={prStatus.tooltip}
-        >
-          #{pr.number}
-        </button>
+        {(thread.linkedPullRequests?.length ?? 0) > 1 ? (
+          <ThreadPullRequestsControl threadRef={threadRef} compact />
+        ) : (
+          <button
+            type="button"
+            onClick={handlePrClick}
+            className={cn("shrink-0 tabular-nums hover:underline", prStatus.colorClass)}
+            aria-label={prStatus.tooltip}
+          >
+            #{pr.number}
+          </button>
+        )}
         <span className="min-w-0 truncate whitespace-nowrap">{pr.title}</span>
       </span>
     ) : null;

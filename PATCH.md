@@ -1142,3 +1142,7 @@ Saved V2 branch candidates feed web sidebar/chat/command-palette status and nati
 and sidebar observations without becoming explicit links. Native explicit links use pushed V2
 snapshots; legacy and branch-only references retain scoped host reads. Web draft/closed/merged
 icons share the detail presentation, and cached draft changes invalidate row snapshots.
+
+PR stack counts now use the fork’s web collection popover from sidebar/header controls and
+native sidebar chain presentation. Native draft metadata survives both VCS/detail and pushed
+V2 snapshot mappings. The upstream standalone hydrated collection panel remains unported.

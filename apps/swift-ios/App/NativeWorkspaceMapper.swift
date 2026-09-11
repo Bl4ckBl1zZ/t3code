@@ -110,7 +110,8 @@ enum NativeWorkspaceMapper {
             title: changeRequest.title,
             state: changeRequest.state,
             url: URL(string: changeRequest.url),
-            updatedAt: changeRequest.updatedAt.flatMap(isoDate)
+            updatedAt: changeRequest.updatedAt.flatMap(isoDate),
+            isDraft: changeRequest.isDraft
         )
     }
 
@@ -124,7 +125,8 @@ enum NativeWorkspaceMapper {
             title: detail.title,
             state: detail.state.rawValue,
             url: URL(string: detail.url),
-            updatedAt: isoDate(detail.updatedAt)
+            updatedAt: isoDate(detail.updatedAt),
+            isDraft: detail.isDraft
         )
     }
 

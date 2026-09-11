@@ -9,6 +9,15 @@ final class FeaturePullRequestLinesTests: XCTestCase {
                 isDraft: false, updatedAt: nil, author: nil, additions: nil, deletions: nil, checksState: nil, reviewDecision: nil, mergeability: nil))
     }
 
+    func testStackBadgeCountsOnlyOneCompleteVisibleChain() {
+        XCTAssertNil(FeaturePullRequestLines.stackSize([link(1)]))
+        XCTAssertNil(FeaturePullRequestLines.stackSize([link(1), link(2)]))
+        XCTAssertEqual(FeaturePullRequestLines.stackSize([link(1), link(2, base: "feature/1")]), 2)
+        var dismissed = link(3)
+        dismissed.source = "stack-dismissed"
+        XCTAssertEqual(FeaturePullRequestLines.stackSize([link(1), dismissed, link(2, base: "feature/1")]), 2)
+    }
+
     func testOrdersDerivedChainBottomToTop() {
         let lines = FeaturePullRequestLines.resolve([link(3, base: "feature/2"), link(1), link(2, base: "feature/1")])
         XCTAssertEqual(lines.map { $0.link.number }, [1, 2, 3])

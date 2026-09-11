@@ -44,7 +44,9 @@ chain order. Native mirrors are covered by generated wire fixtures and host-side
 Web sidebar, chat and command-palette indicators consume saved branch candidates when no explicit
 link is selected. Swift observes candidates separately from its explicit collection and uses pushed
 V2 snapshots for linked status; only branch candidates and legacy environments retain host polling.
-Server settlement, full hosted-reference detail routing and richer sidebar stack badges remain
+Web sidebar multi-link controls reuse the lazy collection popover; native rows show chain counts
+and preserve draft state through cached and host-read mappings.
+Server settlement and full hosted-reference detail routing remain
 separate parity work. Expo retains compatibility through the derived legacy references.
 
 `pullRequests.stack` also supports on-demand hydrated stack details. `pullRequestStackActions`

@@ -74,6 +74,14 @@ public struct FeaturePullRequestLine: Identifiable, Sendable, Equatable {
 /// Orders host-native stacks first by their host order, then infers remaining chains
 /// from base branches. Ambiguous heads and cycles remain visible as independent requests.
 public enum FeaturePullRequestLines {
+    /// A single chain gets a layers badge; unrelated requests retain their own identities.
+    public static func stackSize(_ input: [FeatureLinkedPullRequest]) -> Int? {
+        let visible = input.filter { $0.source != "stack-dismissed" }
+        guard visible.count > 1, let first = resolve(visible).first,
+              first.chainSize == visible.count else { return nil }
+        return visible.count
+    }
+
     public static func resolve(_ input: [FeatureLinkedPullRequest]) -> [FeaturePullRequestLine] {
         let links = input.filter { $0.source != "stack-dismissed" }
         var placed = Set<String>()

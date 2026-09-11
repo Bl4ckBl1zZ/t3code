@@ -146,3 +146,7 @@ The tools do not create, close, or merge a request.
 Thread indicators can keep showing the request for the thread’s saved branch when the checkout
 moves elsewhere. Linking a request explicitly still takes priority. Draft requests have their
 own label and icon in desktop indicators. Native linked status updates arrive with the thread.
+
+A layers badge shows how many requests belong to one stack. Desktop sidebar counts open the
+linked-request list. Native sidebar rows show the same stack count, or the current request and
+a remainder count when the links are unrelated.
