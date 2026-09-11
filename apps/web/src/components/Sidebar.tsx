@@ -1108,6 +1108,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     thread.environmentId,
     thread.linkedPullRequest,
+    thread.pullRequests,
   );
   const pr = resolveDisplayedThreadPr({
     threadBranch: thread.branch,

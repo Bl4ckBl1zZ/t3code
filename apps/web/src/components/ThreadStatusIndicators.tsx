@@ -1,3 +1,4 @@
+import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequestChains";
 import { ConnectedEnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import {
   scopeProjectRef,
@@ -5,7 +6,12 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
 import { pullRequestDetailToVcsStatus } from "@t3tools/client-runtime/state/pull-requests";
-import type { EnvironmentId, ThreadLinkedPullRequest, VcsStatusResult } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ThreadLinkedPullRequest,
+  ThreadPullRequestLink,
+  VcsStatusResult,
+} from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
 import { useMemo } from "react";
@@ -52,9 +58,14 @@ export interface LinkedThreadPullRequestStatus {
 export function useLinkedThreadPullRequest(
   environmentId: EnvironmentId | null,
   linkedPullRequest: ThreadLinkedPullRequest | null | undefined,
+  pullRequests?: readonly ThreadPullRequestLink[],
 ): LinkedThreadPullRequestStatus | null {
+  const current = useMemo(
+    () => resolveThreadCurrentPullRequestLink(pullRequests ?? []),
+    [pullRequests],
+  );
   const detail = useEnvironmentQuery(
-    environmentId === null || linkedPullRequest == null
+    current !== null || environmentId === null || linkedPullRequest == null
       ? null
       : linkedPullRequestDetailAtom({
           environmentId,
@@ -68,18 +79,47 @@ export function useLinkedThreadPullRequest(
 
   return useMemo(
     () =>
-      detail === null
-        ? null
-        : {
-            pr: pullRequestDetailToVcsStatus(detail),
-            sourceControlProvider: {
-              kind: detail.provider,
-              name: detail.provider,
-              baseUrl: "",
+      current !== null
+        ? linkedPullRequestSnapshotStatus(current)
+        : detail === null
+          ? null
+          : {
+              pr: pullRequestDetailToVcsStatus(detail),
+              sourceControlProvider: {
+                kind: detail.provider,
+                name: detail.provider,
+                baseUrl: "",
+              },
             },
-          },
-    [detail],
+    [current, detail],
   );
+}
+
+export function linkedPullRequestSnapshotStatus(
+  link: ThreadPullRequestLink,
+): LinkedThreadPullRequestStatus | null {
+  const snapshot = link.snapshot;
+  if (snapshot === null) return null;
+  const kind = link.url.includes("/-/merge_requests/")
+    ? "gitlab"
+    : link.url.includes("/pullrequest/")
+      ? "azure-devops"
+      : link.url.includes("/pull-requests/")
+        ? "bitbucket"
+        : "github";
+  return {
+    pr: {
+      number: link.number,
+      url: link.url,
+      title: snapshot.title,
+      state: snapshot.state,
+      isDraft: snapshot.isDraft,
+      headRef: snapshot.headBranch,
+      baseRef: snapshot.baseBranch,
+      ...(snapshot.updatedAt === null ? {} : { updatedAt: snapshot.updatedAt }),
+    },
+    sourceControlProvider: { kind, name: kind, baseUrl: "" },
+  };
 }
 
 export function settledPrHoverColorClass(state: NonNullable<ThreadPr>["state"]): string {
@@ -541,6 +581,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
   const linkedPullRequest = useLinkedThreadPullRequest(
     thread.environmentId,
     thread.linkedPullRequest,
+    thread.pullRequests,
   );
   const gitStatus = useEnvironmentQuery(
     thread.linkedPullRequest == null &&

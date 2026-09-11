@@ -10,7 +10,7 @@ export interface McpProviderSessionConfig {
   readonly endpoint: string;
   readonly authorizationHeader: string;
   readonly audience?: string;
-  readonly capabilities?: ReadonlyArray<"preview" | "orchestration" | "worktree">;
+  readonly capabilities?: ReadonlyArray<"preview" | "orchestration" | "worktree" | "pull-requests">;
   readonly issuedAt?: number;
 }
 

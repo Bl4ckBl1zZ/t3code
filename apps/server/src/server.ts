@@ -1,3 +1,5 @@
+import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
+import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import { EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
@@ -753,7 +755,15 @@ export const makeServerLayer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(PullRequestSyncReactor.layer, ThreadPullRequestReactor.layer).pipe(
+          Layer.provide(PullRequestServiceLive),
+        ),
+      ),
+      Layer.provideMerge(RuntimeDependenciesLive),
+      Layer.provide(launcherLayer),
+    );
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,

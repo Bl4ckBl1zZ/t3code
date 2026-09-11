@@ -3768,3 +3768,88 @@ it.effect("forgets detail after a host partially writes and then reports a failu
     assert.strictEqual((yield* service.detail(ref)).title, "After");
   }),
 );
+
+it.effect("refreshes linked summaries with the narrow provider read and shares its cache", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p", title: "Repo", workspaceRoot: "/repo", repository: "org/repo" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestSummary: () =>
+            Effect.sync(() => {
+              reads += 1;
+              return { ...changeRequest(42, "2026-09-11T00:00:00Z"), isDraft: true };
+            }),
+        }),
+      ],
+    });
+    const ref = { projectId: "p" as ProjectId, repository: "org/repo", number: 42 };
+    const first = yield* service.summary(ref);
+    const second = yield* service.summary(ref);
+    assert.equal(reads, 1);
+    assert.isTrue(first.isDraft);
+    assert.deepEqual(second, first);
+    yield* service.invalidate({ reference: ref });
+    yield* service.summary(ref);
+    assert.equal(reads, 2);
+  }),
+);
+
+it.effect(
+  "routes a hosted linked summary explicitly without weakening hostless repository checks",
+  () =>
+    Effect.gen(function* () {
+      const requested: string[] = [];
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p", title: "Repo", workspaceRoot: "/repo", repository: "org/repo" }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            getChangeRequestSummary: (input) =>
+              Effect.sync(() => {
+                requested.push(`${input.host}/${input.repository}`);
+                return changeRequest(42, "2026-09-11T00:00:00Z");
+              }),
+          }),
+        ],
+      });
+      const ref = { projectId: "p" as ProjectId, repository: "other/repo", number: 42 };
+      assert.isTrue((yield* service.summary(ref).pipe(Effect.result))._tag === "Failure");
+      yield* service.summary({ ...ref, host: "github.com" });
+      assert.deepEqual(requested, ["github.com/other/repo"]);
+      assert.isTrue(
+        (yield* service.summary({ ...ref, host: "unknown.example" }).pipe(Effect.result))._tag ===
+          "Failure",
+      );
+      assert.equal(requested.length, 1);
+    }),
+);
+
+it.effect("keeps lightweight stack reads separate from hydrated panel stacks", () =>
+  Effect.gen(function* () {
+    const reads: boolean[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p", title: "Repo", workspaceRoot: "/repo", repository: "org/repo" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getStack: (input) =>
+            Effect.sync(() => {
+              reads.push(input.includeDetails !== false);
+              return null;
+            }),
+        }),
+      ],
+    });
+    const ref = { projectId: "p" as ProjectId, repository: "org/repo", number: 42 };
+    yield* service.stack(ref, { includeDetails: false });
+    yield* service.stack(ref);
+    yield* service.stack(ref, { includeDetails: false });
+    assert.deepEqual(reads, [false, true]);
+  }),
+);

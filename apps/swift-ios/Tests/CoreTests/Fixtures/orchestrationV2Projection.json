@@ -14,6 +14,173 @@
     "interactionMode": "default",
     "branch": null,
     "worktreePath": null,
+    "pullRequests": [
+      {
+        "host": "github.com",
+        "repository": "example/repo",
+        "number": 41,
+        "projectId": "project-v2",
+        "url": "https://github.com/example/repo/pull/41",
+        "source": "agent",
+        "linkedAt": "2026-06-20T00:00:00.000Z",
+        "snapshot": {
+          "state": "open",
+          "title": "Change 41",
+          "headBranch": "feature/41",
+          "baseBranch": "main",
+          "isDraft": false,
+          "updatedAt": "2026-06-20T00:00:00.000Z",
+          "syncedAt": "2026-06-20T00:00:00.000Z",
+          "author": {
+            "login": "octocat",
+            "name": null,
+            "avatarUrl": null
+          },
+          "additions": 12,
+          "deletions": 3,
+          "changedFiles": 2,
+          "reviewDecision": "approved",
+          "checksState": "passing",
+          "mergeability": "mergeable"
+        },
+        "stack": {
+          "kind": "native",
+          "id": "stack-9",
+          "number": 9,
+          "url": "https://github.com/example/repo/stack/9",
+          "base": "main",
+          "layers": [
+            {
+              "number": 41,
+              "headBranch": "feature/41",
+              "state": "open"
+            },
+            {
+              "number": 42,
+              "headBranch": "feature/42",
+              "state": "open"
+            },
+            {
+              "number": 43,
+              "headBranch": "feature/43",
+              "state": "open"
+            }
+          ]
+        }
+      },
+      {
+        "host": "github.com",
+        "repository": "example/repo",
+        "number": 42,
+        "projectId": "project-v2",
+        "url": "https://github.com/example/repo/pull/42",
+        "source": "stack",
+        "linkedAt": "2026-06-20T00:00:00.000Z",
+        "snapshot": {
+          "state": "open",
+          "title": "Change 42",
+          "headBranch": "feature/42",
+          "baseBranch": "feature/41",
+          "isDraft": true,
+          "updatedAt": "2026-06-20T00:00:00.000Z",
+          "syncedAt": "2026-06-20T00:00:00.000Z",
+          "author": {
+            "login": "octocat",
+            "name": null,
+            "avatarUrl": null
+          },
+          "additions": 12,
+          "deletions": 3,
+          "changedFiles": 2,
+          "reviewDecision": "approved",
+          "checksState": "passing",
+          "mergeability": "mergeable"
+        },
+        "stack": {
+          "kind": "native",
+          "id": "stack-9",
+          "number": 9,
+          "url": "https://github.com/example/repo/stack/9",
+          "base": "main",
+          "layers": [
+            {
+              "number": 41,
+              "headBranch": "feature/41",
+              "state": "open"
+            },
+            {
+              "number": 42,
+              "headBranch": "feature/42",
+              "state": "open"
+            },
+            {
+              "number": 43,
+              "headBranch": "feature/43",
+              "state": "open"
+            }
+          ]
+        }
+      },
+      {
+        "host": "github.com",
+        "repository": "example/repo",
+        "number": 43,
+        "projectId": "project-v2",
+        "url": "https://github.com/example/repo/pull/43",
+        "source": "stack-dismissed",
+        "linkedAt": "2026-06-20T00:00:00.000Z",
+        "snapshot": {
+          "state": "open",
+          "title": "Change 43",
+          "headBranch": "feature/43",
+          "baseBranch": "feature/42",
+          "isDraft": false,
+          "updatedAt": "2026-06-20T00:00:00.000Z",
+          "syncedAt": "2026-06-20T00:00:00.000Z",
+          "author": {
+            "login": "octocat",
+            "name": null,
+            "avatarUrl": null
+          },
+          "additions": 12,
+          "deletions": 3,
+          "changedFiles": 2,
+          "reviewDecision": "approved",
+          "checksState": "passing",
+          "mergeability": "mergeable"
+        },
+        "stack": {
+          "kind": "native",
+          "id": "stack-9",
+          "number": 9,
+          "url": "https://github.com/example/repo/stack/9",
+          "base": "main",
+          "layers": [
+            {
+              "number": 41,
+              "headBranch": "feature/41",
+              "state": "open"
+            },
+            {
+              "number": 42,
+              "headBranch": "feature/42",
+              "state": "open"
+            },
+            {
+              "number": 43,
+              "headBranch": "feature/43",
+              "state": "open"
+            }
+          ]
+        }
+      }
+    ],
+    "branchPullRequest": {
+      "projectId": "project-v2",
+      "repository": "example/repo",
+      "number": 42,
+      "url": "https://github.com/example/repo/pull/42"
+    },
     "linkedPullRequest": {
       "projectId": "project-v2",
       "repository": "example/repo",

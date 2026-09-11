@@ -52,6 +52,19 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertNil(dismiss["answers"])
     }
 
+    func testPullRequestLinkSourcesSnapshotsAndDismissedLayersRoundTrip() throws {
+        let thread = try projection().thread
+        let links = try XCTUnwrap(thread.pullRequests)
+        XCTAssertEqual(links.filter(\.isVisible).map(\.number), [41, 42])
+        XCTAssertEqual(links.map(\.source), ["agent", "stack", "stack-dismissed"])
+        XCTAssertEqual(links[1].snapshot?.isDraft, true)
+        XCTAssertEqual(links[1].snapshot?.additions, 12)
+        XCTAssertEqual(links[1].snapshot?.checksState, "passing")
+        XCTAssertEqual(links[0].stack?.layers.map(\.number), [41, 42, 43])
+        XCTAssertEqual(thread.branchPullRequest?.number, 42)
+        XCTAssertEqual(try JSONDecoder().decode([OrchestrationV2ThreadPullRequestLink].self, from: JSONEncoder().encode(links)), links)
+    }
+
     func testToolPresentationMetadataRoundTripsAndOldRowsRemainReadable() throws {
         let item = try XCTUnwrap(try projection().turnItems.first { $0.type == "dynamic_tool" })
         XCTAssertEqual(item.toolSurface, "browser")

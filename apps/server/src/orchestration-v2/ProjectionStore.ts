@@ -974,6 +974,12 @@ export function threadShellFromProjection(
     ...(projection.thread.worktreeStatus === undefined
       ? {}
       : { worktreeStatus: projection.thread.worktreeStatus }),
+    ...(projection.thread.pullRequests === undefined
+      ? {}
+      : { pullRequests: projection.thread.pullRequests }),
+    ...(projection.thread.branchPullRequest === undefined
+      ? {}
+      : { branchPullRequest: projection.thread.branchPullRequest }),
     linkedPullRequest: projection.thread.linkedPullRequest ?? null,
     ...(projection.thread.linkedPullRequests === undefined
       ? {}
@@ -1164,6 +1170,12 @@ function shellFromState(input: {
     ...(input.state.thread.worktreeStatus === undefined
       ? {}
       : { worktreeStatus: input.state.thread.worktreeStatus }),
+    ...(input.state.thread.pullRequests === undefined
+      ? {}
+      : { pullRequests: input.state.thread.pullRequests }),
+    ...(input.state.thread.branchPullRequest === undefined
+      ? {}
+      : { branchPullRequest: input.state.thread.branchPullRequest }),
     linkedPullRequest: input.state.thread.linkedPullRequest ?? null,
     ...(input.state.thread.linkedPullRequests === undefined
       ? {}

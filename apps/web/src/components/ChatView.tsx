@@ -5354,6 +5354,7 @@ function ChatViewContent(props: ChatViewProps) {
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     activeThreadRef?.environmentId ?? null,
     linkedThreadPullRequest,
+    activeThreadShell?.pullRequests,
   );
   const activeThreadPr = resolveDisplayedThreadPr({
     threadBranch: activeThread?.branch ?? null,

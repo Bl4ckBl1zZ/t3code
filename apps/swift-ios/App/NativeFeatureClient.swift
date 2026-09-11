@@ -4942,9 +4942,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 .threadTitleRegeneration,
             linkedPullRequest: mapLinkedPullRequest(
                 thread.linkedPullRequest,
-                environment: environment
+                environment: environment,
+                metadata: thread.pullRequests?.first { $0.number == thread.linkedPullRequest?.number && $0.url == thread.linkedPullRequest?.url }
             ),
-            linkedPullRequests: thread.linkedPullRequests.map { links in links.compactMap { mapLinkedPullRequest($0, environment: environment) } },
+            linkedPullRequests: mapThreadPullRequests(thread.pullRequests, legacy: thread.linkedPullRequests, projectID: thread.projectId, environment: environment),
             supportsMultiplePullRequests: environment.descriptor?.capabilities.threadPullRequestsV2,
             supportsPullRequestStackActions: environment.descriptor?.capabilities.pullRequestStackActions,
             supportsPullRequestLinking: environment.descriptor?.capabilities
@@ -4966,7 +4967,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     /// than at each of the three places that read it back.
     private func mapLinkedPullRequest(
         _ linked: OrchestrationV2ThreadLinkedPullRequest?,
-        environment: Environment
+        environment: Environment,
+        metadata: OrchestrationV2ThreadPullRequestLink? = nil
     ) -> FeatureLinkedPullRequest? {
         guard let linked else { return nil }
         return FeatureLinkedPullRequest(
@@ -4976,8 +4978,40 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             ),
             repository: linked.repository,
             number: linked.number,
-            url: linked.url
+            url: linked.url,
+            host: metadata?.host,
+            source: metadata?.source,
+            linkedAt: metadata?.linkedAt,
+            snapshot: metadata?.snapshot.map { snapshot in
+                FeaturePullRequestSnapshot(
+                    state: snapshot.state.rawValue, title: snapshot.title,
+                    headBranch: snapshot.headBranch, baseBranch: snapshot.baseBranch,
+                    isDraft: snapshot.isDraft, updatedAt: snapshot.updatedAt,
+                    author: snapshot.author?.login, additions: snapshot.additions, deletions: snapshot.deletions,
+                    checksState: snapshot.checksState, reviewDecision: snapshot.reviewDecision,
+                    mergeability: snapshot.mergeability?.rawValue
+                )
+            },
+            stack: metadata?.stack.map { stack in
+                FeaturePullRequestStack(id: stack.id, number: stack.number, url: stack.url,
+                                        base: stack.base, numbers: stack.layers.map(\.number))
+            }
         )
+    }
+
+    private func mapThreadPullRequests(
+        _ links: [OrchestrationV2ThreadPullRequestLink]?,
+        legacy: [OrchestrationV2ThreadLinkedPullRequest]?,
+        projectID: String,
+        environment: Environment
+    ) -> [FeatureLinkedPullRequest]? {
+        guard let links else { return legacy.map { $0.compactMap { mapLinkedPullRequest($0, environment: environment) } } }
+        return links.filter(\.isVisible).compactMap { link in
+            mapLinkedPullRequest(
+                OrchestrationV2ThreadLinkedPullRequest(projectId: link.projectId ?? projectID, repository: link.repository, number: link.number, url: link.url),
+                environment: environment, metadata: link
+            )
+        }
     }
 
     private func mapApprovalKind(_ requestKind: String) -> FeatureApprovalKind {
@@ -5074,9 +5108,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 .threadTitleRegeneration,
             linkedPullRequest: mapLinkedPullRequest(
                 thread.linkedPullRequest,
-                environment: environment
+                environment: environment,
+                metadata: thread.pullRequests?.first { $0.number == thread.linkedPullRequest?.number && $0.url == thread.linkedPullRequest?.url }
             ),
-            linkedPullRequests: thread.linkedPullRequests.map { links in links.compactMap { mapLinkedPullRequest($0, environment: environment) } },
+            linkedPullRequests: mapThreadPullRequests(thread.pullRequests, legacy: thread.linkedPullRequests, projectID: thread.projectId, environment: environment),
             supportsMultiplePullRequests: environment.descriptor?.capabilities.threadPullRequestsV2,
             supportsPullRequestStackActions: environment.descriptor?.capabilities.pullRequestStackActions,
             supportsPullRequestLinking: environment.descriptor?.capabilities

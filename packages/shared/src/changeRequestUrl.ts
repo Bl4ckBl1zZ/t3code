@@ -95,3 +95,17 @@ function claim(host: string, match: RegExpExecArray | null): ChangeRequestLink |
     ? { host, repository: repository.toLowerCase(), number }
     : null;
 }
+
+export function siblingPullRequestUrl(url: string, number: number): string | null {
+  const reference = parseChangeRequestUrl(url);
+  if (reference === null || !Number.isSafeInteger(number) || number < 1) return null;
+  const sibling = new URL(url);
+  const route = /^\/(-\/merge_requests|pull|pull-requests|pullrequest)\/\d+(?:\/|$)/u.exec(
+    sibling.pathname.slice(reference.repository.length + 1),
+  )?.[1];
+  if (route === undefined) return null;
+  sibling.pathname = `/${reference.repository}/${route}/${number}`;
+  sibling.search = "";
+  sibling.hash = "";
+  return sibling.toString();
+}

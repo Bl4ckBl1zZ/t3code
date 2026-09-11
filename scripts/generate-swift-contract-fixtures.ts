@@ -340,6 +340,54 @@ const projection = {
     interactionMode: "default" as const,
     branch: null,
     worktreePath: null,
+    pullRequests: [41, 42, 43].map((number) => ({
+      projectId,
+      host: "github.com",
+      repository: "example/repo",
+      number,
+      url: `https://github.com/example/repo/pull/${number}`,
+      source:
+        number === 43
+          ? ("stack-dismissed" as const)
+          : number === 42
+            ? ("stack" as const)
+            : ("agent" as const),
+      linkedAt: DateTime.formatIso(now),
+      snapshot: {
+        state: "open" as const,
+        title: `Change ${number}`,
+        headBranch: `feature/${number}`,
+        baseBranch: number === 41 ? "main" : `feature/${number - 1}`,
+        isDraft: number === 42,
+        updatedAt: DateTime.formatIso(now),
+        syncedAt: DateTime.formatIso(now),
+        author: { login: "octocat", name: null, avatarUrl: null },
+        additions: 12,
+        deletions: 3,
+        changedFiles: 2,
+        reviewDecision: "approved" as const,
+        checksState: "passing" as const,
+        mergeability: "mergeable" as const,
+      },
+      stack: {
+        kind: "native" as const,
+        id: "stack-9",
+        number: 9,
+        url: "https://github.com/example/repo/stack/9",
+        base: "main",
+        layers: [41, 42, 43].map((n) => ({
+          number: n,
+          headBranch: `feature/${n}`,
+          state: "open" as const,
+        })),
+      },
+    })),
+    branchPullRequest: {
+      projectId,
+      repository: "example/repo",
+      number: 42,
+      url: "https://github.com/example/repo/pull/42",
+    },
     linkedPullRequests: [41, 42].map((number) => ({
       projectId,
       repository: "example/repo",

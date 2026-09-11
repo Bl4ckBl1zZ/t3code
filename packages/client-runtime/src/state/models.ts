@@ -12,6 +12,7 @@ import type {
   RunId,
   ThreadId,
   ThreadLinkedPullRequest,
+  ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
@@ -81,6 +82,8 @@ export interface EnvironmentThreadShell {
   /** Pull request a user pinned to this thread; null when nothing is linked. */
   readonly linkedPullRequest: ThreadLinkedPullRequest | null;
   readonly linkedPullRequests?: readonly ThreadLinkedPullRequest[] | undefined;
+  readonly pullRequests?: readonly ThreadPullRequestLink[] | undefined;
+  readonly branchPullRequest?: ThreadLinkedPullRequest | null | undefined;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
@@ -236,6 +239,10 @@ export function presentThreadShell(
     ...(thread.linkedPullRequests === undefined
       ? {}
       : { linkedPullRequests: thread.linkedPullRequests }),
+    ...(thread.pullRequests === undefined ? {} : { pullRequests: thread.pullRequests }),
+    ...(thread.branchPullRequest === undefined
+      ? {}
+      : { branchPullRequest: thread.branchPullRequest }),
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
     activeProviderThreadId: thread.activeProviderThreadId,

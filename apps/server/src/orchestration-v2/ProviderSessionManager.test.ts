@@ -782,7 +782,10 @@ it.effect(
         assert.isDefined(token);
         const resolved = yield* registry.resolve(token!, registry.audience);
         assert.equal(resolved?.threadId, threadId);
-        assert.deepEqual(resolved?.capabilities, new Set(["preview", "orchestration", "worktree"]));
+        assert.deepEqual(
+          resolved?.capabilities,
+          new Set(["preview", "orchestration", "pull-requests", "worktree"]),
+        );
 
         yield* manager.close(providerSessionId);
         assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId));
@@ -835,10 +838,16 @@ it.effect(
         // cost the thread its orchestration and worktree tools.
         const captured = (yield* Ref.get(mcpConfigs))[0];
         assert.isDefined(captured);
-        assert.deepEqual([...(captured?.capabilities ?? [])], ["orchestration", "worktree"]);
+        assert.deepEqual(
+          [...(captured?.capabilities ?? [])],
+          ["orchestration", "pull-requests", "worktree"],
+        );
         const token = captured?.authorizationHeader.replace(/^Bearer\s+/, "");
         const resolved = yield* registry.resolve(token!, registry.audience);
-        assert.deepEqual(resolved?.capabilities, new Set(["orchestration", "worktree"]));
+        assert.deepEqual(
+          resolved?.capabilities,
+          new Set(["orchestration", "pull-requests", "worktree"]),
+        );
 
         yield* manager.close(providerSessionId);
       });
@@ -938,12 +947,12 @@ it.effect(
         });
 
         const config = (yield* Ref.get(mcpConfigs))[0];
-        assert.deepEqual(config?.capabilities, ["orchestration", "preview"]);
+        assert.deepEqual(config?.capabilities, ["orchestration", "preview", "pull-requests"]);
         const token = config?.authorizationHeader.replace(/^Bearer\s+/, "");
         assert.isDefined(token);
         assert.deepEqual(
           (yield* registry.resolve(token!, registry.audience))?.capabilities,
-          new Set(["preview", "orchestration"]),
+          new Set(["preview", "orchestration", "pull-requests"]),
         );
         yield* manager.close(providerSessionId);
       });

@@ -477,6 +477,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     thread.environmentId,
     thread.linkedPullRequest,
+    thread.pullRequests,
   );
   const pr =
     thread.linkedPullRequest == null

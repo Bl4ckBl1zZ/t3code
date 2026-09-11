@@ -54,3 +54,7 @@ export * from "./hermesSessions.ts";
 export * from "./providerUsageLimits.ts";
 
 export * from "./toolActivity.ts";
+
+export * from "./threadPullRequestLinks.ts";
+
+export * from "./pullRequestMcp.ts";

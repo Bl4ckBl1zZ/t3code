@@ -89,6 +89,29 @@ export interface ProviderChangeRequest {
   readonly checksState?: PullRequestChecksState | null | undefined;
 }
 
+/** The fields needed to keep a linked thread's pull request status live. */
+export interface ProviderChangeRequestSummary {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly state: PullRequestState;
+  /** Present when the host says an open pull request is still a draft. */
+  readonly isDraft?: boolean;
+  readonly closedAt?: string | null;
+  readonly mergedAt?: string | null;
+  readonly updatedAt: string;
+  /** Overview fields, present where the host's single read returns them at no extra cost. */
+  readonly author?: PullRequestActor | null | undefined;
+  readonly additions?: number | undefined;
+  readonly deletions?: number | undefined;
+  readonly changedFiles?: number | undefined;
+  readonly reviewDecision?: PullRequestReviewDecision | null | undefined;
+  readonly checksState?: PullRequestChecksState | null | undefined;
+  readonly mergeability?: PullRequestMergeability | undefined;
+}
+
 export interface ProviderChangeRequestPage {
   readonly items: ReadonlyArray<ProviderChangeRequest>;
   /** True when the host has more rows than the page size asked for. */
@@ -299,6 +322,10 @@ export interface PullRequestProviderApi {
     }>;
   }) => Effect.Effect<ReadonlyArray<ProviderChangeRequestStat>, PullRequestProviderError>;
 
+  readonly getChangeRequestSummary?: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<ProviderChangeRequestSummary, PullRequestProviderError>;
+
   readonly getChangeRequest: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestDetail, PullRequestProviderError>;
@@ -359,7 +386,7 @@ export interface PullRequestProviderApi {
   ) => Effect.Effect<ProviderDiffFileContents, PullRequestProviderError>;
 
   readonly getStack?: (
-    input: ProviderRepositoryRef & { readonly number: number },
+    input: ProviderRepositoryRef & { readonly number: number; readonly includeDetails?: boolean },
   ) => Effect.Effect<PullRequestStack | null, PullRequestProviderError>;
 
   readonly runAction: (

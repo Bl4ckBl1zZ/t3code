@@ -318,7 +318,8 @@
     "./imageDimensions": {
       "types": "./src/imageDimensions.ts",
       "import": "./src/imageDimensions.ts"
-    }
+    },
+    "./threadPullRequestChains": "./src/threadPullRequestChains.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",

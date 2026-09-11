@@ -1,3 +1,5 @@
+import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
+import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import { resolveProjectAutoPull } from "@t3tools/shared/serverSettings";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import {
@@ -438,6 +440,8 @@ export const make = (options?: StartupOptions) =>
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+    const threadPullRequests = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
+    const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
     const hermesProactive = yield* HermesProactiveService.HermesProactiveService;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -765,6 +769,8 @@ export const make = (options?: StartupOptions) =>
           },
         }),
       );
+      yield* threadPullRequests.start();
+      yield* pullRequestSync.start();
       yield* Effect.logDebug("startup phase: complete");
     }).pipe(
       Effect.annotateSpans({

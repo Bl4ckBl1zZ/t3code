@@ -628,7 +628,8 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   the same environment. A host read validates additions; unlinking uses the saved identity
   without requiring the host or project to remain available. Stack detail controls use the
   native parity RPC and capture immutable reviewed heads before submitting merge/rebase.
-  Automatic discovery and source/tombstone metadata remain separate ports. Persistent PR detail/stack reads are now ported as described below.
+  V2 background discovery, source/snapshot metadata, stack tombstones and MCP linking are now
+  ported, as described in the V2 PR tracking entry below.
 
 - GitHub PR labels are editable in web/desktop and Swift detail screens. Optional
   host capability and viewer permission flags gate lazy candidate reads and mutations;
@@ -682,7 +683,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   their run; resource reconciliation never counts as a manual choice. The proactive panel API
   gives linked PRs precedence over automatic plan/diff panels. V2 linked-PR and completed-run
   diff opening are now integrated behind `proactivePanelsEnabled`; background PR discovery
-  remains a separate server integration.
+  now runs on V2 and keeps its branch candidate separate from explicit links.
 
 - Ports lazy diff workers (`b3e1d88590`, readiness follow-up `ce4712d5b0`) at code-view
   boundaries instead of wrapping the entire chat. Concurrent views share a pool, quick reopen
@@ -1119,3 +1120,18 @@ whole transcript on every scroll. No simulator or browser was launched for verif
   signed asset URLs and a bounded macOS icon cache; clients never receive application
   bundle paths. Other host platforms retain glyph fallbacks, as upstream does. Swift
   decodes older items without metadata and scopes native-icon requests by environment.
+
+### V2 pull-request discovery and persisted link snapshots
+
+Upstream PR discovery/snapshot workers and MCP linking are ported to V2 metadata commands,
+not the retired V1 decider or `projection_threads`. `pullRequests` stores host-level identity,
+source, snapshots, native stacks and dismissal tombstones; legacy fields stay derived and
+preserve Azure selectors. Atomic link-version/anchor and branch/worktree guards reject stale
+reads. Background-only updates do not create activity. The fork keeps explicit links authoritative.
+
+Workers start after recovery, share branch/status caches and host-error backoff, and use the
+fork's persistent read cache for cheap summaries and separate lightweight/hydrated stack reads.
+MCP PR tools are credential-thread-scoped. Web linked badges and the web/Swift collection views
+use cached snapshots and ordered chains, with source/check/diff signals. Native fixtures mirror
+the optional wire fields. Server automatic settlement and full cross-repository detail routing
+remain follow-up parity work; no V1 thread imports or new migrations are introduced.

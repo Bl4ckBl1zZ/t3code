@@ -896,6 +896,8 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     /// See `OrchestrationV2ThreadShell.linkedPullRequest`.
     public let linkedPullRequest: OrchestrationV2ThreadLinkedPullRequest?
     public var linkedPullRequests: [OrchestrationV2ThreadLinkedPullRequest]? = nil
+    public var pullRequests: [OrchestrationV2ThreadPullRequestLink]? = nil
+    public var branchPullRequest: OrchestrationV2ThreadLinkedPullRequest? = nil
     public let activeProviderThreadId: String?
     public let historyOrigin: String?
     public let lineage: OrchestrationV2AppThreadLineage
@@ -1316,6 +1318,8 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     /// nothing linked. Nil means "resolve the pull request from the branch".
     public var linkedPullRequest: OrchestrationV2ThreadLinkedPullRequest?
     public var linkedPullRequests: [OrchestrationV2ThreadLinkedPullRequest]? = nil
+    public var pullRequests: [OrchestrationV2ThreadPullRequestLink]? = nil
+    public var branchPullRequest: OrchestrationV2ThreadLinkedPullRequest? = nil
     public var lineage: OrchestrationV2AppThreadLineage
     public var forkedFrom: OrchestrationV2ForkSource?
     public var activeProviderThreadId: String?

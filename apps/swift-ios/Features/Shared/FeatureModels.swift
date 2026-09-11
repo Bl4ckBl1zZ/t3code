@@ -201,23 +201,6 @@ public enum FeatureInteractionMode: String, CaseIterable, Sendable, Codable {
     public var mobileNormalized: FeatureInteractionMode { self }
 }
 
-/// The pull request a user pinned to a thread, in the shape the client needs to
-/// read it back: `pullRequests.detail` is addressed by project, repository and
-/// number, and the URL is what recognises the same request in a chat link.
-public struct FeatureLinkedPullRequest: Sendable, Equatable, Hashable, Codable {
-    public var projectID: String
-    public var repository: String
-    public var number: Int
-    public var url: String
-
-    public init(projectID: String, repository: String, number: Int, url: String) {
-        self.projectID = projectID
-        self.repository = repository
-        self.number = number
-        self.url = url
-    }
-}
-
 public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     /// The environment-local identifier sent over the wire.

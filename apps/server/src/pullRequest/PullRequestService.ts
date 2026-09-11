@@ -2,7 +2,7 @@ import type {
   PullRequestLabelCandidateList,
   PullRequestLabelChangeInput,
 } from "@t3tools/contracts";
-import { PullRequestStack } from "@t3tools/contracts";
+import { PullRequestSummary, PullRequestStack } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -54,7 +54,10 @@ import {
   type SourceControlProviderInfo,
   type SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
+import {
+  canonicalRepositoryKey,
+  detectSourceControlProviderFromRemoteUrl,
+} from "@t3tools/shared/sourceControl";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -119,6 +122,9 @@ const LIST_STATS_CACHE_CAPACITY = 32;
 const DETAIL_CACHE_CAPACITY = 128;
 const DIFF_CACHE_CAPACITY = 128;
 
+/** Internal linked-PR reads can explicitly target another repository on a configured host. */
+export type PullRequestLinkRef = PullRequestRef & { readonly host?: string };
+
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
 
 export class PullRequestService extends Context.Service<
@@ -130,6 +136,9 @@ export class PullRequestService extends Context.Service<
     readonly listStats: (
       input: PullRequestListStatsInput,
     ) => Effect.Effect<PullRequestListStatsResult, PullRequestError>;
+    readonly summary: (
+      input: PullRequestLinkRef,
+    ) => Effect.Effect<PullRequestSummary, PullRequestError>;
     readonly detail: (input: PullRequestRef) => Effect.Effect<PullRequestDetail, PullRequestError>;
     readonly activity: (
       input: PullRequestRef,
@@ -144,7 +153,8 @@ export class PullRequestService extends Context.Service<
       input: PullRequestDiffFileContentsInput,
     ) => Effect.Effect<PullRequestDiffFileContentsResult, PullRequestError>;
     readonly stack: (
-      input: PullRequestRef,
+      input: PullRequestLinkRef,
+      options?: { readonly includeDetails?: boolean },
     ) => Effect.Effect<PullRequestStack | null, PullRequestError>;
     readonly runAction: (input: PullRequestActionInput) => Effect.Effect<void, PullRequestError>;
     readonly update: (input: PullRequestUpdateInput) => Effect.Effect<void, PullRequestError>;
@@ -447,6 +457,11 @@ function withRateLimitBackoff(
           listChangeRequestStats: wrap("listChangeRequestStats", api.listChangeRequestStats),
         }),
     getChangeRequest: wrap("getChangeRequest", api.getChangeRequest),
+    ...(api.getChangeRequestSummary === undefined
+      ? {}
+      : {
+          getChangeRequestSummary: wrap("getChangeRequestSummary", api.getChangeRequestSummary),
+        }),
     getChangeRequestActivity: wrap("getChangeRequestActivity", api.getChangeRequestActivity),
     ...(api.getReviewThreadComments === undefined
       ? {}
@@ -645,16 +660,25 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
+  const requireProject = (
+    ref: PullRequestLinkRef,
+  ): Effect.Effect<SupportedProject, PullRequestError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
       Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
-        const match = supported[0];
-        if (!match) {
-          return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
+        const own = supported[0];
+        const repository = ref.repository.trim();
+        const host = ref.host?.trim().toLowerCase();
+        if (own !== undefined && own.repository.toLowerCase() === repository.toLowerCase()) {
+          // Hostless references only ever meant the project's own repository, and a hosted one
+          // naming it still is; either way the project serves itself.
+          if (host === undefined || host === own.host) return Effect.succeed(own);
         }
-        // The repository travels through the client, so it is checked against the project's
-        // own remote rather than being handed to a provider verbatim.
-        if (match.repository.toLowerCase() !== ref.repository.trim().toLowerCase()) {
+        if (host === undefined) {
+          if (own === undefined) {
+            return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
+          }
+          // The repository travels through the client, so it is checked against the project's
+          // own remote rather than being handed to a provider verbatim.
           return Effect.fail(
             new PullRequestOperationError({
               operation: "resolveRepository",
@@ -662,7 +686,39 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return Effect.succeed(match);
+        const repositoryKey = canonicalRepositoryKey(`${host}/${repository}`.toLowerCase());
+        // Azure SSH and legacy clone hosts differ from the browser URL's host. Compare
+        // the complete repository identity before narrowing those checkouts by host.
+        return listWorkspaceProjects(
+          repositoryKey.startsWith("dev.azure.com/") ? {} : { host },
+        ).pipe(
+          Effect.flatMap(({ supported }) => {
+            const onHost = supported.filter((candidate) => candidate.host === host);
+            const route =
+              supported.find(
+                (candidate) =>
+                  candidate.api.kind === "azure-devops" &&
+                  candidate.project.repositoryIdentity != null &&
+                  canonicalRepositoryKey(
+                    candidate.project.repositoryIdentity.canonicalKey.toLowerCase(),
+                  ) === repositoryKey,
+              ) ??
+              onHost.find(
+                (candidate) =>
+                  candidate.api.kind !== "azure-devops" &&
+                  candidate.repository.toLowerCase() === repository.toLowerCase(),
+              ) ??
+              onHost.find((candidate) => candidate.api.kind !== "azure-devops");
+            if (route === undefined) {
+              return Effect.fail(
+                new PullRequestUnavailableError({ reason: "provider-unsupported" }),
+              );
+            }
+            return Effect.succeed(
+              route.api.kind === "azure-devops" ? route : { ...route, repository },
+            );
+          }),
+        );
       }),
     );
 
@@ -1319,7 +1375,62 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const stackUncached: PullRequestService["Service"]["stack"] = (input) =>
+  const summaryUncached: PullRequestService["Service"]["summary"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project) => {
+        const providerInput = {
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+          number: input.number,
+        };
+        const read =
+          project.api.getChangeRequestSummary === undefined
+            ? project.api.getChangeRequest(providerInput)
+            : project.api.getChangeRequestSummary(providerInput);
+        return read.pipe(
+          Effect.mapError(toPullRequestError("summary")),
+          Effect.map(
+            (changeRequest): PullRequestSummary => ({
+              provider: project.api.kind,
+              projectId: project.project.id,
+              repository: project.repository,
+              number: changeRequest.number,
+              title: changeRequest.title,
+              url: changeRequest.url,
+              state: changeRequest.state,
+              headBranch: changeRequest.headBranch,
+              baseBranch: changeRequest.baseBranch,
+              closedAt: changeRequest.closedAt ?? null,
+              mergedAt: changeRequest.mergedAt ?? null,
+              updatedAt: changeRequest.updatedAt,
+              ...(changeRequest.isDraft === undefined ? {} : { isDraft: changeRequest.isDraft }),
+              ...(changeRequest.author === undefined ? {} : { author: changeRequest.author }),
+              ...(changeRequest.additions === undefined
+                ? {}
+                : { additions: changeRequest.additions }),
+              ...(changeRequest.deletions === undefined
+                ? {}
+                : { deletions: changeRequest.deletions }),
+              ...(changeRequest.changedFiles === undefined
+                ? {}
+                : { changedFiles: changeRequest.changedFiles }),
+              ...(changeRequest.reviewDecision === undefined
+                ? {}
+                : { reviewDecision: changeRequest.reviewDecision }),
+              ...(changeRequest.checksState === undefined
+                ? {}
+                : { checksState: changeRequest.checksState }),
+              ...(changeRequest.mergeability === undefined
+                ? {}
+                : { mergeability: changeRequest.mergeability }),
+            }),
+          ),
+        );
+      }),
+    );
+
+  const stackUncached: PullRequestService["Service"]["stack"] = (input, options) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
         project.api.getStack
@@ -1329,6 +1440,7 @@ export const make = Effect.gen(function* () {
                 repository: project.repository,
                 host: project.host,
                 number: input.number,
+                includeDetails: options?.includeDetails !== false,
               })
               .pipe(Effect.mapError(toPullRequestError("stack")))
           : Effect.succeed(null),
@@ -2090,8 +2202,7 @@ export const make = Effect.gen(function* () {
     return Cache.get(listCache, key);
   };
 
-  // Persist the fork's detail read (15 seconds) and stack (60 seconds). V2 does not use
-  // upstream's V1-linked summary reader. Resolve the project before every cache read so
+  // Persist overview, detail and stack reads. Resolve the project before every cache read so
   // removed projects and changed hosts/workspaces cannot reuse another identity's data.
   const persistedRead = Effect.fn("PullRequestService.persistedRead")(function* <A>(
     input: PullRequestRef,
@@ -2132,10 +2243,19 @@ export const make = Effect.gen(function* () {
     const decoded = yield* Schema.decodeUnknownEffect(codec)(payload).pipe(Effect.option);
     return Option.isSome(decoded) ? decoded.value : yield* lookup;
   });
+  const summaryCodec = Schema.fromJsonString(PullRequestSummary);
+  const summary: PullRequestService["Service"]["summary"] = (input) =>
+    persistedRead(input, "summary", summaryCodec, summaryUncached(input), 60_000);
   const detailCodec = Schema.fromJsonString(PullRequestDetail);
   const stackCodec = Schema.fromJsonString(Schema.NullOr(PullRequestStack));
-  const stack: PullRequestService["Service"]["stack"] = (input) =>
-    persistedRead(input, "stack", stackCodec, stackUncached(input), 60_000);
+  const stack: PullRequestService["Service"]["stack"] = (input, options) =>
+    persistedRead(
+      input,
+      `stack:${options?.includeDetails !== false}`,
+      stackCodec,
+      stackUncached(input, options),
+      60_000,
+    );
 
   const detail: PullRequestService["Service"]["detail"] = (input) =>
     persistedRead(
@@ -2265,6 +2385,7 @@ export const make = Effect.gen(function* () {
       );
 
   return PullRequestService.of({
+    summary,
     list,
     listStats,
     detail,

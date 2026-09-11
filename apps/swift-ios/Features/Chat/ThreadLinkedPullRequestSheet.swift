@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Pins a pull request to a thread, or clears the pin.
+/// Manages linked requests and their persisted stack and host state.
 ///
 /// A linked request replaces the branch-derived one: the row shows it, and it is
 /// what the merge settle rule watches. That matters for the two cases the branch
@@ -41,13 +41,11 @@ struct ThreadLinkedPullRequestSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 if !links.isEmpty {
                     ThreadDetailsSection(title: "Linked pull requests", footer: "The task stays active while any linked pull request is open.") {
-                        ForEach(links, id: \.self) { link in
-                            ThreadDetailsRow(systemImage: "arrow.triangle.pull", title: "#\(link.number)", subtitle: link.repository,
-                                action: { selectedLink = link })
-                            ThreadDetailsRow(systemImage: "link.badge.plus", iconTint: T3Colors.danger,
-                                title: "Unlink #\(link.number)", isDisabled: isBusy, showsChevron: false,
-                                action: { unlink(link) })
-                            if link != links.last { ThreadDetailsDivider() }
+                        let lines = FeaturePullRequestLines.resolve(links)
+                        ForEach(lines) { line in
+                            ThreadLinkedPullRequestRow(line: line, isBusy: isBusy,
+                                open: { selectedLink = line.link }, unlink: { unlink(line.link) })
+                            if line.link.identity != lines.last?.id { ThreadDetailsDivider() }
                         }
                     }
                 }
@@ -109,7 +107,13 @@ struct ThreadLinkedPullRequestSheet: View {
         .background(T3Colors.background)
         .navigationTitle("Pull requests")
         .navigationDestination(item: $selectedLink) { link in
-            PullRequestDetailSheet(client: client, threadID: thread.id, number: link.number)
+            if let manager = client as? any FeatureProjectPullRequestManaging,
+               let host = link.host ?? URL(string: link.url)?.host {
+                PullRequestDetailSheet(access: FeaturePullRequestAccess(manager: manager,
+                    scope: FeaturePullRequestProjectScope(projectID: link.projectID, host: host, repository: link.repository)), number: link.number)
+            } else {
+                PullRequestDetailSheet(client: client, threadID: thread.id, number: link.number)
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -150,5 +154,103 @@ struct ThreadLinkedPullRequestSheet: View {
             }
             isBusy = false
         }
+    }
+}
+
+private struct ThreadLinkedPullRequestRow: View {
+    let line: FeaturePullRequestLine
+    let isBusy: Bool
+    let open: () -> Void
+    let unlink: () -> Void
+
+    private var link: FeatureLinkedPullRequest { line.link }
+    private var stateTitle: String {
+        guard let snapshot = link.snapshot else { return "Waiting for host state" }
+        return snapshot.isDraft && snapshot.state == "open" ? "Draft" : snapshot.state.capitalized
+    }
+    private var stateColor: Color {
+        switch link.snapshot?.state {
+        case "merged": T3Colors.syntaxKeyword
+        case "closed": T3Colors.danger
+        case "open": link.snapshot?.isDraft == true ? T3Colors.textTertiary : T3Colors.success
+        default: T3Colors.textTertiary
+        }
+    }
+    private var stateIcon: String {
+        switch link.snapshot?.state {
+        case "merged": "arrow.triangle.merge"
+        case "closed": "xmark.circle"
+        case "open" where link.snapshot?.isDraft == true: "circle.dashed"
+        default: "arrow.triangle.pull"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            if line.depth > 0 {
+                Rectangle().fill(T3Colors.border).frame(width: 1).padding(.vertical, 4).accessibilityHidden(true)
+            }
+            Button(action: open) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: stateIcon).foregroundStyle(stateColor)
+                        Text("#\(link.number)").monospacedDigit().foregroundStyle(T3Colors.textSecondary)
+                        Text(stateTitle).foregroundStyle(stateColor)
+                        Spacer(minLength: 0)
+                    }
+                    .font(.caption)
+                    Text(link.snapshot?.title ?? link.repository)
+                        .font(T3Typography.control).foregroundStyle(T3Colors.textPrimary)
+                        .multilineTextAlignment(.leading).lineLimit(2)
+                    if let snapshot = link.snapshot {
+                        Text("\(snapshot.headBranch) → \(snapshot.baseBranch)")
+                            .font(.caption.monospaced()).foregroundStyle(T3Colors.textTertiary).lineLimit(1)
+                        HStack(spacing: 8) {
+                            if let checks = snapshot.checksState {
+                                Label(checks == "passing" ? "Checks pass" : checks == "failing" ? "Checks failed" : "Checks pending",
+                                      systemImage: checks == "passing" ? "checkmark.circle" : checks == "failing" ? "xmark.circle" : "clock")
+                                    .foregroundStyle(checks == "passing" ? T3Colors.success : checks == "failing" ? T3Colors.danger : T3Colors.textTertiary)
+                            }
+                            if let additions = snapshot.additions, let deletions = snapshot.deletions {
+                                Text("+\(additions)").foregroundStyle(T3Colors.diffAddition)
+                                Text("−\(deletions)").foregroundStyle(T3Colors.diffDeletion)
+                            }
+                        }
+                        .font(.caption2).monospacedDigit()
+                        if snapshot.state == "open", snapshot.reviewDecision == "approved" || snapshot.reviewDecision == "changes-requested" {
+                            Text(snapshot.reviewDecision == "approved" ? "Approved" : "Changes requested")
+                                .font(.caption2).foregroundStyle(snapshot.reviewDecision == "approved" ? T3Colors.success : T3Colors.warning)
+                        }
+                        if snapshot.state == "open", snapshot.mergeability == "conflicting" {
+                            Text("Conflicts").font(.caption2).foregroundStyle(T3Colors.danger)
+                        }
+                    }
+                    if let source = link.sourceLabel {
+                        Text(source + (link.snapshot?.author.map { " · \($0)" } ?? ""))
+                            .font(.caption2).foregroundStyle(T3Colors.textTertiary)
+                    }
+                    if line.depth == 0, line.chainSize > 1 {
+                        Label("\(line.chainSize) \(line.isNativeStack ? "in stack" : "in branch chain")", systemImage: "square.3.layers.3d")
+                            .font(.caption2).foregroundStyle(T3Colors.textSecondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Open pull request details")
+            Menu {
+                Button("Copy link", systemImage: "doc.on.doc") { UIPasteboard.general.string = link.url }
+                if let url = URL(string: link.url) { Link("Open in browser", destination: url) }
+                Button(link.source == "stack" ? "Dismiss from thread" : "Unlink from thread", systemImage: "link.badge.plus", role: .destructive, action: unlink)
+                    .disabled(isBusy)
+            } label: {
+                Image(systemName: "ellipsis").frame(width: 36, height: 44)
+            }
+            .accessibilityLabel("Actions for pull request \(link.number)")
+        }
+        .padding(.leading, 16 + CGFloat(min(line.depth, 3)) * 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 12)
     }
 }

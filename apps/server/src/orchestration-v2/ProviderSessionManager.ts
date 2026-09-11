@@ -357,6 +357,7 @@ export const layerWithOptions = (
                 const capabilities = new Set<McpInvocationContext.McpCapability>([
                   ...((yield* agentBrowserAccessEnabled(threadId)) ? (["preview"] as const) : []),
                   "orchestration",
+                  "pull-requests",
                   ...(runtimePolicy.runtimeMode === "full-access" ? (["worktree"] as const) : []),
                 ]);
                 // Reuse a still-valid credential for this thread instead of

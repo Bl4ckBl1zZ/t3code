@@ -226,6 +226,16 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("listChangeRequestStats"))),
 
+    // A single CLI read supplies live overview fields without detail permissions or comparisons.
+    getChangeRequestSummary: (input) =>
+      cli.getPullRequestDetail(input).pipe(
+        Effect.map((summary) => ({
+          ...summary,
+          author: withAvatar(summary.author, new Map(), input.host),
+        })),
+        Effect.mapError(fail("getChangeRequestSummary")),
+      ),
+
     getChangeRequest: (input) =>
       Effect.all(
         [
@@ -419,7 +429,7 @@ export const make = Effect.gen(function* () {
 
     getStack: (input) =>
       cli
-        .getPullRequestStack({ ...input, includeDetails: true })
+        .getPullRequestStack({ ...input, includeDetails: input.includeDetails !== false })
         .pipe(Effect.mapError(fail("getStack"))),
     listLabelCandidates: (input) =>
       cli.listLabelCandidates(input).pipe(Effect.mapError(fail("listLabelCandidates"))),

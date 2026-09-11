@@ -215,3 +215,54 @@ public struct PullRequestLabelCandidateList: Codable, Equatable, Sendable {
     public let candidates: [PullRequestLabelCandidate]
     public let truncated: Bool
 }
+
+
+/// Persisted V2 link metadata. Dismissed stack members remain on the wire so discovery
+/// can respect an unlink across restarts; client lists exclude them.
+public struct OrchestrationV2ThreadPullRequestLink: Codable, Equatable, Sendable {
+    public let host: String
+    public let repository: String
+    public let number: Int
+    public let projectId: String?
+    public let url: String
+    public let source: String
+    public let linkedAt: String
+    public let snapshot: OrchestrationV2ThreadPullRequestSnapshot?
+    public let stack: OrchestrationV2ThreadPullRequestStack?
+
+    public var isVisible: Bool { source != "stack-dismissed" }
+}
+
+public struct OrchestrationV2ThreadPullRequestSnapshot: Codable, Equatable, Sendable {
+    public let state: PullRequestState
+    public let title: String
+    public let headBranch: String
+    public let baseBranch: String
+    public let isDraft: Bool
+    public let updatedAt: String?
+    public let syncedAt: String
+    public let closedAt: String?
+    public let mergedAt: String?
+    public let author: PullRequestActor?
+    public let additions: Int?
+    public let deletions: Int?
+    public let changedFiles: Int?
+    public let reviewDecision: String?
+    public let checksState: String?
+    public let mergeability: PullRequestMergeability?
+}
+
+public struct OrchestrationV2ThreadPullRequestStack: Codable, Equatable, Sendable {
+    public let kind: String
+    public let id: String
+    public let number: Int
+    public let url: String
+    public let base: String
+    public let layers: [OrchestrationV2ThreadPullRequestStackLayer]
+}
+
+public struct OrchestrationV2ThreadPullRequestStackLayer: Codable, Equatable, Sendable {
+    public let number: Int
+    public let headBranch: String
+    public let state: PullRequestState
+}

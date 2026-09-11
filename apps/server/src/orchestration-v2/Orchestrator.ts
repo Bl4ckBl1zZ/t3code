@@ -1,4 +1,8 @@
-import { updateLinkedPullRequests } from "@t3tools/shared/threadPullRequests";
+import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequestChains";
+import {
+  allThreadPullRequestsOf,
+  updateLinkedPullRequests,
+} from "@t3tools/shared/threadPullRequests";
 import {
   type ChatAttachment,
   CommandId,
@@ -1455,10 +1459,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.linkedPullRequest,
         command.linkPullRequest,
         command.unlinkPullRequest,
+        command.syncPullRequest,
       ].filter((value) => value !== undefined);
+      const nextLinks = updateLinkedPullRequests(thread, command);
       if (
         edits.length > 1 ||
-        updateLinkedPullRequests(thread, command).linkedPullRequests.length > 50
+        nextLinks.linkedPullRequests.length > 50 ||
+        nextLinks.pullRequests.length > 100
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -1467,6 +1474,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             "Send one pull-request edit at a time; a thread can link at most 50 pull requests.",
         });
       }
+    }
+    if (
+      command.type === "thread.metadata.update" &&
+      ((command.expectedBranch !== undefined && command.expectedBranch !== thread.branch) ||
+        (command.expectedProjectId !== undefined &&
+          command.expectedProjectId !== thread.projectId) ||
+        (command.expectedPullRequestLink !== undefined &&
+          !allThreadPullRequestsOf(thread).some(
+            (link) =>
+              link.source !== "stack-dismissed" &&
+              threadPullRequestKeysEqual(link, command.expectedPullRequestLink!) &&
+              link.source === command.expectedPullRequestLink!.source &&
+              link.linkedAt === command.expectedPullRequestLink!.linkedAt &&
+              link.url === command.expectedPullRequestLink!.url,
+          )) ||
+        (command.linkPullRequestSource !== undefined && command.linkPullRequest === undefined))
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "The pull-request context changed or the link source has no corresponding link.",
+      });
     }
     if (thread.deletedAt !== null && command.type !== "thread.delete") {
       return yield* new OrchestratorDispatchError({
@@ -1751,9 +1780,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             // Absent leaves the link alone; null unlinks.
             ...(command.linkedPullRequest === undefined &&
             command.linkPullRequest === undefined &&
-            command.unlinkPullRequest === undefined
+            command.unlinkPullRequest === undefined &&
+            command.syncPullRequest === undefined
               ? {}
-              : updateLinkedPullRequests(thread, command)),
+              : updateLinkedPullRequests(thread, command, DateTime.formatIso(now))),
+            ...(command.branchPullRequest === undefined
+              ? {}
+              : { branchPullRequest: command.branchPullRequest }),
             ...(command.workInboxRole === undefined
               ? {}
               : {
@@ -1769,7 +1802,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     : {}),
                 }),
             ...(command.clearTimeline === true ? { timelineClearedAt: now } : {}),
-            updatedAt: now,
+            // Host refreshes do not create user activity or postpone inactivity settlement.
+            updatedAt:
+              (command.syncPullRequest !== undefined ||
+                command.branchPullRequest !== undefined ||
+                command.linkPullRequestSource === "stack") &&
+              Object.keys(command).every((key) =>
+                [
+                  "type",
+                  "commandId",
+                  "threadId",
+                  "syncPullRequest",
+                  "branchPullRequest",
+                  "expectedBranch",
+                  "expectedProjectId",
+                  "expectedPullRequestLink",
+                  "linkPullRequest",
+                  "linkPullRequestSource",
+                  "expectedWorktreePath",
+                ].includes(key),
+              )
+                ? thread.updatedAt
+                : now,
           };
         case "thread.runtime-mode.set":
           return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };

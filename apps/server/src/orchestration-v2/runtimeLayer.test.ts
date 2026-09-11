@@ -2421,3 +2421,101 @@ it.layer(SharedApplicationDataPlaneTestLayer)("shared application data plane", (
     }),
   );
 });
+
+it.layer(TestLayer)("V2 pull request metadata", (it) => {
+  it.effect(
+    "persists host snapshots without creating activity and rejects stale stack anchors",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* OrchestratorV2;
+        const threadId = ThreadId.make("runtime-pr-sync");
+        const projectId = ProjectId.make("runtime-pr-project");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("runtime-pr-create"),
+          threadId,
+          projectId,
+          title: "PR metadata",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "feature/pr",
+          worktreePath: null,
+        });
+        const reference = {
+          projectId,
+          repository: "org/repo",
+          number: 1,
+          url: "https://github.com/org/repo/pull/1",
+        };
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-pr-link"),
+          threadId,
+          linkPullRequest: reference,
+          linkPullRequestSource: "agent",
+        });
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        const anchor = before.thread.pullRequests![0]!;
+        yield* TestClock.adjust("1 minute");
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-pr-sync"),
+          threadId,
+          syncPullRequest: {
+            reference: anchor,
+            stack: null,
+            snapshot: {
+              state: "open",
+              title: "Live title",
+              headBranch: "feature/pr",
+              baseBranch: "main",
+              isDraft: true,
+              updatedAt: "2026-09-11T00:00:00.000Z",
+              syncedAt: "2026-09-11T00:00:00.000Z",
+            },
+          },
+        });
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(after.thread.updatedAt, before.thread.updatedAt);
+        assert.equal(after.thread.pullRequests?.[0]?.snapshot?.title, "Live title");
+        assert.equal(
+          (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.snapshot?.isDraft,
+          true,
+        );
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-pr-unlink"),
+          threadId,
+          unlinkPullRequest: reference,
+        });
+        const error = yield* orchestrator
+          .dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("runtime-pr-stale-stack"),
+            threadId,
+            linkPullRequest: { ...reference, number: 2, url: "https://github.com/org/repo/pull/2" },
+            linkPullRequestSource: "stack",
+            expectedPullRequestLink: anchor,
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(error, OrchestratorDispatchError);
+        assert.deepEqual(
+          (yield* orchestrator.getThreadProjection(threadId)).thread.linkedPullRequests,
+          [],
+        );
+        const staleBranch = yield* orchestrator
+          .dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("runtime-pr-stale-branch"),
+            threadId,
+            branchPullRequest: reference,
+            expectedBranch: "different-branch",
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(staleBranch, OrchestratorDispatchError);
+      }),
+  );
+});

@@ -1,3 +1,9 @@
+import {
+  ThreadPullRequestLink,
+  ThreadPullRequestLinkSource,
+  ThreadPullRequestSnapshot,
+  ThreadPullRequestStack,
+} from "./threadPullRequestLinks.ts";
 import { ToolActivitySurface, ToolActivityIcon, ToolActivitySource } from "./toolActivity.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -327,6 +333,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
+  pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink).check(Schema.isMaxLength(100))),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   linkedPullRequests: Schema.optional(
     Schema.Array(ThreadLinkedPullRequest).check(Schema.isMaxLength(50)),
@@ -1646,6 +1654,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
+  pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink).check(Schema.isMaxLength(100))),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   linkedPullRequests: Schema.optional(
     Schema.Array(ThreadLinkedPullRequest).check(Schema.isMaxLength(50)),
@@ -2471,6 +2481,19 @@ export const OrchestrationV2Command = Schema.Union([
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
     /** Atomic collection edits; older clients keep using the single-link field. */
     linkPullRequest: Schema.optional(ThreadLinkedPullRequest),
+    linkPullRequestSource: Schema.optional(ThreadPullRequestLinkSource),
+    /** Background host refresh never recreates an unlinked or replaced link. */
+    syncPullRequest: Schema.optional(
+      Schema.Struct({
+        reference: ThreadPullRequestLink,
+        snapshot: ThreadPullRequestSnapshot,
+        stack: Schema.NullOr(ThreadPullRequestStack),
+      }),
+    ),
+    branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    expectedProjectId: Schema.optional(ProjectId),
+    expectedPullRequestLink: Schema.optional(ThreadPullRequestLink),
     unlinkPullRequest: Schema.optional(ThreadLinkedPullRequest),
     pinned: Schema.optional(Schema.Boolean),
     /** Fractional key placing this thread within the pinned run. Sent alone to
