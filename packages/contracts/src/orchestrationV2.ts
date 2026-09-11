@@ -452,7 +452,15 @@ export const OrchestrationV2DelegatedCompletionCohort = Schema.Struct({
 export type OrchestrationV2DelegatedCompletionCohort =
   typeof OrchestrationV2DelegatedCompletionCohort.Type;
 
+export const OrchestrationV2RestartContinuation = Schema.Struct({
+  messageId: MessageId,
+  reason: Schema.Literals(["restart", "update"]),
+  status: Schema.Literals(["pending", "consumed", "cancelled"]),
+});
+export type OrchestrationV2RestartContinuation = typeof OrchestrationV2RestartContinuation.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
+  restartContinuation: Schema.optional(OrchestrationV2RestartContinuation),
   id: RunId,
   threadId: ThreadId,
   ordinal: PositiveInt,
@@ -861,6 +869,7 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  restartContinuation: Schema.optional(Schema.Boolean),
   ...OrchestrationV2CreationFields,
   id: MessageId,
   threadId: ThreadId,
@@ -2536,6 +2545,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    restartContinuation: Schema.optional(Schema.Struct({ sourceRunId: RunId })),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
@@ -2578,6 +2588,21 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     runId: RunId,
     failure: OrchestrationV2ProviderFailure,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("run.restart-continuation.prepare"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    messageId: MessageId,
+    reason: Schema.Literals(["restart", "update"]),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("run.restart-continuation.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    messageId: MessageId,
   }),
   Schema.Struct({
     type: Schema.Literal("run.interrupt"),

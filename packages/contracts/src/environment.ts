@@ -99,6 +99,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       never send the commands under version skew. */
   threadSettlement: Schema.optionalKey(Schema.Boolean),
   /** Server evaluates inactivity and PR settlement without an open client. */
+  threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */

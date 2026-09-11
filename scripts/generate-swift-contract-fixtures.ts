@@ -58,6 +58,8 @@ import {
   MessageId,
   NodeId,
   OrchestrationV2ThreadProjection,
+  OrchestrationV2Run,
+  OrchestrationV2ConversationMessage,
   PlanId,
   ProjectId,
   ProjectIconOverride,
@@ -1412,3 +1414,66 @@ if (process.argv.includes("--check")) {
     process.exitCode = 1;
   }
 } else NodeFS.writeFileSync(assetImageDimensionsPath, assetImageDimensionsSerialized);
+
+const restartFixturePath = NodePath.join(NodePath.dirname(outputPath), "restartContinuation.json");
+const restartMessageId = MessageId.make("restart-message");
+const restartFixture =
+  JSON.stringify(
+    {
+      run: Effect.runSync(
+        Schema.encodeEffect(OrchestrationV2Run)({
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+          providerThreadId,
+          userMessageId: MessageId.make("original-message"),
+          rootNodeId: null,
+          activeAttemptId: null,
+          status: "cancelled",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+          restartContinuation: {
+            messageId: restartMessageId,
+            reason: "restart",
+            status: "pending",
+          },
+        }),
+      ),
+      message: Effect.runSync(
+        Schema.encodeEffect(OrchestrationV2ConversationMessage)({
+          id: restartMessageId,
+          threadId,
+          runId,
+          nodeId: null,
+          role: "user",
+          text: "Continue after restart",
+          attachments: [],
+          streaming: false,
+          createdBy: "agent",
+          creationSource: "server",
+          createdAt: now,
+          updatedAt: now,
+          restartContinuation: true,
+        }),
+      ),
+      capabilities: Schema.decodeSync(ExecutionEnvironmentCapabilities)({
+        threadRestartContinuation: true,
+      }),
+    },
+    null,
+    2,
+  ) + "\n";
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(restartFixturePath) ||
+    NodeFS.readFileSync(restartFixturePath, "utf8") !== restartFixture
+  ) {
+    console.error("[swift-fixtures] restartContinuation.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(restartFixturePath, restartFixture);

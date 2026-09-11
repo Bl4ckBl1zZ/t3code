@@ -97,3 +97,24 @@ manual command; the old detached foreground respawn path no longer exists.
 - Service installation: `apps/server/src/cloud/bootService.ts`
 - Activation boundary: `apps/server/src/serverRuntimeStartup.ts` and `serverActivation.ts`
 - Client outcome correlation: `packages/client-runtime/src/state/server.ts`
+
+## V2 restart continuation
+
+`continueThreadsAfterServerUpdate` is an environment-owned opt-in, default false, advertised through
+`threadRestartContinuation`. `RestartContinuationService` prepares only the latest running root run
+with a saved native provider reference, before provider shutdown or startup reconciliation. A
+`run.restart-continuation.prepare` command writes the marker into the V2 run JSON projection under
+the thread lock. Process-loss reconciliation preserves it while terminalizing old process-bound
+work; no V1 directory or migration is involved.
+
+After activation, the service dispatches a server-created continuation through normal V2 commands.
+Its marker is consumed in the same transaction as the new message and run. Duplicate deliveries,
+newer work, missing native state, blocking requests and changed provider context are rejected.
+Archive, settle, checkout and provider changes cancel pending markers. Codex sends an empty native
+continuation input; other adapters receive the continuation instruction. A failed resume cannot
+silently fall back to a new provider conversation on this path.
+
+PR discovery, snapshot sync, settlement and restart continuation workers are registered before the
+trial prepare boundary and remain parked until activation. Settlement waits for the initial
+continuation dispatch pass. Per-update handoff requests and cross-environment preference propagation
+remain separate integrations; the environment opt-in already covers normal update restarts.

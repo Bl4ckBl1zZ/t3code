@@ -10,6 +10,22 @@ import XCTest
 /// regenerate the fixture after a contract change and anything the Swift models
 /// got wrong fails here rather than at runtime on a device.
 final class OrchestrationV2ContractTests: XCTestCase {
+    func testRestartContinuationContracts() throws {
+        struct Fixture: Decodable {
+            let run: OrchestrationV2Run
+            let message: OrchestrationV2ConversationMessage
+            let capabilities: EnvironmentDescriptor.Capabilities
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/restartContinuation.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.run.restartContinuation?.messageId, fixture.message.id)
+        XCTAssertEqual(fixture.run.restartContinuation?.status, "pending")
+        XCTAssertEqual(fixture.run.restartContinuation?.reason, "restart")
+        XCTAssertEqual(fixture.message.restartContinuation, true)
+        XCTAssertEqual(fixture.capabilities.threadRestartContinuation, true)
+        XCTAssertEqual(try JSONDecoder().decode(OrchestrationV2Run.self, from: JSONEncoder().encode(fixture.run)), fixture.run)
+    }
+
     /// Every turn item type the contract defines, as of the generated fixture.
     /// Kept explicit so adding a contract variant without a Swift case fails
     /// loudly rather than silently decoding to `.unknown`.

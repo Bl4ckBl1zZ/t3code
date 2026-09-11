@@ -17,6 +17,7 @@
     }
   },
   "settings": {
+    "continueThreadsAfterServerUpdate": false,
     "sidebarAutoSettleAfterDays": 3,
     "sidebarAutoSettleOnMerge": true,
     "enableLegacyTokenStreaming": false,

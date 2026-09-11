@@ -2629,6 +2629,8 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         ) =>
           Effect.gen(function* () {
             const inputItems: Array<CodexSchema.V2TurnStartParams__UserInput> = [];
+            // Codex can continue its resumed native turn without adding a synthetic user prompt.
+            if (turnInput.message.restartContinuation === true) return inputItems;
             if (turnInput.message.text.length > 0) {
               inputItems.push({
                 type: "text",

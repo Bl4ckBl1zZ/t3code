@@ -294,6 +294,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let sidebarAutoSettleAfterDays: Double?
     /// Whether a merged change request settles its thread on its own. A closed
     /// one always does; only the merge half is configurable.
+    public let continueThreadsAfterServerUpdate: Bool
     public let sidebarAutoSettleOnMerge: Bool
     /// Keyed by provider instance id (the default instance for a driver uses
     /// the driver kind, so `"hermes"`, `"codex"`, `"claudeAgent"`, …). Empty
@@ -327,6 +328,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         newWorktreesStartFromOrigin: Bool = true,
         sidebarAutoSettleAfterDays: Double? = ServerSettingsSnapshot
             .defaultSidebarAutoSettleAfterDays,
+        continueThreadsAfterServerUpdate: Bool = false,
         sidebarAutoSettleOnMerge: Bool = ServerSettingsSnapshot
             .defaultSidebarAutoSettleOnMerge,
         providerModelPreferences: [String: ProviderModelPreferencesSnapshot] = [:],
@@ -349,6 +351,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
+        self.continueThreadsAfterServerUpdate = continueThreadsAfterServerUpdate
         self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
         self.providerModelPreferences = providerModelPreferences
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
@@ -377,6 +380,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case defaultThreadEnvMode
         case newWorktreesStartFromOrigin
         case sidebarAutoSettleAfterDays
+        case continueThreadsAfterServerUpdate
         case sidebarAutoSettleOnMerge
         case providerModelPreferences
         case enableAgentBrowserAccess
@@ -418,6 +422,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         sidebarAutoSettleAfterDays = container.contains(.sidebarAutoSettleAfterDays)
             ? try container.decodeIfPresent(Double.self, forKey: .sidebarAutoSettleAfterDays)
             : Self.defaultSidebarAutoSettleAfterDays
+        continueThreadsAfterServerUpdate = try container.decodeIfPresent(Bool.self, forKey: .continueThreadsAfterServerUpdate) ?? false
         sidebarAutoSettleOnMerge = try container.decodeIfPresent(
             Bool.self,
             forKey: .sidebarAutoSettleOnMerge
@@ -459,6 +464,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         // Encoded as explicit null so "never" survives a round trip instead of
         // decoding back as the absent-key default.
         try container.encode(sidebarAutoSettleAfterDays, forKey: .sidebarAutoSettleAfterDays)
+        try container.encode(continueThreadsAfterServerUpdate, forKey: .continueThreadsAfterServerUpdate)
         try container.encode(sidebarAutoSettleOnMerge, forKey: .sidebarAutoSettleOnMerge)
         try container.encode(providerModelPreferences, forKey: .providerModelPreferences)
         try container.encode(enableAgentBrowserAccess, forKey: .enableAgentBrowserAccess)
@@ -482,6 +488,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 public struct ServerSettingsPatchInput: Equatable, Sendable {
     /// Outer nil omits the preference; a present nil disables inactivity settlement.
     public var sidebarAutoSettleAfterDays: Double??
+    public var continueThreadsAfterServerUpdate: Bool?
     public var sidebarAutoSettleOnMerge: Bool?
     /// Outer nil omits the field; a present nil restores automatic selection.
     public var defaultModelSelection: ModelSelection??
@@ -506,6 +513,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
 
     public init(
         sidebarAutoSettleAfterDays: Double?? = nil,
+        continueThreadsAfterServerUpdate: Bool? = nil,
         sidebarAutoSettleOnMerge: Bool? = nil,
         defaultModelSelection: ModelSelection?? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode? = nil,
@@ -523,6 +531,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
+        self.continueThreadsAfterServerUpdate = continueThreadsAfterServerUpdate
         self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
         self.defaultModelSelection = defaultModelSelection
         self.defaultThreadEnvMode = defaultThreadEnvMode
@@ -543,6 +552,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
         if let sidebarAutoSettleAfterDays { fields["sidebarAutoSettleAfterDays"] = sidebarAutoSettleAfterDays.map(JSONValue.number) ?? .null }
+        if let continueThreadsAfterServerUpdate { fields["continueThreadsAfterServerUpdate"] = .bool(continueThreadsAfterServerUpdate) }
         if let sidebarAutoSettleOnMerge { fields["sidebarAutoSettleOnMerge"] = .bool(sidebarAutoSettleOnMerge) }
         if let defaultModelSelection {
             if let selection = defaultModelSelection {

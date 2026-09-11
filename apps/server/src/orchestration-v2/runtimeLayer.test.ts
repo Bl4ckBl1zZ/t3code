@@ -1606,6 +1606,194 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("consumes a restart marker atomically and never dispatches it twice", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const sink = yield* EventSinkV2;
+      const threadId = ThreadId.make("restart-continuation-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("restart-create"),
+        threadId,
+        projectId: ProjectId.make("restart-project"),
+        title: "Restart",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/restart-test",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("restart-original"),
+        threadId,
+        messageId: MessageId.make("restart-original"),
+        createdBy: "user",
+        creationSource: "web",
+        text: "Work",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const run = projection.runs[0]!;
+      const providerThread = projection.providerThreads.find(
+        (candidate) => candidate.id === run.providerThreadId,
+      )!;
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        commandId: CommandId.make("restart-started"),
+        events: [
+          {
+            id: EventId.make("restart-run-started"),
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "running", startedAt: now },
+          },
+          {
+            id: EventId.make("restart-native-reference"),
+            type: "provider-thread.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...providerThread,
+              nativeThreadRef: { driver, nativeId: "saved-provider-thread", strength: "strong" },
+            },
+          },
+        ],
+      });
+      const messageId = MessageId.make("restart-recovery-message");
+      yield* orchestrator.dispatch({
+        type: "run.restart-continuation.prepare",
+        commandId: CommandId.make("restart-prepare"),
+        threadId,
+        runId: run.id,
+        messageId,
+        reason: "restart",
+      });
+      const marked = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      assert.equal(marked.restartContinuation?.status, "pending");
+      yield* sink.write({
+        commandId: CommandId.make("restart-process-loss"),
+        events: [
+          {
+            id: EventId.make("restart-run-cancelled"),
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...marked, status: "cancelled", completedAt: now },
+          },
+        ],
+      });
+      const command = {
+        type: "message.dispatch" as const,
+        commandId: CommandId.make("restart-recovery"),
+        threadId,
+        messageId,
+        text: "Continue",
+        attachments: [],
+        createdBy: "agent" as const,
+        creationSource: "server" as const,
+        restartContinuation: { sourceRunId: run.id },
+        dispatchMode: { type: "start_immediately" as const },
+      };
+      yield* orchestrator.dispatch(command);
+      yield* orchestrator.dispatch(command);
+      const resumed = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(resumed.runs.length, 2);
+      assert.equal(resumed.runs[0]?.restartContinuation?.status, "consumed");
+      assert.equal(
+        resumed.messages.find((message) => message.id === messageId)?.restartContinuation,
+        true,
+      );
+      assert.equal(resumed.runs[1]?.providerThreadId, providerThread.id);
+      const rejected = yield* orchestrator
+        .dispatch({
+          ...command,
+          commandId: CommandId.make("restart-duplicate"),
+          messageId: MessageId.make("restart-other-message"),
+        })
+        .pipe(Effect.flip);
+      assert.equal(rejected._tag, "OrchestratorDispatchError");
+      const nextRun = resumed.runs[1]!;
+      yield* sink.write({
+        commandId: CommandId.make("restart-next-running"),
+        events: [
+          {
+            id: EventId.make("restart-next-running-event"),
+            type: "run.updated",
+            threadId,
+            runId: nextRun.id,
+            occurredAt: now,
+            payload: { ...nextRun, status: "running" },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "run.restart-continuation.prepare",
+        commandId: CommandId.make("restart-next-prepare"),
+        threadId,
+        runId: nextRun.id,
+        messageId: MessageId.make("restart-next-message"),
+        reason: "restart",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("restart-archive"),
+        threadId,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("restart-unarchive"),
+        threadId,
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[1]?.restartContinuation?.status,
+        "cancelled",
+      );
+      yield* orchestrator.dispatch({
+        type: "run.restart-continuation.prepare",
+        commandId: CommandId.make("restart-branch-prepare"),
+        threadId,
+        runId: nextRun.id,
+        messageId: MessageId.make("restart-branch-message"),
+        reason: "restart",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("restart-change-branch"),
+        threadId,
+        branch: "different",
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[1]?.restartContinuation?.status,
+        "cancelled",
+      );
+      yield* orchestrator.dispatch({
+        type: "run.restart-continuation.prepare",
+        commandId: CommandId.make("restart-stop-prepare"),
+        threadId,
+        runId: nextRun.id,
+        messageId: MessageId.make("restart-stop-message"),
+        reason: "restart",
+      });
+      yield* orchestrator.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("restart-explicit-stop"),
+        threadId,
+        runId: nextRun.id,
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[1]?.restartContinuation?.status,
+        "cancelled",
+      );
+    }),
+  );
+
   it.effect("rejects stale automatic settlement and preserves its activity timestamp", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

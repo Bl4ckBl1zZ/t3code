@@ -4,6 +4,7 @@
     "defaultThreadEnvMode": "worktree"
   },
   "settings": {
+    "continueThreadsAfterServerUpdate": false,
     "sidebarAutoSettleAfterDays": 3,
     "sidebarAutoSettleOnMerge": true,
     "enableLegacyTokenStreaming": false,

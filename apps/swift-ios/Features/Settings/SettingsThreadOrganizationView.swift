@@ -12,6 +12,7 @@ struct SettingsThreadOrganizationView: View {
         (model.client as? any FeatureServerSettingsManaging) ?? EmptyFeatureServerSettingsManager.shared
     }
     private var supported: Bool { config?.environment?.capabilities.threadAutoSettlement == true }
+    private var restartSupported: Bool { config?.environment?.capabilities.threadRestartContinuation == true }
     private var days: Double? { config?.settings?.sidebarAutoSettleAfterDays }
 
     var body: some View {
@@ -49,6 +50,14 @@ struct SettingsThreadOrganizationView: View {
                     Text("Running work, blocking requests and open linked pull requests stay active.")
                         .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(14)
                 }.disabled(!supported || loading || saving)
+                ThreadDetailsSection(title: "Restart recovery") {
+                    Toggle("Continue after restarts", isOn: Binding(
+                        get: { config?.settings?.continueThreadsAfterServerUpdate ?? false },
+                        set: { value in Task { await save(.init(continueThreadsAfterServerUpdate: value)) } }
+                    )).padding(14)
+                    Text(restartSupported ? "Resume interrupted threads when this machine starts T3 again, including after updates. Saved provider sessions are required. Terminal commands may still be interrupted." : "Connect an updated server to configure restart recovery.")
+                        .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(14)
+                }.disabled(!restartSupported || loading || saving)
                 Button("Reload") { Task { await load() } }.disabled(loading || saving)
             }.padding(18)
         }
@@ -71,13 +80,15 @@ struct SettingsThreadOrganizationView: View {
         } catch { if !Task.isCancelled && requestedID == environmentID { errorMessage = error.localizedDescription } }
     }
     private func save(_ patch: ServerSettingsPatchInput) async {
-        guard supported, !loading, !saving else { return }
+        let isRestartPatch = patch.continueThreadsAfterServerUpdate != nil
+        guard (isRestartPatch ? restartSupported : supported), !loading, !saving else { return }
         saving = true
         let requestedID = environmentID
         defer { saving = false }
         do {
             let current = try await manager.providerModelConfiguration(environmentID: requestedID)
-            guard current.environment?.capabilities.threadAutoSettlement == true else { throw FeatureCapabilityUnavailable("Automatic settlement") }
+            let available = isRestartPatch ? current.environment?.capabilities.threadRestartContinuation : current.environment?.capabilities.threadAutoSettlement
+            guard available == true else { throw FeatureCapabilityUnavailable(isRestartPatch ? "Restart recovery" : "Automatic settlement") }
             try await manager.updateServerSettings(environmentID: requestedID, patch: patch)
             guard !Task.isCancelled, requestedID == environmentID else { return }
             await load()

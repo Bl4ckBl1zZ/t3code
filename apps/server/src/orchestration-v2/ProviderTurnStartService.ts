@@ -239,6 +239,11 @@ export const layer: Layer.Layer<
           });
         }
         if (providerThread.nativeThreadRef === null) {
+          if (message.restartContinuation === true)
+            return yield* new ProviderTurnStartError({
+              runId,
+              cause: "The interrupted provider thread no longer has a saved resume reference.",
+            });
           return yield* session.ensureThread({
             threadId: projection.thread.id,
             modelSelection: run.modelSelection,
@@ -258,6 +263,7 @@ export const layer: Layer.Layer<
           return resumed.success;
         }
 
+        if (message.restartContinuation === true) return yield* resumed.failure;
         const replacement = yield* session.ensureThread({
           threadId: projection.thread.id,
           modelSelection: run.modelSelection,
@@ -513,6 +519,9 @@ export const layer: Layer.Layer<
         captureFilesystemCheckpoint:
           session.providerSession.capabilities.checkpointing.appCanCheckpointFilesystem,
         message: {
+          ...(message.restartContinuation === undefined
+            ? {}
+            : { restartContinuation: message.restartContinuation }),
           messageId: message.id,
           // Appended after the handoff composition on purpose: the upload list
           // should be the last thing the model reads, not something buried

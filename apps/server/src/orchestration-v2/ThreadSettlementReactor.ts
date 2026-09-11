@@ -29,7 +29,9 @@ import {
 export class ThreadSettlementReactor extends Context.Service<
   ThreadSettlementReactor,
   {
-    readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+    readonly start: (options?: {
+      readonly beforeSweep?: Effect.Effect<void>;
+    }) => Effect.Effect<void, never, Scope.Scope>;
     readonly drain: Effect.Effect<void>;
     readonly requestSweep: Effect.Effect<void>;
   }
@@ -157,11 +159,13 @@ export const make = Effect.gen(function* () {
       { concurrency: 8, discard: true },
     );
   });
+  let beforeSweep: Effect.Effect<void> = Effect.void;
   let queued = false;
   const worker = yield* makeDrainableWorker(() =>
     Effect.sync(() => {
       queued = false;
     }).pipe(
+      Effect.andThen(Effect.suspend(() => beforeSweep)),
       Effect.andThen(sweep()),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
@@ -177,7 +181,10 @@ export const make = Effect.gen(function* () {
     queued = true;
     return worker.enqueue(undefined);
   });
-  const start = Effect.fn("ThreadSettlementReactor.start")(function* () {
+  const start = Effect.fn("ThreadSettlementReactor.start")(function* (options?: {
+    readonly beforeSweep?: Effect.Effect<void>;
+  }) {
+    beforeSweep = options?.beforeSweep ?? Effect.void;
     const changes = yield* settingsService.subscribeChanges;
     const merges = yield* pullRequests.subscribeMerges;
     yield* forkParked(

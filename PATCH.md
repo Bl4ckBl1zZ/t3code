@@ -1179,3 +1179,18 @@ Resume requests exclude historical turns and validate only the native thread ide
 update timestamp used by V2. Unknown historical error enums cannot prevent a valid resume; malformed
 identity metadata remains an error and never starts a fresh thread silently. Automatic restart
 continuation itself remains separate work.
+
+### Opt-in restart continuation on V2 (2026-09-11 parity port)
+
+The restart preference and lifecycle intent from `5b7d72aad1`, `b906ce2d73` and `1abc717f0d` are
+ported to V2 persisted run markers and serialized continuation commands. V1 provider directories,
+adapters and projectors are not carried. Current native provider references and the latest V2 run
+own recovery; duplicates, completed/archived/settled work, newer messages and changed contexts do
+not resume. Explicit stop/organization changes retire pending markers. Codex resumes without a
+synthetic prompt, other adapters receive a continuation instruction, and recovery never creates a
+fresh provider conversation as a fallback. No SQLite migration is required.
+
+Web and native machine preferences use `threadRestartContinuation`, default false; Swift mirrors
+settings, capabilities and optional run/message fields. All newly added PR/settlement/recovery roots
+are registered before update activation. Cross-environment shared preferences and per-update
+handoff integration remain distinct parity work; the persisted machine opt-in covers normal updates.

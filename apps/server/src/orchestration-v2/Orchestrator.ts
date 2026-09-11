@@ -1,3 +1,7 @@
+import {
+  canContinueAfterRestart,
+  RESTART_CONTINUATION_PROMPT,
+} from "./RestartContinuationPolicy.ts";
 import { isAutoSettlementCandidate } from "./ThreadSettlementPolicy.ts";
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequestChains";
 import {
@@ -250,6 +254,8 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "prepared-run.release":
     case "prepared-run.progress":
     case "prepared-run.fail":
+    case "run.restart-continuation.prepare":
+    case "run.restart-continuation.clear":
     case "run.interrupt":
     case "queued-message.promote-to-steer":
     case "queued-run.reorder":
@@ -1993,6 +1999,35 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
 
+    if (
+      command.type === "thread.archive" ||
+      command.type === "thread.delete" ||
+      command.type === "thread.settle" ||
+      command.type === "thread.model-selection.set" ||
+      command.type === "provider.switch" ||
+      (command.type === "thread.metadata.update" &&
+        ((command.worktreePath !== undefined && command.worktreePath !== thread.worktreePath) ||
+          (command.branch !== undefined && command.branch !== thread.branch)))
+    ) {
+      const current = yield* getProjectionWithPendingEvents(command.threadId, events);
+      for (const run of current.runs) {
+        if (run.restartContinuation?.status !== "pending") continue;
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...run,
+            restartContinuation: { ...run.restartContinuation, status: "cancelled" },
+          },
+        });
+      }
+    }
     // Settle means "done with this thread", so a live provider session must
     // not keep running background work (PR monitors, dev servers, subagent
     // fleets) after it lands. Commands are decided serially against the
@@ -3003,6 +3038,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     });
 
+  const dispatchRestartContinuation = Effect.fn("Orchestrator.dispatchRestartContinuation")(
+    function* (
+      command: Extract<
+        OrchestrationV2Command,
+        { type: "run.restart-continuation.prepare" | "run.restart-continuation.clear" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      const run = projection.runs.find((candidate) => candidate.id === command.runId);
+      if (run === undefined) return;
+      if (command.type === "run.restart-continuation.prepare") {
+        if (
+          !canContinueAfterRestart(projection, run, "prepare") ||
+          run.restartContinuation?.status === "pending"
+        )
+          return;
+      } else if (
+        run.restartContinuation?.status !== "pending" ||
+        run.restartContinuation.messageId !== command.messageId
+      )
+        return;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "run.updated",
+        threadId: command.threadId,
+        runId: run.id,
+        providerInstanceId: run.providerInstanceId,
+        occurredAt: yield* DateTime.now,
+        payload: {
+          ...run,
+          restartContinuation:
+            command.type === "run.restart-continuation.prepare"
+              ? { messageId: command.messageId, reason: command.reason, status: "pending" }
+              : { ...run.restartContinuation!, status: "cancelled" },
+        },
+      });
+    },
+  );
+
   const dispatchMessage = (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -3010,6 +3087,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (command.restartContinuation !== undefined) {
+        const source = projection.runs.find(
+          (run) => run.id === command.restartContinuation!.sourceRunId,
+        );
+        if (
+          source === undefined ||
+          !canContinueAfterRestart(projection, source, "resume") ||
+          source.restartContinuation?.messageId !== command.messageId ||
+          command.createdBy !== "agent" ||
+          command.creationSource !== "server" ||
+          command.dispatchMode.type !== "start_immediately" ||
+          command.attachments.length > 0
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Restart continuation was superseded or has no resumable provider context.",
+          });
+        }
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: source.id,
+          providerInstanceId: source.providerInstanceId,
+          occurredAt: yield* DateTime.now,
+          payload: {
+            ...source,
+            restartContinuation: { ...source.restartContinuation, status: "consumed" },
+          },
+        });
+        projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      }
       if (projection.thread.settledOverride !== null) {
         const now = yield* DateTime.now;
         const thread: OrchestrationV2AppThread = {
@@ -3107,9 +3219,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         };
       }
       const dispatchText =
-        delegatedCompletion === undefined
-          ? command.text
-          : delegatedCompletionWakeDetail(projection, delegatedCompletion.taskIds);
+        command.restartContinuation !== undefined
+          ? RESTART_CONTINUATION_PROMPT
+          : delegatedCompletion === undefined
+            ? command.text
+            : delegatedCompletionWakeDetail(projection, delegatedCompletion.taskIds);
       const sourcePlanProjection =
         command.sourcePlanRef === undefined
           ? null
@@ -3319,6 +3433,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           completedAt: null,
         };
         const message: OrchestrationV2ConversationMessage = {
+          ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
           createdBy: command.createdBy,
           creationSource: command.creationSource,
           id: command.messageId,
@@ -3574,6 +3689,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           completedAt: null,
         };
         const message: OrchestrationV2ConversationMessage = {
+          ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
           createdBy: command.createdBy,
           creationSource: command.creationSource,
           id: command.messageId,
@@ -4345,6 +4461,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: null,
       };
       const message: OrchestrationV2ConversationMessage = {
+        ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         id: command.messageId,
@@ -6039,7 +6156,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       const projection = yield* loadProjectionForCommand(command);
-      const run = projection.runs.find((candidate) => candidate.id === command.runId);
+      const originalRun = projection.runs.find((candidate) => candidate.id === command.runId);
+      const run =
+        originalRun?.restartContinuation?.status === "pending"
+          ? {
+              ...originalRun,
+              restartContinuation: {
+                ...originalRun.restartContinuation,
+                status: "cancelled" as const,
+              },
+            }
+          : originalRun;
       const rootNode =
         run?.rootNodeId === null
           ? undefined
@@ -6080,6 +6207,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
 
       const emitEvent = emit(events, command);
+      if (originalRun?.restartContinuation?.status === "pending")
+        yield* emitEvent({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: run,
+        });
       const interruptRequestItem: OrchestrationV2TurnItem = {
         id: idAllocator.derive.runSignalTurnItem({
           runId: run.id,
@@ -7134,6 +7270,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "runtime-request.respond":
         yield* dispatchRuntimeRequestRespond(command, events, effects);
+        break;
+      case "run.restart-continuation.prepare":
+      case "run.restart-continuation.clear":
+        yield* dispatchRestartContinuation(command, events);
         break;
       case "run.interrupt":
         cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);

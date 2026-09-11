@@ -955,6 +955,7 @@ function codexReplayPreamble(input: {
   readonly nativeThreadId: string;
   readonly nativeTurnId: string;
   readonly prompt: string;
+  readonly promptless?: boolean;
 }): Array<CodexReplay.CodexAppServerReplayEntry> {
   return [
     {
@@ -1035,7 +1036,7 @@ function codexReplayPreamble(input: {
         method: "turn/start",
         params: {
           threadId: input.nativeThreadId,
-          input: [{ type: "text", text: input.prompt }],
+          input: input.promptless ? [] : [{ type: "text", text: input.prompt }],
           cwd: "/workspace",
           model: "gpt-5.4",
           approvalPolicy: "never",
@@ -1253,6 +1254,40 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         ),
     );
   }
+
+  it.effect("sends promptless input for a restart continuation", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const nativeThreadId = "promptless-restart";
+        const nativeTurnId = "promptless-turn";
+        const entries = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId,
+          prompt: "Continue after restart",
+          promptless: true,
+        });
+        const h = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({ scenario: "promptless-restart", entries }),
+        );
+        const input = makeCodexTestTurnInput({
+          threadId: h.threadId,
+          providerThread: h.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("promptless-attempt"),
+          text: "Continue after restart",
+        });
+        yield* h.runtime.startTurn({
+          ...input,
+          message: {
+            ...input.message,
+            createdBy: "agent",
+            creationSource: "server",
+            restartContinuation: true,
+          },
+        });
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
 
   const assistantMessages = (events: ReadonlyArray<ProviderAdapterV2Event>) =>
     events.filter(

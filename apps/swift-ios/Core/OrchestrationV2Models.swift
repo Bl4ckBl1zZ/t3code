@@ -1045,7 +1045,14 @@ public struct OrchestrationV2ContextTransfer: Codable, Equatable, Sendable, Iden
 /// A run, narrowed to what drives the thread header and the queue control. The
 /// projection carries far more per run; the rest is modeled when a feature
 /// needs it.
+public struct OrchestrationV2RestartContinuation: Codable, Equatable, Sendable {
+    public let messageId: String
+    public let reason: String
+    public let status: String
+}
+
 public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
+    public var restartContinuation: OrchestrationV2RestartContinuation? = nil
     public let id: String
     public let ordinal: Int
     public let status: String
@@ -1079,6 +1086,7 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
 /// table, which is what a queued run's `userMessageId` resolves against and
 /// what survives a timeline clear.
 public struct OrchestrationV2ConversationMessage: Codable, Equatable, Sendable, Identifiable {
+    public var restartContinuation: Bool? = nil
     public let id: String
     public let threadId: String
     public let runId: String?
@@ -1095,12 +1103,14 @@ public struct OrchestrationV2ConversationMessage: Codable, Equatable, Sendable, 
     public let updatedAt: OrchestrationV2Timestamp
 
     private enum CodingKeys: String, CodingKey {
+        case restartContinuation
         case id, threadId, runId, nodeId, role, text, attachments, streaming
         case createdBy, creationSource, createdAt, updatedAt
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        restartContinuation = try container.decodeIfPresent(Bool.self, forKey: .restartContinuation)
         id = try container.decode(String.self, forKey: .id)
         threadId = try container.decode(String.self, forKey: .threadId)
         runId = try container.decodeIfPresent(String.self, forKey: .runId)

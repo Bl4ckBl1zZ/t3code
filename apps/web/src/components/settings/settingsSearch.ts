@@ -52,6 +52,12 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
  */
 export const SETTINGS_SEARCH_ITEMS = [
   {
+    id: "continue-threads-after-server-update",
+    title: "Continue threads after restarts",
+    to: "/settings/general",
+    searchTerms: ["resume interrupted crash reboot update machine server recovery"],
+  },
+  {
     id: "project-defaults",
     title: "Project defaults",
     to: "/settings/projects",

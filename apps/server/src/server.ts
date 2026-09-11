@@ -1,3 +1,4 @@
+import * as RestartContinuationService from "./orchestration-v2/RestartContinuationService.ts";
 import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -762,6 +763,7 @@ export const makeServerLayer = Layer.unwrap(
           PullRequestSyncReactor.layer,
           ThreadPullRequestReactor.layer,
           ThreadSettlementReactor.layer,
+          RestartContinuationService.layer,
         ).pipe(Layer.provide(PullRequestServiceLive)),
       ),
       Layer.provideMerge(RuntimeDependenciesLive),

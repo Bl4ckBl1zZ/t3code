@@ -725,6 +725,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
         : []),
+      ...(settings.continueThreadsAfterServerUpdate !==
+      DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
+        ? ["Continue threads after restarts"]
+        : []),
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
         : []),
@@ -824,6 +828,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
       settings.sidebarAutoSettleAfterDays,
+      settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
@@ -918,6 +923,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       alwaysExpandActivity: DEFAULT_UNIFIED_SETTINGS.alwaysExpandActivity,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
+      continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
@@ -2260,6 +2266,9 @@ function LegacyFeaturesSection() {
 }
 
 export function GeneralSettingsPanel() {
+  const primaryEnvironment = usePrimaryEnvironment();
+  const supportsRestartContinuation =
+    primaryEnvironment?.serverConfig?.environment.capabilities.threadRestartContinuation === true;
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
@@ -2315,6 +2324,33 @@ export function GeneralSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("continue-threads-after-server-update")}
+          resetAction={
+            supportsRestartContinuation && settings.continueThreadsAfterServerUpdate ? (
+              <SettingResetButton
+                label="restart continuation"
+                onClick={() => updateSettings({ continueThreadsAfterServerUpdate: false })}
+              />
+            ) : null
+          }
+          description={
+            supportsRestartContinuation
+              ? "Resume interrupted threads after this machine restarts or updates. Saved provider sessions are required; terminal commands may still be interrupted."
+              : "Connect an updated server to configure restart continuation."
+          }
+          control={
+            <Switch
+              disabled={!supportsRestartContinuation}
+              checked={settings.continueThreadsAfterServerUpdate}
+              onCheckedChange={(checked) =>
+                updateSettings({ continueThreadsAfterServerUpdate: Boolean(checked) })
+              }
+              aria-label="Continue threads after restarts"
+            />
+          }
+        />
         <SettingsRow
           title="Set up T3 Code"
           description="Connect computers, configure agents, and import CLI projects and conversations."

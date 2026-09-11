@@ -1,3 +1,4 @@
+import * as RestartContinuationService from "./orchestration-v2/RestartContinuationService.ts";
 import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -444,6 +445,7 @@ export const make = (options?: StartupOptions) =>
     const threadPullRequests = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
     const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
     const threadSettlement = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+    const restartContinuation = yield* RestartContinuationService.RestartContinuationService;
     const hermesProactive = yield* HermesProactiveService.HermesProactiveService;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -466,6 +468,7 @@ export const make = (options?: StartupOptions) =>
             cause: "Server runtime is shutting down.",
           }),
         );
+        yield* restartContinuation.prepare("restart").pipe(Effect.ignore({ log: true }));
         const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
         if (workerFiber !== null) {
           yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
@@ -615,7 +618,12 @@ export const make = (options?: StartupOptions) =>
           "orchestration-v2.projections.rebuild",
           projectionMaintenance.rebuild,
         ),
-        recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
+        recover: runStartupPhase(
+          "orchestration-v2.recovery",
+          restartContinuation
+            .prepare("restart")
+            .pipe(Effect.ignore({ log: true }), Effect.andThen(providerRuntimeRecovery.recover)),
+        ),
         startEffectWorker: runStartupPhase(
           "orchestration-v2.effect-worker.start",
           startEffectWorkerWithRelay({
@@ -725,6 +733,11 @@ export const make = (options?: StartupOptions) =>
         }),
       );
 
+      yield* threadPullRequests.start();
+      yield* pullRequestSync.start();
+      yield* threadSettlement.start({ beforeSweep: restartContinuation.awaitInitialResume });
+      yield* forkParked(restartContinuation.resume);
+
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
       yield* runStartupPhase(
@@ -771,9 +784,6 @@ export const make = (options?: StartupOptions) =>
           },
         }),
       );
-      yield* threadPullRequests.start();
-      yield* pullRequestSync.start();
-      yield* threadSettlement.start();
       yield* Effect.logDebug("startup phase: complete");
     }).pipe(
       Effect.annotateSpans({
