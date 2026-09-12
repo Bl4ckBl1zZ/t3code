@@ -20,7 +20,7 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Atom } from "effect/unstable/reactivity";
 
 import {
@@ -29,13 +29,15 @@ import {
   reconcilePreviewServerSessions,
   updatePreviewServerSnapshot,
 } from "~/previewStateStore";
-import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
+import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { resolveBrowserNavigationTarget } from "~/browser/browserTargetResolver";
 import {
   readActiveBrowserRecordingTargets,
   startBrowserRecording,
   stopBrowserRecording,
+  stopBrowserRecordingForUpload,
 } from "~/browser/browserRecording";
+import { uploadBrowserRecording } from "~/browser/browserRecordingUpload";
 import { resolveBrowserRecordingStopTarget } from "~/browser/browserRecordingScope";
 import {
   acquireBrowserSurfaceActivity,
@@ -59,8 +61,10 @@ import {
   PreviewAutomationViewportTimeoutError,
 } from "./previewAutomationErrors";
 import {
+  explicitlySuppressesPreviewMiniPlayer,
   previewAutomationDefaultViewport,
   previewAutomationOpenNeedsOverlay,
+  shouldAutoShowPreviewForAutomationUse,
   shouldOpenPreviewMiniPlayer,
 } from "./previewAutomationOpenReadiness";
 import {
@@ -313,6 +317,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
   );
   const [automationConnectionAtom] = useState(() => Atom.make<string | null>(null));
   const automationConnectionId = useAtomValue(automationConnectionAtom);
+  const presentationSuppressedRuntimeTabsRef = useRef(new Map<string, Set<string>>());
 
   const handleRequest = useCallback(
     async (request: PreviewAutomationRequest): Promise<unknown> => {
@@ -357,6 +362,21 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
           }
           const readyState = readThreadPreviewState(threadRef);
           const runtimeTabId = previewRuntimeTabId(threadRef, readyState.serverEpoch, readyTabId);
+          if (request.operation !== "open") {
+            const { autoShowFloatingPreview } = await resolveBrowserDefaults();
+            if (
+              shouldAutoShowPreviewForAutomationUse({
+                operation: request.operation,
+                autoShowFloatingPreview,
+                presentationSuppressed:
+                  presentationSuppressedRuntimeTabsRef.current
+                    .get(request.threadId)
+                    ?.has(runtimeTabId) ?? false,
+              })
+            ) {
+              usePreviewMiniPlayerStore.getState().open(threadRef, readyTabId);
+            }
+          }
           browserActivity.release ??= acquireBrowserSurfaceActivity(runtimeTabId);
           await waitForDesktopOverlay(
             threadRef,
@@ -456,6 +476,32 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               input,
               (await resolveBrowserDefaults()).autoShowFloatingPreview,
             );
+            const explicitlySuppressed = explicitlySuppressesPreviewMiniPlayer(input);
+            const suppressedTabs = presentationSuppressedRuntimeTabsRef.current.get(
+              request.threadId,
+            );
+            if (explicitlySuppressed) {
+              if (suppressedTabs) {
+                suppressedTabs.add(activeRuntimeTabId);
+              } else {
+                presentationSuppressedRuntimeTabsRef.current.set(
+                  request.threadId,
+                  new Set([activeRuntimeTabId]),
+                );
+              }
+              const miniPlayer = selectThreadPreviewMiniPlayer(
+                usePreviewMiniPlayerStore.getState().byThreadKey,
+                threadRef,
+              );
+              if (miniPlayer?.tabId === activeTabId) {
+                usePreviewMiniPlayerStore.getState().close(threadRef);
+              }
+            } else if (shouldPresentPreview) {
+              suppressedTabs?.delete(activeRuntimeTabId);
+              if (suppressedTabs?.size === 0) {
+                presentationSuppressedRuntimeTabsRef.current.delete(request.threadId);
+              }
+            }
             if (shouldPresentPreview) {
               usePreviewMiniPlayerStore.getState().open(threadRef, activeTabId);
             }
@@ -668,7 +714,18 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             const stopRuntimeTabId =
               activeRecordings.find((recording) => recording.serverTabId === stopTabId)
                 ?.runtimeTabId ?? null;
-            const artifact = stopRuntimeTabId ? await stopBrowserRecording(stopRuntimeTabId) : null;
+            const transferToEnvironment =
+              typeof request.input === "object" &&
+              request.input !== null &&
+              "transferToEnvironment" in request.input &&
+              request.input.transferToEnvironment === true;
+            const artifact = stopRuntimeTabId
+              ? transferToEnvironment
+                ? await stopBrowserRecordingForUpload(stopRuntimeTabId, (saved, blob) =>
+                    uploadBrowserRecording(threadRef, saved, blob, hostDeadlineMs),
+                  )
+                : await stopBrowserRecording(stopRuntimeTabId)
+              : null;
             if (!artifact || !stopTabId) {
               return raisePreviewAutomationHostError(
                 new PreviewAutomationRecordingNotActiveError({

@@ -55,6 +55,7 @@ import { ZoomIndicator } from "./ZoomIndicator";
 import { AgentBrowserCursor } from "./AgentBrowserCursor";
 import {
   findActiveBrowserRecordingRuntimeTabId,
+  isBrowserRecordingStartCancelledError,
   startBrowserRecording,
   stopBrowserRecording,
   useActiveBrowserRecordingTabIds,
@@ -397,7 +398,8 @@ export function PreviewView({
         return;
       }
       if (record) {
-        void startBrowserRecording(runtimeTabId, threadRef, tabId).catch((error) => {
+        void startBrowserRecording(runtimeTabId, threadRef, tabId).catch((error: unknown) => {
+          if (isBrowserRecordingStartCancelledError(error)) return;
           toastManager.add({
             type: "error",
             title: "Unable to start recording",

@@ -4,12 +4,19 @@ import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Schema from "effect/Schema";
+import {
+  parseAttachmentUuid,
+  parseAttachmentFileExtension,
+  PENDING_ATTACHMENT_THREAD_SEGMENT,
+  toSafeThreadAttachmentSegment,
+} from "../../../attachmentStore.ts";
+import { resolveAttachmentRelativePath } from "../../../attachmentPaths.ts";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type {
   PreviewAutomationOperation,
   PreviewAutomationOpenInput,
-  PreviewAutomationRecordingArtifact,
   PreviewAutomationRecordingStatus,
   PreviewAutomationResizeResult,
   PreviewAutomationSetColorSchemeResult,
@@ -17,7 +24,15 @@ import type {
   PreviewAutomationStatus,
   PreviewTabId,
 } from "@t3tools/contracts";
-import { PreviewAutomationScreenshotSaveError } from "@t3tools/contracts";
+import {
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  PREVIEW_RECORDING_STOP_TIMEOUT_MS,
+  PreviewAutomationRecordingTransferError,
+  PreviewAutomationRecordingDesktopUpdateRequiredError,
+  PreviewAutomationRecordingArtifact,
+  type ThreadId,
+  PreviewAutomationScreenshotSaveError,
+} from "@t3tools/contracts";
 
 import * as ServerConfig from "../../../config.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -248,6 +263,79 @@ const saveSnapshotScreenshot = Effect.fn("PreviewToolkit.saveSnapshotScreenshot"
   },
 );
 
+const UploadedRecordingArtifact = Schema.Struct({
+  ...PreviewAutomationRecordingArtifact.fields,
+  uploadedAttachmentId: Schema.optional(Schema.String),
+});
+const decodeUploadedRecordingArtifact = Schema.decodeUnknownEffect(UploadedRecordingArtifact);
+
+export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(function* (
+  threadId: ThreadId,
+  response: unknown,
+) {
+  const artifact = yield* decodeUploadedRecordingArtifact(response).pipe(
+    Effect.mapError(
+      (cause) =>
+        new PreviewAutomationRecordingTransferError({
+          threadId,
+          cause,
+        }),
+    ),
+  );
+  if (!artifact.uploadedAttachmentId) {
+    return yield* new PreviewAutomationRecordingDesktopUpdateRequiredError({ threadId });
+  }
+  const config = yield* ServerConfig.ServerConfig;
+  const uuid = parseAttachmentUuid(artifact.uploadedAttachmentId);
+  const extension = parseAttachmentFileExtension(artifact.uploadedAttachmentId);
+  const threadSegment = toSafeThreadAttachmentSegment(threadId);
+  const pendingId = `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${uuid}-${extension}`;
+  if (!uuid || !extension || !threadSegment || artifact.uploadedAttachmentId !== pendingId) {
+    return yield* new PreviewAutomationRecordingTransferError({
+      threadId,
+    });
+  }
+  // The same completed upload can be returned to overlapping stop requests.
+  const finalId = `${threadSegment}-${uuid}-${extension}`;
+  const currentPath = resolveAttachmentRelativePath({
+    attachmentsDir: config.attachmentsDir,
+    relativePath: `${pendingId}.${extension}`,
+  });
+  const finalPath = resolveAttachmentRelativePath({
+    attachmentsDir: config.attachmentsDir,
+    relativePath: `${finalId}.${extension}`,
+  });
+  if (!currentPath || !finalPath) {
+    return yield* new PreviewAutomationRecordingTransferError({ threadId });
+  }
+  const fileSystem = yield* FileSystem.FileSystem;
+  const validateFile = (filePath: string) =>
+    fileSystem.stat(filePath).pipe(
+      Effect.filterOrFail(
+        (stat) =>
+          stat.type === "File" &&
+          Number(stat.size) === artifact.sizeBytes &&
+          artifact.sizeBytes > 0 &&
+          artifact.sizeBytes <= PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+        () => new PreviewAutomationRecordingTransferError({ threadId }),
+      ),
+    );
+  yield* Effect.gen(function* () {
+    yield* validateFile(currentPath);
+    yield* fileSystem.rename(currentPath, finalPath);
+  }).pipe(
+    // Another stop may already have claimed this exact upload for this thread.
+    Effect.catch((cause) =>
+      cause._tag !== "PreviewAutomationRecordingTransferError" && cause.reason._tag === "NotFound"
+        ? validateFile(finalPath)
+        : Effect.fail(cause),
+    ),
+    Effect.mapError((cause) => new PreviewAutomationRecordingTransferError({ threadId, cause })),
+  );
+  const { uploadedAttachmentId: _uploadedAttachmentId, ...recording } = artifact;
+  return { ...recording, id: finalId, path: finalPath };
+});
+
 const handlers = {
   preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   preview_open: (input) =>
@@ -260,7 +348,7 @@ const handlers = {
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
   preview_snapshot: (input) =>
     Effect.gen(function* () {
-      const { save, savePath, ...target } = input ?? {};
+      const { includeImage: _includeImage, save, savePath, ...target } = input ?? {};
       const snapshot = yield* invokeTargeted<PreviewAutomationSnapshot>("snapshot", target);
       if (savePath !== undefined) {
         const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -287,13 +375,23 @@ const handlers = {
   preview_press: (input) => invokeTargeted<void>("press", input).pipe(Effect.as({})),
   preview_scroll: (input) => invokeTargeted<void>("scroll", input).pipe(Effect.as({})),
   preview_evaluate: (input) =>
-    invokeTargeted<unknown>("evaluate", input).pipe(Effect.map((result) => result ?? null)),
+    invokeTargeted<unknown>("evaluate", input).pipe(
+      Effect.map((result) => ({ value: result ?? null })),
+    ),
   preview_wait_for: (input) =>
     invokeTargeted<void>("waitFor", input, input.timeoutMs).pipe(Effect.as({})),
   preview_recording_start: (input) =>
     invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
   preview_recording_stop: (input) =>
-    invokeTargeted<PreviewAutomationRecordingArtifact>("recordingStop", input ?? {}),
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+      const response = yield* invokeTargeted<unknown>(
+        "recordingStop",
+        { ...input, transferToEnvironment: true },
+        PREVIEW_RECORDING_STOP_TIMEOUT_MS,
+      );
+      return yield* claimPreviewRecording(scope.threadId, response);
+    }),
 } satisfies Parameters<typeof PreviewToolkit.toLayer>[0];
 
 const { preview_snapshot, ...standardHandlers } = handlers;

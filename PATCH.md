@@ -450,10 +450,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     admission. Only message-mode questions can be dismissed. Callback answers with files
     retain their native response and queue the files as a follow-up. The V1 client commands and
     async-settlement implementation remain excluded; no SQLite migration is added.
-  - Cross-platform capture (`299404a754`), native feedback follow-ups, remote recording transfer,
-    text-only/saved preview snapshots (`29c5ecd0ee`, `061543e9e5`, `9e37f0c291`), recording
-    encoding (`3941c2a1de`), floating-preview resize and remote media resolution cross the fork's
-    desktop/preview protocols and attachment handling. Windows terminal telemetry
+  - Cross-platform capture (`299404a754`) and native feedback follow-ups remain separate ports.
+    Remote recording transfer, bounded/text-only snapshots, Electron 43 recording capture and
+    floating-preview resize are now carried through the fork preview protocol, as detailed below.
+    Windows terminal telemetry
     (`ea646c0834`) needs the fork's resource-monitor protocol and service fakes adapted together.
   - Effect rc.112, Alchemy beta.76 and TypeScript 7 upgrades (and their reference trees and native
     Headers patch) require validation of the fork-only V2/Swift-support/tooling consumers. The
@@ -1347,3 +1347,24 @@ contract fixtures and pure routing tests cover attribution and session selection
   app-bound encryption. Native keyring bindings load only during an explicit import. Linux
   uses the bundled libsecret helper; no V1 runtime or database migration is introduced. Swift
   does not host Electron browser partitions, so these controls remain desktop-local.
+
+### Browser recording and floating preview parity
+
+Reviewed upstream `061543e9e5`, `9e37f0c291`, `ef7014d851`, `3941c2a1de`,
+`12e8997e58` and `f57d3832c0` are adapted to the retained browser services. MCP snapshots
+support image omission and bounded text while retaining complete structured metadata and the
+fork's V2 workspace-safe screenshot saving. Evaluate results wrap arbitrary values in an object.
+Agent recordings upload through the existing signed attachment transport and are claimed by
+the invoking V2 thread; desktop-only paths are never presented as remote environment artifacts.
+Transfers are size/deadline bounded, concurrent stops share an upload, and failures retain the
+desktop copy. Old desktop clients return an explicit update-required error.
+
+Electron 43 recording uses a short-lived frame-bound display-media grant and serializes only
+capture startup. Active capture keeps hidden guests paintable and disables background throttling;
+cleanup restores throttling and releases streams before upload. H264 is preferred when available,
+with bounded resolution/frame-rate-based encoding quality. Floating previews resize from all
+edges with their source aspect ratio, retain size through temporary container changes, and return
+when their full browser panel closes. Agent activity honors explicit background-only opens and
+the desktop-local automatic floating preference. Dialogs remain above floating browser content.
+No V1 thread runtime or migration is introduced. Swift uses the existing authenticated artifact
+renderer; Electron capture/profile controls remain desktop-specific.

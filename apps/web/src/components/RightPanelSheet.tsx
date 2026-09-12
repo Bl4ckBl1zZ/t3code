@@ -7,6 +7,7 @@ export function RightPanelSheet(props: {
   children: ReactNode;
   animationDurationMs?: number;
   open: boolean;
+  underFloatingPreview?: boolean;
   onClose: () => void;
 }) {
   return (
@@ -25,6 +26,9 @@ export function RightPanelSheet(props: {
         side="right"
         showCloseButton={false}
         keepMounted
+        {...(props.underFloatingPreview
+          ? { backdropClassName: "z-[35]", viewportClassName: "z-[35]" }
+          : {})}
         className={RIGHT_PANEL_SHEET_CLASS_NAME}
       >
         {props.children}

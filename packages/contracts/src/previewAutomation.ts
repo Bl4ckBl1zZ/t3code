@@ -70,6 +70,12 @@ const SNAPSHOT_SAVE_PATH_DESCRIPTION =
   "Optional workspace-relative file path ending in .png. Use only when the screenshot should live inside the repo (e.g. committed docs or fixtures); prefer save:true for chat evidence. The file is written into the thread workspace and can be embedded with markdown image syntax, e.g. ![login page](screenshots/login.png).";
 
 export const PreviewAutomationSnapshotInput = Schema.Struct({
+  includeImage: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Include the screenshot image in the tool result. Defaults to true; set false for text-only output.",
+    }),
+  ),
   ...PreviewAutomationTabTargetFields,
   save: Schema.optional(
     Schema.Boolean.annotate({ description: SNAPSHOT_SAVE_DESCRIPTION }),
@@ -580,6 +586,8 @@ export const PreviewAutomationRecordingStatus = Schema.Struct({
 });
 export type PreviewAutomationRecordingStatus = typeof PreviewAutomationRecordingStatus.Type;
 
+export const PREVIEW_RECORDING_STOP_TIMEOUT_MS = 120_000;
+
 export const PreviewAutomationRecordingArtifact = Schema.Struct({
   id: Schema.String,
   tabId: PreviewTabId,
@@ -897,7 +905,50 @@ export class PreviewAutomationScreenshotSaveError extends Schema.TaggedErrorClas
   }
 }
 
+export class PreviewAutomationRecordingTransferError extends Schema.TaggedErrorClass<PreviewAutomationRecordingTransferError>()(
+  "PreviewAutomationRecordingTransferError",
+  {
+    threadId: ThreadId,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return "Preview recording could not be saved to the agent environment. The saved copy remains on the desktop.";
+  }
+}
+
+export class PreviewAutomationRecordingDesktopUpdateRequiredError extends Schema.TaggedErrorClass<PreviewAutomationRecordingDesktopUpdateRequiredError>()(
+  "PreviewAutomationRecordingDesktopUpdateRequiredError",
+  { threadId: ThreadId, cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return "Update the desktop app to transfer recordings. The recording remains on the desktop.";
+  }
+}
+
+export class PreviewAutomationRecordingTooLargeError extends Schema.TaggedErrorClass<PreviewAutomationRecordingTooLargeError>()(
+  "PreviewAutomationRecordingTooLargeError",
+  { threadId: ThreadId, cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return "The recording exceeds 50 MiB. The saved copy remains on the desktop.";
+  }
+}
+
+export class PreviewAutomationRecordingDeadlineExpiredError extends Schema.TaggedErrorClass<PreviewAutomationRecordingDeadlineExpiredError>()(
+  "PreviewAutomationRecordingDeadlineExpiredError",
+  { threadId: ThreadId, cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return "The recording transfer deadline expired. The saved copy remains on the desktop.";
+  }
+}
+
 export const PreviewAutomationError = Schema.Union([
+  PreviewAutomationRecordingTransferError,
+  PreviewAutomationRecordingDesktopUpdateRequiredError,
+  PreviewAutomationRecordingTooLargeError,
+  PreviewAutomationRecordingDeadlineExpiredError,
   PreviewAutomationUnavailableError,
   PreviewAutomationNoAvailableHostError,
   PreviewAutomationUnsupportedClientError,
