@@ -1,3 +1,4 @@
+import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
@@ -174,7 +175,12 @@ function RootRouteView() {
           hostedStatic={authGateState.status === "hosted-static"}
         >
           {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-          {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
+          {primaryEnvironmentAuthenticated ? (
+            <>
+              <DesktopAppActivationCoordinator />
+              <SnapShotCoordinator />
+            </>
+          ) : null}
           <RelayClientInstallDialog />
           <ConnectOnboardingDialog />
           <SshPasswordPromptDialog />

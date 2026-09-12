@@ -1,3 +1,11 @@
+import { useSyncExternalStore } from "react";
+import { subscribeSnapShotComposerFocus } from "../../lib/desktopSnapShot";
+import {
+  getPendingSnapShotAnimations,
+  subscribeToPendingSnapShotAnimations,
+  pendingSnapShotAnimationIdsForTarget,
+} from "../../lib/snapShotAnimation";
+import { resizeSnapShotSource } from "../../lib/snapShotSource";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
@@ -829,6 +837,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
+  const allPendingCaptures = useSyncExternalStore(
+    subscribeToPendingSnapShotAnimations,
+    getPendingSnapShotAnimations,
+    getPendingSnapShotAnimations,
+  );
+  const captureIds = pendingSnapShotAnimationIdsForTarget(allPendingCaptures, composerDraftTarget);
+  const pendingCaptures = allPendingCaptures.filter((capture) => captureIds.includes(capture.id));
+  useEffect(() => subscribeSnapShotComposerFocus(focusComposer), [focusComposer]);
   const composerElementContexts = composerDraft.elementContexts;
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
@@ -1953,6 +1969,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 name: image.name,
                 mimeType: image.mimeType,
                 sizeBytes: image.sizeBytes,
+                ...(image.type === "image" && image.source ? { source: image.source } : {}),
                 dataUrl,
               });
             } catch {
@@ -2773,6 +2790,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           mimeType: result.image.mimeType,
           sizeBytes: result.image.sizeBytes,
           dataUrl: result.image.dataUrl,
+          ...(image.type === "image" && image.source
+            ? { source: resizeSnapShotSource(image.source, result.image.imageSize) }
+            : {}),
         });
       }
       const { kept, droppedNames } = partitionStashAttachments(candidateAttachments);
@@ -3815,8 +3835,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               !isComposerApprovalState &&
               pendingUserInputs.length === 0 && (
                 <ComposerAttachmentChips
+                  pendingCaptures={pendingCaptures}
                   attachments={composerImages
-                    .filter((image) => !isComposerResting || image.type !== "image")
+                    .filter(
+                      (image) =>
+                        !isComposerResting ||
+                        image.type !== "image" ||
+                        captureIds.includes(image.id),
+                    )
                     .filter(
                       (image) =>
                         !composerPreviewAnnotations.some(
@@ -3829,6 +3855,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       name: image.name,
                       mimeType: image.mimeType,
                       sizeBytes: image.sizeBytes,
+                      ...(image.type === "image" && image.source ? { source: image.source } : {}),
                       previewUrl: image.previewUrl,
                       upload:
                         uploadsByImageId[image.id]?.environmentId === environmentId

@@ -19,6 +19,7 @@ import {
   AttachmentMaterialization,
   annotateAttachmentPlacement,
 } from "../attachments/AttachmentMaterialization.ts";
+import { appendSnapShotContext } from "../attachments/snapShotContext.ts";
 import { appendUploadedFilesBlock } from "../attachments/uploadPaths.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import {
@@ -632,17 +633,19 @@ export const layer: Layer.Layer<
             ? {}
             : { restartContinuation: message.restartContinuation }),
           messageId: message.id,
-          // Appended after the handoff composition on purpose: the upload list
-          // should be the last thing the model reads, not something buried
-          // inside a handoff summary.
-          text: appendUploadedFilesBlock(
-            effectiveHandoffs.length === 0
-              ? message.text
-              : providerMessageWithContextHandoffs({
-                  handoffs: effectiveHandoffs,
-                  userText: message.text,
-                }),
-            uploads.promptBlock,
+          // Attachment paths and captured-window data follow handoff context,
+          // outside the historical summary.
+          text: appendSnapShotContext(
+            appendUploadedFilesBlock(
+              effectiveHandoffs.length === 0
+                ? message.text
+                : providerMessageWithContextHandoffs({
+                    handoffs: effectiveHandoffs,
+                    userText: message.text,
+                  }),
+              uploads.promptBlock,
+            ),
+            message.attachments,
           ),
           attachments: uploads.inlineAttachments,
           createdBy: message.createdBy,

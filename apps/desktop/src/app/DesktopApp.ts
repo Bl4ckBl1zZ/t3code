@@ -1,3 +1,4 @@
+import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -204,6 +205,7 @@ const bootstrap = Effect.gen(function* () {
   }
 
   yield* installDesktopIpcHandlers();
+  yield* (yield* DesktopSnapShot.DesktopSnapShot).initialize;
   yield* logBootstrapInfo("bootstrap ipc handlers registered");
 
   if (!(yield* Ref.get(state.quitting))) {

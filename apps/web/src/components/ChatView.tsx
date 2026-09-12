@@ -6876,6 +6876,7 @@ function ChatViewContent(props: ChatViewProps) {
               sizeBytes: image.sizeBytes,
               dataUrl,
               ...(image.role === undefined ? {} : { role: image.role }),
+              ...(image.type === "image" && image.source ? { source: image.source } : {}),
             };
           case "file":
             return {

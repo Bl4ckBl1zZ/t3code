@@ -386,6 +386,7 @@ export function getUploadedAttachments(input: {
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       ...(image.role === undefined ? {} : { role: image.role }),
+      ...(image.type === "image" && image.source ? { source: image.source } : {}),
     });
   }
   return attachments;

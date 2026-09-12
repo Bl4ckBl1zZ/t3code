@@ -1,3 +1,4 @@
+import { ChatImageAttachment } from "../packages/contracts/src/chatAttachment.ts";
 import { TerminalSummary, TerminalWriteInput } from "../packages/contracts/src/terminal.ts";
 import {
   AgentSessionScanResult,
@@ -1669,3 +1670,50 @@ if (process.argv.includes("--check")) {
 } else {
   NodeFS.writeFileSync(actionTerminalPath, actionTerminalSerialized);
 }
+
+const snapShotFixturePath = NodePath.join(NodePath.dirname(outputPath), "snapShot.json");
+const snapShotFixture = `${JSON.stringify(
+  Schema.encodeSync(ChatImageAttachment)({
+    type: "image",
+    id: "capture_1",
+    name: "window.png",
+    mimeType: "image/png",
+    sizeBytes: 4,
+    source: {
+      kind: "snap-shot",
+      capturedAt: "2026-09-01T00:00:00.000Z",
+      appName: "Editor",
+      windowTitle: "main.ts",
+      accessibility: {
+        format: "element-tree",
+        coordinateSpace: "captured-image",
+        imageSize: { width: 100, height: 80 },
+        truncated: true,
+        root: {
+          role: "window",
+          bounds: null,
+          children: [
+            {
+              role: "button",
+              name: "Save",
+              bounds: { x: 10, y: 5, width: 20, height: 10 },
+              state: { enabled: true },
+              children: [],
+            },
+          ],
+        },
+      },
+    },
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(snapShotFixturePath) ||
+    NodeFS.readFileSync(snapShotFixturePath, "utf8") !== snapShotFixture
+  ) {
+    console.error("[swift-fixtures] snapShot.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(snapShotFixturePath, snapShotFixture);

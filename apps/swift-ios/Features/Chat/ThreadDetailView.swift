@@ -2930,6 +2930,7 @@ struct FeatureMessageView: View {
 private struct FeatureMessageAttachmentsView: View {
     @SwiftUI.Environment(\.markdownMediaContext) private var mediaContext
     @State private var previewedDocument: FeatureMessageAttachment?
+    @State private var captureDetails: FeatureMessageAttachment?
     let attachments: [FeatureMessageAttachment]
     @State private var previewedAttachment: FeatureMessageAttachment?
 
@@ -2967,6 +2968,24 @@ private struct FeatureMessageAttachmentsView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
 
+                        if let source = attachment.source {
+                            Button { captureDetails = attachment } label: {
+                                HStack(spacing: 7) {
+                                    if let data = source.appIconData, let icon = UIImage(data: data) {
+                                        Image(uiImage: icon).resizable().scaledToFit().frame(width: 28, height: 28)
+                                    } else {
+                                        Image(systemName: "macwindow").frame(width: 28, height: 28)
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(source.appName).font(T3Typography.supportingStrong)
+                                        Text(source.windowTitle.isEmpty ? "Captured window" : source.windowTitle)
+                                            .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).lineLimit(2)
+                                    }
+                                    Spacer(minLength: 0)
+                                    Image(systemName: source.accessibilityDetails == nil ? "photo" : "text.alignleft")
+                                }.frame(minHeight: T3Metrics.minimumTapTarget)
+                            }.buttonStyle(.plain).accessibilityLabel("Capture details from \(source.appName)")
+                        }
                         if FeatureFilePreviewPath.isDocument(attachment.name), mediaContext?.resolveDocumentURL != nil {
                             Button { previewedDocument = attachment } label: {
                                 Label("Preview document", systemImage: "doc.richtext").font(T3Typography.supportingStrong)
@@ -3009,7 +3028,7 @@ private struct FeatureMessageAttachmentsView: View {
                             .stroke(T3Colors.border, lineWidth: 1)
                     }
                     .accessibilityElement(
-                        children: attachment.mimeType.hasPrefix("video/") ? .contain : .combine
+                        children: attachment.mimeType.hasPrefix("video/") || attachment.source != nil ? .contain : .combine
                     )
                     .accessibilityLabel(
                         attachment.mimeType.hasPrefix("image/")
@@ -3040,6 +3059,22 @@ private struct FeatureMessageAttachmentsView: View {
                         if attachment.mimeType.hasPrefix("image/"), attachment.url != nil {
                             previewedAttachment = attachment
                         }
+                    }
+                }
+            }
+            .sheet(item: $captureDetails) { attachment in
+                if let source = attachment.source {
+                    NavigationStack {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text(source.appName).font(.headline)
+                                Text(source.windowTitle).foregroundStyle(T3Colors.textSecondary)
+                                Text(source.accessibilityDetails ?? "The captured window did not include accessibility data.")
+                                    .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                            }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                        }.background(T3Colors.background).navigationTitle("Capture details")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { captureDetails = nil } } }
                     }
                 }
             }

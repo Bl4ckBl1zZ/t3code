@@ -13,6 +13,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { desktopWslStateAtom } from "~/state/desktopWslState";
 import {
   ArchiveIcon,
+  ScanLineIcon,
   BlocksIcon,
   BotIcon,
   CalendarClockIcon,
@@ -70,6 +71,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/general": Settings2Icon,
   "/settings/projects": FolderIcon,
   "/settings/appearance": PaletteIcon,
+  "/settings/snap-shot": ScanLineIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,

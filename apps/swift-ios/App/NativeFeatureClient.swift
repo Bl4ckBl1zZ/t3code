@@ -4898,7 +4898,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         name: $0.name,
                         mimeType: $0.mimeType,
                         sizeBytes: $0.sizeBytes,
-                        url: cachedAttachmentURL(for: $0.id, environmentID: environmentID)
+                        url: cachedAttachmentURL(for: $0.id, environmentID: environmentID),
+                        source: $0.source
                     )
                 },
                 // Kept so the transcript can tell an agent-sent user message

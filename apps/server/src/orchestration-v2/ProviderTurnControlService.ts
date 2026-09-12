@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { AttachmentMaterialization } from "../attachments/AttachmentMaterialization.ts";
+import { appendSnapShotContext } from "../attachments/snapShotContext.ts";
 import { appendUploadedFilesBlock } from "../attachments/uploadPaths.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
@@ -292,9 +293,12 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
             message: {
               messageId: message.id,
-              text: appendUploadedFilesBlock(
-                expandAssistantCitationsForProvider(message.text),
-                uploads.promptBlock,
+              text: appendSnapShotContext(
+                appendUploadedFilesBlock(
+                  expandAssistantCitationsForProvider(message.text),
+                  uploads.promptBlock,
+                ),
+                message.attachments,
               ),
               attachments: uploads.inlineAttachments,
               createdBy: message.createdBy,
