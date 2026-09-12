@@ -554,6 +554,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await client.serverConfig().providers
     }
 
+    func usageSummary(environmentID: String, input: UsageSummaryInput) async throws -> UsageSummary {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.getUsageSummary(input: input)
+    }
+
+    func refreshUsageRates(environmentID: String) async throws {
+        let client = try await environmentClient(id: environmentID)
+        _ = try await client.refreshUsageRates()
+    }
+
     func usageSummary(
         environmentID: String,
         sinceDay: String,

@@ -887,6 +887,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-task:run-now",
       tag: WS_METHODS.scheduledTasksRunNow,
     }),
+    refreshUsageRates: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:refresh-usage-rates",
+      tag: WS_METHODS.serverRefreshUsageRates,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     retryResourceTelemetry: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:retry-resource-telemetry",
       tag: WS_METHODS.serverRetryResourceTelemetry,

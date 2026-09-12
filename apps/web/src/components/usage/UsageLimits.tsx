@@ -117,10 +117,17 @@ function LimitWindow({ window, now }: { window: ServerProviderUsageWindow; now: 
     </div>
   );
 }
-export function UsageLimits({ onShowUsage }: { onShowUsage: () => void }) {
+export function UsageLimits({
+  onShowUsage,
+  selected,
+  setSelected,
+}: {
+  onShowUsage: () => void;
+  selected: ReadonlySet<EnvironmentId> | null;
+  setSelected: (next: ReadonlySet<EnvironmentId> | null) => void;
+}) {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const refreshAccess = useAtomValue(refreshAccessAtom);
-  const [selected, setSelected] = useState<ReadonlySet<EnvironmentId> | null>(null);
   const [pending, setPending] = useState(false);
   const [failures, setFailures] = useState<readonly string[]>([]);
   const nowMinute = useNowMinute();

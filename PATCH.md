@@ -1271,7 +1271,22 @@ not instantiate this editor. Reselect-to-reveal in the diff tree was already pre
 The loading/refresh treatment from `f12d39359f` keeps refresh glyphs stable while requests
 run and uses a shared spinner throughout web/desktop. Usage history refresh waits for the
 selected machines' rescans; disconnects abort waiting without hanging healthy machines.
-This does not add the upstream pricing-refresh RPC. Live V2 activity uses the masked text
+Pricing refresh was subsequently ported below. Live V2 activity uses the masked text
 highlight from `ce4712d5b0`; one shared observer pauses web motion offscreen, in hidden tabs
 and for reduced motion. Swift uses a native masked highlight that stops when its row leaves
 the view, the app becomes inactive, or reduced motion is enabled. No V1 runtime is imported.
+
+### Usage history and current native contracts
+
+Reviewed `2b745efe57` rate refresh and `394e8470c8` settings consistency now run independently
+of V1: rate loads are single-flight with a one-minute manual floor and daily normal TTL;
+custom prices and transcript homes use one settings snapshot. Failed fetches retain cached
+rates. Web/desktop and Swift refresh pricing before rescanning, with older-server fallback.
+The read-authorized RPC changes no provider credentials or transcript contents.
+
+Web's permanent environment filter and incremental totals follow `7ee52b0773`; preferences
+follow `add8c3a55a` while preserving the fork's separate Limits screen. Swift now decodes usage
+v5, accepts compatible v4, excludes older/future versions, and carries hourly bucket starts.
+It adds exact rolling 24-hour charts, selected-machine histories, progressive coverage and the
+full model list. A generated server-schema fixture checks current native decoding and totals.
+Expo remains frozen; its existing daily/hourly usage RPC is backward compatible.

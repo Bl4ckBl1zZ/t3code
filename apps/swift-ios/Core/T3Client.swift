@@ -1130,24 +1130,26 @@ public actor T3Client {
         )
     }
 
-    /// Scans provider transcript directories on this server and returns the
-    /// usage summary for an inclusive `[sinceDay, untilDay]` window of
-    /// `YYYY-MM-DD` days bucketed in `timeZone` (IANA — an offset would be
-    /// wrong across a DST boundary).
-    public func getUsageSummary(
-        sinceDay: String,
-        untilDay: String,
-        timeZone: String
-    ) async throws -> UsageSummary {
-        try await rpc.request(
-            RPCMethod.serverGetUsageSummary.rawValue,
-            payload: .object([
-                "sinceDay": .string(sinceDay),
-                "untilDay": .string(untilDay),
-                "timeZone": .string(timeZone),
-            ]),
-            as: UsageSummary.self
-        )
+    /// Refreshes model pricing, retaining the server's cached rates on network failure.
+    public func refreshUsageRates() async throws -> UsagePricing {
+        try await rpc.request(RPCMethod.serverRefreshUsageRates.rawValue,
+                              payload: .object([:]), as: UsagePricing.self)
+    }
+
+    /// Scans provider transcripts, preserving an exact hourly window when requested.
+    public func getUsageSummary(input: UsageSummaryInput) async throws -> UsageSummary {
+        var payload: [String: JSONValue] = ["sinceDay": .string(input.sinceDay),
+            "untilDay": .string(input.untilDay), "timeZone": .string(input.timeZone),
+            "resolution": .string(input.resolution)]
+        if let since = input.sinceTime { payload["sinceTime"] = .string(since) }
+        if let until = input.untilTime { payload["untilTime"] = .string(until) }
+        return try await rpc.request(RPCMethod.serverGetUsageSummary.rawValue,
+                                    payload: .object(payload), as: UsageSummary.self)
+    }
+
+    public func getUsageSummary(sinceDay: String, untilDay: String, timeZone: String) async throws -> UsageSummary {
+        try await getUsageSummary(input: UsageSummaryInput(sinceDay: sinceDay, untilDay: untilDay,
+            timeZone: timeZone, resolution: "day", sinceTime: nil, untilTime: nil))
     }
 
     /// Issues a short-lived authenticated URL for a persisted attachment,
@@ -1994,6 +1996,7 @@ public enum RPCMethod: String, Sendable {
     case agentSessionsImport = "agentSessions.import"
     case assetsCreateURL = "assets.createUrl"
     case serverGetUsageSummary = "server.getUsageSummary"
+    case serverRefreshUsageRates = "server.refreshUsageRates"
     case assetsPersistChatAttachments = "assets.persistChatAttachments"
     case providerUploadFeedback = "provider.uploadFeedback"
     case subscribeServerConfig

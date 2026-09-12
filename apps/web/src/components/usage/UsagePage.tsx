@@ -1,15 +1,19 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { UsageLimits } from "./UsageLimits";
-import { UsagePriceOverrides } from "./UsagePriceOverrides";
-import type { UsageProviderKind } from "@t3tools/contracts";
-import { CheckIcon, XIcon } from "lucide-react";
+import { UsageEnvironmentFilter } from "./UsageEnvironmentFilter";
+import {
+  readUsagePagePreferences,
+  saveUsagePagePreferences,
+  type UsagePagePreferences,
+} from "./usagePagePreferences";
+import type { EnvironmentId, UsageProviderKind } from "@t3tools/contracts";
 import { useMemo, useRef, useState } from "react";
 
 import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
-import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
+import { useUsage } from "../../state/usage";
 import {
   enumerateDays,
   enumerateHourStarts,
@@ -46,32 +50,62 @@ const WINDOW_OPTIONS = [
 ] as const;
 
 export function UsagePage() {
-  const [view, setView] = useState<"usage" | "limits">("usage");
-  return view === "limits" ? (
-    <UsageLimits onShowUsage={() => setView("usage")} />
+  const [preferences, setPreferences] = useState(readUsagePagePreferences);
+  const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
+    useState<ReadonlySet<EnvironmentId> | null>(null);
+  const updatePreferences = (next: UsagePagePreferences) => {
+    setPreferences(next);
+    saveUsagePagePreferences(next);
+  };
+  return preferences.metric === "limits" ? (
+    <UsageLimits
+      selected={selectedEnvironmentIds}
+      setSelected={setSelectedEnvironmentIds}
+      onShowUsage={() => updatePreferences({ ...preferences, metric: "cost" })}
+    />
   ) : (
-    <UsageHistoryPage onShowLimits={() => setView("limits")} />
+    <UsageHistoryPage
+      preferences={preferences}
+      updatePreferences={updatePreferences}
+      selectedEnvironmentIds={selectedEnvironmentIds}
+      setSelectedEnvironmentIds={setSelectedEnvironmentIds}
+      onShowLimits={() => updatePreferences({ ...preferences, metric: "limits" })}
+    />
   );
 }
 
-function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
-  const [pricesOpen, setPricesOpen] = useState(false);
+function UsageHistoryPage({
+  onShowLimits,
+  preferences,
+  updatePreferences,
+  selectedEnvironmentIds,
+  setSelectedEnvironmentIds,
+}: {
+  onShowLimits: () => void;
+  preferences: UsagePagePreferences;
+  updatePreferences: (next: UsagePagePreferences) => void;
+  selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
+  setSelectedEnvironmentIds: (next: ReadonlySet<EnvironmentId> | null) => void;
+}) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshingRef = useRef(false);
   const [windowSelection, setWindowSelection] = useState(() => ({
-    days: 30,
-    window: makeWindow(30),
+    days: preferences.windowDays,
+    window: makeWindow(
+      preferences.windowDays,
+      undefined,
+      preferences.windowDays === 1 ? "hour" : "day",
+    ),
   }));
-  const [metric, setMetric] = useState<UsageChartMetric>("cost");
+  const metric = preferences.metric === "tokens" ? "tokens" : "cost";
+  const setMetric = (metric: UsageChartMetric) => updatePreferences({ ...preferences, metric });
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
-  const { merged, environments, isPending, isPartial, refresh } = useUsage(window);
-
-  // Hold the content until every environment is terminal. Rendering merged
-  // totals while devices are still answering makes every number on the page
-  // jump as each one lands.
-  const settling = isPending || isPartial;
+  const { merged, environments, selectedEnvironments, isPending, isPartial, refresh } = useUsage(
+    window,
+    selectedEnvironmentIds,
+  );
 
   const days = useMemo(
     () => enumerateDays(window.sinceDay, window.untilDay),
@@ -103,6 +137,8 @@ function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
   const timeValueColumnWidth = `${60 / (activeProviders.length + 2)}%`;
 
   const selectWindow = (days: number) => {
+    if (days !== 1 && days !== 7 && days !== 30 && days !== 90) return;
+    updatePreferences({ ...preferences, windowDays: days });
     setWindowSelection({
       days,
       window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
@@ -175,9 +211,6 @@ function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
         <Button size="sm" variant="ghost" onClick={onShowLimits}>
           Limits
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => setPricesOpen(true)}>
-          Model prices
-        </Button>
         <Button
           disabled={isRefreshing}
           aria-busy={isRefreshing}
@@ -231,9 +264,6 @@ function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
         <Button size="sm" variant="ghost" onClick={onShowLimits}>
           Limits
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => setPricesOpen(true)}>
-          Model prices
-        </Button>
         <Button
           disabled={isRefreshing}
           aria-busy={isRefreshing}
@@ -250,34 +280,33 @@ function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
-      {pricesOpen && (
-        <UsagePriceOverrides
-          usage={environments}
-          initialSelectedEnvironmentIds={null}
-          onOpenChange={(open) => {
-            setPricesOpen(open);
-            if (!open) refresh();
-          }}
-        />
-      )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <WorkspacePageHeader electron={isElectron}>{topbarContent}</WorkspacePageHeader>
 
+        <div className="flex min-w-0 items-center border-b border-border px-4 py-2 text-sm">
+          <UsageEnvironmentFilter
+            environments={environments}
+            selectedEnvironments={selectedEnvironments}
+            selectedEnvironmentIds={selectedEnvironmentIds}
+            onSelectionChange={setSelectedEnvironmentIds}
+            showUsageStatus
+            isPartial={isPartial}
+            duplicateSources={merged.duplicateSources}
+            staleEnvironments={merged.staleEnvironments}
+          />
+        </div>
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer width="wide">
-            {settling ? (
-              <>
-                {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
-                <UsageSkeleton />
-              </>
+            {selectedEnvironments.length === 0 ? (
+              <p className="py-12 text-center text-sm text-muted-foreground">
+                {environments.length === 0
+                  ? "Connect an environment to see usage."
+                  : "Select an environment to see usage."}
+              </p>
+            ) : isPending ? (
+              <UsageSkeleton />
             ) : (
               <>
-                <UsageCoverageNotice
-                  environments={environments}
-                  duplicateSources={merged.duplicateSources}
-                  staleEnvironments={merged.staleEnvironments}
-                />
-
                 <section className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
                   <div className="flex min-w-0 flex-col gap-5">
                     <div className="flex flex-col gap-1">
@@ -538,105 +567,6 @@ function Metric({ label, value }: { readonly label: string; readonly value: stri
     <div className="flex min-w-0 flex-col gap-0.5">
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className="text-base font-medium text-foreground tabular-nums">{value}</span>
-    </div>
-  );
-}
-
-/**
- * Says plainly when the totals are incomplete: an environment that failed, or
- * one whose transcripts another environment already reported. Environments
- * that are still answering never reach this notice; the page shows the
- * loading skeleton until every one is terminal.
- */
-function UsageCoverageNotice({
-  environments,
-  duplicateSources,
-  staleEnvironments,
-}: {
-  readonly environments: readonly EnvironmentUsageStatus[];
-  readonly duplicateSources: readonly string[];
-  readonly staleEnvironments: readonly string[];
-}) {
-  const failed = environments.filter((environment) => environment.error !== null);
-  const stale = environments.filter((environment) =>
-    staleEnvironments.includes(environment.environmentId),
-  );
-  if (failed.length === 0 && stale.length === 0 && duplicateSources.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="flex flex-col gap-1 border border-border px-3 py-2 text-xs text-muted-foreground">
-      {failed.map((environment) => (
-        <span key={environment.label}>{environment.label} could not report usage.</span>
-      ))}
-      {stale.map((environment) => (
-        <span key={environment.label}>
-          {environment.label} runs an older server version and is excluded from totals.
-        </span>
-      ))}
-      {duplicateSources.length > 0 ? (
-        <span>
-          Counted once across environments sharing a transcript directory:{" "}
-          {duplicateSources.join(", ")}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Per-device progress while the page waits for every environment to answer.
- * Only rendered with two or more devices; a lone device has nothing to
- * enumerate.
- */
-function UsageDeviceStrip({
-  environments,
-}: {
-  readonly environments: readonly EnvironmentUsageStatus[];
-}) {
-  const scanning = environments.filter(
-    (environment) => environment.summary === null && environment.error === null,
-  );
-  return (
-    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border border-border px-3 py-2 text-xs">
-      {environments.map((environment) => {
-        if (environment.summary !== null) {
-          return (
-            <span
-              key={environment.environmentId}
-              className="flex items-center gap-1 text-foreground"
-            >
-              <CheckIcon className="size-3 text-emerald-600 dark:text-emerald-300/90" aria-hidden />
-              {environment.label}
-            </span>
-          );
-        }
-        if (environment.error !== null) {
-          return (
-            <span
-              key={environment.environmentId}
-              className="flex items-center gap-1 text-destructive"
-            >
-              <XIcon className="size-3" aria-hidden />
-              {environment.label}
-            </span>
-          );
-        }
-        return (
-          <span
-            key={environment.environmentId}
-            className="animate-status-pulse text-muted-foreground"
-          >
-            {environment.label}…
-          </span>
-        );
-      })}
-      <span className="ms-auto text-muted-foreground">
-        {scanning.length === 1
-          ? "1 device still scanning"
-          : `${scanning.length} devices still scanning`}
-      </span>
     </div>
   );
 }

@@ -53,6 +53,9 @@ import {
   PullRequestReviewerCandidateList,
   PullRequestReviewerRequestInput,
   UsageModelPriceOverride,
+  UsageSummary,
+  UsageDay,
+  USAGE_CONTRACT_VERSION,
   CheckpointId,
   CheckpointScopeId,
   ContextHandoffId,
@@ -1512,3 +1515,69 @@ if (process.argv.includes("--check")) {
     process.exitCode = 1;
   }
 } else NodeFS.writeFileSync(hostResourcesPath, hostResourcesFixture);
+
+const usageHistoryPath = NodePath.join(NodePath.dirname(outputPath), "usageHistory.json");
+const usageHistorySerialized = `${JSON.stringify(
+  Schema.encodeSync(UsageSummary)({
+    contractVersion: USAGE_CONTRACT_VERSION,
+    readAt: "2026-09-12T12:00:00Z",
+    timeZone: "UTC",
+    sinceDay: UsageDay.make("2026-09-11"),
+    untilDay: UsageDay.make("2026-09-12"),
+    buckets: [
+      {
+        day: UsageDay.make("2026-09-12"),
+        hourStart: "2026-09-12T11:00:00Z",
+        provider: "grok",
+        model: "grok-code",
+        totals: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 20,
+          cacheCreationTokens: 0,
+          outputTokens: 50,
+          reasoningTokens: 10,
+        },
+        costUsd: 0.2,
+        cacheSavingsUsd: 0.01,
+        costSource: "modelPriced",
+        records: 1,
+        unpricedRecords: 0,
+        sessions: 1,
+      },
+    ],
+    sources: [
+      {
+        fingerprint: {
+          hostId: "fixture-host",
+          provider: "grok",
+          resolvedHomePath: "/fixture/grok",
+          volumeId: "1:2",
+        },
+        status: "ok",
+        scannedFiles: 1,
+        skippedFiles: 0,
+        malformedRecords: 0,
+        distinctSessions: 1,
+        message: null,
+      },
+    ],
+    pricing: {
+      status: "fresh",
+      source: "fixture",
+      fetchedAt: "2026-09-12T12:00:00Z",
+      knownModels: 1,
+    },
+    scanDurationMs: 1,
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(usageHistoryPath) ||
+    NodeFS.readFileSync(usageHistoryPath, "utf8") !== usageHistorySerialized
+  ) {
+    console.error("[swift-fixtures] usageHistory.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(usageHistoryPath, usageHistorySerialized);

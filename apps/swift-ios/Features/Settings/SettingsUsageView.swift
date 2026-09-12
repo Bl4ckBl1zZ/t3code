@@ -19,10 +19,17 @@ public struct SettingsUsageView: View {
     @Bindable private var model: FeatureRootModel
 
     @State private var state: LoadState = .loading
-    @State private var showsLimits = false
+    @AppStorage("t3.usage.showsLimits") private var showsLimits = false
     @State private var limitsRefreshID = UUID()
-    @State private var windowDays = 30
-    @State private var showsCost = true
+    @State private var loadGeneration = UUID()
+    @State private var loadedSelection: String?
+    @AppStorage("t3.usage.windowDays") private var windowDays = 30
+    @AppStorage("t3.usage.showsCost") private var showsCost = true
+    @State private var selectedEnvironmentIDs: Set<String>?
+    @State private var selectionRevision = UUID()
+    @State private var scanningEnvironments: [String] = []
+
+    private var selectedIDs: Set<String> { selectedEnvironmentIDs ?? Set(model.snapshot.environments.map(\.id)) }
     /// Environments that answered nothing this refresh (offline, old server):
     /// their usage is absent, and the screen must say so rather than present
     /// the merged number as complete.
@@ -49,7 +56,10 @@ public struct SettingsUsageView: View {
                     Label("Model prices", systemImage: "dollarsign.circle")
                         .font(T3Typography.threadBody).padding(.horizontal, SettingsMetrics.cardInset)
                 }
+                environmentSection
                 windowSection
+                if selectedIDs.isEmpty { SettingsFootnote("Select an environment to see usage.") }
+                if !scanningEnvironments.isEmpty { SettingsFootnote("Still scanning: \(scanningEnvironments.joined(separator: ", ")). Totals are partial.") }
 
                 switch state {
                 case .loading:
@@ -76,17 +86,39 @@ public struct SettingsUsageView: View {
         .background(T3Colors.background)
         .navigationTitle("Usage")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(windowDays)-\(showsLimits)") { if !showsLimits { await reload() } }
+        .task(id: "\(windowDays)-\(showsLimits)-\(selectionRevision)-\(model.snapshot.environments.map(\.id).joined(separator: ","))") { if !showsLimits { await reload() } }
         .refreshable {
             if showsLimits { limitsRefreshID = UUID() }
-            else { await reload() }
+            else { await reload(refreshPrices: true) }
         }
     }
 
     // MARK: - Sections
 
+    private var environmentSection: some View {
+        SettingsSection(title: "Environments") {
+            Menu {
+                Button("All environments") { selectedEnvironmentIDs = nil; selectionRevision = UUID() }
+                ForEach(model.snapshot.environments) { environment in
+                    Button {
+                        var ids = selectedIDs
+                        if !ids.insert(environment.id).inserted { ids.remove(environment.id) }
+                        selectedEnvironmentIDs = ids
+                        selectionRevision = UUID()
+                    } label: {
+                        Label(environment.name, systemImage: selectedIDs.contains(environment.id) ? "checkmark.circle.fill" : "circle")
+                    }
+                }
+            } label: {
+                HStack { Text(selectedEnvironmentIDs == nil ? "All environments" : "\(selectedIDs.count) selected"); Spacer(); Image(systemName: "chevron.up.chevron.down") }
+                    .frame(minHeight: T3Metrics.minimumTapTarget).padding(.horizontal, SettingsMetrics.rowPadding)
+            }
+        }
+    }
+
     private var windowSection: some View {
         Picker("Window", selection: $windowDays) {
+            Text("Past 24h").tag(1)
             Text("7 days").tag(7)
             Text("30 days").tag(30)
             Text("90 days").tag(90)
@@ -105,22 +137,23 @@ public struct SettingsUsageView: View {
     }
 
     private func totalsSection(_ merged: FeatureMergedUsage) -> some View {
-        SettingsSection(
-            title: "Last \(windowDays) days",
+        let activePeriods = windowDays == 1 ? merged.hourly.count : merged.activeDays
+        return SettingsSection(
+            title: windowDays == 1 ? "Past 24 hours" : "Last \(windowDays) days",
             footer: "Cost is the API-equivalent price of these tokens; subscription plans bill separately."
         ) {
             VStack(spacing: 10) {
                 HStack(spacing: 10) {
-                    statCard("Total cost", Self.cost(merged.costUsd))
+                    statCard(showsCost ? "Total cost" : "Total tokens", showsCost ? Self.cost(merged.costUsd) : Self.tokens(merged.totalTokens))
                     statCard(
-                        "Daily average",
-                        merged.activeDays == 0
-                            ? "—"
-                            : Self.cost(merged.costUsd / Double(merged.activeDays))
+                        windowDays == 1 ? "Hourly average" : "Daily average",
+                        activePeriods == 0 ? "—" : showsCost
+                            ? Self.cost(merged.costUsd / Double(activePeriods))
+                            : Self.tokens(merged.totalTokens / activePeriods)
                     )
                 }
                 HStack(spacing: 10) {
-                    statCard("Tokens", Self.tokens(merged.totalTokens))
+                    statCard(showsCost ? "Tokens" : "API cost", showsCost ? Self.tokens(merged.totalTokens) : Self.cost(merged.costUsd))
                     statCard(
                         "Cached input",
                         merged.cachedInputShare
@@ -137,7 +170,7 @@ public struct SettingsUsageView: View {
     }
 
     private func chartSection(_ merged: FeatureMergedUsage) -> some View {
-        SettingsSection(title: showsCost ? "Daily cost" : "Daily tokens") {
+        SettingsSection(title: "\(windowDays == 1 ? "Hourly" : "Daily") \(showsCost ? "cost" : "tokens")") {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("Metric", selection: $showsCost) {
                     Text("Cost").tag(true)
@@ -147,7 +180,7 @@ public struct SettingsUsageView: View {
                 .frame(maxWidth: 220)
 
                 Chart {
-                    ForEach(merged.daily) { day in
+                    ForEach(windowDays == 1 ? merged.hourly : merged.daily) { day in
                         ForEach(orderedProviders(in: day), id: \.self) { provider in
                             if let slice = day.byProvider[provider] {
                                 BarMark(
@@ -205,9 +238,7 @@ public struct SettingsUsageView: View {
     private func modelsSection(_ merged: FeatureMergedUsage) -> some View {
         SettingsSection(title: "By model") {
             VStack(spacing: 8) {
-                // Five covers the realistic spread; a long tail of one-off
-                // models would push the coverage note off screen.
-                ForEach(merged.models.prefix(5)) { model in
+                ForEach(merged.models.sorted { showsCost ? $0.costUsd > $1.costUsd : $0.totalTokens > $1.totalTokens }) { model in
                     HStack(spacing: 8) {
                         Text(model.model)
                             .font(T3Typography.supporting)
@@ -253,27 +284,32 @@ public struct SettingsUsageView: View {
 
     // MARK: - Loading
 
-    private func reload() async {
+    private func reload(refreshPrices: Bool = false) async {
+        let generation = UUID()
+        loadGeneration = generation
         guard let reader = model.client as? any FeatureUsageReading else {
             state = .failed("This connection does not support usage summaries.")
             return
         }
-        if case .loaded = state { } else { state = .loading }
+        let selection = "\(windowDays):\(selectedIDs.sorted().joined(separator: ","))"
+        if loadedSelection != selection { state = .loading }
+        loadedSelection = selection
 
-        let window = Self.window(days: windowDays)
-        let environments = model.snapshot.environments
+        let window = UsageSummaryInput.window(days: windowDays)
+        let environments = model.snapshot.environments.filter { selectedIDs.contains($0.id) }
+        scanningEnvironments = environments.map(\.name)
         var usable: [FeatureEnvironmentUsage] = []
         var unreachable: [String] = []
-        // Sequential on purpose: each answer is a filesystem scan on that
-        // server, and the summaries are small. Parallelism would only race
-        // several servers' scans for no visible win on a settings screen.
+        // Keep at most one native scan in flight and publish each answer immediately.
         for environment in environments {
+            guard !Task.isCancelled, loadGeneration == generation else { return }
             do {
+                // Older servers may not expose pricing refresh; their scan still works.
+                if refreshPrices { try? await reader.refreshUsageRates(environmentID: environment.id) }
+                guard !Task.isCancelled, loadGeneration == generation else { return }
                 let summary = try await reader.usageSummary(
                     environmentID: environment.id,
-                    sinceDay: window.sinceDay,
-                    untilDay: window.untilDay,
-                    timeZone: TimeZone.current.identifier
+                    input: window
                 )
                 usable.append(
                     FeatureEnvironmentUsage(
@@ -287,7 +323,12 @@ public struct SettingsUsageView: View {
                 // a failed screen.
                 unreachable.append(environment.name)
             }
+            guard !Task.isCancelled, loadGeneration == generation else { return }
+            scanningEnvironments = Array(environments.dropFirst(usable.count + unreachable.count)).map(\.name)
+            unreachableEnvironments = unreachable
+            if !usable.isEmpty { state = .loaded(FeatureUsageMerge.merge(usable)) }
         }
+        guard !Task.isCancelled, loadGeneration == generation else { return }
         unreachableEnvironments = unreachable
         if usable.isEmpty && !environments.isEmpty {
             state = .failed("No connected server answered the usage scan.")
@@ -365,15 +406,8 @@ public struct SettingsUsageView: View {
         return formatter
     }()
 
-    private static func window(days: Int) -> (sinceDay: String, untilDay: String) {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let since = calendar.date(byAdding: .day, value: -(days - 1), to: today) ?? today
-        return (dayFormatter.string(from: since), dayFormatter.string(from: today))
-    }
-
     private static func chartDate(_ day: String) -> Date {
-        dayFormatter.date(from: day) ?? Date(timeIntervalSince1970: 0)
+        ISO8601DateFormatter().date(from: day) ?? dayFormatter.date(from: day) ?? Date(timeIntervalSince1970: 0)
     }
 
     private static func cost(_ value: Double) -> String {

@@ -36,12 +36,23 @@ public protocol FeatureThreadRoleAssigning: AnyObject {
 /// time so the caller can merge and report partial coverage per environment.
 @MainActor
 public protocol FeatureUsageReading: AnyObject {
+    func refreshUsageRates(environmentID: String) async throws
+    func usageSummary(environmentID: String, input: UsageSummaryInput) async throws -> UsageSummary
     func usageSummary(
         environmentID: String,
         sinceDay: String,
         untilDay: String,
         timeZone: String
     ) async throws -> UsageSummary
+}
+
+public extension FeatureUsageReading {
+    func usageSummary(environmentID: String, input: UsageSummaryInput) async throws -> UsageSummary {
+        guard input.resolution == "day" else { throw RPCError.protocolViolation("This connection does not support hourly usage.") }
+        return try await usageSummary(environmentID: environmentID, sinceDay: input.sinceDay,
+                                      untilDay: input.untilDay, timeZone: input.timeZone)
+    }
+    func refreshUsageRates(environmentID: String) async throws {}
 }
 
 /// Optional project-favicon capability: the same signed asset route the desktop

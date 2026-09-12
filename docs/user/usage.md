@@ -10,7 +10,9 @@ completed-turn record will not appear.
 
 Use **Past 24h** for an hourly chart covering the exact rolling 24-hour period. The **7 days**,
 **30 days**, and **90 days** ranges use daily resolution. Cost and token toggles update both the
-headline and chart, and refreshing rescans every connected environment.
+headline and chart, and refreshing rescans selected environments. The environment filter shows scan progress and
+explains unavailable or incompatible servers; totals appear as machines answer. Your selected
+usage view, metric and time range are remembered.
 
 ## Subscription limits
 
@@ -44,3 +46,8 @@ Web and desktop can apply edits to several environments. Mixed cells keep each
 environment’s existing rate until you change them. If some saves fail, retry applies
 only to those environments. On iPhone and iPad, choose an environment before editing
 its model prices. A connected server with pricing support and write access is required.
+
+Refreshing Usage first checks for updated model prices, so newly listed models can be priced
+without waiting for the daily update. Closely repeated requests reuse the latest table. If the
+price source is unavailable, cached prices still work. On iPhone and iPad, pull to refresh.
+Native history also supports **Past 24h**, environment selection, and the full model breakdown.

@@ -1,6 +1,6 @@
 import Foundation
 
-// Ported from packages/contracts/src/usage.ts (contract version 3): the
+// Ported from packages/contracts/src/usage.ts (contract version 5): the
 // `server.getUsageSummary` shapes the web and Expo usage dashboards read.
 // Providers travel as plain strings rather than a closed enum so a server that
 // learns a new provider kind degrades to an unstyled series instead of a
@@ -9,7 +9,8 @@ import Foundation
 /// The usage contract this client understands. A summary reporting a different
 /// version is excluded from merging (its semantics may have changed) and the
 /// UI reports partial coverage instead of silently mixing incompatibles.
-public let usageContractVersion = 3
+public let usageContractVersion = 5
+public let usageMergeCompatibleSince = 4
 
 /// Token totals for one bucket. `reasoningTokens` is a subset of
 /// `outputTokens` (Codex reports it separately, Claude folds thinking into
@@ -46,6 +47,7 @@ public struct UsageTokenTotals: Codable, Equatable, Sendable {
 /// money spent — subscription plans bill separately.
 public struct UsageBucket: Codable, Equatable, Sendable {
     public let day: String
+    public let hourStart: String?
     public let provider: String
     public let model: String
     public let totals: UsageTokenTotals
@@ -58,6 +60,7 @@ public struct UsageBucket: Codable, Equatable, Sendable {
 
     public init(
         day: String,
+        hourStart: String? = nil,
         provider: String,
         model: String,
         totals: UsageTokenTotals,
@@ -69,6 +72,7 @@ public struct UsageBucket: Codable, Equatable, Sendable {
         sessions: Int
     ) {
         self.day = day
+        self.hourStart = hourStart
         self.provider = provider
         self.model = model
         self.totals = totals
@@ -182,5 +186,32 @@ public struct UsageSummary: Codable, Equatable, Sendable {
         self.sources = sources
         self.pricing = pricing
         self.scanDurationMs = scanDurationMs
+    }
+}
+
+/// An inclusive local-day window or an exact rolling hourly interval.
+public struct UsageSummaryInput: Sendable, Equatable {
+    public let sinceDay: String
+    public let untilDay: String
+    public let timeZone: String
+    public let resolution: String
+    public let sinceTime: String?
+    public let untilTime: String?
+
+    public static func window(days: Int, now: Date = Date(), timeZone: TimeZone = .current) -> Self {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let hourly = days == 1
+        let since = hourly ? now.addingTimeInterval(-24 * 60 * 60)
+            : calendar.date(byAdding: .day, value: -(max(1, days) - 1), to: calendar.startOfDay(for: now))!
+        return Self(sinceDay: formatter.string(from: since), untilDay: formatter.string(from: now),
+                    timeZone: timeZone.identifier, resolution: hourly ? "hour" : "day",
+                    sinceTime: hourly ? since.ISO8601Format() : nil,
+                    untilTime: hourly ? now.ISO8601Format() : nil)
     }
 }
