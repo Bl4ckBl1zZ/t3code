@@ -57,6 +57,8 @@ import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
+import * as BrowserImport from "./preview/BrowserImport/BrowserImport.ts";
+import * as LinuxBrowserSecret from "./preview/BrowserImport/LinuxBrowserSecret.ts";
 import * as BrowserSession from "./preview/BrowserSession.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
@@ -147,10 +149,10 @@ const desktopServerExposureLayer = DesktopServerExposure.layer.pipe(
   Layer.provideMerge(desktopFoundationLayer),
 );
 
-const desktopPreviewLayer = PreviewManager.layer.pipe(
-  Layer.provideMerge(BrowserSession.layer),
-  Layer.provideMerge(desktopFoundationLayer),
-);
+const desktopPreviewLayer = Layer.mergeAll(
+  PreviewManager.layer,
+  BrowserImport.layer.pipe(Layer.provide(LinuxBrowserSecret.layer)),
+).pipe(Layer.provideMerge(BrowserSession.layer), Layer.provideMerge(desktopFoundationLayer));
 
 const desktopWindowLayer = DesktopWindow.layer.pipe(
   Layer.provideMerge(desktopServerExposureLayer),

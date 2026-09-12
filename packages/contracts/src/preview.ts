@@ -1,3 +1,4 @@
+import { BrowserProfileId } from "./browserProfile.ts";
 /**
  * Preview - Schemas for the in-app browser preview surface.
  *
@@ -169,6 +170,7 @@ export const PreviewSessionSnapshot = Schema.Struct({
   canGoForward: Schema.Boolean,
   /** Missing snapshots from older servers are treated as fill-panel mode. */
   viewport: Schema.optional(PreviewViewportSetting),
+  profileId: Schema.optional(BrowserProfileId),
   updatedAt: Schema.String,
 });
 export type PreviewSessionSnapshot = typeof PreviewSessionSnapshot.Type;
@@ -184,6 +186,7 @@ export const PreviewOpenInput = Schema.Struct({
    * later (which the user would see as a visible reflow).
    */
   viewport: Schema.optional(PreviewViewportSetting),
+  profileId: Schema.optional(BrowserProfileId),
 });
 export type PreviewOpenInput = typeof PreviewOpenInput.Type;
 

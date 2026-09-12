@@ -692,6 +692,21 @@ export function PreviewView({
         trailingActions={
           previewBridge ? (
             <PreviewMoreMenu
+              profiles={browserDefaults.profiles}
+              onNewProfileTab={(profileId) => {
+                void openPreviewSession({ openPreview: open, threadRef, profileId })
+                  .then((result) => {
+                    if (result._tag === "Success")
+                      useRightPanelStore.getState().openBrowser(threadRef, result.value.tabId);
+                    else
+                      toastManager.add({ type: "error", title: "Could not open browser profile" });
+                  })
+                  .catch(() =>
+                    toastManager.add({ type: "error", title: "Could not open browser profile" }),
+                  );
+              }}
+              environmentId={threadRef.environmentId}
+              profileId={tabId ? previewState.sessions[tabId]?.profileId : undefined}
               tabId={runtimeTabId}
               hasWebContents={desktopOverlay?.hasWebContents ?? false}
               zoomFactor={desktopOverlay?.zoomFactor ?? 1}

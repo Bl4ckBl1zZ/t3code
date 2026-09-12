@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CLIENT_SETTINGS,
   FILL_PREVIEW_VIEWPORT,
   type PreviewOpenInput,
   type PreviewSessionSnapshot,
@@ -15,6 +16,11 @@ import {
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 
 import { addBrowserSurface } from "./addBrowserSurface";
+
+vi.mock("~/hooks/useSettings", () => ({
+  ensureClientSettingsHydrated: async () => DEFAULT_CLIENT_SETTINGS,
+  getClientSettings: () => DEFAULT_CLIENT_SETTINGS,
+}));
 
 const threadRef = {
   environmentId: "local" as ScopedThreadRef["environmentId"],
@@ -48,6 +54,7 @@ describe("addBrowserSurface", () => {
     expect(openPreview).toHaveBeenCalledWith({
       threadId: "thread-1",
       viewport: FILL_PREVIEW_VIEWPORT,
+      profileId: "default",
     });
     expect(Object.keys(readThreadPreviewState(threadRef).sessions)).toEqual(["tab-1", "tab-2"]);
     expect(

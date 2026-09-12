@@ -189,7 +189,7 @@ describe("buildThreadActionItems", () => {
     expect(item?.searchTerms).toEqual(
       expect.arrayContaining([
         "#287",
-        "Bl4ckBl1zZ/t3code#287",
+        "bl4ckbl1zz/t3code#287",
         "https://github.com/Bl4ckBl1zZ/t3code/pull/287",
       ]),
     );

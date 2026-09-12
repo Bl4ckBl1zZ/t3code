@@ -65,6 +65,7 @@ import {
   SettingsUnavailableGroup,
   SettingsSection,
 } from "./settingsLayout";
+import { BrowserProfilesSetting } from "./BrowserProfilesSettings";
 import { searchableSetting } from "./settingsSearch";
 
 function statusLabel(status: OpenRouterIntegrationStatus | null): string {
@@ -516,6 +517,7 @@ export function IntegrationsSettings() {
   const previewDefaultsDisabled = !isElectron;
   const previewDefaults = (
     <>
+      <BrowserProfilesSetting disabled={previewDefaultsDisabled} />
       <BrowserViewportSetting disabled={previewDefaultsDisabled} />
       <BrowserZoomSetting disabled={previewDefaultsDisabled} />
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />

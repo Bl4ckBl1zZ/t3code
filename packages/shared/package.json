@@ -319,7 +319,11 @@
       "types": "./src/imageDimensions.ts",
       "import": "./src/imageDimensions.ts"
     },
-    "./threadPullRequestChains": "./src/threadPullRequestChains.ts"
+    "./threadPullRequestChains": "./src/threadPullRequestChains.ts",
+    "./nodeSqliteClient": {
+      "types": "./src/nodeSqliteClient.ts",
+      "import": "./src/nodeSqliteClient.ts"
+    }
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",

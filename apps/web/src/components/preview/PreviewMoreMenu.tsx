@@ -1,4 +1,5 @@
 "use client";
+import type { EnvironmentId, BrowserProfile } from "@t3tools/contracts";
 
 import type { DesktopPreviewColorScheme } from "@t3tools/contracts";
 import { Minus, MoreVertical, Plus as PlusIcon, RotateCcw } from "lucide-react";
@@ -30,6 +31,10 @@ const COLOR_SCHEME_OPTIONS: ReadonlyArray<{
 ];
 
 interface Props {
+  environmentId: EnvironmentId;
+  profileId?: string | undefined;
+  profiles: readonly BrowserProfile[];
+  onNewProfileTab: (profileId: string) => void;
   /** Active preview tab id. Tab-targeting actions are disabled without it. */
   tabId: string | null;
   /**
@@ -58,6 +63,10 @@ interface Props {
  * when the desktop bridge is present, so we can call it unconditionally.
  */
 export function PreviewMoreMenu({
+  environmentId,
+  profileId,
+  profiles,
+  onNewProfileTab,
   tabId,
   hasWebContents,
   zoomFactor,
@@ -93,6 +102,22 @@ export function PreviewMoreMenu({
         <TooltipPopup>More</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end" sideOffset={6} className="min-w-56">
+        <MenuItem disabled>
+          Profile:{" "}
+          {profiles.find((profile) => profile.id === (profileId ?? "default"))?.name ??
+            "Removed profile"}
+        </MenuItem>
+        <MenuSub>
+          <MenuSubTrigger>New tab in profile</MenuSubTrigger>
+          <MenuSubPopup>
+            {profiles.map((profile) => (
+              <MenuItem key={profile.id} onClick={() => onNewProfileTab(profile.id)}>
+                {profile.name}
+              </MenuItem>
+            ))}
+          </MenuSubPopup>
+        </MenuSub>
+        <MenuSeparator />
         <MenuItem onClick={callTab(bridge.hardReload)} disabled={tabDisabled}>
           Hard reload
         </MenuItem>
@@ -177,10 +202,18 @@ export function PreviewMoreMenu({
           </span>
         </MenuItem>
         <MenuSeparator />
-        <MenuItem onClick={() => void bridge.clearCookies().catch(() => undefined)}>
+        <MenuItem
+          onClick={() =>
+            void bridge.clearCookies(environmentId, profileId ?? "default").catch(() => undefined)
+          }
+        >
           Clear cookies
         </MenuItem>
-        <MenuItem onClick={() => void bridge.clearCache().catch(() => undefined)}>
+        <MenuItem
+          onClick={() =>
+            void bridge.clearCache(environmentId, profileId ?? "default").catch(() => undefined)
+          }
+        >
           Clear cache
         </MenuItem>
       </MenuPopup>

@@ -52,6 +52,12 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
  */
 export const SETTINGS_SEARCH_ITEMS = [
   {
+    id: "browser-profiles",
+    title: "Browser profiles",
+    to: "/settings/integrations",
+    searchTerms: ["cookies", "import", "incognito", "logins"],
+  },
+  {
     id: "continue-threads-after-server-update",
     title: "Continue threads after restarts",
     to: "/settings/general",

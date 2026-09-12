@@ -13,6 +13,8 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
+  browserProfiles: [],
+  browserDefaultProfileId: "default",
   onboardingCompletedAt: null,
   composerCollapseOnScroll: true,
   panelAnimationDurationMs: 0,

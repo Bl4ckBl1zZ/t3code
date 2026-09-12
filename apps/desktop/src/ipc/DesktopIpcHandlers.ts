@@ -98,6 +98,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(downloadUpdate);
   yield* ipc.handle(installUpdate);
   yield* ipc.handle(checkForUpdate);
+  yield* ipc.handle(PreviewIpc.listBrowserImportSources);
+  yield* ipc.handle(PreviewIpc.importBrowserCookies);
+  yield* ipc.handle(PreviewIpc.openFullDiskAccessSettings);
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
   }

@@ -7,11 +7,15 @@ const state = vi.hoisted(() => ({
   persist: vi.fn(),
   notify: vi.fn(),
 }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => new Map() }));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
   useCallback: <T>(callback: T) => callback,
 }));
-vi.mock("~/state/environments", () => ({ usePrimaryEnvironment: () => state.primary }));
+vi.mock("~/state/environments", () => ({
+  usePrimaryEnvironment: () => state.primary,
+  useEnvironments: () => ({ environments: [] }),
+}));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.persist }));
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: state.notify } }));
 vi.mock("~/hostedPairing", () => ({ isHostedStaticApp: () => state.hosted }));

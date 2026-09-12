@@ -1,3 +1,4 @@
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
 import type { LocalApi, PreviewSessionSnapshot, ScopedThreadRef } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -18,6 +19,11 @@ vi.mock("~/rightPanelStore", () => ({
   useRightPanelStore: {
     getState: () => ({ openBrowser: vi.fn() }),
   },
+}));
+
+vi.mock("~/hooks/useSettings", () => ({
+  ensureClientSettingsHydrated: async () => DEFAULT_CLIENT_SETTINGS,
+  getClientSettings: () => DEFAULT_CLIENT_SETTINGS,
 }));
 
 const threadRef = {
