@@ -230,7 +230,11 @@ public struct ThreadDetailView: View {
                         client: model.client,
                         threadID: thread.id,
                         initialPath: path,
-                        initialLine: line
+                        initialLine: line,
+                        workspaceMutationID: WorkspaceMutationRevision.latest((model.details[thread.id]?.timelineItems ?? []).lazy.map {
+                            WorkspaceMutationItem(sourceThreadID: $0.sourceThreadId, itemID: $0.item.id,
+                                type: $0.item.type, status: $0.item.status.rawValue, updatedAt: $0.item.base.updatedAt)
+                        })
                     )
                 case let .review(filePath):
                     FeatureReviewView(

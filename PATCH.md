@@ -1245,3 +1245,13 @@ execution project, so routing cannot overwrite another machine's draft. Branches
 search and provider controls follow the execution project. Manual workspace choices freeze that
 project. Neither implementation imports a V1 thread runtime, and no migration is needed.
 The frozen Expo client retains compatible defaulted contracts without a new balancing screen.
+
+### Native file refresh after agent edits
+
+Swift's open file browser and previews now use the same V2 terminal file-change/command
+revision policy as web (`e09b88b6a5` intent). The revision is computed only for the open Files
+surface, includes inherited source identity, and invalidates directory, text and media reads.
+Reload and revision changes cancel/ignore older loads. Previous content stays visible with an
+explicit refresh error; images bypass old cached bodies and document URLs retain signed query
+bytes while carrying a cache revision. Document retries cannot resurrect an old signed URL after
+navigation or agent edits. This is event-driven; no additional polling or V1 subscriptions.

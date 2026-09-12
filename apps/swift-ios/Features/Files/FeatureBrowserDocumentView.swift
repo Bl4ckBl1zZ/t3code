@@ -5,6 +5,7 @@ import WebKit
 struct FeatureBrowserDocumentView: View {
     let url: URL
     var refreshURL: (() async throws -> URL)? = nil
+    @State private var retryGeneration = UUID()
     @State private var refreshedURL: URL?
     @State private var loading = true
     @State private var failure: String?
@@ -17,14 +18,29 @@ struct FeatureBrowserDocumentView: View {
                     Label("Preview unavailable", systemImage: "doc.badge.ellipsis")
                 } description: { Text(failure) } actions: {
                     Button("Reload") {
+                        let generation = UUID()
+                        retryGeneration = generation
                         Task {
                             self.failure = nil; loading = true
-                            do { if let refreshURL { refreshedURL = try await refreshURL() }; attempt += 1 }
-                            catch { self.failure = error.localizedDescription; loading = false }
+                            do {
+                                let nextURL = try await refreshURL?()
+                                guard !Task.isCancelled, retryGeneration == generation else { return }
+                                refreshedURL = nextURL
+                                attempt += 1
+                            } catch {
+                                guard !Task.isCancelled, retryGeneration == generation else { return }
+                                self.failure = error.localizedDescription; loading = false
+                            }
                         }
                     }
                 }.background(T3Colors.background)
             } else if loading { ProgressView("Loading document…") }
+        }
+        .onChange(of: url) {
+            retryGeneration = UUID()
+            refreshedURL = nil
+            failure = nil
+            loading = true
         }
     }
 }

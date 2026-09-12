@@ -70,3 +70,7 @@ tap an image to inspect it at full size.
 On iOS, expanded tool history remembers where you were reading inside a long result when you
 collapse the group or scroll it off screen. Dragging takes control immediately if a saved
 position is being restored.
+
+On iOS, open file previews and folder listings refresh after the agent finishes a file edit or
+command. A failed refresh keeps the previous preview visible and shows an error. Use **Reload**
+to retry or to pick up changes made outside the agent.
