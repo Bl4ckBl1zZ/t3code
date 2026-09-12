@@ -1,0 +1,22 @@
+{
+  "summary": {
+    "threadId": "thread",
+    "terminalId": "term-2",
+    "cwd": "/workspace",
+    "worktreePath": null,
+    "status": "running",
+    "pid": 123,
+    "exitCode": null,
+    "exitSignal": null,
+    "hasRunningSubprocess": true,
+    "activeScriptId": "dev",
+    "label": "pnpm dev",
+    "updatedAt": "2026-09-12T12:00:00Z"
+  },
+  "write": {
+    "threadId": "thread",
+    "terminalId": "term-2",
+    "data": "pnpm dev\r",
+    "scriptId": "dev"
+  }
+}

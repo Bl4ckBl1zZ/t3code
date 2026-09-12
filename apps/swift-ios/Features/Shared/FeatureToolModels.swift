@@ -1056,6 +1056,7 @@ public struct FeatureTerminalOutputCursor: Sendable, Equatable, Codable {
 }
 
 public struct FeatureTerminalSnapshot: Sendable, Equatable, Codable {
+    public var activeScriptID: String? = nil
     public var outputCursor: FeatureTerminalOutputCursor? = nil
     public var threadID: String
     public var terminalID: String

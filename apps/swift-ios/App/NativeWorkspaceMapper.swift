@@ -210,7 +210,7 @@ enum NativeWorkspaceMapper {
     }
 
     static func terminal(_ summary: TerminalSummary) -> FeatureTerminalSnapshot {
-        FeatureTerminalSnapshot(
+        var result = FeatureTerminalSnapshot(
             threadID: summary.threadId,
             terminalID: summary.terminalId,
             state: terminalState(summary.status),
@@ -220,6 +220,8 @@ enum NativeWorkspaceMapper {
             hasRunningSubprocess: summary.hasRunningSubprocess,
             updatedAt: summary.updatedAt
         )
+        result.activeScriptID = summary.activeScriptId
+        return result
     }
 
     private static func terminalState(_ status: TerminalSessionStatus) -> FeatureTerminalState {

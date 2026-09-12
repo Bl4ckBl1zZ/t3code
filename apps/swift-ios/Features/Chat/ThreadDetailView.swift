@@ -245,11 +245,11 @@ public struct ThreadDetailView: View {
                     )
                 case .sourceControl:
                     FeatureSourceControlView(client: model.client, threadID: thread.id)
-                case let .terminal(command):
+                case let .terminal(terminalID):
                     FeatureTerminalView(
                         client: model.client,
                         threadID: thread.id,
-                        initialCommand: command
+                        initialTerminalID: terminalID
                     )
                 }
             }
@@ -930,18 +930,10 @@ public struct ThreadDetailView: View {
         }
     }
 
-    /// Runs a project action by swapping the details sheet for the terminal and
-    /// letting it type the command in. The terminal is the only surface that can
-    /// show what the action does, so it is the destination rather than a side
-    /// effect the reader has to go looking for.
-    ///
-    /// Narrower than the desktop control on purpose: the action runs in whichever
-    /// terminal this thread resolves to instead of spawning one, and a `singleRun`
-    /// action does not toggle off — attributing a running subprocess back to a
-    /// script needs a script id on `FeatureTerminalSnapshot`, which the wire
-    /// model does not carry yet.
-    private func runProjectScript(_ script: ProjectScript) {
-        toolSurface = .terminal(command: script.command)
+    private func runProjectScript(_ script: ProjectScript) async throws {
+        if let terminalID = try await model.client.performProjectScript(threadID: thread.id, script: script) {
+            toolSurface = .terminal(terminalID: terminalID)
+        }
     }
 
     /// Sheets stack over the thread, so a row that opens another surface swaps
@@ -958,7 +950,7 @@ public struct ThreadDetailView: View {
         case .sourceControl:
             toolSurface = .sourceControl
         case .terminal:
-            toolSurface = .terminal(command: nil)
+            toolSurface = .terminal(terminalID: nil)
         case let .thread(id, isArchived):
             toolSurface = nil
             onOpenRelatedThread(id, isArchived)
@@ -1310,10 +1302,8 @@ private enum FeatureThreadToolSurface: Identifiable {
     case files(path: String?, line: Int?)
     case review(filePath: String?)
     case sourceControl
-    /// `command` is the project action that opened this terminal, if any. Part
-    /// of the identity below, so running a second action re-presents the
-    /// surface instead of reusing a terminal already running the first.
-    case terminal(command: String?)
+    /// Opens the exact session that accepted a project action.
+    case terminal(terminalID: String?)
 
     var id: String {
         switch self {
@@ -1321,7 +1311,7 @@ private enum FeatureThreadToolSurface: Identifiable {
         case let .files(path, line): "files:\(path ?? "")#\(line.map(String.init) ?? "")"
         case let .review(filePath): "review:\(filePath ?? "")"
         case .sourceControl: "sourceControl"
-        case let .terminal(command): "terminal:\(command ?? "")"
+        case let .terminal(terminalID): "terminal:\(terminalID ?? "")"
         }
     }
 }

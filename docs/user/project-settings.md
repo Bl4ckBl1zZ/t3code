@@ -84,3 +84,14 @@ choosing a branch or workspace manually stops automatic rerouting.
 Choose a computer directly to override Auto, or select Auto again to retry. Add attachments
 after the machine is selected. If no eligible machine has available capacity, choose one
 manually or retry; the task is not submitted to an arbitrary fallback machine.
+
+## Running actions on iPhone and iPad
+
+Open a thread’s details and choose an action. Its output opens in the terminal that
+received the command. An action uses an idle shell when available and opens a separate
+terminal if the existing shells are busy.
+
+For an action marked **Single run**, its row changes to **Stop** while running. Tap it
+to interrupt that action with Ctrl-C. Other terminal sessions keep running. Once the
+action exits, the same row can start it again. Repeatable actions remain available to
+start additional runs.

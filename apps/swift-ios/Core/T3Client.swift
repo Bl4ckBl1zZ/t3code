@@ -1589,18 +1589,28 @@ public actor T3Client {
     }
 
     public func writeTerminal(
-        threadID: String,
-        terminalID: String,
-        data: String
+        threadID: String, terminalID: String, data: String, scriptID: String? = nil
     ) async throws {
-        try await rpc.request(
-            RPCMethod.terminalWrite.rawValue,
-            payload: .object([
-                "threadId": .string(threadID),
-                "terminalId": .string(terminalID),
-                "data": .string(data),
-            ])
-        )
+        var payload: [String: JSONValue] = ["threadId": .string(threadID), "terminalId": .string(terminalID), "data": .string(data)]
+        if let scriptID { payload["scriptId"] = .string(scriptID) }
+        try await rpc.request(RPCMethod.terminalWrite.rawValue, payload: .object(payload))
+    }
+
+    public func terminalMetadataSnapshot(threadID: String) async throws -> [TerminalSummary] {
+        try await withThrowingTaskGroup(of: [TerminalSummary].self) { group in
+            group.addTask {
+                for try await event in await self.terminalMetadataEvents() {
+                    if event.type == "snapshot" { return (event.terminals ?? []).filter { $0.threadId == threadID } }
+                }
+                throw RPCError.protocolViolation("Terminal metadata ended before reporting sessions.")
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(15))
+                throw RPCError.protocolViolation("Terminal metadata timed out. Retry the action.")
+            }
+            defer { group.cancelAll() }
+            return try await group.next() ?? []
+        }
     }
 
     public func resizeTerminal(
