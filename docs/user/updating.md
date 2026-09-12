@@ -30,11 +30,11 @@ The update does not remove saved threads, settings, or project files.
 
 ## Choose the Action You See
 
-| Action                     | What to do                                                                                                                                                                  |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Update server**          | Available for the T3 Code Linux background service. Select the button and leave T3 Code open while it prepares, tests, restarts, and reconnects.                            |
-| **Update the desktop app** | Open the T3 Code desktop app on the machine that runs the server and install the app update there. Reopen it if needed.                                                     |
-| **Copy update command**    | Copy the command, open a terminal on the server machine, stop the current T3 Code server, and relaunch it with the copied command and any startup options you normally use. |
+| Action                     | What to do                                                                                                                                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Update server**          | Available for the T3 Code Linux background service and recent desktop-managed servers. Select the button and leave T3 Code open while it prepares, tests, restarts, and reconnects. |
+| **Update the desktop app** | Recent desktop apps accept remote updates. Older apps must be updated on the machine that runs them.                                                                                |
+| **Copy update command**    | Copy the command, open a terminal on the server machine, stop the current T3 Code server, and relaunch it with the copied command and any startup options you normally use.         |
 
 The available action depends on how that server was started. T3 Code does not update connected
 servers silently in the background.
@@ -80,10 +80,14 @@ If a step fails:
 
 ## The Mobile App
 
-The mobile app keeps itself current on its own. When it finds a new version, it downloads it in the
-background and installs it automatically the next time you leave the app. Unsent drafts and queued
-messages are saved before the restart. Only if the app stays open long enough that the update never
-gets that chance does it ask whether to install right away; choosing **Later** is safe and keeps the
-automatic install armed.
+The native iOS app receives its own updates through TestFlight or the App Store.
+To update a connected Mac’s desktop app from your phone, open **Settings → Connections → Desktop
+updates**, select the environment, then choose **Check and update**. Confirm the relaunch and keep
+the screen open while the app downloads, restarts, and reconnects. Completion means the server has
+returned on the version the desktop app actually downloaded from its update channel.
+
+The desktop app briefly disconnects all clients on that machine. Active agent work may be interrupted.
+A failed installer leaves a readable error and the app attempts to restore its backend connections.
+Older desktop apps display instructions for updating on the host instead.
 
 For remote connection setup and access troubleshooting, see [Remote Access](./remote-access.md).

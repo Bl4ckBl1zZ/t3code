@@ -118,3 +118,18 @@ PR discovery, snapshot sync, settlement and restart continuation workers are reg
 trial prepare boundary and remain parked until activation. Settlement waits for the initial
 continuation dispatch pass. Per-update handoff requests and cross-environment preference propagation
 remain separate integrations; the environment opt-in already covers normal update restarts.
+
+## Remote desktop handoff
+
+Desktop-managed environments with a telemetry control descriptor advertise `desktopAppUpdate`.
+`server.updateServerWithProgress` uses the supervising app's existing updater feed and returns
+`method: desktop-app`, the actual target version, and a preparation token. The separate
+`server.commitDesktopUpdate` RPC authorizes installation only after the client received that token.
+The client subscribes before committing and requires a later lifecycle ready event on the target
+version; socket loss alone is never success. Repeated commits are idempotent and expired or cancelled
+preparations cannot install. Failed installers restart the app's backend pool.
+
+The fork's automatic updater still waits for idle V2 agents and background work. Remote preparations
+hold that automatic install path through the token's lifetime so it cannot race the acknowledgement.
+The Swift app implements the same handoff, bounded reconnect retries, and environment-scoped operation
+guard. Its progress subscription does not replay a preparation after reconnect.

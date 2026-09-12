@@ -563,6 +563,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await environmentClient(id: environmentID).consumeResetCredit(sourceID: sourceID, accountID: accountID, creditID: creditID)
     }
 
+    private var desktopUpdatesInFlight: Set<String> = []
+
+    func updateDesktopApp(environmentID: String, progress: @escaping @Sendable (String) async -> Void) async throws -> String {
+        guard desktopUpdatesInFlight.insert(environmentID).inserted else {
+            throw FeatureCapabilityUnavailable("An update is already running for this environment")
+        }
+        defer { desktopUpdatesInFlight.remove(environmentID) }
+        let client = try await environmentClient(id: environmentID)
+        return try await client.updateDesktopApp(progress: progress)
+    }
+
     func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
         if refresh { return try await client.refreshProviderSnapshots() }
