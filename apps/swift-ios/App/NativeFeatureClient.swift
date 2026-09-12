@@ -60,6 +60,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var latestServerConfig: ServerConfigSnapshot?
     private var serverConfigsByEnvironmentID: [String: ServerConfigSnapshot] = [:]
     private var environmentThemesByEnvironmentID: [String: [EnvironmentTheme]] = [:]
+    private var projectScriptActionsInFlight: Set<String> = []
+    private var pendingProjectScripts: [String: (terminalID: String, startedAt: Date)] = [:]
     private var latestSnapshot: FeatureSnapshot?
     private var activeThreadID: String?
     private var activeThreadEnvironmentID: String?
@@ -2723,6 +2725,48 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
+    func performProjectScript(threadID: String, script: ProjectScript) async throws -> String? {
+        let route = try threadRoute(for: threadID)
+        guard projectScriptActionsInFlight.insert(route.uiID).inserted else {
+            throw RPCError.protocolViolation("A project action is already starting. Try again when it finishes.")
+        }
+        defer { projectScriptActionsInFlight.remove(route.uiID) }
+        let generation = environmentGeneration
+        let context = try workspaceContext(route: route)
+        let sessions = try await route.client.terminalMetadataSnapshot(threadID: route.wireID)
+        guard isKnownClient(route.client, environmentID: route.environmentID, generation: generation) else { throw CancellationError() }
+        let currentContext = try workspaceContext(route: route)
+        guard currentContext.cwd == context.cwd, currentContext.worktreePath == context.worktreePath else { throw CancellationError() }
+        pendingProjectScripts = pendingProjectScripts.filter { Date.now.timeIntervalSince($0.value.startedAt) < 10 }
+        let key = "\(route.uiID)\u{0}\(script.id)"
+        let plan = ProjectScriptTerminalPlan.resolve(script: script, sessions: sessions, pendingTerminalID: pendingProjectScripts[key]?.terminalID)
+        switch plan {
+        case let .interrupt(terminalID):
+            try await route.client.writeTerminal(threadID: route.wireID, terminalID: terminalID, data: "\u{3}")
+            pendingProjectScripts[key] = nil
+            return nil
+        case let .launch(terminalID):
+            if script.singleRun == true { pendingProjectScripts[key] = (terminalID, .now) }
+            do {
+                let shell = shellsByEnvironmentID[route.environmentID]
+                let projectID = shell?.threads.first(where: { $0.id == route.wireID })?.projectId
+                let projectRoot = shell?.projects.first(where: { $0.id == projectID })?.workspaceRoot ?? context.cwd
+                var env = ["T3CODE_PROJECT_ROOT": projectRoot]
+                if let worktreePath = context.worktreePath { env["T3CODE_WORKTREE_PATH"] = worktreePath }
+                _ = try await route.client.openTerminal(threadID: route.wireID, terminalID: terminalID, cwd: context.cwd,
+                    worktreePath: context.worktreePath, environmentVariables: env)
+                guard isKnownClient(route.client, environmentID: route.environmentID, generation: generation) else { throw CancellationError() }
+                let writeContext = try workspaceContext(route: route)
+                guard writeContext.cwd == context.cwd, writeContext.worktreePath == context.worktreePath else { throw CancellationError() }
+                try await route.client.writeTerminal(threadID: route.wireID, terminalID: terminalID, data: "\(script.command)\r", scriptID: script.id)
+                return terminalID
+            } catch {
+                pendingProjectScripts[key] = nil
+                throw error
+            }
+        }
+    }
+
     func openTerminal(
         threadID: String,
         terminalID: String,
@@ -3116,6 +3160,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         threadID: String
     ) -> FeatureTerminalSnapshot {
         let key = TerminalKey(threadID: threadID, terminalID: summary.terminalId)
+        if summary.hasRunningSubprocess, let scriptID = summary.activeScriptId {
+            pendingProjectScripts["\(threadID)\u{0}\(scriptID)"] = nil
+        }
         var snapshot = NativeWorkspaceMapper.terminal(summary)
         snapshot.threadID = threadID
         if let cached = terminalSnapshots[key] {

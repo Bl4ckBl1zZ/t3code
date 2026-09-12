@@ -208,6 +208,8 @@ public protocol FeatureClient: AnyObject {
         message: String?
     ) async throws -> FeatureSourceControlStatus
 
+    /// Returns the launched terminal; nil means an existing single-run action was interrupted.
+    func performProjectScript(threadID: String, script: ProjectScript) async throws -> String?
     func terminalSnapshot(threadID: String, terminalID: String) async throws -> FeatureTerminalSnapshot
     func terminalEvents(threadID: String, terminalID: String) -> AsyncStream<FeatureTerminalSnapshot>
     func terminalSessions(threadID: String) -> AsyncStream<[FeatureTerminalSnapshot]>
@@ -532,6 +534,10 @@ public extension FeatureClient {
         rows: Int
     ) async throws {
         throw FeatureCapabilityUnavailable("Terminal")
+    }
+
+    func performProjectScript(threadID: String, script: ProjectScript) async throws -> String? {
+        throw FeatureCapabilityUnavailable("Project actions")
     }
 
     func writeTerminal(threadID: String, terminalID _: String, data: String) async throws {

@@ -1324,3 +1324,14 @@ settings path, survive redacted edits of legacy inline keys, and are deleted wit
 Swift mirrors the new settings, capability, stream event, and credit contract, checked by a
 schema-generated fixture. No V1 runtime or SQLite migration is introduced. Frozen Expo keeps
 its existing UI and does not opt in to source events.
+
+### Native project-action Run/Stop parity
+
+Swift now uses the fork's existing terminal `scriptId` write attribution and
+`activeScriptId` metadata to match web/desktop project actions. Single-run actions
+interrupt their exact running session with Ctrl-C; a short pending-launch record
+bridges metadata latency. Other busy shells are never reused for launches. The native
+terminal opens the actual destination session, and the details sheet observes metadata
+only while visible to render Run/Stop. Commands receive project/worktree environment
+variables. A generation/workspace guard rejects stale launch destinations. Native
+contract fixtures and pure routing tests cover attribution and session selection.

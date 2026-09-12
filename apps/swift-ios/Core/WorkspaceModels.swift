@@ -621,6 +621,7 @@ public struct TerminalSummary: Codable, Equatable, Sendable {
     public let pid: Int?
     public let exitCode: Int?
     public let exitSignal: Int?
+    public var activeScriptId: String? = nil
     public let hasRunningSubprocess: Bool
     public let label: String
     public let updatedAt: String

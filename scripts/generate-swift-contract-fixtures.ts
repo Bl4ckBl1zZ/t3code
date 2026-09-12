@@ -1,3 +1,4 @@
+import { TerminalSummary, TerminalWriteInput } from "../packages/contracts/src/terminal.ts";
 import {
   AgentSessionScanResult,
   AgentSessionImportResult,
@@ -1626,4 +1627,43 @@ if (process.argv.includes("--check")) {
   }
 } else {
   NodeFS.writeFileSync(hubPath, hubSerialized);
+}
+
+const actionTerminal = {
+  summary: Schema.encodeSync(TerminalSummary)({
+    threadId: "thread",
+    terminalId: "term-2",
+    cwd: "/workspace",
+    worktreePath: null,
+    status: "running",
+    pid: 123,
+    exitCode: null,
+    exitSignal: null,
+    hasRunningSubprocess: true,
+    activeScriptId: "dev",
+    label: "pnpm dev",
+    updatedAt: "2026-09-12T12:00:00Z",
+  }),
+  write: Schema.encodeSync(TerminalWriteInput)({
+    threadId: "thread",
+    terminalId: "term-2",
+    data: "pnpm dev\r",
+    scriptId: "dev",
+  }),
+};
+const actionTerminalPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "projectActionTerminal.json",
+);
+const actionTerminalSerialized = `${JSON.stringify(actionTerminal, null, 2)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(actionTerminalPath) ||
+    NodeFS.readFileSync(actionTerminalPath, "utf8") !== actionTerminalSerialized
+  ) {
+    console.error("[swift-fixtures] projectActionTerminal.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(actionTerminalPath, actionTerminalSerialized);
 }

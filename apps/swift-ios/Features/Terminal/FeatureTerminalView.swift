@@ -66,6 +66,7 @@ public struct FeatureTerminalView: View {
     /// running session other than `default`, and a caller writing to a guessed
     /// id would run the command in a terminal the reader never sees.
     let initialCommand: String?
+    let initialTerminalID: String?
 
     @SwiftUI.Environment(\.dismiss) private var dismiss
     @AppStorage("terminalFontSize") private var storedFontSize = TerminalFontSize.defaultValue
@@ -88,10 +89,11 @@ public struct FeatureTerminalView: View {
     /// into a terminal the reader deliberately switched to.
     @State private var didSendInitialCommand = false
 
-    public init(client: any FeatureClient, threadID: String, initialCommand: String? = nil) {
+    public init(client: any FeatureClient, threadID: String, initialCommand: String? = nil, initialTerminalID: String? = nil) {
         self.client = client
         self.threadID = threadID
         self.initialCommand = initialCommand
+        self.initialTerminalID = initialTerminalID
     }
 
     public var body: some View {
@@ -156,7 +158,7 @@ public struct FeatureTerminalView: View {
             for await updates in client.terminalSessions(threadID: threadID) {
                 sessions = updates
                 if !sessionsResolved {
-                    activeTerminalID = TerminalSessionList.initialID(in: updates)
+                    activeTerminalID = initialTerminalID ?? TerminalSessionList.initialID(in: updates)
                     sessionsResolved = true
                 }
             }

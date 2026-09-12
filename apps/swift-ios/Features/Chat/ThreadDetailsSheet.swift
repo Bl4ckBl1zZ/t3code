@@ -38,7 +38,9 @@ struct ThreadDetailsSheet: View {
     var endpoints: [ThreadEndpoint] = []
     var scripts: [ProjectScript] = []
     var activeScriptIDs: [String] = []
-    var onRunScript: ((ProjectScript) -> Void)?
+    var onRunScript: ((ProjectScript) async throws -> Void)?
+    @State private var liveScriptIDs: Set<String> = []
+    @State private var scriptActionBusy = false
     /// The same projection the timeline renders, so this sheet and the rows in
     /// the thread cannot disagree about what is running.
     var turnItems: [OrchestrationV2TurnItem] = []
@@ -96,8 +98,14 @@ struct ThreadDetailsSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await loadSourceControl() }
         .task { await loadSourceControl() }
+        .task(id: thread.id) {
+            guard !scripts.isEmpty else { return }
+            for await sessions in client.terminalSessions(threadID: thread.id) {
+                liveScriptIDs = Set(sessions.filter { $0.hasRunningSubprocess }.compactMap(\.activeScriptID))
+            }
+        }
         .alert(
-            "Git action failed",
+            "Action failed",
             isPresented: Binding(
                 get: { actionError != nil },
                 set: { if !$0 { actionError = nil } }
@@ -297,7 +305,7 @@ struct ThreadDetailsSheet: View {
         if !isChatConversation, !scripts.isEmpty {
             ThreadDetailsSection(title: "Actions") {
                 ForEach(Array(scripts.enumerated()), id: \.element.id) { index, script in
-                    let isActive = activeScriptIDs.contains(script.id)
+                    let isActive = script.singleRun == true && (activeScriptIDs.contains(script.id) || liveScriptIDs.contains(script.id))
                     if index > 0 {
                         ThreadDetailsDivider()
                     }
@@ -309,10 +317,15 @@ struct ThreadDetailsSheet: View {
                         title: ThreadDetailsWorkspace.scriptRowTitle(script, isActive: isActive),
                         subtitle: script.command,
                         showsChevron: false,
-                        action: onRunScript.map { run in { run(script) } }
+                        action: onRunScript.map { run in { Task {
+                            guard !scriptActionBusy else { return }
+                            scriptActionBusy = true
+                            defer { scriptActionBusy = false }
+                            do { try await run(script) } catch { actionError = error.localizedDescription }
+                        } } }
                     )
                 }
-            }
+            }.disabled(scriptActionBusy)
         }
     }
 
