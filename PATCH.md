@@ -1379,3 +1379,13 @@ socket addresses; default home can fall back to the development desktop only bef
 connection succeeds. SSH and Windows/WSL path mismatches fail explicitly. Requests are bounded,
 serialized, and canceled on disconnect or renderer loss. Existing desktop focus behavior is
 retained. No server startup, browser launch, V1 thread command or Swift wire change is added.
+
+### Headless Connect diagnostics
+
+Upstream `99e3b721c5` is ported into the fork's existing startup gate and service installer.
+Linux status checks user-manager availability, lingering, enabled state and running state;
+installation verifies prerequisites before replacing artifacts or stopping a working service.
+Connect authorization is distinguished from live reachability. Typed relay failures retain
+safe reason/trace information, permanent rejections stop retrying, and transient failures retain
+the bounded startup retry. Tests mock service commands and relay responses. V2 activation and
+restart continuation ordering remain intact; no provider or native contract changes are needed.

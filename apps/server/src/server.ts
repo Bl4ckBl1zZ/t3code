@@ -1,3 +1,5 @@
+import * as Cause from "effect/Cause";
+import { shouldRetryCloudLink } from "./cloud/relayResponse.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as RestartContinuationService from "./orchestration-v2/RestartContinuationService.ts";
 import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
@@ -694,7 +696,7 @@ export const makeServerLayer = Layer.unwrap(
           Effect.catchCause((cause) =>
             Effect.logWarning(
               "Failed to release the managed tunnel on shutdown; the next link reuses it",
-              { cause },
+              { errors: Cause.prettyErrors(cause).map((error) => error.message) },
             ),
           ),
           Effect.asVoid,
@@ -726,10 +728,7 @@ export const makeServerLayer = Layer.unwrap(
             // reachability after a restart.
             yield* reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`).pipe(
               Effect.retry({
-                while: (error) =>
-                  error._tag !== "EnvironmentHttpBadRequestError" &&
-                  error._tag !== "EnvironmentHttpUnauthorizedError" &&
-                  error._tag !== "EnvironmentHttpConflictError",
+                while: shouldRetryCloudLink,
                 schedule: Schedule.exponential("1 second").pipe(
                   Schedule.modifyDelay(({ duration }) =>
                     Effect.succeed(Duration.min(duration, Duration.seconds(30))),
@@ -740,7 +739,7 @@ export const makeServerLayer = Layer.unwrap(
               Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
               Effect.catch((cause) =>
                 Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
-                  cause,
+                  message: cause.message,
                 }),
               ),
             );
