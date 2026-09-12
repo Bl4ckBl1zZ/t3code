@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -993,6 +994,34 @@ describe("DesktopUpdates", () => {
 
         // The stopped backend cannot host agent activity, so the idle watcher
         // proceeds straight to the install-and-restart step.
+        assert.isTrue(yield* Ref.get(desktopState.quitting));
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("holds an idle automatic install until remote preparation is released", () => {
+    const harness = makeHarness({ initialSettings: autoUpdateSettings });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.deferAutomaticInstall(
+          "remote-1",
+          (yield* Clock.currentTimeMillis) + 300_000,
+        );
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* flushCallbacks;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.millis(1));
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
+        yield* updates.deferAutomaticInstall("remote-1", null);
+        // The normal startup check completes while the existing idle watcher waits.
+        yield* TestClock.adjust(Duration.seconds(16));
+        harness.emit("update-not-available");
+        yield* flushCallbacks;
+        yield* TestClock.adjust(Duration.seconds(15));
         assert.isTrue(yield* Ref.get(desktopState.quitting));
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));

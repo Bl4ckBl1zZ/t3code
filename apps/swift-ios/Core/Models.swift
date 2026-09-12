@@ -74,6 +74,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let pullRequests: Bool?
         public let serverSelfUpdate: String?
         public let serverSelfUpdateProgress: Bool?
+        public let desktopAppUpdate: Bool?
 
         private enum CodingKeys: String, CodingKey {
             case repositoryIdentity
@@ -102,7 +103,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case pullRequestStackActions
             case pullRequests
             case serverSelfUpdate
-            case serverSelfUpdateProgress
+            case serverSelfUpdateProgress, desktopAppUpdate
         }
 
         public init(from decoder: any Decoder) throws {
@@ -143,6 +144,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
                 forKey: .threadPullRequestLinking
             )
             pullRequests = try container.decodeIfPresent(Bool.self, forKey: .pullRequests)
+            desktopAppUpdate = try container.decodeIfPresent(Bool.self, forKey: .desktopAppUpdate)
             serverSelfUpdate = try container.decodeIfPresent(String.self, forKey: .serverSelfUpdate)
             serverSelfUpdateProgress = try container.decodeIfPresent(
                 Bool.self,

@@ -1418,3 +1418,11 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
 - Hosted PR references now retain optional `host` across RPC/HTTP reads, mutations, activity/diff caches, web review drafts and native requests. Linked repositories can reuse a configured checkout on the same host; unknown hosts and Azure account/project aliases retain their existing routing checks. V2 links and the persisted PR read cache stay authoritative.
 
 - Swift adapts the resting composer to touch: a multiline draft reduces to one line after scrolling into history and expands on editing, recording, attachment/request flows or returning to the bottom. The model footer and 44pt controls stay visible, and the editor/microphone stay mounted. Only settled scroll gestures publish reading state; height motion respects reduced motion and background visibility.
+
+- Remote desktop updates are manually ported from `b2f25d390a`: authenticated RPC prepares
+  the supervising app's download, returns a token before shutdown, and commits that exact
+  version. Web and Swift verify the target after reconnect and retry lost commits. Swift
+  exposes the flow in Settings → Connections → Desktop updates. Frozen Expo consumes the
+  shared contract but gains no new screen. Fork release feeds and idle-only automatic
+  installs remain intact; remote preparations temporarily hold automatic installs until
+  commitment, cancellation or expiry. No V1 thread runtime is involved.

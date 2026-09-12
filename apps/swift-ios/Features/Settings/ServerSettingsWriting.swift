@@ -14,6 +14,7 @@ import Foundation
 /// working, its rows just refuse the write instead of going missing.
 @MainActor
 public protocol FeatureServerSettingsManaging: AnyObject {
+    func updateDesktopApp(environmentID: String, progress: @escaping @Sendable (String) async -> Void) async throws -> String
     func providerUpdateEvents(environmentID: String) async throws -> AsyncThrowingStream<[ServerProviderSnapshot], Error>
     func updateProvider(environmentID: String, driver: String, instanceID: String) async throws -> [ServerProviderSnapshot]
     func refreshProviderUpdates(environmentID: String) async throws -> [ServerProviderSnapshot]
@@ -78,5 +79,11 @@ extension FeatureServerSettingsManaging {
 extension FeatureServerSettingsManaging {
     public func providerUpdateEvents(environmentID: String) async throws -> AsyncThrowingStream<[ServerProviderSnapshot], Error> {
         AsyncThrowingStream { $0.finish() }
+    }
+}
+
+extension FeatureServerSettingsManaging {
+    public func updateDesktopApp(environmentID: String, progress: @escaping @Sendable (String) async -> Void) async throws -> String {
+        throw FeatureCapabilityUnavailable("Remote desktop updates")
     }
 }

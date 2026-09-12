@@ -102,6 +102,55 @@ public actor T3Client {
         )
     }
 
+    public func updateDesktopApp(progress: @escaping @Sendable (String) async -> Void) async throws -> String {
+        let config = try await serverConfig()
+        guard let descriptor = config.environment, descriptor.capabilities.desktopAppUpdate == true else {
+            throw RPCError.remote("Update the desktop app on that machine to enable remote updates.")
+        }
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask { [self] in
+                let events = await rpc.subscribe("server.updateServerWithProgress",
+                    payload: .object(["targetVersion": .string(descriptor.serverVersion)]),
+                    reconnect: false, as: NativeServerUpdateProgress.self)
+                var prepared: NativeServerUpdateResult?
+                for try await event in events {
+                    if event.type == "progress", let stage = event.stage { await progress(stage) }
+                    if event.type == "complete", let result = event.result { prepared = result; break }
+                }
+                guard let result = prepared, result.method == "desktop-app", let token = result.desktopUpdateToken else {
+                    throw RPCError.protocolViolation("The desktop app did not return an update preparation token.")
+                }
+                await progress("resuming")
+                return try await self.finishDesktopUpdate(result, token: token)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(22 * 60))
+                throw RPCError.remote("The desktop update did not finish in time. Check the connection before retrying.")
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw RPCError.disconnected }
+            return result
+        }
+    }
+
+    private func finishDesktopUpdate(_ prepared: NativeServerUpdateResult, token: String) async throws -> String {
+        try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask { [self] in
+                let events = await rpc.subscribe("subscribeServerLifecycle", as: NativeServerUpdateReady.self)
+                return try await NativeDesktopUpdateHandoff.run(prepared: prepared, events: events) { [self] in
+                    try await self.rpc.request("server.commitDesktopUpdate", payload: .object(["requestId": .string(token)]))
+                }
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(150))
+                throw RPCError.remote("The desktop app has not reconnected on the prepared version yet.")
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw RPCError.disconnected }
+            return result
+        }
+    }
+
     public func updateProvider(driver: String, instanceID: String) async throws -> [ServerProviderSnapshot] {
         struct Payload: Decodable { let providers: [ServerProviderSnapshot] }
         let result = try await rpc.request("server.updateProvider",

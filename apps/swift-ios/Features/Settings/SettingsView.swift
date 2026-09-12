@@ -9,6 +9,7 @@ public struct SettingsView: View {
     @State private var showingAddEnvironment = false
     @State private var showingDevices = false
     @State private var showingEnvironmentIcons = false
+    @State private var showingDesktopUpdates = false
     @State private var showingT3Connect = false
     @State private var showingIntegrations = false
     @State private var showingAgents = false
@@ -66,6 +67,9 @@ public struct SettingsView: View {
             }
             .background(T3Colors.background)
             .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $showingDesktopUpdates) {
+                NavigationStack { SettingsDesktopUpdatesView(model: model) }
+            }
             .confirmationDialog(
                 "Disconnect from this server?",
                 isPresented: $showingDisconnect,
@@ -340,6 +344,11 @@ public struct SettingsView: View {
                     }
                 }
 
+                settingsDivider
+
+                Button { showingDesktopUpdates = true } label: {
+                    SettingsNavigationRow(title: "Desktop updates", systemImage: "arrow.down.circle")
+                }.buttonStyle(.plain)
                 settingsDivider
 
                 Button { showingEnvironmentIcons = true } label: {

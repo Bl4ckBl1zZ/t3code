@@ -455,6 +455,7 @@ import {
   resolveServerConfigVersionMismatch,
   resolveServerSelfUpdateCapability,
   serverUpdateGuidance,
+  supportsDesktopAppUpdate,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 
@@ -2510,6 +2511,7 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatch && activeThread ? activeThread.environmentId : null;
   const serverUpdateEnvironmentId = activeThread?.environmentId ?? null;
   const versionMismatchSelfUpdate = resolveServerSelfUpdateCapability(serverConfig);
+  const versionMismatchDesktopAppUpdate = supportsDesktopAppUpdate(serverConfig);
   const serverUpdateState = useAtomValue(
     serverEnvironment.updateStateAtom(serverUpdateEnvironmentId),
   );
@@ -2613,7 +2615,8 @@ function ChatViewContent(props: ChatViewProps) {
             <>
               Client {versionMismatch.clientVersion} is connected to {versionMismatchServerLabel}{" "}
               {versionMismatch.serverVersion}.{" "}
-              {serverUpdateGuidance(versionMismatchSelfUpdate, versionMismatchServerLabel)}
+              {!versionMismatchDesktopAppUpdate &&
+                serverUpdateGuidance(versionMismatchSelfUpdate, versionMismatchServerLabel)}
             </>
           ) : null,
         // The desktop-managed guidance is already the description; the action
@@ -2621,11 +2624,13 @@ function ChatViewContent(props: ChatViewProps) {
         actions:
           updateInProgress ||
           !versionMismatch ||
-          versionMismatchSelfUpdate === "desktop-managed" ? undefined : (
+          (versionMismatchSelfUpdate === "desktop-managed" &&
+            !versionMismatchDesktopAppUpdate) ? undefined : (
             <ServerUpdateAction
               environmentId={serverUpdateEnvironmentId}
               serverLabel={versionMismatchServerLabel}
               selfUpdate={versionMismatchSelfUpdate}
+              desktopAppUpdate={versionMismatchDesktopAppUpdate}
               targetVersion={versionMismatch.clientVersion}
               {...(updateFailed ? { label: "Retry update" } : {})}
             />
@@ -2654,6 +2659,7 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatchDismissKey,
     serverUpdateEnvironmentId,
     versionMismatchSelfUpdate,
+    versionMismatchDesktopAppUpdate,
     versionMismatchServerLabel,
   ]);
   const unlockedSelectedProvider = resolveSelectableProvider(

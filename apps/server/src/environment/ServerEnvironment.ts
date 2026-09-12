@@ -141,6 +141,9 @@ export const make = Effect.gen(function* () {
   });
 
   const machine = yield* detectServerEnvironmentMachineKind();
+  const desktopAppUpdate =
+    serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
+
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
     label,
@@ -184,7 +187,10 @@ export const make = Effect.gen(function* () {
       pullRequestStackActions: true,
       usagePriceOverrides: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
-      ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
+      ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
+        ? { serverSelfUpdateProgress: true }
+        : {}),
+      ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
     },
   };
 
