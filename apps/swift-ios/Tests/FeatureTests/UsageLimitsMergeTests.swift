@@ -14,6 +14,22 @@ struct UsageLimitsMergeTests {
         ]))
     }
 
+    @Test func mergesHubQuotaAndTargetsItsExactResetCredit() throws {
+        struct Fixture: Decodable { let source: UsageLimitSourceSnapshot; let config: UsageLimitSourceConfig }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("CoreTests/Fixtures/usageLimitSource.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        let result = FeatureUsageLimitsMerge.merge([.init(id: "mac", label: "Mac",
+            providers: [try provider("personal", email: "same@example.com", percent: 20)], sources: [fixture.source])])
+        #expect(result.count == 1)
+        #expect(result.first?.resetTarget?.instanceID == nil)
+        #expect(result.first?.resetTarget?.sourceID == "team-hub")
+        #expect(result.first?.resetTarget?.creditID == "credit-a")
+        #expect(result.first?.environments == ["Mac", "Mac · Team"])
+        let patch = ServerSettingsPatchInput(usageLimitSources: ["team-hub": fixture.config])
+        #expect(patch.json["usageLimitSources"]?["team-hub"]?["managementKey"] == .string("••••••"))
+        #expect(ServerSettingsPatchInput(usageLimitSources: ["team-hub": nil]).json["usageLimitSources"]?["team-hub"] == .null)
+    }
+
     @Test func keepsSuccessfulRedemptionWarningsDistinctFromErrors() throws {
         let result = try JSONDecoder().decode(ProviderConsumeResetCreditResult.self, from: Data(#"{"outcome":"reset","warning":"Refresh to confirm new limits."}"#.utf8))
         #expect(result.outcome == "reset")

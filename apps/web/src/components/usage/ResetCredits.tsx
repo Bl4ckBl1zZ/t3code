@@ -1,6 +1,6 @@
 import type {
   EnvironmentId,
-  ProviderInstanceId,
+  ProviderConsumeResetCreditInput,
   ProviderConsumeResetCreditOutcome,
   ServerProviderResetCredits,
 } from "@t3tools/contracts";
@@ -33,7 +33,7 @@ export function ResetCredits({
   now,
   canOperate,
 }: {
-  target: { environmentId: EnvironmentId; instanceId: ProviderInstanceId };
+  target: { environmentId: EnvironmentId } & ProviderConsumeResetCreditInput;
   credits: ServerProviderResetCredits;
   now: number;
   canOperate: boolean;
@@ -52,7 +52,10 @@ export function ResetCredits({
     try {
       const result = await consume({
         environmentId: target.environmentId,
-        input: { instanceId: target.instanceId },
+        input:
+          "instanceId" in target
+            ? { instanceId: target.instanceId }
+            : { sourceId: target.sourceId, accountId: target.accountId, creditId: target.creditId },
       });
       setStatus(
         result._tag === "Success"

@@ -5,7 +5,7 @@ import type { ProviderInstance } from "./ProviderDriver.ts";
 /** Validate the current instance immediately before an account-level operation. */
 export const consumeInstanceResetCredit = Effect.fn("consumeInstanceResetCredit")(function* (
   instance: Pick<ProviderInstance, "enabled" | "consumeResetCredit"> | undefined,
-  input: ProviderConsumeResetCreditInput,
+  input: Extract<ProviderConsumeResetCreditInput, { instanceId: string }>,
 ) {
   if (!instance?.enabled || !instance.consumeResetCredit)
     return yield* new ProviderSetupError({

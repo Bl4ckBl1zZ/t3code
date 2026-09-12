@@ -1136,6 +1136,32 @@ public actor T3Client {
             payload: .object(["instanceId": .string(instanceID)]), as: ProviderConsumeResetCreditResult.self)
     }
 
+    public func consumeResetCredit(sourceID: String, accountID: String, creditID: String) async throws -> ProviderConsumeResetCreditResult {
+        try await rpc.request(RPCMethod.providerConsumeResetCredit.rawValue,
+            payload: .object(["sourceId": .string(sourceID), "accountId": .string(accountID), "creditId": .string(creditID)]), as: ProviderConsumeResetCreditResult.self)
+    }
+
+    /// A short-lived opt-in subscription also works for non-active environments.
+    public func usageLimitSources() async throws -> [UsageLimitSourceSnapshot] {
+        guard try await serverConfig().environment?.capabilities.usageLimitSources == true else { return [] }
+        return try await withThrowingTaskGroup(of: [UsageLimitSourceSnapshot].self) { group in
+            group.addTask {
+                let events = await self.rpc.subscribe(RPCMethod.subscribeServerConfig.rawValue,
+                    payload: .object(["usageLimitSources": .bool(true)]), as: ServerConfigStreamEvent.self)
+                for try await event in events {
+                    if case let .usageLimitSourcesUpdated(sources) = event { return sources }
+                }
+                throw RPCError.protocolViolation("Quota hub subscription ended before reporting limits.")
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(20))
+                throw RPCError.protocolViolation("Quota hub limits timed out. Refresh to retry.")
+            }
+            defer { group.cancelAll() }
+            return try await group.next() ?? []
+        }
+    }
+
     public func refreshUsageRates() async throws -> UsagePricing {
         try await rpc.request(RPCMethod.serverRefreshUsageRates.rawValue,
                               payload: .object([:]), as: UsagePricing.self)

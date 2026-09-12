@@ -114,6 +114,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       client reconnecting to one must drop published themes rather than keep
       showing a set nothing will ever update. */
   environmentThemes: Schema.optionalKey(Schema.Boolean),
+  usageLimitSources: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   /** Custom model entries can include names and composer option descriptors. */
   assistantCitations: Schema.optional(Schema.Boolean),

@@ -1,5 +1,6 @@
 import {
   ProviderInstanceId,
+  UsageLimitSourceId,
   ProviderDriverKind,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
@@ -196,4 +197,41 @@ describe("quota pooling", () => {
     expect(paceOf(window({ usedPercent: 80 }), now)).toBe("ahead");
     expect(formatResetsIn(window({ resetsAt: "2026-09-10T11:00:00Z" }), now)).toBe("resets now");
   });
+});
+
+it("deduplicates a hub account with a local account and redeems the displayed hub credit", () => {
+  const result = collectLimitAccounts([
+    {
+      id: "mac",
+      label: "Mac",
+      providers: [provider({ auth: { email: "same@example.com" } })],
+      usageLimitSources: [
+        {
+          id: UsageLimitSourceId.make("hub"),
+          kind: "cliproxy",
+          label: "Team",
+          checkedAt: "2026-09-10T13:00:00Z",
+          accounts: [
+            {
+              id: "auth-file",
+              driver: ProviderDriverKind.make("codex"),
+              email: "Same@Example.com",
+              usageLimits: limits({
+                checkedAt: "2026-09-10T13:00:00Z",
+                resetCredits: { availableCount: 1, nextCreditId: "credit" },
+              }),
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+  expect(result).toHaveLength(1);
+  expect(result[0]?.resetTarget).toEqual({
+    environmentId: "mac",
+    sourceId: "hub",
+    accountId: "auth-file",
+    creditId: "credit",
+  });
+  expect(result[0]?.environments).toEqual(["Mac", "Mac · Team"]);
 });

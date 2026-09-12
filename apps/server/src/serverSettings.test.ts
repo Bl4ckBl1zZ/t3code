@@ -3,6 +3,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
   ProviderInstanceId,
+  UsageLimitSourceId,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -73,6 +74,52 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  for (const inline of [false, true]) {
+    it.effect(`keeps hub keys secret across redacted edits and deletion (inline=${inline})`, () =>
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const id = UsageLimitSourceId.make("hub-test");
+        const source = {
+          kind: "cliproxy" as const,
+          url: "https://hub.example.test",
+          managementKey: "test-management-secret",
+          enabled: true,
+        };
+        if (inline) {
+          yield* fs.writeFileString(
+            config.settingsPath,
+            yield* Schema.encodeEffect(Schema.fromJsonString(ServerSettingsPatch))({
+              usageLimitSources: { [id]: source },
+            }),
+          );
+        } else {
+          yield* service.updateSettings({ usageLimitSources: { [id]: source } });
+        }
+        const current = yield* service.getSettings;
+        const redacted =
+          ServerSettingsModule.redactServerSettingsForClient(current).usageLimitSources[id]!;
+        assert.equal(redacted.managementKey, "••••••");
+        const saved = yield* service.updateSettings({
+          usageLimitSources: { [id]: { ...redacted, label: "Renamed", enabled: false } },
+        });
+        assert.equal(saved.usageLimitSources[id]?.managementKey, source.managementKey);
+        assert.notInclude(yield* fs.readFileString(config.settingsPath), source.managementKey);
+        yield* service.updateSettings({ defaultAutoPull: true });
+        assert.equal(
+          (yield* service.getSettings).usageLimitSources[id]?.managementKey,
+          source.managementKey,
+        );
+        yield* service.updateSettings({ usageLimitSources: { [id]: null } });
+        assert.isUndefined((yield* service.getSettings).usageLimitSources[id]);
+        // Re-adding a redacted source cannot recover the removed credential.
+        yield* service.updateSettings({ usageLimitSources: { [id]: redacted } });
+        assert.equal((yield* service.getSettings).usageLimitSources[id]?.managementKey, "");
+      }).pipe(Effect.provide(makeServerSettingsLayer())),
+    );
+  }
+
   it.effect("preserves context when reading a provider environment secret fails", () => {
     const platformCause = PlatformError.systemError({
       _tag: "PermissionDenied",

@@ -162,6 +162,7 @@ export const make = Effect.gen(function* () {
       threadSnooze: true,
       threadVisitedTracking: true,
       environmentThemes: true,
+      usageLimitSources: true,
       environmentIcon: true,
       customModelDefinitions: true,
       projectIcons: true,
