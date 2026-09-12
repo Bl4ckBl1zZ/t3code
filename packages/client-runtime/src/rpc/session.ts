@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import { type ServerConfig, WS_METHODS } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -44,7 +46,12 @@ type InitialConfigError = Effect.Error<
 >;
 type ProbeError = Effect.Error<ReturnType<WsRpcProtocolClient[typeof WS_METHODS.serverProbe]>>;
 
-function mapSessionRpcError(error: InitialConfigError | ProbeError): ConnectionAttemptError {
+const isSocketErrorReason = Schema.is(Socket.SocketErrorReason);
+
+function mapSessionRpcError(
+  error: InitialConfigError | ProbeError,
+  networkHint: string,
+): ConnectionAttemptError {
   switch (error._tag) {
     case "EnvironmentAuthorizationError":
       return new ConnectionBlockedError({
@@ -60,7 +67,7 @@ function mapSessionRpcError(error: InitialConfigError | ProbeError): ConnectionA
     case "RpcClientError":
       return new ConnectionTransientErrorClass({
         reason: "transport",
-        detail: error.message,
+        detail: `${error.message}${isSocketErrorReason(error.reason) ? networkHint : ""}`,
       });
   }
 }
@@ -69,6 +76,10 @@ export const make = Effect.gen(function* () {
   const webSocketConstructor = yield* Socket.WebSocketConstructor;
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
+    const networkHint =
+      connection.target._tag === "RelayConnectionTarget" ? ` ${NETWORK_BLOCKING_HINT}` : "";
+    const mapRpcError = (error: Parameters<typeof mapSessionRpcError>[0]) =>
+      mapSessionRpcError(error, networkHint);
     yield* Effect.annotateCurrentSpan({
       "connection.environment.id": connection.environmentId,
     });
@@ -83,9 +94,7 @@ export const make = Effect.gen(function* () {
             disconnected,
             new ConnectionTransientErrorClass({
               reason: "transport",
-              detail: wasConnected
-                ? `${connection.label} disconnected.`
-                : `${connection.label} could not establish a WebSocket connection.`,
+              detail: `${wasConnected ? `${connection.label} disconnected.` : `${connection.label} could not establish a WebSocket connection.`}${networkHint}`,
             }),
           ),
         ),
@@ -116,7 +125,7 @@ export const make = Effect.gen(function* () {
     const client = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
     const initialConfig = yield* Effect.cached(
       client[WS_METHODS.serverGetConfig]({}).pipe(
-        Effect.mapError(mapSessionRpcError),
+        Effect.mapError(mapRpcError),
         Effect.withSpan("environment.initialSync"),
       ),
     );
@@ -125,7 +134,7 @@ export const make = Effect.gen(function* () {
         (config.environment.capabilities.connectionProbe === true
           ? client[WS_METHODS.serverProbe]({})
           : client[WS_METHODS.serverGetConfig]({})
-        ).pipe(Effect.mapError(mapSessionRpcError)),
+        ).pipe(Effect.mapError(mapRpcError)),
       ),
       Effect.asVoid,
       Effect.withSpan("clientRuntime.connection.rpcSession.probe"),

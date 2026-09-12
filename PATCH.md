@@ -1404,3 +1404,5 @@ Swift already performs request-time renewal, shares in-flight work and reuses ne
 Its session-permission check now also renews on an unauthenticated HTTP 200 response, once only,
 and reports continued rejection. Cookie/bearer behavior is preserved. No SQLite migration or V1
 runtime is added. Authentication tests use synthetic credentials and mocked transports.
+
+- Carries upstream T3 Connect network guidance through the fork’s shared authorization, relay, and V2 RPC connection paths. Only relay transport failures and timeouts suggest DNS/firewall troubleshooting; authentication and server response errors retain their own messages. Swift already provides native network/VPN guidance and retry actions.

@@ -1,3 +1,4 @@
+import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -534,7 +535,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         failure: {
           error: new ConnectionTransientError({
             reason: "timeout",
-            detail: `${target.label} did not respond during connection setup.`,
+            detail: `${target.label} did not respond during connection setup.${target._tag === "RelayConnectionTarget" ? ` ${NETWORK_BLOCKING_HINT}` : ""}`,
           }),
           attemptSpan: Option.none(),
         },

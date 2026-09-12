@@ -1,3 +1,4 @@
+import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import {
   RelayAccessTokenType,
   RelayApi,
@@ -151,7 +152,7 @@ export class ManagedRelayRequestTimeoutError extends Schema.TaggedErrorClass<Man
   },
 ) {
   override get message(): string {
-    return `${this.activity} timed out.`;
+    return `${this.activity} timed out. ${NETWORK_BLOCKING_HINT}`;
   }
 }
 
@@ -170,13 +171,14 @@ export class ManagedRelayRequestFailedError extends Schema.TaggedErrorClass<Mana
   "ManagedRelayRequestFailedError",
   {
     action: ManagedRelayRequestAction,
+    transportFailed: Schema.optionalKey(Schema.Boolean),
     cause: Schema.Defect(),
     relayError: Schema.optional(Schema.Union([RelayProtectedError, RelayVoiceInputError])),
     traceId: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
-    return `Could not ${this.action}.`;
+    return `Could not ${this.action}.${this.transportFailed ? ` ${NETWORK_BLOCKING_HINT}` : ""}`;
   }
 }
 
@@ -365,6 +367,8 @@ function relayRequestError(action: ManagedRelayRequestAction) {
   return (cause: RelayHttpRequestError): ManagedRelayClientError =>
     new ManagedRelayRequestFailedError({
       action,
+      transportFailed:
+        HttpClientError.isHttpClientError(cause) && cause.reason._tag === "TransportError",
       cause,
       ...(isRelayProtectedError(cause) || isRelayVoiceInputError(cause)
         ? { relayError: cause, traceId: cause.traceId }
