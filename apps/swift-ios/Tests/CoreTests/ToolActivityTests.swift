@@ -29,3 +29,12 @@ struct ToolActivityTests {
         #expect(icon.imageURL(dark: false)?.absoluteString == "https://localhost:8080/favicon.ico")
     }
 }
+
+extension ToolActivityTests {
+    @Test func themedInlineLogosPreserveAppearanceChoice() throws {
+        let data = Data(#"{"_tag":"themed-logo","logoUrl":"data:image/svg+xml,%3Csvg%2F%3E","logoUrlDark":"data:image/png;base64,aGVsbG8="}"#.utf8)
+        let icon = try JSONDecoder().decode(ToolActivityIcon.self, from: data)
+        #expect(icon.imageURL(dark: false)?.scheme == "data")
+        #expect(icon.imageURL(dark: true)?.absoluteString == "data:image/png;base64,aGVsbG8=")
+    }
+}

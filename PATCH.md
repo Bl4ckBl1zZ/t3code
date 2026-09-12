@@ -1202,3 +1202,11 @@ link/unlink commands. It opens from the thread header/sidebar collection and rig
 launcher, retains independent PR detail tabs, and shows stack structure, host checks,
 review decisions, conflicts, author, branch direction and sync age. Unknown host fields
 stay unknown. The native linked-PR sheet already consumes the same snapshots.
+
+### Native tool logos
+
+Swift tool rows render HTTP(S) and inline raster/SVG logos through a bounded bitmap cache,
+with theme-specific URLs and existing signed native-app icons. SVGView is pinned to revision
+`fd9f0303bc2da37e5d1ea98f42835c8273361c7b`; parsing has no external-resource linker and
+rejects excessive depth, size and recursive references. Transcript rows retain only a 48-pixel
+raster; they do not embed web views or repeatedly parse SVG while scrolling.

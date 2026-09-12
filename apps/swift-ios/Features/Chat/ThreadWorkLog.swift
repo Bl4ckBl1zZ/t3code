@@ -1659,10 +1659,7 @@ private struct ThreadToolActivityIcon: View {
         if icon?._tag == "native-app", let app = icon?.app {
             NativeAppToolIcon(app: app, fallback: fallback)
         } else if let url = icon?.imageURL(dark: colorScheme == .dark) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image { image.resizable().scaledToFit() }
-                else { Image(systemName: fallback) }
-            }.frame(width: 16, height: 16).accessibilityHidden(true)
+            NativeToolLogo(url: url, fallback: fallback)
         } else { Image(systemName: fallback).accessibilityHidden(true) }
     }
 }
