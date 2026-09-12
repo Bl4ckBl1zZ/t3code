@@ -107,3 +107,9 @@ beside the conversation. The panel shows checks, reviews, conflicts and stack or
 latest saved host state. Open individual requests in separate tabs, copy their links, or unlink
 them from the row menu. The right-panel launcher opens this collection even before a request
 has been linked.
+
+Thread and source-control preferences are shared across connected machines. On native iOS,
+open **Settings → Shared preferences**; on web or desktop, use **General** and **Source Control**.
+If a machine was offline during an edit, a mismatch notice lets you apply the selected machine’s
+preferences to the others. Provider accounts, project overrides and machine configuration remain
+specific to each machine. A generated-text model only propagates to compatible enabled accounts.

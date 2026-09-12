@@ -1,3 +1,4 @@
+import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
 import { ProviderAccountSetup } from "./ProviderAccountSetup";
 import { ProjectAutoPullSettings } from "./ProjectBooleanSettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
@@ -2323,6 +2324,7 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SharedSettingsMismatchAlert />
       <SettingsSection title="General">
         <SettingsRow
           serverScoped
@@ -2337,7 +2339,7 @@ export function GeneralSettingsPanel() {
           }
           description={
             supportsRestartContinuation
-              ? "Resume interrupted threads after this machine restarts or updates. Saved provider sessions are required; terminal commands may still be interrupted."
+              ? "Resume interrupted threads after restarts or updates. Shared across connected, supported machines. Saved provider sessions are required; terminal commands may still be interrupted."
               : "Connect an updated server to configure restart continuation."
           }
           control={

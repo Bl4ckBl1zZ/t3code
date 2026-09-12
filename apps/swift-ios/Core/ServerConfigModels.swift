@@ -267,6 +267,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// Opaque envelopes preserve unknown driver fields while editing one account's models.
     public let providerInstances: [String: JSONValue]
     public let providerDefinitions: [String: JSONValue]
+    public let textGenerationModelSelection: ModelSelection?
+    public let sourceControlWritingStyle: SourceControlWritingStyle?
     public let defaultModelSelection: ModelSelection?
     public let defaultProjectScripts: [ProjectScript]
     public let projectScriptOverrides: [String: [ProjectScript]?]
@@ -316,6 +318,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public init(
         providerInstances: [String: JSONValue] = [:],
         providerDefinitions: [String: JSONValue] = [:],
+        textGenerationModelSelection: ModelSelection? = nil,
+        sourceControlWritingStyle: SourceControlWritingStyle? = nil,
         defaultModelSelection: ModelSelection? = nil,
         defaultProjectScripts: [ProjectScript] = [],
         projectScriptOverrides: [String: [ProjectScript]?] = [:],
@@ -340,6 +344,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     ) {
         self.providerInstances = providerInstances
         self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
+        self.textGenerationModelSelection = textGenerationModelSelection
+        self.sourceControlWritingStyle = sourceControlWritingStyle
         self.defaultModelSelection = defaultModelSelection
         self.defaultProjectScripts = defaultProjectScripts
         self.projectScriptOverrides = projectScriptOverrides
@@ -372,6 +378,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case providerInstances
+        case textGenerationModelSelection, sourceControlWritingStyle
         case defaultModelSelection
         case defaultProjectScripts, projectScriptOverrides
         case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
@@ -403,6 +410,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         providerInstances = try container.decodeIfPresent([String: JSONValue].self, forKey: .providerInstances) ?? [:]
+        textGenerationModelSelection = try container.decodeIfPresent(ModelSelection.self, forKey: .textGenerationModelSelection)
+        sourceControlWritingStyle = try container.decodeIfPresent(SourceControlWritingStyle.self, forKey: .sourceControlWritingStyle)
         defaultModelSelection = try container.decodeIfPresent(ModelSelection.self, forKey: .defaultModelSelection)
         defaultProjectScripts = try container.decodeIfPresent([ProjectScript].self, forKey: .defaultProjectScripts) ?? []
         projectScriptOverrides = try container.decodeIfPresent([String: [ProjectScript]?].self, forKey: .projectScriptOverrides) ?? [:]
@@ -451,6 +460,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(providerInstances, forKey: .providerInstances)
+        try container.encodeIfPresent(textGenerationModelSelection, forKey: .textGenerationModelSelection)
+        try container.encodeIfPresent(sourceControlWritingStyle, forKey: .sourceControlWritingStyle)
         try container.encode(defaultModelSelection, forKey: .defaultModelSelection)
         try container.encode(defaultProjectScripts, forKey: .defaultProjectScripts)
         try container.encode(projectScriptOverrides, forKey: .projectScriptOverrides)
@@ -491,6 +502,9 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var continueThreadsAfterServerUpdate: Bool?
     public var sidebarAutoSettleOnMerge: Bool?
     /// Outer nil omits the field; a present nil restores automatic selection.
+    public var textGenerationModelSelection: ModelSelection?
+    public var sourceControlWritingStyle: SourceControlWritingStylePatch?
+    public var newWorktreesStartFromOrigin: Bool?
     public var defaultModelSelection: ModelSelection??
     public var defaultThreadEnvMode: ServerThreadEnvironmentMode?
     public var defaultProjectScripts: [ProjectScript]?
@@ -515,6 +529,9 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         sidebarAutoSettleAfterDays: Double?? = nil,
         continueThreadsAfterServerUpdate: Bool? = nil,
         sidebarAutoSettleOnMerge: Bool? = nil,
+        textGenerationModelSelection: ModelSelection? = nil,
+        sourceControlWritingStyle: SourceControlWritingStylePatch? = nil,
+        newWorktreesStartFromOrigin: Bool? = nil,
         defaultModelSelection: ModelSelection?? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode? = nil,
         defaultProjectScripts: [ProjectScript]? = nil,
@@ -533,6 +550,9 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
         self.continueThreadsAfterServerUpdate = continueThreadsAfterServerUpdate
         self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
+        self.textGenerationModelSelection = textGenerationModelSelection
+        self.sourceControlWritingStyle = sourceControlWritingStyle
+        self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
         self.defaultModelSelection = defaultModelSelection
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.defaultProjectScripts = defaultProjectScripts
@@ -554,6 +574,9 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         if let sidebarAutoSettleAfterDays { fields["sidebarAutoSettleAfterDays"] = sidebarAutoSettleAfterDays.map(JSONValue.number) ?? .null }
         if let continueThreadsAfterServerUpdate { fields["continueThreadsAfterServerUpdate"] = .bool(continueThreadsAfterServerUpdate) }
         if let sidebarAutoSettleOnMerge { fields["sidebarAutoSettleOnMerge"] = .bool(sidebarAutoSettleOnMerge) }
+        if let textGenerationModelSelection { fields["textGenerationModelSelection"] = textGenerationModelSelection.settingsJSON }
+        if let sourceControlWritingStyle { fields["sourceControlWritingStyle"] = sourceControlWritingStyle.json }
+        if let newWorktreesStartFromOrigin { fields["newWorktreesStartFromOrigin"] = .bool(newWorktreesStartFromOrigin) }
         if let defaultModelSelection {
             if let selection = defaultModelSelection {
                 var value: [String: JSONValue] = ["instanceId": .string(selection.instanceId), "model": .string(selection.model)]
@@ -614,7 +637,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public var environment: EnvironmentDescriptor? = nil
     public var cwd: String? = nil
     public let providers: [ServerProviderSnapshot]
-    public let settings: ServerSettingsSnapshot?
+    public var settings: ServerSettingsSnapshot?
     /// The server's dedicated non-project workspace for projectless T3 Work
     /// conversations. Matching it against a project's `workspaceRoot` is what
     /// stops a Work launch attaching to an arbitrary project, so its absence
@@ -642,6 +665,12 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         self.threadSnapshotWindow = threadSnapshotWindow
         self.threadResumeCompletionMarker = threadResumeCompletionMarker
         self.shellResumeCompletionMarker = shellResumeCompletionMarker
+    }
+
+    public func replacingSettings(_ settings: ServerSettingsSnapshot?) -> Self {
+        var copy = self
+        copy.settings = settings
+        return copy
     }
 
     private enum CodingKeys: String, CodingKey {

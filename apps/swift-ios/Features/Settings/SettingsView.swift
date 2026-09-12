@@ -475,7 +475,7 @@ public struct SettingsView: View {
         SettingsSection(title: "Features") {
             VStack(spacing: 0) {
                 Button { showingThreadOrganization = true } label: {
-                    SettingsNavigationRow(title: "Thread organization", systemImage: "tray.full")
+                    SettingsNavigationRow(title: "Shared preferences", systemImage: "tray.full")
                 }.buttonStyle(.plain)
                 settingsDivider
 

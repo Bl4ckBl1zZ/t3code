@@ -1210,3 +1210,12 @@ with theme-specific URLs and existing signed native-app icons. SVGView is pinned
 `fd9f0303bc2da37e5d1ea98f42835c8273361c7b`; parsing has no external-resource linker and
 rejects excessive depth, size and recursive references. Transcript rows retain only a 48-pixel
 raster; they do not embed web views or repeatedly parse SVG while scrolling.
+
+### Shared server preferences
+
+Web and Swift share restart continuation, automatic settlement, worktree origin, generated-text
+model and source-control writing preferences across connected, capable environments. Other
+server settings keep their explicit machine scope. The V2 capability gates retain legacy-client
+fallbacks; account selections propagate only when the target enables the same instance/driver.
+Disconnected targets are not overwritten with defaults. Mismatch notices offer an explicit
+apply-to-all action using loaded settings; Swift reports individual failed target names.

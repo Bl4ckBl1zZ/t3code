@@ -5281,14 +5281,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environmentID: String
     ) -> ServerConfigSnapshot {
         let previous = serverConfigsByEnvironmentID[environmentID]
-        return ServerConfigSnapshot(
-            providers: previous?.providers ?? latestServerConfig?.providers ?? [],
-            settings: settings,
-            t3WorkDirectory: previous?.t3WorkDirectory,
-            threadSnapshotWindow: previous?.threadSnapshotWindow,
-            threadResumeCompletionMarker: previous?.threadResumeCompletionMarker,
-            shellResumeCompletionMarker: previous?.shellResumeCompletionMarker
-        )
+            ?? (environmentID == activeEnvironment?.id ? latestServerConfig : nil)
+            ?? ServerConfigSnapshot(providers: [])
+        return previous.replacingSettings(settings)
     }
 
     /// Single write path for server configs so the provider catalog cache can
@@ -6650,7 +6645,9 @@ extension NativeFeatureClient: FeatureHermesInboxManaging {
 extension NativeFeatureClient: FeatureServerSettingsManaging {
     func providerModelConfiguration(environmentID: String) async throws -> ServerConfigSnapshot {
         let client = try await environmentClient(id: environmentID)
-        return try await client.serverConfig()
+        let config = try await client.serverConfig()
+        setServerConfig(config, environmentID: environmentID)
+        return config
     }
 
     @discardableResult
@@ -6671,6 +6668,11 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             throw FeatureCapabilityUnavailable("Custom model pricing")
         }
         let client = try await environmentClient(id: environmentID)
+        let sourceConfig = try await client.serverConfig()
+        if patch.continueThreadsAfterServerUpdate != nil, sourceConfig.environment?.capabilities.threadRestartContinuation != true {
+            throw FeatureCapabilityUnavailable("Restart recovery")
+        }
+        setServerConfig(sourceConfig, environmentID: environmentID)
         let settings = try await client.updateServerSettings(patch: patch)
         // Fold the server's answer into the cached config now. The active
         // environment would also hear it on the config subscription, but a
@@ -6679,7 +6681,31 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         let config = mergingSettings(settings, environmentID: environmentID)
         if environmentID == activeEnvironment?.id { latestServerConfig = config }
         setServerConfig(config, environmentID: environmentID)
+        let shared = SharedServerSettings.split(patch).shared
+        var failedTargets: [String] = []
+        if !SharedServerSettings.isEmpty(shared) {
+            for environment in try await runtime.environments() where environment.id != environmentID {
+                guard environmentConnectionStates[environment.id] == .connected else { continue }
+                do {
+                    let targetClient = try await environmentClient(id: environment.id)
+                    let targetConfig = try await targetClient.serverConfig()
+                    guard targetConfig.environment?.capabilities.threadAutoSettlement == true,
+                          let targetSettings = targetConfig.settings else { continue }
+                    let targetPatch = SharedServerSettings.filter(shared,
+                        restartSupported: targetConfig.environment?.capabilities.threadRestartContinuation == true,
+                        target: targetSettings, source: settings)
+                    guard !SharedServerSettings.isEmpty(targetPatch) else { continue }
+                    let saved = try await targetClient.updateServerSettings(patch: targetPatch)
+                    setServerConfig(targetConfig, environmentID: environment.id)
+                    setServerConfig(mergingSettings(saved, environmentID: environment.id), environmentID: environment.id)
+                } catch is CancellationError { throw CancellationError() }
+                catch { failedTargets.append(environment.label) }
+            }
+        }
         if let shell = latestShell { await emitSnapshot(shell) }
+        if !failedTargets.isEmpty {
+            throw SharedSettingsWriteFailure(machines: failedTargets)
+        }
         return FeatureEnvironmentPreferences(
             defaultWorkspaceMode: settings.defaultThreadEnvMode == .worktree ? .worktree : .local,
             newWorktreesStartFromOrigin: settings.newWorktreesStartFromOrigin,
@@ -6687,6 +6713,33 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             claudeAutoCompactWindow: settings.claudeAutoCompactWindow
         )
     }
+    func sharedSettingsMismatches(environmentID: String) async throws -> [FeatureSharedSettingsMismatch] {
+        let source = try await providerModelConfiguration(environmentID: environmentID)
+        guard source.environment?.capabilities.threadAutoSettlement == true, let sourceSettings = source.settings else { return [] }
+        var mismatches: [FeatureSharedSettingsMismatch] = []
+        for environment in try await runtime.environments() where environment.id != environmentID {
+            guard environmentConnectionStates[environment.id] == .connected,
+                  let config = serverConfigsByEnvironmentID[environment.id],
+                  config.environment?.capabilities.threadAutoSettlement == true,
+                  let settings = config.settings else { continue }
+            if SharedServerSettings.differs(source: sourceSettings,
+                sourceRestart: source.environment?.capabilities.threadRestartContinuation == true,
+                target: settings, targetRestart: config.environment?.capabilities.threadRestartContinuation == true) {
+                mismatches.append(.init(id: environment.id, name: environment.label))
+            }
+        }
+        return mismatches
+    }
+
+    func applySharedSettings(environmentID: String) async throws {
+        let config = try await providerModelConfiguration(environmentID: environmentID)
+        guard config.environment?.capabilities.threadAutoSettlement == true, let settings = config.settings else {
+            throw FeatureCapabilityUnavailable("Shared preferences")
+        }
+        try await updateServerSettings(environmentID: environmentID,
+            patch: SharedServerSettings.pick(settings, restartSupported: config.environment?.capabilities.threadRestartContinuation == true))
+    }
+
 }
 
 // MARK: - Voice Input
@@ -7049,4 +7102,9 @@ struct NativeVoiceRelayClient: Sendable {
 
         let models: [Model]
     }
+}
+
+private struct SharedSettingsWriteFailure: LocalizedError {
+    let machines: [String]
+    var errorDescription: String? { "Saved on the selected machine, but could not update shared preferences on " + machines.joined(separator: ", ") + ". Reload and apply to all to retry." }
 }

@@ -16,8 +16,8 @@ update the server, and the version difference remains visible in Connections.
 ## Before You Update
 
 Updating restarts the server, so the connection disappears briefly. **Settings → General → Continue
-threads after restarts** is off by default. On native iOS, open **Settings → Thread organization →
-Restart recovery** and select the machine. When enabled, interrupted threads resume after an update,
+threads after restarts** is off by default. On native iOS, open **Settings → Shared preferences →
+Restart recovery**. Edits apply to connected machines that support the setting. When enabled, interrupted threads resume after an update,
 crash or machine restart once T3 starts again. This setting does not start T3 automatically.
 
 Recovery requires a saved provider session. Codex continues without a synthetic prompt; other
