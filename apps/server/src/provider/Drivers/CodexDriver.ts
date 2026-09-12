@@ -41,7 +41,11 @@ import {
 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { checkCodexProviderStatus, makePendingCodexProvider } from "../Layers/CodexProvider.ts";
+import {
+  checkCodexProviderStatus,
+  makePendingCodexProvider,
+  withCodexAppServerClient,
+} from "../Layers/CodexProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
@@ -62,6 +66,11 @@ import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
+import {
+  CodexResetCreditCoordinator,
+  CODEX_RESET_CREDIT_TIMEOUT,
+} from "../Layers/codexResetCredit.ts";
+import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -79,6 +88,7 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
  */
 export type CodexDriverEnv =
   | CodexAdapterV2DriverEnv
+  | CodexResetCreditCoordinator
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
@@ -121,6 +131,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   defaultConfig: (): CodexSettings => decodeCodexSettings({}),
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
+      const resetCreditCoordinator = yield* CodexResetCreditCoordinator;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
@@ -236,6 +247,54 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             }),
         ),
       );
+      const accountKey = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
+      const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
+        resetCreditCoordinator
+          .redeem(accountKey, (idempotencyKey) =>
+            Effect.gen(function* () {
+              const { client } = yield* withCodexAppServerClient({
+                binaryPath: effectiveConfig.binaryPath,
+                homePath: effectiveConfig.homePath,
+                launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+                cwd: process.cwd(),
+                environment: processEnv,
+              });
+              return (yield* client.request("account/rateLimitResetCredit/consume", {
+                idempotencyKey,
+              })).outcome;
+            }).pipe(Effect.scoped, Effect.timeout(CODEX_RESET_CREDIT_TIMEOUT)),
+          )
+          .pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.mapError(
+              (cause) =>
+                new ProviderDriverError({
+                  driver: DRIVER_KIND,
+                  instanceId,
+                  detail:
+                    "Codex could not redeem the reset credit. Retrying will reuse the same attempt.",
+                  cause,
+                }),
+            ),
+            Effect.flatMap((outcome) =>
+              Effect.gen(function* () {
+                const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
+                const refreshed = yield* snapshot.refresh;
+                const limits = refreshed.usageLimits;
+                return {
+                  outcome,
+                  ...(limits?.checkedAt === undefined ||
+                  limits.checkedAt === before ||
+                  limits.unavailable?.reason === "probeFailed"
+                    ? {
+                        warning:
+                          "Codex reported the redemption outcome, but new limits could not be confirmed. Refresh to check.",
+                      }
+                    : {}),
+                };
+              }),
+            ),
+          );
       return {
         instanceId,
         driverKind: DRIVER_KIND,
@@ -245,6 +304,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         enabled,
         snapshot,
         orchestrationAdapter,
+        consumeResetCredit,
         textGeneration,
       } satisfies ProviderInstance;
     }),

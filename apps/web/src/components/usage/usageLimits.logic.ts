@@ -1,5 +1,7 @@
 import type {
   ServerProvider,
+  EnvironmentId,
+  ProviderInstanceId,
   ServerProviderUsageLimits,
   ServerProviderUsageWindow,
 } from "@t3tools/contracts";
@@ -15,6 +17,9 @@ export interface LimitAccount {
   readonly label: string;
   readonly environments: readonly string[];
   readonly limits: ServerProviderUsageLimits | undefined;
+  readonly resetTarget?:
+    | { readonly environmentId: EnvironmentId; readonly instanceId: ProviderInstanceId }
+    | undefined;
 }
 export function collectLimitAccounts(
   environments: readonly {
@@ -37,6 +42,10 @@ export function collectLimitAccounts(
       const newer =
         Date.parse(provider.usageLimits?.checkedAt ?? "") >
         Date.parse(held?.limits?.checkedAt ?? "1970-01-01");
+      const resetTarget =
+        provider.driver === "codex" && provider.usageLimits?.resetCredits
+          ? { environmentId: environment.id as EnvironmentId, instanceId: provider.instanceId }
+          : undefined;
       const label = provider.displayName || email || String(provider.instanceId);
       accounts.set(
         id,
@@ -45,6 +54,7 @@ export function collectLimitAccounts(
               ...held,
               environments: [...new Set([...held.environments, environment.label])],
               limits: newer ? provider.usageLimits : held.limits,
+              resetTarget: newer ? resetTarget : held.resetTarget,
             }
           : {
               id,
@@ -52,6 +62,7 @@ export function collectLimitAccounts(
               label,
               environments: [environment.label],
               limits: provider.usageLimits,
+              ...(resetTarget ? { resetTarget } : {}),
             },
       );
     }

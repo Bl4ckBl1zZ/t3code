@@ -548,6 +548,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
+    func consumeResetCredit(environmentID: String, instanceID: String) async throws -> ProviderConsumeResetCreditResult {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.consumeResetCredit(instanceID: instanceID)
+    }
+
     func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
         if refresh { return try await client.refreshProviderSnapshots() }

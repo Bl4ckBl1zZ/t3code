@@ -38,6 +38,12 @@ export interface CodexRateLimitSnapshot {
 export function codexUsageLimits(
   snapshot: CodexRateLimitSnapshot,
   checkedAt: string,
+  resetCredits?: {
+    readonly availableCount: number;
+    readonly credits?:
+      | readonly { readonly status: string; readonly expiresAt?: number | null }[]
+      | null;
+  } | null,
 ): ServerProviderUsageLimits {
   if (snapshot.limitId && snapshot.limitId !== "codex") return { checkedAt, windows: [] };
   const monthly = snapshot.planType === "free" || snapshot.planType === "go";
@@ -71,7 +77,27 @@ export function codexUsageLimits(
       ...(resetsAt ? { resetsAt } : {}),
     });
   }
-  return { checkedAt, windows };
+  const expiries =
+    resetCredits?.credits?.flatMap((credit) =>
+      credit.status === "available" &&
+      typeof credit.expiresAt === "number" &&
+      Number.isFinite(credit.expiresAt)
+        ? [credit.expiresAt]
+        : [],
+    ) ?? [];
+  const nextExpiresAt = expiries.length ? iso(Math.min(...expiries) * 1000) : undefined;
+  return {
+    checkedAt,
+    windows,
+    ...(resetCredits && Number.isFinite(resetCredits.availableCount)
+      ? {
+          resetCredits: {
+            availableCount: Math.max(0, Math.floor(resetCredits.availableCount)),
+            ...(nextExpiresAt ? { nextExpiresAt } : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 export function claudeUsageLimits(
@@ -257,5 +283,9 @@ export function applyCodexRateLimitEvent(
     else windows[index] = next;
   }
   if (!changed && previous && !previous.unavailable) return previous;
-  return { checkedAt, windows };
+  return {
+    checkedAt,
+    windows,
+    ...(previous?.resetCredits ? { resetCredits: previous.resetCredits } : {}),
+  };
 }

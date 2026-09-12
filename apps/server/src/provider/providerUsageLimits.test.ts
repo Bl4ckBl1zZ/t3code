@@ -12,6 +12,28 @@ import {
 const decodeLimits = Schema.decodeUnknownSync(ServerProviderUsageLimits);
 const checkedAt = "2026-09-06T00:00:00.000Z";
 describe("provider subscription limits", () => {
+  it("maps available reset credits and preserves them across live window updates", () => {
+    const snapshot = codexUsageLimits({ primary: { usedPercent: 90 } }, checkedAt, {
+      availableCount: 2,
+      credits: [
+        { status: "used", expiresAt: 1 },
+        { status: "available", expiresAt: 1788652800 },
+        { status: "available", expiresAt: 1788652900 },
+      ],
+    });
+    expect(snapshot.resetCredits).toEqual({
+      availableCount: 2,
+      nextExpiresAt: "2026-09-06T00:00:00.000Z",
+    });
+    expect(decodeLimits(snapshot)).toEqual(snapshot);
+    expect(
+      applyCodexRateLimitEvent(snapshot, { primary: { usedPercent: 95 } }, checkedAt)?.resetCredits,
+    ).toEqual(snapshot.resetCredits);
+    expect(codexUsageLimits({}, checkedAt).resetCredits).toBeUndefined();
+    expect(
+      codexUsageLimits({}, checkedAt, { availableCount: 0 }).resetCredits?.availableCount,
+    ).toBe(0);
+  });
   it("normalizes Codex windows, clamping percentages and rejecting invalid durations", () => {
     const limits = codexUsageLimits(
       {

@@ -1290,3 +1290,19 @@ v5, accepts compatible v4, excludes older/future versions, and carries hourly bu
 It adds exact rolling 24-hour charts, selected-machine histories, progressive coverage and the
 full model list. A generated server-schema fixture checks current native decoding and totals.
 Expo remains frozen; its existing daily/hourly usage RPC is backward compatible.
+
+### Codex reset credits on V2 provider instances
+
+`1641b4aba5` is ported onto the fork's account-owning provider instances, retaining the V2
+adapter and no V1 setup/runtime services. The scoped probe and reset action share app-server
+initialization. An account-directory coordinator serializes attempts, keeps the idempotency key
+on failure and bounds the request to 20 seconds. Registry hydration owns the coordinator across
+instance rebuilds. Disabled/missing/non-Codex instances cannot redeem. The operate-authorized
+RPC returns a warning, rather than an error inviting another redemption, if only the subsequent
+limits probe fails. Live V2 window notifications retain banked credits (`f1a08116f9` intent).
+
+Web/desktop and native Swift show banked counts/expiry and require explicit confirmation. The
+redemption target follows the instance that supplied the displayed account snapshot, including
+deduplicated multi-environment accounts. Web additionally respects known operate permissions;
+the server is authoritative for every client. No real credit was redeemed during verification.
+External quota hubs remain a separate port; the frozen Expo client ignores optional credit data.

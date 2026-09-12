@@ -7,6 +7,8 @@ struct FeatureLimitAccount: Identifiable, Equatable, Sendable {
     let plan: String?
     var environments: [String]
     var limits: ServerProviderUsageLimits?
+    struct ResetTarget: Equatable, Sendable { let environmentID: String; let instanceID: String }
+    var resetTarget: ResetTarget? = nil
 }
 
 struct FeatureEnvironmentLimits: Sendable {
@@ -34,14 +36,17 @@ enum FeatureUsageLimitsMerge {
                 let email = provider.auth.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let identity = email.flatMap { $0.isEmpty ? nil : $0 } ?? "instance:\(environment.id):\(provider.instanceId)"
                 let key = "\(provider.driver):\(identity)"
+                let resetTarget: FeatureLimitAccount.ResetTarget? = provider.driver == "codex" && provider.usageLimits?.resetCredits != nil
+                    ? .init(environmentID: environment.id, instanceID: provider.instanceId) : nil
                 if var account = accounts[key] {
                     if !account.environments.contains(environment.label) { account.environments.append(environment.label) }
                     if (date(provider.usageLimits?.checkedAt) ?? .distantPast) > (date(account.limits?.checkedAt) ?? .distantPast) {
                         account.limits = provider.usageLimits
+                        account.resetTarget = resetTarget
                     }
                     accounts[key] = account
                 } else {
-                    accounts[key] = .init(id: key, provider: FeatureAccountLabel.display(provider.displayName, fallback: provider.driver), driver: provider.driver, plan: provider.auth.label.flatMap { $0.contains("@") ? nil : $0 }, environments: [environment.label], limits: provider.usageLimits)
+                    accounts[key] = .init(id: key, provider: FeatureAccountLabel.display(provider.displayName, fallback: provider.driver), driver: provider.driver, plan: provider.auth.label.flatMap { $0.contains("@") ? nil : $0 }, environments: [environment.label], limits: provider.usageLimits, resetTarget: resetTarget)
                 }
             }
         }

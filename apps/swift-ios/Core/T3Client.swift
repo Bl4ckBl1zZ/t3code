@@ -1131,6 +1131,11 @@ public actor T3Client {
     }
 
     /// Refreshes model pricing, retaining the server's cached rates on network failure.
+    public func consumeResetCredit(instanceID: String) async throws -> ProviderConsumeResetCreditResult {
+        try await rpc.request(RPCMethod.providerConsumeResetCredit.rawValue,
+            payload: .object(["instanceId": .string(instanceID)]), as: ProviderConsumeResetCreditResult.self)
+    }
+
     public func refreshUsageRates() async throws -> UsagePricing {
         try await rpc.request(RPCMethod.serverRefreshUsageRates.rawValue,
                               payload: .object([:]), as: UsagePricing.self)
@@ -1996,6 +2001,7 @@ public enum RPCMethod: String, Sendable {
     case agentSessionsImport = "agentSessions.import"
     case assetsCreateURL = "assets.createUrl"
     case serverGetUsageSummary = "server.getUsageSummary"
+    case providerConsumeResetCredit = "provider.consumeResetCredit"
     case serverRefreshUsageRates = "server.refreshUsageRates"
     case assetsPersistChatAttachments = "assets.persistChatAttachments"
     case providerUploadFeedback = "provider.uploadFeedback"

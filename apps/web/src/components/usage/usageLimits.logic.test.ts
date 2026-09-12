@@ -53,6 +53,38 @@ const account = (
 });
 
 describe("quota accounts", () => {
+  it("routes redemption to the account instance that supplied the displayed credits", () => {
+    const accounts = collectLimitAccounts([
+      {
+        id: "older",
+        label: "Older",
+        providers: [
+          provider({
+            instanceId: ProviderInstanceId.make("personal"),
+            auth: { email: "same@example.com" },
+            usageLimits: limits({
+              checkedAt: "2026-09-10T10:00:00Z",
+              resetCredits: { availableCount: 1 },
+            }),
+          }),
+        ],
+      },
+      {
+        id: "newer",
+        label: "Newer",
+        providers: [
+          provider({
+            instanceId: ProviderInstanceId.make("work"),
+            auth: { email: "same@example.com" },
+            usageLimits: limits({ resetCredits: { availableCount: 2 } }),
+          }),
+        ],
+      },
+    ]);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]?.resetTarget).toEqual({ environmentId: "newer", instanceId: "work" });
+    expect(accounts[0]?.limits?.resetCredits?.availableCount).toBe(2);
+  });
   it("counts a signed-in account once across environments and keeps its newest report", () => {
     const accounts = collectLimitAccounts([
       { id: "mac", label: "Mac", providers: [provider({ auth: { email: " User@Example.com " } })] },

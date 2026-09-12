@@ -496,6 +496,7 @@ if (process.argv.includes("--check")) {
 
 const limitsPath = NodePath.join(NodePath.dirname(outputPath), "providerUsageLimits.json");
 const limits = Schema.encodeSync(ServerProviderUsageLimits)({
+  resetCredits: { availableCount: 2, nextExpiresAt: "2026-09-28T00:00:00.000Z" },
   checkedAt: "2026-09-06T00:00:00.000Z",
   windows: [
     {

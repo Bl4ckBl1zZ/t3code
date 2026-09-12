@@ -1,3 +1,4 @@
+import { consumeInstanceResetCredit } from "./provider/consumeResetCredit.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import { withCreatedPullRequestLink } from "./git/linkCreatedPullRequest.ts";
 import { AgentSessionScanner } from "./project/AgentSessionScanner.ts";
@@ -135,6 +136,7 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -1998,6 +2000,16 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.providerConsumeResetCredit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerConsumeResetCredit,
+            Effect.gen(function* () {
+              const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+              const instance = yield* providerInstances.getInstance(input.instanceId);
+              return yield* consumeInstanceResetCredit(instance, input);
+            }),
+            { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.serverGetUsageSummary]: (input) =>
           observeRpcEffect(WS_METHODS.serverGetUsageSummary, usage.readSummary(input), {

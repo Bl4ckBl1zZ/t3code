@@ -24,7 +24,7 @@ The same known account on multiple environments appears once, using its freshest
 Accounts without a reported identity stay separate. Pooled bars weight each reporting account
 equally; they do not claim that different subscription plans have equal token allowances.
 Unavailable environments, unsupported accounts, failed probes, and stale reports are labeled.
-This view does not redeem reset credits or read accounts from external proxy hubs.
+External proxy hubs are not included in this view yet.
 
 ## Native iOS account comparison
 
@@ -51,3 +51,11 @@ Refreshing Usage first checks for updated model prices, so newly listed models c
 without waiting for the daily update. Closely repeated requests reuse the latest table. If the
 price source is unavailable, cached prices still work. On iPhone and iPad, pull to refresh.
 Native history also supports **Past 24h**, environment selection, and the full model breakdown.
+
+## Codex reset credits
+
+When Codex reports banked reset credits, Limits shows their count and next expiry. Choose
+**Use reset** (or **Use reset credit** on iPhone and iPad), then confirm **Use credit** to redeem
+one. This spends a banked credit and cannot be undone. The action requires permission to operate
+the selected environment. A failed attempt can be retried with the same attempt ID. If redemption
+succeeds but its follow-up report fails, refresh the limits to confirm their current state.

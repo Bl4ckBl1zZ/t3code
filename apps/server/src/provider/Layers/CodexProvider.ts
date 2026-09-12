@@ -54,6 +54,9 @@ const CODEX_PRESENTATION = {
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
   readonly rateLimits?: CodexRateLimitSnapshot | undefined;
+  readonly resetCredits?:
+    | CodexSchema.V2GetAccountRateLimitsResponse["rateLimitResetCredits"]
+    | undefined;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -325,7 +328,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   };
 }
 
-const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
+export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(function* (input: {
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly launchArgs?: string;
@@ -387,6 +390,13 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   });
   yield* client.notify("initialized", undefined);
 
+  return { client, initialize };
+});
+
+const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (
+  input: Parameters<typeof withCodexAppServerClient>[0],
+) {
+  const { client, initialize } = yield* withCodexAppServerClient(input);
   // Extract the version string after the first '/' in userAgent, up to the next space or the end
   const versionMatch = initialize.userAgent.match(/\/([^\s]+)/);
   const version = versionMatch ? versionMatch[1] : undefined;
@@ -408,7 +418,6 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
       }),
       requestAllCodexModels(client),
       client.request("account/rateLimits/read", undefined).pipe(
-        Effect.map((response) => response.rateLimitsByLimitId?.codex ?? response.rateLimits),
         Effect.timeoutOption(Duration.millis(3_000)),
         Effect.map(Option.getOrUndefined),
         Effect.orElseSucceed(() => undefined),
@@ -419,7 +428,8 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
 
   return {
     account: accountResponse,
-    rateLimits,
+    rateLimits: rateLimits?.rateLimitsByLimitId?.codex ?? rateLimits?.rateLimits,
+    resetCredits: rateLimits?.rateLimitResetCredits,
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),
@@ -617,7 +627,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         snapshot.account.account?.type !== "chatgpt"
           ? unavailableUsageLimits(checkedAt, "unsupported")
           : snapshot.rateLimits
-            ? codexUsageLimits(snapshot.rateLimits, checkedAt)
+            ? codexUsageLimits(snapshot.rateLimits, checkedAt, snapshot.resetCredits)
             : unavailableUsageLimits(checkedAt, "probeFailed"),
       ...(accountStatus.message ? { message: accountStatus.message } : {}),
     },

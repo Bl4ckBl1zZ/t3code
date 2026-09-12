@@ -1,3 +1,4 @@
+import { ResetCredits } from "./ResetCredits";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ServerProviderUsageWindow } from "@t3tools/contracts";
 import { GaugeIcon } from "lucide-react";
@@ -324,6 +325,18 @@ export function UsageLimits({
                   account.limits.windows.map((window) => (
                     <LimitWindow key={window.id} window={window} now={now} />
                   ))
+                )}
+                {account.limits?.resetCredits && account.resetTarget && (
+                  <ResetCredits
+                    target={account.resetTarget}
+                    credits={account.limits.resetCredits}
+                    now={now}
+                    canOperate={
+                      refreshAccess.get(account.resetTarget.environmentId) === "granted" &&
+                      presentations.get(account.resetTarget.environmentId)?.connection.phase ===
+                        "connected"
+                    }
+                  />
                 )}
                 {account.limits && (
                   <p className="mt-3 text-[11px] text-muted-foreground">
