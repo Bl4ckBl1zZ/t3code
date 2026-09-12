@@ -92,6 +92,7 @@ export function ComposerAttachmentChips(props: {
             <div
               key={attachment.id}
               role="listitem"
+              data-chat-composer-expanded-image={attachment.type === "image" ? "true" : undefined}
               className={cn(
                 "group/chip relative h-16 overflow-hidden rounded-lg border border-border/80 bg-background",
                 isMedia ? "w-16" : "min-w-[168px] max-w-[240px]",

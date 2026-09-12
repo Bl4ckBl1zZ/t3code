@@ -20,3 +20,11 @@ export function shouldUseCompactComposerPrimaryActions(
   }
   return width !== null && width < COMPOSER_FOOTER_WIDE_ACTIONS_COMPACT_BREAKPOINT_PX;
 }
+
+export function shouldAnimateComposerRestingTransition(input: {
+  hasCompletedInitialLayout: boolean;
+  stateChanged: boolean;
+  hasInterruptedAnimation: boolean;
+}): boolean {
+  return input.hasCompletedInitialLayout && (input.stateChanged || input.hasInterruptedAnimation);
+}
