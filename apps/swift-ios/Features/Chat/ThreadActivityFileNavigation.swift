@@ -24,15 +24,16 @@ public struct ThreadActivityFileRoute: Equatable, Sendable {
         relativePath: String,
         line: Int? = nil
     ) -> ThreadActivityFileRoute {
+        let segments = FeatureFilePreviewPath.fileLinkSegments(relativePath)
         let resolvedLine: String? = if let line, line > 0 { String(line) } else { nil }
         return ThreadActivityFileRoute(
             environmentID: environmentID,
             threadID: currentThreadID,
             // `split` drops empty segments, so a leading or doubled separator
             // does not produce a blank path component.
-            path: relativePath.split(separator: "/").map(String.init),
+            path: segments,
             line: resolvedLine,
-            absolutePath: FeatureFilePreviewPath.isAbsolute(relativePath) ? relativePath : nil
+            absolutePath: !segments.isEmpty && FeatureFilePreviewPath.isAbsolute(relativePath) ? relativePath : nil
         )
     }
 }

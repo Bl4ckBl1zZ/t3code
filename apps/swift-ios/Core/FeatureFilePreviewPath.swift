@@ -1,6 +1,16 @@
 import Foundation
 
 public enum FeatureFilePreviewPath {
+    /// Separator-only paths (including a Windows drive root) name the file browser, not a file.
+    public static func fileLinkSegments(_ path: String) -> [String] {
+        let segments = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).map(String.init)
+        if segments.count == 1, isAbsolute(path),
+           segments[0].range(of: #"^[A-Za-z]:$"#, options: .regularExpression) != nil {
+            return []
+        }
+        return segments
+    }
+
     public static func isAbsolute(_ path: String) -> Bool {
         path.hasPrefix("/") || path.hasPrefix("\\") || path.range(of: #"^[A-Za-z]:[/\\]"#, options: .regularExpression) != nil
     }

@@ -29,12 +29,13 @@ final class ThreadDeepLinkNavigationTests: XCTestCase {
         XCTAssertNil(FeatureFilesView.deepLinkedEntry(path: nil))
         XCTAssertNil(FeatureFilesView.deepLinkedEntry(path: ""))
         XCTAssertNil(FeatureFilesView.deepLinkedEntry(path: "//"))
+        XCTAssertNil(FeatureFilesView.deepLinkedEntry(path: #"C:\"#))
     }
 
-    func testASeparatorOnlySegmentDoesNotSurviveIntoTheEntry() {
+    func testAnAbsoluteHostPathKeepsItsLeadingSeparator() {
         let entry = FeatureFilesView.deepLinkedEntry(path: "/src//app.swift")
 
-        XCTAssertEqual(entry?.path, "src/app.swift")
+        XCTAssertEqual(entry?.path, "/src//app.swift")
         XCTAssertEqual(entry?.name, "app.swift")
     }
 
