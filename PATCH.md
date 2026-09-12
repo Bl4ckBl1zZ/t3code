@@ -490,7 +490,7 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
     static HTML cache correctness from the latter are carried. Its V1 stream/Expo changes are
     excluded; its worker and animation changes remain with their deferred prerequisites.
   - Lazy diff workers and Pierre editor fixes (`b3e1d88590`, `df8e0eb46b`, `6270a6f88b`,
-    `2fa5ef4c7b`, `6b87ce3a0b`) need integration with the fork's file/media panels and existing
+    `2fa5ef4c7b`, `6b87ce3a0b`) are ported with the fork's file/media panels and existing
     dependency patches. Terminal stream cursors, hidden surfaces and keyboard focus
     (`da7e46d08e`, `5eab021a51`, `896fe82f2f`) need joint adaptation to fork replay/selection
     handling. The independent bounded server history and terminal metadata cache are carried.
@@ -1255,3 +1255,13 @@ Reload and revision changes cancel/ignore older loads. Previous content stays vi
 explicit refresh error; images bypass old cached bodies and document URLs retain signed query
 bytes while carrying a cache revision. Document retries cannot resurrect an old signed URL after
 navigation or agent edits. This is event-driven; no additional polling or V1 subscriptions.
+
+### Editable file highlighting and wrapped geometry
+
+The Pierre dependency patch retains the fork's controlled comment selection and exports while
+adding upstream stale-worker/cache eviction (`df8e0eb46b`), editor grammar readiness
+(`2fa5ef4c7b`), and measured-prefix preservation during edits (`6270a6f88b`). Width changes and
+line-number digit boundaries still invalidate affected measurements; hidden zero-width layouts
+wait for a visible resize. The reviewed tests execute the actual installed tokenizer, workers,
+editor and virtualizer. Native source previews use Swift's read-only highlighting/layout and do
+not instantiate this editor. Reselect-to-reveal in the diff tree was already present.
