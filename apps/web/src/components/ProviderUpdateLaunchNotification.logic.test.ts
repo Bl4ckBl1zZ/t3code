@@ -26,6 +26,7 @@ import {
   getSingleProviderUpdateProgressToastView,
   hasOneClickUpdateProviderCandidate,
   isProviderUpdateCandidate,
+  isProviderSettingsUpdateCandidate,
   isTerminalProviderUpdatePhase,
   localEnvironmentUpdateNotificationKey,
   parseWslDistroFromInstanceId,
@@ -1128,4 +1129,41 @@ describe("provider update launch notification logic", () => {
       ).toMatchObject({ kind: "idle", text: "Codex" });
     });
   });
+});
+
+it("keeps separate installations available in settings without driver deduplication", () => {
+  const accounts = [
+    provider({
+      driver: driver("codex"),
+      instanceId: instanceId("codex-work"),
+      canUpdate: true,
+      updateCommand: "npm update",
+      advisoryStatus: "behind_latest",
+    }),
+    provider({
+      driver: driver("codex"),
+      instanceId: instanceId("codex-personal"),
+      canUpdate: true,
+      updateCommand: "brew upgrade codex",
+      advisoryStatus: "behind_latest",
+    }),
+    provider({
+      driver: driver("codex"),
+      instanceId: instanceId("codex-manual"),
+      canUpdate: false,
+      updateCommand: null,
+      advisoryStatus: "behind_latest",
+    }),
+    provider({
+      driver: driver("codex"),
+      instanceId: instanceId("codex-disabled"),
+      enabled: false,
+      canUpdate: true,
+      updateCommand: "npm update",
+      advisoryStatus: "behind_latest",
+    }),
+  ];
+  expect(
+    accounts.filter(isProviderSettingsUpdateCandidate).map((account) => account.instanceId),
+  ).toEqual(["codex-work", "codex-personal"]);
 });

@@ -6727,6 +6727,42 @@ extension NativeFeatureClient: FeatureHermesInboxManaging {
 /// touched rather than to the active one: Settings lists every paired server,
 /// and a write has to land on the one it was made against.
 extension NativeFeatureClient: FeatureServerSettingsManaging {
+    func providerUpdateEvents(environmentID: String) async throws -> AsyncThrowingStream<[ServerProviderSnapshot], Error> {
+        let client = try await environmentClient(id: environmentID)
+        let events = await client.serverConfigEvents()
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let task = Task {
+                do {
+                    for try await event in events {
+                        try Task.checkCancellation()
+                        switch event {
+                        case let .snapshot(config): continuation.yield(config.providers)
+                        case let .providerStatuses(providers): continuation.yield(providers)
+                        default: break
+                        }
+                    }
+                    continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func updateProvider(environmentID: String, driver: String, instanceID: String) async throws -> [ServerProviderSnapshot] {
+        let client = try await environmentClient(id: environmentID)
+        let providers = try await client.updateProvider(driver: driver, instanceID: instanceID)
+        // Propagate the new catalog through the same environment-owned snapshot path.
+        _ = try? await providerModelConfiguration(environmentID: environmentID)
+        return providers
+    }
+
+    func refreshProviderUpdates(environmentID: String) async throws -> [ServerProviderSnapshot] {
+        let client = try await environmentClient(id: environmentID)
+        let providers = try await client.refreshProviderSnapshots()
+        _ = try? await providerModelConfiguration(environmentID: environmentID)
+        return providers
+    }
+
     func providerModelConfiguration(environmentID: String) async throws -> ServerConfigSnapshot {
         let client = try await environmentClient(id: environmentID)
         let config = try await client.serverConfig()

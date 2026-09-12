@@ -155,6 +155,8 @@ public struct ServerProviderSkillSnapshot: Codable, Equatable, Sendable {
 }
 
 public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable {
+    public var versionAdvisory: ServerProviderVersionAdvisory? = nil
+    public var updateState: ServerProviderUpdateState? = nil
     public var usageLimits: ServerProviderUsageLimits? = nil
     public var id: String { instanceId }
 

@@ -53,7 +53,9 @@ import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
+  makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
+  normalizeCommandPath,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import {
@@ -74,12 +76,17 @@ import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
-const UPDATE = makePackageManagedProviderMaintenanceResolver({
-  provider: DRIVER_KIND,
-  npmPackageName: "@openai/codex",
-  homebrewFormula: "codex",
-  nativeUpdate: null,
-});
+function makeCodexMaintenanceResolver(sharedHomePath: string) {
+  return makePackageManagedProviderMaintenanceResolver({
+    provider: DRIVER_KIND,
+    npmPackageName: "@openai/codex",
+    nativeUpdate: {
+      args: ["update"],
+      isCommandPath: (path) => normalizeCommandPath(path).includes("/packages/standalone/"),
+      env: { CODEX_HOME: sharedHomePath },
+    },
+  });
+}
 
 /**
  * Services the driver needs to materialize an instance. Surfaced as the
@@ -161,10 +168,20 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         enabled,
         homePath: homeLayout.effectiveHomePath ?? "",
       } satisfies CodexSettings;
-      const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-        binaryPath: effectiveConfig.binaryPath,
-        env: processEnv,
-      });
+      const maintenanceSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const maintenanceFs = yield* FileSystem.FileSystem;
+      const maintenancePath = yield* Path.Path;
+      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+        resolveProviderMaintenanceCapabilitiesEffect(
+          makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
+          { binaryPath: effectiveConfig.binaryPath, env: processEnv },
+        ).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, maintenanceSpawner),
+          Effect.provideService(FileSystem.FileSystem, maintenanceFs),
+          Effect.provideService(Path.Path, maintenancePath),
+        ),
+      );
+      const maintenanceCapabilities = yield* resolveMaintenance();
 
       const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
 
@@ -190,6 +207,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<CodexSettings>>({
         maintenanceCapabilities,
+        resolveMaintenance,
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
@@ -202,9 +220,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           ),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
-          enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
-            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-          }).pipe(
+          resolveMaintenance().pipe(
+            Effect.flatMap((currentMaintenance) =>
+              enrichProviderSnapshotWithVersionAdvisory(snapshot, currentMaintenance, {
+                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+              }),
+            ),
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
           ),

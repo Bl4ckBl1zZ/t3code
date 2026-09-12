@@ -127,3 +127,7 @@ For multi-account setups, see [Codex](./providers-codex.md) and [Claude](./provi
 - [Remote access](./remote-access.md): connect from a phone, tablet, or another desktop
 - [Keeping T3 Code in sync](./updating.md): client and server version skew
 - [Running in the background](./background-service.md): Linux background service
+
+Provider updates use the installer that owns the executable on the selected machine. npm updates target the original global prefix; Homebrew compares against the version available from Homebrew. Unknown installations and mise-managed provider packages require updating with their original installer.
+
+In iOS Settings → Agents, open an account’s configuration to see installed/latest versions, refresh the check, or update a supported installation. Save account changes first. The result and command output stay visible, and a copy action provides the update command for use on the paired server.
