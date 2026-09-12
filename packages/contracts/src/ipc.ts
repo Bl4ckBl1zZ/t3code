@@ -1,3 +1,5 @@
+import { BrowserImportSource, BrowserImportInput, BrowserImportResult } from "./browserImport.ts";
+import { BrowserProfileId } from "./browserProfile.ts";
 import type {
   VcsCreateRefInput,
   VcsCreateRefResult,
@@ -1058,6 +1060,7 @@ export const DesktopPreviewNavigateInputSchema = Schema.Struct({
 
 export const DesktopPreviewConfigInputSchema = Schema.Struct({
   environmentId: EnvironmentId,
+  profileId: Schema.optional(BrowserProfileId),
 });
 
 export const DesktopPreviewSetColorSchemeInputSchema = Schema.Struct({
@@ -1251,16 +1254,24 @@ export interface DesktopPreviewBridge {
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */
-  clearCookies: () => Promise<void>;
+  clearCookies: (environmentId: EnvironmentId, profileId?: BrowserProfileId) => Promise<void>;
   /** Drop the HTTP cache for the preview partition (all tabs). */
-  clearCache: () => Promise<void>;
+  clearCache: (environmentId: EnvironmentId, profileId?: BrowserProfileId) => Promise<void>;
   /**
    * One-shot config for mounting a preview `<webview>`. Replaces three
    * earlier round-trip calls (`getBrowserPartition`, `getWebviewPreferences`,
    * `getPickPreloadPath`) so adding a new field here only requires touching
    * the contract + main, not the renderer's mount logic.
    */
-  getPreviewConfig: (environmentId: EnvironmentId) => Promise<DesktopPreviewWebviewConfig>;
+  listBrowserImportSources: () => Promise<ReadonlyArray<BrowserImportSource>>;
+  importBrowserCookies: (
+    input: BrowserImportInput & { readonly environmentId: EnvironmentId },
+  ) => Promise<BrowserImportResult>;
+  openFullDiskAccessSettings: () => Promise<void>;
+  getPreviewConfig: (
+    environmentId: EnvironmentId,
+    profileId?: BrowserProfileId,
+  ) => Promise<DesktopPreviewWebviewConfig>;
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   /**
    * Activate the in-page element picker for the given tab. Resolves with
@@ -1473,3 +1484,8 @@ export interface EnvironmentApi {
     ) => () => void;
   };
 }
+
+export const DesktopPreviewClearDataInputSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  profileId: Schema.optional(BrowserProfileId),
+});

@@ -39,3 +39,5 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+/native/browser-secret/build/

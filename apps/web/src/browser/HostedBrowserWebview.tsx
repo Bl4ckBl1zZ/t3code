@@ -53,12 +53,13 @@ export function HostedBrowserWebview(props: {
   readonly runtimeTabId: string;
   readonly initialUrl: string | null;
   readonly viewport: PreviewViewportSetting;
+  readonly profileId?: string | undefined;
   readonly pictureInPicture: boolean;
   readonly zoomFactor: number;
 }) {
   const { threadRef, tabId, runtimeTabId, initialUrl, viewport, pictureInPicture, zoomFactor } =
     props;
-  const config = usePreviewWebviewConfig(threadRef.environmentId);
+  const config = usePreviewWebviewConfig(threadRef.environmentId, props.profileId);
   const [initialSrc] = useState(() => initialUrl ?? "about:blank");
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);

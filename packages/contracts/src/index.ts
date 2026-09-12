@@ -60,3 +60,6 @@ export * from "./threadPullRequestLinks.ts";
 export * from "./pullRequestMcp.ts";
 
 export * from "./usageLimitSourceId.ts";
+
+export * from "./browserProfile.ts";
+export * from "./browserImport.ts";

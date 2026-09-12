@@ -1,3 +1,4 @@
+import { openPreviewSession } from "~/components/preview/openPreviewSession";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import type {
   AssetCreateUrlResult,
@@ -42,9 +43,10 @@ export async function openUrlInPreview<E>(input: {
   readonly url: string;
   readonly openPreview: OpenPreviewMutation<E>;
 }): Promise<AtomCommandResult<void, E>> {
-  const result = await input.openPreview({
-    environmentId: input.threadRef.environmentId,
-    input: { threadId: input.threadRef.threadId, url: input.url },
+  const result = await openPreviewSession({
+    openPreview: input.openPreview,
+    threadRef: input.threadRef,
+    url: input.url,
   });
   return mapAtomCommandResult(result, (snapshot) => {
     applyPreviewServerSnapshot(input.threadRef, snapshot);

@@ -796,6 +796,10 @@ interface StagePackageJson {
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
 export const DESKTOP_ELECTRON_LANGUAGES = ["en-US"] as const;
 export const DESKTOP_FILE_EXCLUSIONS = [
+  "!apps/desktop/resources/browser-secret",
+  "!apps/desktop/resources/browser-secret/**/*",
+  "!apps/desktop/prod-resources/browser-secret",
+  "!apps/desktop/prod-resources/browser-secret/**/*",
   // T3 Code always passes the user's installed Claude executable to the SDK,
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
@@ -1906,6 +1910,51 @@ function generateMacIconSet(
   });
 }
 
+export class LinuxBrowserSecretHostError extends Schema.TaggedErrorClass<LinuxBrowserSecretHostError>()(
+  "LinuxBrowserSecretHostError",
+  { hostPlatform: Schema.String },
+) {
+  override get message(): string {
+    return `Linux desktop builds must run on a Linux host: the browser secret helper links against libsecret and cannot be built on '${this.hostPlatform}'.`;
+  }
+}
+
+export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  if (input.platform !== "linux") return;
+  // The helper links against the host's libsecret, so it can only be built on
+  // Linux; the build script is a no-op elsewhere. A Linux artifact from
+  // another host would ship without it and every v11 cookie import would
+  // report the keyring as unavailable, so refuse rather than package that
+  // silently. `universal` is a mac-only arch the option type still admits;
+  // the helper script rejects it, so it maps to the concrete x64 the Linux
+  // resource monitor uses for the same request.
+  const hostPlatform = yield* HostProcessPlatform;
+  if (hostPlatform !== "linux") {
+    return yield* new LinuxBrowserSecretHostError({ hostPlatform });
+  }
+  const path = yield* Path.Path;
+  yield* runCommand(
+    ChildProcess.make(
+      "node",
+      [
+        path.join(input.repoRoot, "apps/desktop/scripts/build-browser-secret.mjs"),
+        "--arch",
+        input.arch === "arm64" ? "arm64" : "x64",
+        "--output",
+        path.join(input.stageResourcesDir, "browser-secret", "t3-browser-secret"),
+      ],
+      { cwd: input.repoRoot },
+    ),
+    { label: "build Linux browser secret helper", verbose: input.verbose },
+  );
+});
+
 function stageMacIcons(stageResourcesDir: string, sourcePng: string, verbose: boolean) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -2213,6 +2262,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "linux"
+        ? [{ from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" }]
+        : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
@@ -3167,6 +3219,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     verbose: options.verbose,
   });
 
+  yield* stageBrowserSecret({
+    repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
   yield* assertPlatformBuildResources(
     options.platform,
     stageResourcesDir,

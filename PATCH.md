@@ -1335,3 +1335,15 @@ terminal opens the actual destination session, and the details sheet observes me
 only while visible to render Run/Stop. Commands receive project/worktree environment
 variables. A generation/workspace guard rejects stale launch destinations. Native
 contract fixtures and pure routing tests cover attribution and session selection.
+
+- Desktop browser profiles and cookie import are ported through the retained preview service.
+  The existing per-environment default partition keeps its exact digest, preserving logins;
+  named profiles use a separate namespace and Incognito uses memory-only partitions. The
+  profile stays on snapshots across navigation and reports. Browser defaults are client-local;
+  file links, terminal links, and agent-created tabs resolve them after settings hydration.
+  The settings import wizard supports Chromium-family browsers, Firefox, and Safari with
+  explicit source/target selection and OS permission recovery. It snapshots source databases,
+  retains cookie domain scopes, skips partitioned/container cookies, and never bypasses Windows
+  app-bound encryption. Native keyring bindings load only during an explicit import. Linux
+  uses the bundled libsecret helper; no V1 runtime or database migration is introduced. Swift
+  does not host Electron browser partitions, so these controls remain desktop-local.

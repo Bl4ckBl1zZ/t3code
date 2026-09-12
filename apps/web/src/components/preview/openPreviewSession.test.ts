@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CLIENT_SETTINGS,
   FILL_PREVIEW_VIEWPORT,
   type PreviewOpenInput,
   type PreviewSessionSnapshot,
@@ -11,6 +12,11 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { readThreadPreviewState, resetPreviewStateForTests } from "~/previewStateStore";
 
 import { openPreviewSession } from "./openPreviewSession";
+
+vi.mock("~/hooks/useSettings", () => ({
+  ensureClientSettingsHydrated: async () => DEFAULT_CLIENT_SETTINGS,
+  getClientSettings: () => DEFAULT_CLIENT_SETTINGS,
+}));
 
 const threadRef = {
   environmentId: "local" as ScopedThreadRef["environmentId"],
@@ -49,6 +55,7 @@ describe("openPreviewSession", () => {
     expect(open).toHaveBeenCalledWith({
       threadId: "thread-1",
       viewport: FILL_PREVIEW_VIEWPORT,
+      profileId: "default",
     });
     expect(readThreadPreviewState(threadRef).snapshot).toEqual(idleSnapshot);
     expect(readThreadPreviewState(threadRef).recentlySeenUrls).toEqual([]);
@@ -67,6 +74,7 @@ describe("openPreviewSession", () => {
       threadId: "thread-1",
       url: "t3.chat",
       viewport: FILL_PREVIEW_VIEWPORT,
+      profileId: "default",
     });
     expect(readThreadPreviewState(threadRef).snapshot).toEqual(snapshot);
     expect(readThreadPreviewState(threadRef).recentlySeenUrls).toEqual(["https://t3.chat/"]);

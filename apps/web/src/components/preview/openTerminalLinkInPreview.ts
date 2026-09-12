@@ -1,3 +1,4 @@
+import { openPreviewSession } from "~/components/preview/openPreviewSession";
 import type { LocalApi, ScopedThreadRef } from "@t3tools/contracts";
 import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import { isPreviewableUrl } from "@t3tools/shared/preview";
@@ -82,9 +83,10 @@ export async function openTerminalLinkInPreview<E>(
   }
 
   if (choice === "open-in-preview") {
-    const result = await input.openPreview({
-      environmentId: input.threadRef.environmentId,
-      input: { threadId: input.threadRef.threadId, url: input.url },
+    const result = await openPreviewSession({
+      openPreview: input.openPreview,
+      threadRef: input.threadRef,
+      url: input.url,
     });
     if (result._tag === "Failure") {
       if (isAtomCommandInterrupted(result)) {
