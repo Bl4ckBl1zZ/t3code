@@ -136,18 +136,27 @@ struct PullRequestDetailSheet: View {
             }
         }
         .sheet(item: $textEdit) { edit in
-            if let detail = overview?.detail, let editing = access.editing?(displayedNumber, detail.url) {
-                PullRequestTextEditor(edit: edit, access: editing) { await load(preserveContent: true) }
-            }
+            textEditor(edit)
         }
         .sheet(item: $selectedAction) { action in
             if let detail = overview?.detail, let run = access.runAction {
                 PullRequestActionSheet(action: action, detail: detail, perform: { try await run(detail.number, detail.url, $0) }) {
-                    Task { await load() }
+                    Task { await load(force: action == .approveWorkflows || action == .updateBranch) }
                 }
             }
         }
         .accessibilityIdentifier("pull-request-detail-sheet")
+    }
+
+    @ViewBuilder
+    private func textEditor(_ edit: PullRequestTextEdit) -> some View {
+        if let detail = overview?.detail, let editing = access.editing?(displayedNumber, detail.url) {
+            let followUp = PullRequestActionLogic.offered(detail).first { $0 == .close || $0 == .reopen }
+            PullRequestTextEditor(edit: edit, access: editing, commentAction: access.runAction == nil ? nil : followUp, performCommentAction: {
+                guard let followUp, let run = access.runAction else { return }
+                try await run(detail.number, detail.url, PullRequestActionRequest(action: followUp.rawValue, mergeMethod: nil, updateMethod: nil))
+            }) { await load(preserveContent: true) }
+        }
     }
 
     private func load(preserveContent: Bool = false, force: Bool = false) async {
@@ -374,8 +383,16 @@ struct PullRequestDetailSheet: View {
                     .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
             }
             if detail.state == .open, detail.autoMergeEnabled == true {
-                Label("Auto-merge enabled", systemImage: "arrow.triangle.merge")
+                Label(detail.autoMergeMethod.map { "Auto-merge (\($0))" } ?? "Auto-merge enabled", systemImage: "arrow.triangle.merge")
                     .font(T3Typography.supporting).foregroundStyle(T3Colors.accent)
+            }
+            if (detail.workflowApprovalsRequired ?? 0) > 0,
+               PullRequestActionLogic.offered(detail).contains(.approveWorkflows), access.runAction != nil {
+                Button { selectedAction = .approveWorkflows } label: {
+                    Label("Approve \(detail.workflowApprovalsRequired ?? 0) waiting workflows", systemImage: "play.circle")
+                        .font(T3Typography.supportingStrong).foregroundStyle(T3Colors.warning)
+                        .frame(minHeight: 44)
+                }.disabled(actionPending)
             }
             Text(PullRequestDetailSections.statsLine(detail))
                 .font(T3Typography.supporting)

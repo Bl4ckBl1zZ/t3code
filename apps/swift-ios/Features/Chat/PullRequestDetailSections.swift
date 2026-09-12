@@ -149,6 +149,7 @@ enum PullRequestDetailSections {
 
     static func checkSymbol(_ status: PullRequestCheckStatus) -> String {
         switch status {
+        case .actionRequired: "exclamationmark.circle"
         case .pending: "clock"
         case .success: "checkmark.circle.fill"
         case .failure: "xmark.circle.fill"
@@ -160,7 +161,7 @@ enum PullRequestDetailSections {
 
     static func checkTone(_ status: PullRequestCheckStatus) -> PullRequestStatusTone {
         switch status {
-        case .pending: .warning
+        case .pending, .actionRequired: .warning
         case .success: .success
         case .failure: .danger
         case .skipped, .neutral, .cancelled: .neutral

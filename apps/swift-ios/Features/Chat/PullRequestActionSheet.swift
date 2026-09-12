@@ -48,7 +48,7 @@ struct PullRequestActionSheet: View {
             .navigationTitle(action.label).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) } }
             .interactiveDismissDisabled(pending)
-            .onAppear { if !methods.contains(method) { method = methods.first ?? "" } }
+            .onAppear { if !methods.contains(method) { method = detail.autoMergeMethod.flatMap { methods.contains($0) ? $0 : nil } ?? methods.first ?? "" } }
         }
     }
 }
