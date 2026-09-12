@@ -2101,15 +2101,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
               let thread = shell.threads.first(where: { $0.id == route.wireID }),
               let project = shell.projects.first(where: { $0.id == thread.projectId }),
               let identity = project.repositoryIdentity,
-              identity.canonicalKey.lowercased() == target.repositoryKey,
-              let repository = identity.displayName else {
-            throw FeatureCapabilityUnavailable("Previewing a pull request outside this thread’s repository; open it in the browser")
+              identity.canonicalKey.lowercased().split(separator: "/").first == target.repositoryKey.split(separator: "/").first else {
+            throw FeatureCapabilityUnavailable("Previewing a pull request on an unconfigured host; open it in the browser")
         }
+        let repository = target.repositoryKey.split(separator: "/").dropFirst().joined(separator: "/")
         let key = "\(route.environmentID):\(target.id)"
         if let cached = pullRequestPreviewCache[key], Date.now.timeIntervalSince(cached.loadedAt) < 30 {
             return cached.detail
         }
-        let detail = try await route.client.pullRequestDetail(projectID: project.id, repository: repository, number: target.number)
+        let detail = try await route.client.pullRequestDetail(projectID: project.id, repository: repository, host: target.url.host, number: target.number)
         try Task.checkCancellation()
         pullRequestPreviewCache = pullRequestPreviewCache.filter { Date.now.timeIntervalSince($0.value.loadedAt) < 30 }
         if pullRequestPreviewCache.count >= 32 { pullRequestPreviewCache.removeAll(keepingCapacity: true) }
@@ -2173,20 +2173,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func projectPullRequestRoute(_ scope: FeaturePullRequestProjectScope) throws -> (NativeProjectRoute, String) {
         let route = try projectRoute(for: scope.projectID)
         let identity = try project(for: route).repositoryIdentity
-        guard identity?.canonicalKey.lowercased() == scope.canonicalKey else {
+        let ownKey = identity?.canonicalKey.lowercased()
+        let sameHost = ownKey?.split(separator: "/").first.map(String.init) == scope.host.lowercased()
+        // Azure's account/project URL aliases need an exact checkout; other hosts can read linked repositories.
+        guard ownKey == scope.canonicalKey || (sameHost && scope.host.lowercased() != "dev.azure.com" && !scope.host.lowercased().hasSuffix(".visualstudio.com")) else {
             throw FeatureCapabilityUnavailable("The project repository changed. Refresh the pull-request list")
         }
-        guard let repository = identity?.displayName, !repository.isEmpty else {
-            throw NativeFeatureClientError.repositoryIdentityUnavailable
-        }
-        return (route, repository)
+        guard !scope.repository.isEmpty else { throw NativeFeatureClientError.repositoryIdentityUnavailable }
+        return (route, scope.repository)
     }
 
-    private func pullRequestRoute(scope: FeaturePullRequestScope) throws -> (client: T3Client, projectID: String, repository: String) {
+    private func pullRequestRoute(scope: FeaturePullRequestScope) throws -> (client: T3Client, projectID: String, repository: String, host: String?) {
         switch scope {
         case let .project(scope):
             let (route, repository) = try projectPullRequestRoute(scope)
-            return (route.client, route.wireID, repository)
+            return (route.client, route.wireID, repository, scope.host)
         case let .thread(threadID):
             let route = try threadRoute(for: threadID)
             guard let shell = shellsByEnvironmentID[route.environmentID],
@@ -2195,7 +2196,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                   let repository = project.repositoryIdentity?.displayName, !repository.isEmpty else {
                 throw NativeFeatureClientError.repositoryIdentityUnavailable
             }
-            return (route.client, project.id, repository)
+            return (route.client, project.id, repository, project.repositoryIdentity?.canonicalKey.split(separator: "/").first.map(String.init))
         }
     }
 
@@ -2233,116 +2234,116 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func pullRequestFileContents(scope: FeaturePullRequestScope, number: Int, expectedURL: String, input: PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        return try await route.client.pullRequestDiffFileContents(projectID: route.projectID, repository: route.repository, number: number, input: input)
+        return try await route.client.pullRequestDiffFileContents(projectID: route.projectID, repository: route.repository, host: route.host, number: number, input: input)
     }
 
     func pullRequestDiff(scope: FeaturePullRequestScope, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
         let route = try pullRequestRoute(scope: scope)
-        return try await route.client.pullRequestDiff(projectID: route.projectID, repository: route.repository, number: number, cursor: cursor, commit: commit)
+        return try await route.client.pullRequestDiff(projectID: route.projectID, repository: route.repository, host: route.host, number: number, cursor: cursor, commit: commit)
     }
 
     func pullRequestThreadComments(scope: FeaturePullRequestScope, number: Int, threadID: String, cursor: String) async throws -> PullRequestThreadCommentsResult {
         let route = try pullRequestRoute(scope: scope)
-        return try await route.client.pullRequestThreadComments(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, cursor: cursor)
+        return try await route.client.pullRequestThreadComments(projectID: route.projectID, repository: route.repository, host: route.host, number: number, threadID: threadID, cursor: cursor)
     }
 
     func invalidatePullRequest(scope: FeaturePullRequestScope, number: Int) async throws {
         let route = try pullRequestRoute(scope: scope)
-        try await route.client.invalidatePullRequest(projectID: route.projectID, repository: route.repository, number: number)
+        try await route.client.invalidatePullRequest(projectID: route.projectID, repository: route.repository, host: route.host, number: number)
     }
 
     func invalidatePullRequestListings(environmentID: String) async throws {
         try await environmentClient(id: environmentID).invalidatePullRequestListings()
     }
 
-    private func validatedPullRequestRoute(scope: FeaturePullRequestScope, number: Int, expectedURL: String) async throws -> (client: T3Client, projectID: String, repository: String) {
+    private func validatedPullRequestRoute(scope: FeaturePullRequestScope, number: Int, expectedURL: String) async throws -> (client: T3Client, projectID: String, repository: String, host: String?) {
         let route = try pullRequestRoute(scope: scope)
-        try await route.client.invalidatePullRequest(projectID: route.projectID, repository: route.repository, number: number)
-        let current = try await route.client.pullRequestDetail(projectID: route.projectID, repository: route.repository, number: number)
+        try await route.client.invalidatePullRequest(projectID: route.projectID, repository: route.repository, host: route.host, number: number)
+        let current = try await route.client.pullRequestDetail(projectID: route.projectID, repository: route.repository, host: route.host, number: number)
         guard current.url == expectedURL else { throw FeatureCapabilityUnavailable("The pull request repository changed. Reopen the review") }
         return route
     }
 
     func replyToPullRequestThread(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, body: String) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.replyToPullRequestThread(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, body: body)
+        try await route.client.replyToPullRequestThread(projectID: route.projectID, repository: route.repository, host: route.host, number: number, threadID: threadID, body: body)
     }
 
     func setPullRequestThreadResolution(scope: FeaturePullRequestScope, number: Int, expectedURL: String, threadID: String, resolved: Bool) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.setPullRequestThreadResolution(projectID: route.projectID, repository: route.repository, number: number, threadID: threadID, resolved: resolved)
+        try await route.client.setPullRequestThreadResolution(projectID: route.projectID, repository: route.repository, host: route.host, number: number, threadID: threadID, resolved: resolved)
     }
 
     func pullRequestReviewerCandidates(scope: FeaturePullRequestScope, number: Int, expectedURL: String) async throws -> PullRequestReviewerCandidateList {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        return try await route.client.pullRequestReviewerCandidates(projectID: route.projectID, repository: route.repository, number: number)
+        return try await route.client.pullRequestReviewerCandidates(projectID: route.projectID, repository: route.repository, host: route.host, number: number)
     }
 
     func requestPullRequestReviewers(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestReviewerRequest) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.requestPullRequestReviewers(projectID: route.projectID, repository: route.repository, number: number, request: request)
+        try await route.client.requestPullRequestReviewers(projectID: route.projectID, repository: route.repository, host: route.host, number: number, request: request)
     }
 
     func setPullRequestReaction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestReactionRequest) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.setPullRequestReaction(projectID: route.projectID, repository: route.repository, number: number, request: request)
+        try await route.client.setPullRequestReaction(projectID: route.projectID, repository: route.repository, host: route.host, number: number, request: request)
     }
 
     func updatePullRequestText(scope: FeaturePullRequestScope, number: Int, expectedURL: String, update: PullRequestTextUpdate) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.updatePullRequestText(projectID: route.projectID, repository: route.repository, number: number, update: update)
+        try await route.client.updatePullRequestText(projectID: route.projectID, repository: route.repository, host: route.host, number: number, update: update)
         pullRequestPreviewCache.removeAll(keepingCapacity: true)
     }
 
     func updatePullRequestComment(scope: FeaturePullRequestScope, number: Int, expectedURL: String, commentID: String, kind: String, body: String) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.updatePullRequestComment(projectID: route.projectID, repository: route.repository, number: number, commentID: commentID, kind: kind, body: body)
+        try await route.client.updatePullRequestComment(projectID: route.projectID, repository: route.repository, host: route.host, number: number, commentID: commentID, kind: kind, body: body)
     }
 
     func commentOnPullRequest(scope: FeaturePullRequestScope, number: Int, expectedURL: String, body: String) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.commentOnPullRequest(projectID: route.projectID, repository: route.repository, number: number, body: body)
+        try await route.client.commentOnPullRequest(projectID: route.projectID, repository: route.repository, host: route.host, number: number, body: body)
     }
 
     func runPullRequestAction(scope: FeaturePullRequestScope, number: Int, expectedURL: String, request: PullRequestActionRequest) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.runPullRequestAction(projectID: route.projectID, repository: route.repository, number: number, request: request)
+        try await route.client.runPullRequestAction(projectID: route.projectID, repository: route.repository, host: route.host, number: number, request: request)
         pullRequestPreviewCache.removeAll(keepingCapacity: true)
     }
 
     func submitPullRequestReview(scope: FeaturePullRequestScope, number: Int, expectedURL: String, submission: PullRequestReviewSubmission) async throws {
         let route = try await validatedPullRequestRoute(scope: scope, number: number, expectedURL: expectedURL)
-        try await route.client.submitPullRequestReview(projectID: route.projectID, repository: route.repository, number: number, submission: submission)
+        try await route.client.submitPullRequestReview(projectID: route.projectID, repository: route.repository, host: route.host, number: number, submission: submission)
     }
 
     func projectPullRequestOverview(scope: FeaturePullRequestProjectScope, number: Int) async throws -> FeaturePullRequestOverview {
         let (route, repository) = try projectPullRequestRoute(scope)
-        let detail = try await route.client.pullRequestDetail(projectID: route.wireID, repository: repository, number: number)
-        let activity = try? await route.client.pullRequestActivity(projectID: route.wireID, repository: repository, number: number)
+        let detail = try await route.client.pullRequestDetail(projectID: route.wireID, repository: repository, host: scope.host, number: number)
+        let activity = try? await route.client.pullRequestActivity(projectID: route.wireID, repository: repository, host: scope.host, number: number)
         return FeaturePullRequestOverview(detail: detail, activity: activity)
     }
 
     func projectPullRequestLabels(scope: FeaturePullRequestProjectScope, number: Int) async throws -> PullRequestLabelCandidateList {
         let (route, repository) = try projectPullRequestRoute(scope)
-        return try await route.client.pullRequestLabelCandidates(projectID: route.wireID, repository: repository, number: number)
+        return try await route.client.pullRequestLabelCandidates(projectID: route.wireID, repository: repository, host: scope.host, number: number)
     }
 
     func setProjectPullRequestLabels(scope: FeaturePullRequestProjectScope, number: Int, labels: [String], applied: Bool) async throws {
         let (route, repository) = try projectPullRequestRoute(scope)
-        try await route.client.setPullRequestLabels(projectID: route.wireID, repository: repository, number: number, labels: labels, applied: applied)
+        try await route.client.setPullRequestLabels(projectID: route.wireID, repository: repository, host: scope.host, number: number, labels: labels, applied: applied)
         pullRequestPreviewCache.removeAll(keepingCapacity: true)
     }
 
     func projectPullRequestStack(scope: FeaturePullRequestProjectScope, number: Int) async throws -> PullRequestStack? {
         let (route, repository) = try projectPullRequestRoute(scope)
         guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { return nil }
-        return try await route.client.pullRequestStack(projectID: route.wireID, repository: repository, number: number)
+        return try await route.client.pullRequestStack(projectID: route.wireID, repository: repository, host: scope.host, number: number)
     }
 
     func runProjectPullRequestStackAction(scope: FeaturePullRequestProjectScope, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
         let (route, repository) = try projectPullRequestRoute(scope)
         guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { throw FeatureCapabilityUnavailable("Stack actions") }
-        try await route.client.runPullRequestStackAction(projectID: route.wireID, repository: repository, number: number,
+        try await route.client.runPullRequestStackAction(projectID: route.wireID, repository: repository, host: scope.host, number: number,
             stack: stack, action: action, mergeMethod: mergeMethod)
     }
 

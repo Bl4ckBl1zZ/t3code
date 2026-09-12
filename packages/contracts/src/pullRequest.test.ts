@@ -256,3 +256,17 @@ describe("naming the reader as the author to narrow by", () => {
     expect(resolvePullRequestAuthorFilter("me", "  ")).toBe("me");
   });
 });
+
+describe("hosted pull request references", () => {
+  it("retains host identity through action decoding", () => {
+    expect(
+      decodeAction({
+        projectId: "frontend",
+        host: "github.example",
+        repository: "acme/backend",
+        number: 7,
+        action: "close",
+      }),
+    ).toMatchObject({ host: "github.example", repository: "acme/backend" });
+  });
+});

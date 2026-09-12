@@ -235,6 +235,27 @@ export function findProjectForChangeRequest(
   });
 }
 
+/** Reuse a checkout on the same host for linked repositories without local projects. */
+export function findProjectForHostedChangeRequest(
+  projects: ReadonlyArray<EnvironmentProject>,
+  link: ChangeRequestLink,
+): EnvironmentProject | undefined {
+  return (
+    findProjectForChangeRequest(projects, link) ??
+    projects.find((project) => {
+      const identity = project.repositoryIdentity;
+      const kind = identity?.provider as SourceControlProviderKind | undefined;
+      return (
+        identity !== null &&
+        identity !== undefined &&
+        kind !== undefined &&
+        kind !== "azure-devops" &&
+        pullRequestHostOf(identity, kind) === link.host
+      );
+    })
+  );
+}
+
 /**
  * Opens a change request link on the page, and says whether it did. Anything else — another
  * organisation's repository, a host nothing here is checked out from, a link that merely looks
@@ -293,17 +314,19 @@ export function useOpenChangeRequestLink(
                 Number(right.environmentId === primaryEnvironmentId) -
                 Number(left.environmentId === primaryEnvironmentId),
             );
-      const project = findProjectForChangeRequest(projects, parsed);
+      const project = findProjectForHostedChangeRequest(projects, parsed);
       if (project === undefined || !reads(project.environmentId)) return false;
+      const repository =
+        project.repositoryIdentity?.provider === "azure-devops"
+          ? (project.repositoryIdentity.displayName ?? parsed.repository)
+          : parsed.repository;
       event.preventDefault();
       event.stopPropagation();
       if (resolvedThreadRef) {
         useRightPanelStore.getState().openPullRequest(resolvedThreadRef, {
           projectId: project.id,
           host: parsed.host,
-          // The identity's own spelling, not the one read out of the URL: the panel asks the
-          // provider for this repository, while matching a link only ever compares lower case.
-          repository: project.repositoryIdentity?.displayName ?? parsed.repository,
+          repository,
           number: parsed.number,
         });
         return true;
@@ -315,7 +338,7 @@ export function useOpenChangeRequestLink(
           // Every state, so the pull request being opened is also in the list behind it whether
           // it is open, merged or closed.
           state: "all",
-          repository: parsed.repository,
+          repository,
           number: parsed.number,
           selectedProjectId: project.id,
           selectedHost: parsed.host,

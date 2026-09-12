@@ -7953,10 +7953,13 @@ function ChatViewContent(props: ChatViewProps) {
       // reader's feet. A link the agent wrote can open any other one here, and that one has to be
       // checkable out like it is anywhere else.
       <PullRequestDetailPanel
-        key={`${renderedRightPanelSurface.repository}#${renderedRightPanelSurface.number}`}
+        key={renderedRightPanelSurface.id}
         environmentId={activeThread.environmentId}
         reference={{
           projectId: renderedRightPanelSurface.projectId as ProjectId,
+          ...(renderedRightPanelSurface.host === undefined
+            ? {}
+            : { host: renderedRightPanelSurface.host }),
           repository: renderedRightPanelSurface.repository,
           number: renderedRightPanelSurface.number,
         }}

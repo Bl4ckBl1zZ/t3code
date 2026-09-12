@@ -127,7 +127,7 @@ const DETAIL_CACHE_CAPACITY = 128;
 const DIFF_CACHE_CAPACITY = 128;
 
 /** Internal linked-PR reads can explicitly target another repository on a configured host. */
-export type PullRequestLinkRef = PullRequestRef & { readonly host?: string };
+export type PullRequestLinkRef = PullRequestRef;
 
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly host: string;
@@ -2144,7 +2144,8 @@ export const make = Effect.gen(function* () {
   let listingsEpoch = 0;
   const refEpochs = new Map<string, number>();
   const REF_EPOCH_CAPACITY = 2_048;
-  const refScope = (ref: PullRequestRef) => `${ref.projectId} ${ref.repository} ${ref.number}`;
+  const refScope = (ref: PullRequestRef) =>
+    `${ref.projectId} ${ref.host?.toLowerCase() ?? ""} ${ref.repository.toLowerCase()} ${ref.number}`;
   const refEpoch = (ref: PullRequestRef) => refEpochs.get(refScope(ref)) ?? 0;
   const bumpRefEpoch = (ref: PullRequestRef) => {
     const scope = refScope(ref);
@@ -2315,8 +2316,19 @@ export const make = Effect.gen(function* () {
 
   const activityCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, repository, number] = JSON.parse(key) as [number, string, string, number];
-      return activityUncached({ projectId, repository, number } as PullRequestRef);
+      const [, projectId, host, repository, number] = JSON.parse(key) as [
+        number,
+        string,
+        string | null,
+        string,
+        number,
+      ];
+      return activityUncached({
+        projectId,
+        ...(host === null ? {} : { host }),
+        repository,
+        number,
+      } as PullRequestRef);
     },
     {
       capacity: DETAIL_CACHE_CAPACITY,
@@ -2324,15 +2336,22 @@ export const make = Effect.gen(function* () {
     },
   );
   const activity: PullRequestService["Service"]["activity"] = (input) => {
-    const key = JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]);
+    const key = JSON.stringify([
+      refEpoch(input),
+      input.projectId,
+      input.host?.toLowerCase() ?? null,
+      input.repository.toLowerCase(),
+      input.number,
+    ]);
     return Cache.get(activityCache, key);
   };
 
   const diffCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, repository, number, cursor, commit] = JSON.parse(key) as [
+      const [, projectId, host, repository, number, cursor, commit] = JSON.parse(key) as [
         number,
         string,
+        string | null,
         string,
         number,
         string | null,
@@ -2340,6 +2359,7 @@ export const make = Effect.gen(function* () {
       ];
       return diffUncached({
         projectId,
+        ...(host === null ? {} : { host }),
         repository,
         number,
         ...(cursor === null ? {} : { cursor }),
@@ -2350,7 +2370,7 @@ export const make = Effect.gen(function* () {
       capacity: DIFF_CACHE_CAPACITY,
       timeToLive: (exit, key) => {
         if (!Exit.isSuccess(exit)) return Duration.zero;
-        const commit = (JSON.parse(key) as ReadonlyArray<unknown>)[5];
+        const commit = (JSON.parse(key) as ReadonlyArray<unknown>)[6];
         return commit === null ? DIFF_CACHE_TTL : COMMIT_DIFF_CACHE_TTL;
       },
     },
@@ -2359,7 +2379,8 @@ export const make = Effect.gen(function* () {
     const key = JSON.stringify([
       refEpoch(input),
       input.projectId,
-      input.repository,
+      input.host?.toLowerCase() ?? null,
+      input.repository.toLowerCase(),
       input.number,
       input.cursor ?? null,
       input.commit ?? null,

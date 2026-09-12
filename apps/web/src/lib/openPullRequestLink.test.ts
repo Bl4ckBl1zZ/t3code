@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   changeRequestRepositoryUrl,
   findProjectForChangeRequest,
+  findProjectForHostedChangeRequest,
   gitHubPullRequestBrowserUrl,
   matchesLinkedPullRequestUrl,
   openPullRequestLink,
@@ -303,6 +304,30 @@ describe("parseChangeRequestUrl", () => {
 describe("findProjectForChangeRequest", () => {
   const project = (identity: Record<string, unknown>) =>
     ({ id: "p1", repositoryIdentity: identity }) as never;
+
+  it("opens another repository on a configured host without crossing hosts", () => {
+    const projects = [
+      project({
+        canonicalKey: "github.com/acme/frontend",
+        provider: "github",
+        displayName: "acme/frontend",
+      }),
+    ];
+    expect(
+      findProjectForHostedChangeRequest(projects, {
+        host: "github.com",
+        repository: "acme/backend",
+        number: 7,
+      }),
+    ).toBe(projects[0]);
+    expect(
+      findProjectForHostedChangeRequest(projects, {
+        host: "github.other",
+        repository: "acme/backend",
+        number: 7,
+      }),
+    ).toBeUndefined();
+  });
 
   it("matches a nested GitLab group by the whole path below the host", () => {
     // The server identifies a repository by `displayName`, which keeps every group segment; the

@@ -483,7 +483,7 @@ export function PullRequestDetailPanel({
    */
   composerDraftTarget?: ScopedThreadRef | DraftId;
 }) {
-  const pullRequestKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
+  const pullRequestKey = `${reference.projectId}:${reference.host?.toLowerCase() ?? ""}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
   const [timelineOrder, setTimelineOrder] = useState<"newest" | "oldest">("newest");
   const [codeCommitScope, setCodeCommitScope] = useState<{

@@ -816,147 +816,148 @@ public actor T3Client {
     public func pullRequestDetail(
         projectID: String,
         repository: String,
+        host: String? = nil,
         number: Int
     ) async throws -> PullRequestDetail {
         try await rpc.request(
             RPCMethod.pullRequestsDetail.rawValue,
-            payload: .object([
+            payload: .object(PullRequestWireReference.withHost(host, [
                 "projectId": .string(projectID),
                 "repository": .string(repository),
                 "number": .number(Double(number)),
-            ]),
+            ])),
             as: PullRequestDetail.self
         )
     }
 
-    public func pullRequestThreadComments(projectID: String, repository: String, number: Int, threadID: String, cursor: String) async throws -> PullRequestThreadCommentsResult {
-        try await rpc.request("pullRequests.threadComments", payload: .object([
+    public func pullRequestThreadComments(projectID: String, repository: String, host: String? = nil, number: Int, threadID: String, cursor: String) async throws -> PullRequestThreadCommentsResult {
+        try await rpc.request("pullRequests.threadComments", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
             "threadId": .string(threadID), "cursor": .string(cursor),
-        ]), as: PullRequestThreadCommentsResult.self)
+        ])), as: PullRequestThreadCommentsResult.self)
     }
 
-    public func replyToPullRequestThread(projectID: String, repository: String, number: Int, threadID: String, body: String) async throws {
-        let _: JSONValue = try await rpc.request("pullRequests.replyToThread", payload: .object([
+    public func replyToPullRequestThread(projectID: String, repository: String, host: String? = nil, number: Int, threadID: String, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.replyToThread", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
             "threadId": .string(threadID), "body": .string(body),
-        ]), as: JSONValue.self)
+        ])), as: JSONValue.self)
     }
 
-    public func setPullRequestThreadResolution(projectID: String, repository: String, number: Int, threadID: String, resolved: Bool) async throws {
-        let _: JSONValue = try await rpc.request("pullRequests.setThreadResolution", payload: .object([
+    public func setPullRequestThreadResolution(projectID: String, repository: String, host: String? = nil, number: Int, threadID: String, resolved: Bool) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.setThreadResolution", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
             "threadId": .string(threadID), "resolved": .bool(resolved),
-        ]), as: JSONValue.self)
+        ])), as: JSONValue.self)
     }
 
-    public func invalidatePullRequest(projectID: String, repository: String, number: Int) async throws {
-        let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object(["reference": .object([
+    public func invalidatePullRequest(projectID: String, repository: String, host: String? = nil, number: Int) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object(["reference": .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
-        ])]), as: JSONValue.self)
+        ]))]), as: JSONValue.self)
     }
 
     public func invalidatePullRequestListings() async throws {
         let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object([:]), as: JSONValue.self)
     }
 
-    public func pullRequestReviewerCandidates(projectID: String, repository: String, number: Int) async throws -> PullRequestReviewerCandidateList {
-        try await rpc.request("pullRequests.reviewerCandidates", payload: .object([
+    public func pullRequestReviewerCandidates(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestReviewerCandidateList {
+        try await rpc.request("pullRequests.reviewerCandidates", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
-        ]), as: PullRequestReviewerCandidateList.self)
+        ])), as: PullRequestReviewerCandidateList.self)
     }
 
-    public func requestPullRequestReviewers(projectID: String, repository: String, number: Int, request: PullRequestReviewerRequest) async throws {
-        let _: JSONValue = try await rpc.request("pullRequests.requestReviewers", payload: .object([
+    public func requestPullRequestReviewers(projectID: String, repository: String, host: String? = nil, number: Int, request: PullRequestReviewerRequest) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.requestReviewers", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
             "reviewers": .array(request.reviewers.map { .object(["id": .string($0.id), "kind": .string($0.kind)]) }), "requested": .bool(request.requested),
-        ]), as: JSONValue.self)
+        ])), as: JSONValue.self)
     }
 
-    public func setPullRequestReaction(projectID: String, repository: String, number: Int, request: PullRequestReactionRequest) async throws {
-        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "content": .string(request.content), "reacted": .bool(request.reacted)]
+    public func setPullRequestReaction(projectID: String, repository: String, host: String? = nil, number: Int, request: PullRequestReactionRequest) async throws {
+        var payload: [String: JSONValue] = PullRequestWireReference.withHost(host, ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "content": .string(request.content), "reacted": .bool(request.reacted)])
         if let subjectId = request.subjectId { payload["subjectId"] = .string(subjectId) }
         let _: JSONValue = try await rpc.request("pullRequests.setReaction", payload: .object(payload), as: JSONValue.self)
     }
 
-    public func updatePullRequestText(projectID: String, repository: String, number: Int, update: PullRequestTextUpdate) async throws {
-        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
+    public func updatePullRequestText(projectID: String, repository: String, host: String? = nil, number: Int, update: PullRequestTextUpdate) async throws {
+        var payload: [String: JSONValue] = PullRequestWireReference.withHost(host, ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))])
         if let title = update.title { payload["title"] = .string(title) }
         if let body = update.body { payload["body"] = .string(body) }
         let _: JSONValue = try await rpc.request("pullRequests.update", payload: .object(payload), as: JSONValue.self)
     }
 
-    public func updatePullRequestComment(projectID: String, repository: String, number: Int, commentID: String, kind: String, body: String) async throws {
-        let _: JSONValue = try await rpc.request("pullRequests.updateComment", payload: .object([
+    public func updatePullRequestComment(projectID: String, repository: String, host: String? = nil, number: Int, commentID: String, kind: String, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.updateComment", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
             "commentId": .string(commentID), "kind": .string(kind), "body": .string(body),
-        ]), as: JSONValue.self)
+        ])), as: JSONValue.self)
     }
 
-    public func commentOnPullRequest(projectID: String, repository: String, number: Int, body: String) async throws {
-        let _: JSONValue = try await rpc.request("pullRequests.comment", payload: .object([
+    public func commentOnPullRequest(projectID: String, repository: String, host: String? = nil, number: Int, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.comment", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "body": .string(body),
-        ]), as: JSONValue.self)
+        ])), as: JSONValue.self)
     }
 
-    public func runPullRequestAction(projectID: String, repository: String, number: Int, request: PullRequestActionRequest) async throws {
-        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "action": .string(request.action)]
+    public func runPullRequestAction(projectID: String, repository: String, host: String? = nil, number: Int, request: PullRequestActionRequest) async throws {
+        var payload: [String: JSONValue] = PullRequestWireReference.withHost(host, ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "action": .string(request.action)])
         if let method = request.mergeMethod { payload["mergeMethod"] = .string(method) }
         if let method = request.updateMethod { payload["updateMethod"] = .string(method) }
         let _: JSONValue = try await rpc.request("pullRequests.runAction", payload: .object(payload), as: JSONValue.self)
     }
 
-    public func submitPullRequestReview(projectID: String, repository: String, number: Int, submission: PullRequestReviewSubmission) async throws {
+    public func submitPullRequestReview(projectID: String, repository: String, host: String? = nil, number: Int, submission: PullRequestReviewSubmission) async throws {
         let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(submission))
         guard case var .object(payload) = encoded else { throw CocoaError(.coderInvalidValue) }
         payload["projectId"] = .string(projectID); payload["repository"] = .string(repository); payload["number"] = .number(Double(number))
         let _: JSONValue = try await rpc.request("pullRequests.submitReview", payload: .object(payload), as: JSONValue.self)
     }
 
-    public func pullRequestDiffFileContents(projectID: String, repository: String, number: Int, input: PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents {
-        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
-            "changeType": .string(input.changeType), "oldPath": .string(input.oldPath), "newPath": .string(input.newPath)]
+    public func pullRequestDiffFileContents(projectID: String, repository: String, host: String? = nil, number: Int, input: PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents {
+        var payload: [String: JSONValue] = PullRequestWireReference.withHost(host, ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "changeType": .string(input.changeType), "oldPath": .string(input.oldPath), "newPath": .string(input.newPath)])
         if let commit = input.commit { payload["commit"] = .string(commit) }
         return try await rpc.request("pullRequests.diffFileContents", payload: .object(payload), as: PullRequestDiffFileContents.self)
     }
 
-    public func pullRequestDiff(projectID: String, repository: String, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
-        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
+    public func pullRequestDiff(projectID: String, repository: String, host: String? = nil, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
+        var payload: [String: JSONValue] = PullRequestWireReference.withHost(host, ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))])
         if let cursor { payload["cursor"] = .string(cursor) }
         if let commit { payload["commit"] = .string(commit) }
         return try await rpc.request("pullRequests.diff", payload: .object(payload), as: PullRequestDiffResult.self)
     }
 
-    public func pullRequestLabelCandidates(projectID: String, repository: String, number: Int) async throws -> PullRequestLabelCandidateList {
-        try await rpc.request("pullRequests.labelCandidates", payload: .object([
+    public func pullRequestLabelCandidates(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestLabelCandidateList {
+        try await rpc.request("pullRequests.labelCandidates", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
-        ]), as: PullRequestLabelCandidateList.self)
+        ])), as: PullRequestLabelCandidateList.self)
     }
 
-    public func setPullRequestLabels(projectID: String, repository: String, number: Int, labels: [String], applied: Bool) async throws {
-        let _: JSONValue = try await rpc.request("pullRequests.setLabels", payload: .object([
+    public func setPullRequestLabels(projectID: String, repository: String, host: String? = nil, number: Int, labels: [String], applied: Bool) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.setLabels", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
             "labels": .array(labels.map { .string($0) }), "applied": .bool(applied),
-        ]), as: JSONValue.self)
+        ])), as: JSONValue.self)
     }
 
-    public func pullRequestStack(projectID: String, repository: String, number: Int) async throws -> PullRequestStack? {
-        try await rpc.request("pullRequests.stack", payload: .object([
+    public func pullRequestStack(projectID: String, repository: String, host: String? = nil, number: Int) async throws -> PullRequestStack? {
+        try await rpc.request("pullRequests.stack", payload: .object(PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
-        ]), as: Optional<PullRequestStack>.self)
+        ])), as: Optional<PullRequestStack>.self)
     }
 
-    public func runPullRequestStackAction(projectID: String, repository: String, number: Int,
+    public func runPullRequestStackAction(projectID: String, repository: String, host: String? = nil, number: Int,
         stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
         let heads = stack.affectedLayers(number: number, action: action)
         guard !heads.isEmpty, heads.allSatisfy({ $0.headSha != nil }) else {
             throw RPCError.remote("Refresh the stack before performing this action.")
         }
-        var fields: [String: JSONValue] = [
+        var fields: [String: JSONValue] = PullRequestWireReference.withHost(host, [
             "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
             "stackNumber": .number(Double(stack.number)), "action": .string(action),
             "expectedStackHeads": .array(heads.map { .object(["number": .number(Double($0.number)), "headSha": .string($0.headSha!)]) }),
-        ]
+        ])
         if let mergeMethod { fields["mergeMethod"] = .string(mergeMethod) }
         if action == "update-branch" { fields["updateMethod"] = .string("rebase") }
         let _: JSONValue = try await rpc.request("pullRequests.runAction", payload: .object(fields), as: JSONValue.self)
@@ -965,15 +966,16 @@ public actor T3Client {
     public func pullRequestActivity(
         projectID: String,
         repository: String,
+        host: String? = nil,
         number: Int
     ) async throws -> PullRequestActivity {
         try await rpc.request(
             RPCMethod.pullRequestsActivity.rawValue,
-            payload: .object([
+            payload: .object(PullRequestWireReference.withHost(host, [
                 "projectId": .string(projectID),
                 "repository": .string(repository),
                 "number": .number(Double(number)),
-            ]),
+            ])),
             as: PullRequestActivity.self
         )
     }
