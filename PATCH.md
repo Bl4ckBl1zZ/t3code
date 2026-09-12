@@ -1406,3 +1406,5 @@ and reports continued rejection. Cookie/bearer behavior is preserved. No SQLite 
 runtime is added. Authentication tests use synthetic credentials and mocked transports.
 
 - Carries upstream T3 Connect network guidance through the fork’s shared authorization, relay, and V2 RPC connection paths. Only relay transport failures and timeouts suggest DNS/firewall troubleshooting; authentication and server response errors retain their own messages. Swift already provides native network/VPN guidance and retry actions.
+
+- Ports native process-table sampling and terminal scan backoff without changing V2 terminal ownership or script attribution. Resource-monitor protocol 3 is internal to the host-side native helper; client terminal wire contracts stay unchanged.
