@@ -24,7 +24,7 @@ The same known account on multiple environments appears once, using its freshest
 Accounts without a reported identity stay separate. Pooled bars weight each reporting account
 equally; they do not claim that different subscription plans have equal token allowances.
 Unavailable environments, unsupported accounts, failed probes, and stale reports are labeled.
-External proxy hubs are not included in this view yet.
+CLIProxyAPI hubs can report additional accounts alongside local providers.
 
 ## Native iOS account comparison
 
@@ -59,3 +59,18 @@ When Codex reports banked reset credits, Limits shows their count and next expir
 one. This spends a banked credit and cannot be undone. The action requires permission to operate
 the selected environment. A failed attempt can be retried with the same attempt ID. If redemption
 succeeds but its follow-up report fails, refresh the limits to confirm their current state.
+
+## Quota hubs
+
+On web and desktop, open **Usage → Limits** and choose **Add hub** under an environment.
+On iPhone or iPad, open **Settings → Usage → Limits → Quota hubs**, select an environment,
+and add its hub URL and management key. The key stays in that server’s secret store.
+
+Edit a hub to change its address, label, or key. Leaving the key blank while editing on iOS
+or web keeps the existing key. Disable pauses its reports; Enable resumes them. Remove deletes
+its configuration and stored key. Changes affect only the selected environment.
+
+Hub accounts contribute to the same account comparisons and pooled bars. A known account
+also configured locally is counted once, using its freshest report. Failed hubs show an error;
+refresh to try again. Hub accounts report quota but cannot run tasks. Eligible Codex hub
+accounts also support **Use reset**, with confirmation before spending a credit.

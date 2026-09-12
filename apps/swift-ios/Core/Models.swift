@@ -68,6 +68,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let providerTerminalEnvironment: Bool?
         public let projectIcons: Bool?
         public let environmentIcon: Bool?
+        public let usageLimitSources: Bool?
         public let usagePriceOverrides: Bool?
         public let pullRequestStackActions: Bool?
         public let pullRequests: Bool?
@@ -96,6 +97,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case projectIcons
             case customModelDefinitions
             case environmentIcon
+            case usageLimitSources
             case usagePriceOverrides
             case pullRequestStackActions
             case pullRequests
@@ -133,6 +135,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             projectIcons = try container.decodeIfPresent(Bool.self, forKey: .projectIcons)
             customModelDefinitions = try container.decodeIfPresent(Bool.self, forKey: .customModelDefinitions)
             environmentIcon = try container.decodeIfPresent(Bool.self, forKey: .environmentIcon)
+            usageLimitSources = try container.decodeIfPresent(Bool.self, forKey: .usageLimitSources)
             usagePriceOverrides = try container.decodeIfPresent(Bool.self, forKey: .usagePriceOverrides)
             pullRequestStackActions = try container.decodeIfPresent(Bool.self, forKey: .pullRequestStackActions)
             threadPullRequestLinking = try container.decodeIfPresent(

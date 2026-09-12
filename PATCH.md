@@ -1305,4 +1305,22 @@ Web/desktop and native Swift show banked counts/expiry and require explicit conf
 redemption target follows the instance that supplied the displayed account snapshot, including
 deduplicated multi-environment accounts. Web additionally respects known operate permissions;
 the server is authoritative for every client. No real credit was redeemed during verification.
-External quota hubs remain a separate port; the frozen Expo client ignores optional credit data.
+External quota hubs are now carried below; the frozen Expo client ignores optional credit data.
+
+### External quota hubs (2026-09-12 parity port)
+
+CLIProxyAPI quota sources (`19d8ab2ae9`, `0a89364f15`, `1641b4aba5` intent) use a
+standalone UsageLimitSources service, separate from V2 runnable provider instances.
+Background policy gates polling; configuration edits and explicit refresh update sources.
+The opt-in `usageLimitSourcesUpdated` config event protects older clients. Web/desktop
+project live sources without persisting them; Swift reads a bounded subscription for each
+selected environment. Known account identities deduplicate local and hub reports, keeping
+the reset target with the freshest displayed quota. Hub redemption pins both account and
+credit with a stable request ID; a cooldown-clear failure is a successful result with warning.
+
+Both maintained clients manage environment-local hubs, including edit, disable, re-enable,
+and remove. Management keys live in the server secret store, are redacted on every client
+settings path, survive redacted edits of legacy inline keys, and are deleted with sources.
+Swift mirrors the new settings, capability, stream event, and credit contract, checked by a
+schema-generated fixture. No V1 runtime or SQLite migration is introduced. Frozen Expo keeps
+its existing UI and does not opt in to source events.

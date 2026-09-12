@@ -33,6 +33,9 @@ import {
   AssetCreateUrlResult,
   EnvironmentId,
   ServerProviderUsageLimits,
+  UsageLimitSourceId,
+  UsageLimitSourceSnapshot,
+  UsageLimitSourceConfig,
   ServerProvider,
   PullRequestStack,
   PullRequestLabelCandidateList,
@@ -1582,3 +1585,45 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(usageHistoryPath, usageHistorySerialized);
+
+const hubFixture = {
+  source: Schema.encodeSync(UsageLimitSourceSnapshot)({
+    id: UsageLimitSourceId.make("team-hub"),
+    kind: "cliproxy",
+    label: "Team",
+    checkedAt: "2026-09-06T01:00:00.000Z",
+    accounts: [
+      {
+        id: "account-a",
+        driver: ProviderDriverKind.make("codex"),
+        email: "same@example.com",
+        plan: "Pro",
+        usageLimits: {
+          ...Schema.decodeUnknownSync(ServerProviderUsageLimits)(limits),
+          checkedAt: "2026-09-06T01:00:00.000Z",
+          resetCredits: {
+            availableCount: 2,
+            nextCreditId: "credit-a",
+            nextExpiresAt: "2026-09-28T00:00:00.000Z",
+          },
+        },
+      },
+    ],
+  }),
+  config: Schema.encodeSync(UsageLimitSourceConfig)({
+    kind: "cliproxy",
+    url: "https://hub.example.test",
+    managementKey: "••••••",
+    enabled: true,
+  }),
+};
+const hubPath = NodePath.join(NodePath.dirname(outputPath), "usageLimitSource.json");
+const hubSerialized = `${JSON.stringify(hubFixture, null, 2)}\n`;
+if (process.argv.includes("--check")) {
+  if (!NodeFS.existsSync(hubPath) || NodeFS.readFileSync(hubPath, "utf8") !== hubSerialized) {
+    console.error("[swift-fixtures] usageLimitSource.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(hubPath, hubSerialized);
+}

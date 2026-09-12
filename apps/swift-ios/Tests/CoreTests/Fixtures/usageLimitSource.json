@@ -1,0 +1,40 @@
+{
+  "source": {
+    "id": "team-hub",
+    "kind": "cliproxy",
+    "label": "Team",
+    "checkedAt": "2026-09-06T01:00:00.000Z",
+    "accounts": [
+      {
+        "id": "account-a",
+        "driver": "codex",
+        "email": "same@example.com",
+        "plan": "Pro",
+        "usageLimits": {
+          "checkedAt": "2026-09-06T01:00:00.000Z",
+          "windows": [
+            {
+              "id": "primary",
+              "kind": "session",
+              "label": "Session",
+              "usedPercent": 42,
+              "resetsAt": "2026-09-06T05:00:00.000Z",
+              "windowDurationMins": 300
+            }
+          ],
+          "resetCredits": {
+            "availableCount": 2,
+            "nextExpiresAt": "2026-09-28T00:00:00.000Z",
+            "nextCreditId": "credit-a"
+          }
+        }
+      }
+    ]
+  },
+  "config": {
+    "kind": "cliproxy",
+    "url": "https://hub.example.test",
+    "managementKey": "••••••",
+    "enabled": true
+  }
+}

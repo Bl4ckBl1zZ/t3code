@@ -276,6 +276,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let projectAgentBrowserAccessOverrides: [String: Bool]
     public let projectAutoPullOverrides: [String: Bool]
     public let environmentIcon: String?
+    public let usageLimitSources: [String: UsageLimitSourceConfig]?
     public let usagePriceOverrides: [String: UsageModelPriceOverride]?
     /// The default window matching `DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS` in
     /// `packages/contracts`, applied when a server predates the setting.
@@ -327,6 +328,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         projectAutoPullOverrides: [String: Bool] = [:],
         projectAgentBrowserAccessOverrides: [String: Bool] = [:],
         environmentIcon: String? = nil,
+        usageLimitSources: [String: UsageLimitSourceConfig]? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
         newWorktreesStartFromOrigin: Bool = true,
@@ -353,6 +355,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
         self.environmentIcon = environmentIcon
+        self.usageLimitSources = usageLimitSources
         self.usagePriceOverrides = usagePriceOverrides
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
@@ -383,6 +386,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case defaultProjectScripts, projectScriptOverrides
         case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
         case environmentIcon
+        case usageLimitSources
         case usagePriceOverrides
         case defaultThreadEnvMode
         case newWorktreesStartFromOrigin
@@ -419,6 +423,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         projectAgentBrowserAccessOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAgentBrowserAccessOverrides) ?? [:]
         projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
         environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
+        usageLimitSources = try container.decodeIfPresent([String: UsageLimitSourceConfig].self, forKey: .usageLimitSources)
         usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
         defaultThreadEnvMode = try container.decode(
             ServerThreadEnvironmentMode.self,
@@ -469,6 +474,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(projectAgentBrowserAccessOverrides, forKey: .projectAgentBrowserAccessOverrides)
         try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
         try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
+        try container.encodeIfPresent(usageLimitSources, forKey: .usageLimitSources)
         try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
         try container.encode(defaultThreadEnvMode, forKey: .defaultThreadEnvMode)
         try container.encode(newWorktreesStartFromOrigin, forKey: .newWorktreesStartFromOrigin)
@@ -516,6 +522,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var customModelsByDriver: [String: [JSONValue]]?
     /// A present nil entry resets one model. Omitted models are unchanged.
     public var environmentIcon: String??
+    public var usageLimitSources: [String: UsageLimitSourceConfig?]?
     public var usagePriceOverrides: [String: UsageModelPriceOverride?]?
     public var enableHermes: Bool?
     public var enableAgentBrowserAccess: Bool?
@@ -542,6 +549,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         providerInstances: [String: JSONValue]? = nil,
         customModelsByDriver: [String: [JSONValue]]? = nil,
         environmentIcon: String?? = nil,
+        usageLimitSources: [String: UsageLimitSourceConfig?]? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride?]? = nil,
         enableAgentBrowserAccess: Bool? = nil,
         claudeAutoCompactWindow: String? = nil,
@@ -563,6 +571,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         self.providerInstances = providerInstances
         self.customModelsByDriver = customModelsByDriver
         self.environmentIcon = environmentIcon
+        self.usageLimitSources = usageLimitSources
         self.usagePriceOverrides = usagePriceOverrides
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
         self.claudeAutoCompactWindow = claudeAutoCompactWindow
@@ -616,6 +625,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
             }
             fields["providers"] = .object(providers)
         }
+        if let usageLimitSources { fields["usageLimitSources"] = .object(usageLimitSources.mapValues { $0?.json ?? .null }) }
         if let usagePriceOverrides { fields["usagePriceOverrides"] = .object(usagePriceOverrides.mapValues { $0?.json ?? .null }) }
         if let hiddenModelsByProvider {
             fields["providerModelPreferences"] = .object(hiddenModelsByProvider.mapValues {
@@ -734,6 +744,7 @@ public enum ServerConfigStreamEvent: Decodable, Sendable {
     case providerStatuses([ServerProviderSnapshot])
     case settingsUpdated(ServerSettingsSnapshot)
     case environmentThemesUpdated([EnvironmentTheme])
+    case usageLimitSourcesUpdated([UsageLimitSourceSnapshot])
     case unrelated(type: String)
 
     private enum CodingKeys: String, CodingKey { case type, config, payload }
@@ -751,6 +762,7 @@ public enum ServerConfigStreamEvent: Decodable, Sendable {
         }
     }
     private struct SettingsPayload: Decodable { let settings: ServerSettingsSnapshot }
+    private struct UsageSourcesPayload: Decodable { let sources: [UsageLimitSourceSnapshot] }
     private struct EnvironmentThemesPayload: Decodable { let themes: [EnvironmentTheme] }
 
     public init(from decoder: any Decoder) throws {
@@ -769,6 +781,8 @@ public enum ServerConfigStreamEvent: Decodable, Sendable {
             self = .settingsUpdated(
                 try container.decode(SettingsPayload.self, forKey: .payload).settings
             )
+        case "usageLimitSourcesUpdated":
+            self = .usageLimitSourcesUpdated(try container.decode(UsageSourcesPayload.self, forKey: .payload).sources)
         case "environmentThemesUpdated":
             self = .environmentThemesUpdated(
                 try container.decode(EnvironmentThemesPayload.self, forKey: .payload).themes

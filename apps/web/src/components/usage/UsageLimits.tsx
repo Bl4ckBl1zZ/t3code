@@ -1,3 +1,4 @@
+import { UsageLimitSources } from "./UsageLimitSources";
 import { ResetCredits } from "./ResetCredits";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ServerProviderUsageWindow } from "@t3tools/contracts";
@@ -147,6 +148,7 @@ export function UsageLimits({
             id,
             label: value.entry.target.label,
             providers: value.serverConfig?.providers ?? [],
+            usageLimitSources: value.serverConfig?.usageLimitSources ?? [],
           })),
       ),
     [presentations, selected],
@@ -220,6 +222,20 @@ export function UsageLimits({
               </label>
             ))}
           </div>
+          {targets.map(
+            ([id, value]) =>
+              value.serverConfig?.environment.capabilities.usageLimitSources && (
+                <UsageLimitSources
+                  key={id}
+                  environmentId={id}
+                  label={value.entry.target.label}
+                  config={value.serverConfig}
+                  canOperate={
+                    refreshAccess.get(id) === "granted" && value.connection.phase === "connected"
+                  }
+                />
+              ),
+          )}
           {failures.map((failure) => (
             <p key={failure} role="alert" className="mb-2 text-xs text-destructive">
               {failure}

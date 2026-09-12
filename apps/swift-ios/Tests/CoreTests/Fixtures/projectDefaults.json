@@ -121,6 +121,7 @@
     },
     "hermesProactiveDefaultApplied": false,
     "projectFileBackfillApplied": false,
+    "usageLimitSources": {},
     "usagePriceOverrides": {}
   },
   "capabilities": {

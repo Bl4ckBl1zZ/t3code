@@ -281,17 +281,35 @@ export function applyServerConfigProjection(
       // Only from a server that still streams them. Reconnecting to one that
       // predates the feature must drop the set rather than leave a palette on
       // screen that nothing will ever update again.
-      const carried =
-        event.config.environment.capabilities.environmentThemes === true && Option.isSome(current)
+      const capabilities = event.config.environment.capabilities;
+      const carriedThemes =
+        capabilities.environmentThemes === true && Option.isSome(current)
           ? current.value.config.environmentThemes
           : undefined;
+      const carriedSources =
+        capabilities.usageLimitSources === true && Option.isSome(current)
+          ? current.value.config.usageLimitSources
+          : undefined;
       return Option.some({
-        config:
-          carried === undefined ? event.config : { ...event.config, environmentThemes: carried },
+        config: {
+          ...event.config,
+          ...(carriedThemes === undefined ? {} : { environmentThemes: carriedThemes }),
+          ...(carriedSources === undefined ? {} : { usageLimitSources: carriedSources }),
+        },
         latestEvent: event,
         source: "live" as const,
       });
     }
+    case "usageLimitSourcesUpdated":
+      return Option.map(current, (projection) => ({
+        ...projection,
+        config: {
+          ...projection.config,
+          usageLimitSources: event.payload.sources.length ? event.payload.sources : undefined,
+        },
+        latestEvent: event,
+        source: "live" as const,
+      }));
     case "keybindingsUpdated":
       return Option.map(current, (projection) => ({
         config: {
@@ -357,13 +375,14 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
  * otherwise hand clients palettes the environment has already dropped.
  */
 function withoutEnvironmentThemes(config: ServerConfig): ServerConfig {
-  if (config.environmentThemes === undefined) return config;
-  const { environmentThemes: _ephemeral, ...rest } = config;
+  if (config.environmentThemes === undefined && config.usageLimitSources === undefined)
+    return config;
+  const { environmentThemes: _ephemeral, usageLimitSources: _sources, ...rest } = config;
   return rest;
 }
 
 export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConfigState.make")(
-  function* (environmentThemes?: boolean) {
+  function* (environmentThemes?: boolean, usageLimitSources?: boolean) {
     const supervisor = yield* EnvironmentSupervisor;
     const cache = yield* EnvironmentCacheStore;
     const environmentId = supervisor.target.environmentId;
@@ -424,10 +443,10 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
       Effect.forkScoped,
     );
 
-    yield* subscribe(
-      WS_METHODS.subscribeServerConfig,
-      environmentThemes === true ? { environmentThemes: true } : {},
-    ).pipe(
+    yield* subscribe(WS_METHODS.subscribeServerConfig, {
+      ...(environmentThemes === true ? { environmentThemes: true } : {}),
+      ...(usageLimitSources === true ? { usageLimitSources: true } : {}),
+    }).pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
           const next = applyServerConfigProjection(yield* SubscriptionRef.get(state), event);
@@ -460,11 +479,12 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
 export function serverConfigStateChanges(
   environmentId: EnvironmentId,
   environmentThemes?: boolean,
+  usageLimitSources?: boolean,
 ) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(
-      makeEnvironmentServerConfigState(environmentThemes).pipe(
+      makeEnvironmentServerConfigState(environmentThemes, usageLimitSources).pipe(
         Effect.map((state) =>
           SubscriptionRef.changes(state).pipe(
             Stream.filterMap((projection) =>
@@ -523,6 +543,7 @@ export function createServerEnvironmentAtoms<R, E>(
      * receives the payload.
      */
     readonly environmentThemes?: boolean;
+    readonly usageLimitSources?: boolean;
   },
 ) {
   const configScheduler = createAtomCommandScheduler();
@@ -534,7 +555,13 @@ export function createServerEnvironmentAtoms<R, E>(
   };
   const configProjectionFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
-      .atom(serverConfigStateChanges(environmentId, options.environmentThemes))
+      .atom(
+        serverConfigStateChanges(
+          environmentId,
+          options.environmentThemes,
+          options.usageLimitSources,
+        ),
+      )
       .pipe(
         Atom.setIdleTTL(5 * 60_000),
         Atom.withLabel(`environment-data:server:config-projection:${environmentId}`),
@@ -892,7 +919,8 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.providerConsumeResetCredit,
       concurrency: {
         mode: "singleFlight",
-        key: ({ environmentId, input }) => `${environmentId}:${input.instanceId}`,
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${"instanceId" in input ? input.instanceId : `${input.sourceId}:${input.accountId}:${input.creditId}`}`,
       },
     }),
     refreshUsageRates: createEnvironmentRpcCommand(runtime, {

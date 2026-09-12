@@ -1095,6 +1095,8 @@ public struct FeatureTerminalSnapshot: Sendable, Equatable, Codable {
 
 @MainActor
 public protocol FeatureUsageLimitsReading: AnyObject {
+    func usageLimitSources(environmentID: String) async throws -> [UsageLimitSourceSnapshot]
+    func consumeResetCredit(environmentID: String, sourceID: String, accountID: String, creditID: String) async throws -> ProviderConsumeResetCreditResult
     func consumeResetCredit(environmentID: String, instanceID: String) async throws -> ProviderConsumeResetCreditResult
     func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot]
 }
@@ -1105,6 +1107,10 @@ public protocol FeatureDocumentAttachmentResolving: AnyObject {
 }
 
 public extension FeatureUsageLimitsReading {
+    func usageLimitSources(environmentID: String) async throws -> [UsageLimitSourceSnapshot] { [] }
+    func consumeResetCredit(environmentID: String, sourceID: String, accountID: String, creditID: String) async throws -> ProviderConsumeResetCreditResult {
+        throw RPCError.protocolViolation("This connection does not support hub reset credits.")
+    }
     func consumeResetCredit(environmentID: String, instanceID: String) async throws -> ProviderConsumeResetCreditResult {
         throw RPCError.protocolViolation("This connection does not support reset credits.")
     }

@@ -1,7 +1,8 @@
 import type {
   ServerProvider,
   EnvironmentId,
-  ProviderInstanceId,
+  ProviderConsumeResetCreditInput,
+  UsageLimitSourceSnapshot,
   ServerProviderUsageLimits,
   ServerProviderUsageWindow,
 } from "@t3tools/contracts";
@@ -18,7 +19,7 @@ export interface LimitAccount {
   readonly environments: readonly string[];
   readonly limits: ServerProviderUsageLimits | undefined;
   readonly resetTarget?:
-    | { readonly environmentId: EnvironmentId; readonly instanceId: ProviderInstanceId }
+    | ({ readonly environmentId: EnvironmentId } & ProviderConsumeResetCreditInput)
     | undefined;
 }
 export function collectLimitAccounts(
@@ -26,6 +27,7 @@ export function collectLimitAccounts(
     id: string;
     label: string;
     providers: readonly LimitProvider[];
+    usageLimitSources?: readonly UsageLimitSourceSnapshot[];
   }[],
 ): readonly LimitAccount[] {
   const accounts = new Map<string, LimitAccount>();
@@ -65,6 +67,44 @@ export function collectLimitAccounts(
               ...(resetTarget ? { resetTarget } : {}),
             },
       );
+    }
+    for (const source of environment.usageLimitSources ?? []) {
+      for (const account of source.accounts) {
+        const email = account.email?.trim().toLowerCase();
+        const id = `${account.driver}:${email || `hub:${environment.id}:${source.id}:${account.id}`}`;
+        const held = accounts.get(id);
+        const newer =
+          !held?.limits ||
+          Date.parse(account.usageLimits.checkedAt) > Date.parse(held.limits.checkedAt);
+        const creditId = account.usageLimits.resetCredits?.nextCreditId;
+        const resetTarget = creditId
+          ? {
+              environmentId: environment.id as EnvironmentId,
+              sourceId: source.id,
+              accountId: account.id,
+              creditId,
+            }
+          : undefined;
+        const label = `${environment.label} · ${source.label}`;
+        accounts.set(
+          id,
+          held
+            ? {
+                ...held,
+                environments: [...new Set([...held.environments, label])],
+                limits: newer ? account.usageLimits : held.limits,
+                resetTarget: newer ? resetTarget : held.resetTarget,
+              }
+            : {
+                id,
+                driver: account.driver,
+                label: account.email || account.id,
+                environments: [label],
+                limits: account.usageLimits,
+                resetTarget,
+              },
+        );
+      }
     }
   }
   return [...accounts.values()];

@@ -151,6 +151,7 @@ export function applyServerSettingsPatch(
     backgroundActivityProfile,
     backgroundActivity,
     usagePriceOverrides: pricePatch,
+    usageLimitSources: usageSourcesPatch,
     projectScriptOverrides: scriptOverridesPatch,
     defaultProjectScripts: defaultScriptsPatch,
     projectAutoPullOverrides: autoPullPatch,
@@ -193,6 +194,11 @@ export function applyServerSettingsPatch(
           }
         : undefined;
   const next = deepMerge(current, patchForMerge);
+  const usageLimitSources = { ...current.usageLimitSources };
+  for (const [id, source] of Object.entries(usageSourcesPatch ?? {})) {
+    if (source === null) delete usageLimitSources[id as keyof typeof usageLimitSources];
+    else usageLimitSources[id as keyof typeof usageLimitSources] = source;
+  }
   const usagePriceOverrides = { ...current.usagePriceOverrides };
   for (const [model, price] of Object.entries(pricePatch ?? {})) {
     if (price === null) delete usagePriceOverrides[model];
@@ -211,6 +217,7 @@ export function applyServerSettingsPatch(
   const nextWithReplacementsBase = {
     ...next,
     usagePriceOverrides,
+    usageLimitSources,
     defaultProjectScripts: defaultScriptsPatch ?? current.defaultProjectScripts,
     projectScriptOverrides: { ...current.projectScriptOverrides, ...scriptOverridesPatch },
     projectAutoPullOverrides,

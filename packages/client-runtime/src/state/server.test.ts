@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  UsageLimitSourceId,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -546,4 +547,46 @@ describe("server state projection", () => {
       expect(yield* Queue.poll(savedConfigs)).toEqual(Option.none());
     }),
   );
+});
+
+it("keeps live quota hubs across reconnects, clears removals and drops them on downgrade", () => {
+  const config = {
+    ...CONFIG,
+    environment: {
+      ...CONFIG.environment,
+      capabilities: { ...CONFIG.environment.capabilities, usageLimitSources: true },
+    },
+  };
+  const initial = applyServerConfigProjection(Option.none(), snapshotEvent(config));
+  const sources = [
+    {
+      id: UsageLimitSourceId.make("hub"),
+      kind: "cliproxy" as const,
+      label: "Hub",
+      checkedAt: "2026-09-12T00:00:00Z",
+      accounts: [],
+    },
+  ];
+  const reported = applyServerConfigProjection(initial, {
+    version: 1,
+    type: "usageLimitSourcesUpdated",
+    payload: { sources },
+  });
+  expect(
+    Option.getOrThrow(applyServerConfigProjection(reported, snapshotEvent(config))).config
+      .usageLimitSources,
+  ).toEqual(sources);
+  expect(
+    Option.getOrThrow(
+      applyServerConfigProjection(reported, {
+        version: 1,
+        type: "usageLimitSourcesUpdated",
+        payload: { sources: [] },
+      }),
+    ).config.usageLimitSources,
+  ).toBeUndefined();
+  expect(
+    Option.getOrThrow(applyServerConfigProjection(reported, snapshotEvent(CONFIG))).config
+      .usageLimitSources,
+  ).toBeUndefined();
 });

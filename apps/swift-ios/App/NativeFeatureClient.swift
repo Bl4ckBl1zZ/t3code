@@ -553,6 +553,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await client.consumeResetCredit(instanceID: instanceID)
     }
 
+    func usageLimitSources(environmentID: String) async throws -> [UsageLimitSourceSnapshot] {
+        try await environmentClient(id: environmentID).usageLimitSources()
+    }
+
+    func consumeResetCredit(environmentID: String, sourceID: String, accountID: String, creditID: String) async throws -> ProviderConsumeResetCreditResult {
+        try await environmentClient(id: environmentID).consumeResetCredit(sourceID: sourceID, accountID: accountID, creditID: creditID)
+    }
+
     func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
         if refresh { return try await client.refreshProviderSnapshots() }
@@ -3319,7 +3327,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
                     case let .environmentThemesUpdated(themes):
                         self.environmentThemesByEnvironmentID[activeClient.environment.id] = themes
-                    case .unrelated:
+                    case .usageLimitSourcesUpdated, .unrelated:
                         continue
                     }
                     self.adoptDefaultThemeIfNeeded(environmentID: activeClient.environment.id)
@@ -6698,6 +6706,9 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         }
         let client = try await environmentClient(id: environmentID)
         let sourceConfig = try await client.serverConfig()
+        if patch.usageLimitSources != nil, sourceConfig.environment?.capabilities.usageLimitSources != true {
+            throw FeatureCapabilityUnavailable("Quota hubs")
+        }
         if patch.continueThreadsAfterServerUpdate != nil, sourceConfig.environment?.capabilities.threadRestartContinuation != true {
             throw FeatureCapabilityUnavailable("Restart recovery")
         }

@@ -7,7 +7,13 @@ struct FeatureLimitAccount: Identifiable, Equatable, Sendable {
     let plan: String?
     var environments: [String]
     var limits: ServerProviderUsageLimits?
-    struct ResetTarget: Equatable, Sendable { let environmentID: String; let instanceID: String }
+    struct ResetTarget: Equatable, Sendable {
+        let environmentID: String
+        var instanceID: String? = nil
+        var sourceID: String? = nil
+        var accountID: String? = nil
+        var creditID: String? = nil
+    }
     var resetTarget: ResetTarget? = nil
 }
 
@@ -15,6 +21,7 @@ struct FeatureEnvironmentLimits: Sendable {
     let id: String
     let label: String
     let providers: [ServerProviderSnapshot]
+    var sources: [UsageLimitSourceSnapshot] = []
 }
 
 enum FeatureUsageLimitsMerge {
@@ -47,6 +54,28 @@ enum FeatureUsageLimitsMerge {
                     accounts[key] = account
                 } else {
                     accounts[key] = .init(id: key, provider: FeatureAccountLabel.display(provider.displayName, fallback: provider.driver), driver: provider.driver, plan: provider.auth.label.flatMap { $0.contains("@") ? nil : $0 }, environments: [environment.label], limits: provider.usageLimits, resetTarget: resetTarget)
+                }
+            }
+            for source in environment.sources {
+                for member in source.accounts {
+                    let email = member.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    let identity = email.flatMap { $0.isEmpty ? nil : $0 } ?? "hub:\(environment.id):\(source.id):\(member.id)"
+                    let key = "\(member.driver):\(identity)"
+                    let label = "\(environment.label) · \(source.label)"
+                    let resetTarget = member.usageLimits.resetCredits?.nextCreditId.map {
+                        FeatureLimitAccount.ResetTarget(environmentID: environment.id, sourceID: source.id, accountID: member.id, creditID: $0)
+                    }
+                    if var account = accounts[key] {
+                        if !account.environments.contains(label) { account.environments.append(label) }
+                        if (date(member.usageLimits.checkedAt) ?? .distantPast) > (date(account.limits?.checkedAt) ?? .distantPast) {
+                            account.limits = member.usageLimits
+                            account.resetTarget = resetTarget
+                        }
+                        accounts[key] = account
+                    } else {
+                        accounts[key] = .init(id: key, provider: FeatureAccountLabel.display(member.id, fallback: member.driver), driver: member.driver, plan: member.plan,
+                            environments: [label], limits: member.usageLimits, resetTarget: resetTarget)
+                    }
                 }
             }
         }

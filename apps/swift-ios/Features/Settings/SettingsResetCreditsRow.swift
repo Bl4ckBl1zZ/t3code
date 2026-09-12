@@ -37,7 +37,12 @@ struct SettingsResetCreditsRow: View {
         busy = true
         defer { busy = false }
         do {
-            let result = try await reader.consumeResetCredit(environmentID: target.environmentID, instanceID: target.instanceID)
+            let result: ProviderConsumeResetCreditResult
+            if let instanceID = target.instanceID {
+                result = try await reader.consumeResetCredit(environmentID: target.environmentID, instanceID: instanceID)
+            } else if let sourceID = target.sourceID, let accountID = target.accountID, let creditID = target.creditID {
+                result = try await reader.consumeResetCredit(environmentID: target.environmentID, sourceID: sourceID, accountID: accountID, creditID: creditID)
+            } else { throw RPCError.protocolViolation("The reset credit target is unavailable. Refresh limits.") }
             status = result.message
             await didRedeem()
         } catch { status = error.localizedDescription }

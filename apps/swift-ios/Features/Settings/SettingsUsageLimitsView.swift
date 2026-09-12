@@ -35,6 +35,12 @@ struct SettingsUsageLimitsView: View {
                 .accessibilityIdentifier("limits-environment-selection")
                 Button("Refresh limits") { reloadID = UUID() }.disabled(isLoading || selectedIDs.isEmpty)
             }
+            NavigationLink {
+                SettingsQuotaHubsView(model: model).onDisappear { reloadID = UUID() }
+            } label: {
+                Label("Quota hubs", systemImage: "network").font(T3Typography.threadBody)
+                    .padding(.horizontal, SettingsMetrics.cardInset)
+            }
             if isLoading { ProgressView("Reading subscription limits…").frame(maxWidth: .infinity) }
             if selectedIDs.isEmpty { SettingsErrorBanner(message: "Select an environment to see its subscription limits.") }
             ForEach(notices, id: \.self) { SettingsErrorBanner(message: $0) }
@@ -153,7 +159,17 @@ struct SettingsUsageLimitsView: View {
             do {
                 let providers = try await reader.usageLimits(environmentID: environment.id, refresh: true)
                 try Task.checkCancellation()
-                environments.append(.init(id: environment.id, label: environment.name, providers: providers))
+                var sources: [UsageLimitSourceSnapshot] = []
+                do {
+                    sources = try await reader.usageLimitSources(environmentID: environment.id)
+                    for source in sources where source.error != nil {
+                        failures.append("\(environment.name) · \(source.label): \(source.error!)")
+                    }
+                } catch {
+                    if Task.isCancelled { return }
+                    failures.append("\(environment.name): Quota hubs could not be read; local accounts are shown.")
+                }
+                environments.append(.init(id: environment.id, label: environment.name, providers: providers, sources: sources))
             } catch {
                 if Task.isCancelled { return }
                 failures.append("\(environment.name) is unavailable; its accounts are not included.")

@@ -1,8 +1,8 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { presentThreadShell } from "./models";
-import { v2ThreadShell } from "./orchestrationV2TestFixtures";
+import { presentThreadShell } from "./models.ts";
+import { v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { describe, expect, it } from "vite-plus/test";
-import { applyDurableThreadOrder, planDurableThreadReorder } from "./threadSort";
+import { applyDurableThreadOrder, planDurableThreadReorder } from "./threadSort.ts";
 
 describe("durable sidebar order", () => {
   it("carries server active-order keys through the client projection, including reset", () => {
