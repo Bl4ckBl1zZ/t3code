@@ -400,6 +400,7 @@ public enum InteractionMode: String, Codable, CaseIterable, Sendable {
 
 
 public struct ChatAttachment: Codable, Identifiable, Equatable, Sendable {
+    public var source: SnapShotSource? = nil
     public let type: String
     public let id: String
     public let name: String

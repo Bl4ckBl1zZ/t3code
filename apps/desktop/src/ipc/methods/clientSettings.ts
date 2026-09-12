@@ -1,3 +1,4 @@
+import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
 import { ClientSettingsSchema } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -24,5 +25,6 @@ export const setClientSettings = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.clientSettings.set")(function* (settings) {
     const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
     yield* clientSettings.set(settings);
+    yield* (yield* DesktopSnapShot.DesktopSnapShot).configure(settings);
   }),
 });

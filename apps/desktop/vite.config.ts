@@ -40,6 +40,14 @@ export default defineConfig({
   pack: [
     {
       format: "cjs",
+      outDir: "dist-electron/snapShot",
+      dts: false,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/snapShot/SnapShotAccessibilityWorker.ts"],
+      deps: { alwaysBundle: (id) => id.startsWith("@t3tools/") },
+    },
+    {
+      format: "cjs",
       outDir: "dist-electron",
       dts: false,
       sourcemap: true,

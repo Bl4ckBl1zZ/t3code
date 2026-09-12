@@ -1,3 +1,4 @@
+import type { SnapShotSource } from "@t3tools/contracts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import { consumeInstanceResetCredit } from "./provider/consumeResetCredit.ts";
@@ -243,6 +244,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
     readonly sizeBytes: number;
     readonly dataUrl: string;
     readonly role?: "upload" | "preview-annotation" | undefined;
+    readonly source?: SnapShotSource | undefined;
   }>;
 }) {
   const config = yield* ServerConfig.ServerConfig;
@@ -284,6 +286,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
         ...(attachment.role === undefined ? {} : { role: attachment.role }),
+        ...(attachment.type === "image" && attachment.source ? { source: attachment.source } : {}),
       };
       const relativePath = attachmentRelativePath(persisted);
       if (relativePath === null) {

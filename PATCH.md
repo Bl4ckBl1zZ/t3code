@@ -1447,3 +1447,16 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   tokens expire with the preparation. Web/Expo's shared update command and Swift read the
   target environment's saved opt-in preference and capability. No V1 thread projection,
   provider reactor or new migration is carried.
+
+- SnapShots are manually ported from `299404a754` and follow-ups through `d29c56a5`
+  onto the fork's macOS ARM desktop and V2 attachment pipeline. The foreground window,
+  optional verified accessibility data and app identity enter a durable draft queue;
+  acknowledgement follows successful local persistence, never automatic sending.
+  Global modifier pairs/custom shortcuts, explicit permission setup with restart resume,
+  capture sounds and reduced-motion-aware feedback are carried. Source metadata survives
+  compression, stashes, HTTP/inline uploads, V2 start/steering and native Swift decoding.
+  Swift shows capture identity and inspectable text/tree data in its existing attachment
+  surface; its camera, Photos, Files and share intake remain the iOS capture entry points.
+  No cross-app capture API exists on iOS. Linux/Windows capture backends and desktop-config
+  installers are omitted from the macOS-only build, and upstream's V1 provider injection is
+  replaced by the V2 start/control boundaries. No migration or V1 runtime is imported.

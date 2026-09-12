@@ -1,3 +1,5 @@
+import type { DesktopSnapShotEvent } from "@t3tools/contracts";
+import { SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -99,6 +101,9 @@ export class DesktopWindow extends Context.Service<
     // produce a stranded window pointing at nothing.
     readonly handleBackendNotReady: Effect.Effect<void>;
     readonly flushMainWindowBounds: Effect.Effect<void>;
+    readonly dispatchSnapShotEvent: (
+      event: DesktopSnapShotEvent,
+    ) => Effect.Effect<void, DesktopWindowError>;
     readonly dispatchMenuAction: (action: string) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
@@ -909,6 +914,18 @@ export const make = Effect.gen(function* () {
     flushMainWindowBounds: Effect.suspend(() => flushMainWindowBounds).pipe(
       Effect.withSpan("desktop.window.flushMainWindowBounds"),
     ),
+    dispatchSnapShotEvent: Effect.fn("desktop.window.dispatchSnapShotEvent")(function* (event) {
+      const existing = yield* currentMainWindow;
+      if (Option.isNone(existing) && event.type !== "started") return;
+      const window = Option.isSome(existing) ? existing.value : yield* ensureMain;
+      if (window.isDestroyed()) return;
+      const send = () => {
+        if (!window.isDestroyed()) window.webContents.send(SNAP_SHOT_EVENT_CHANNEL, event);
+      };
+      if (window.webContents.isLoadingMainFrame()) window.webContents.once("did-finish-load", send);
+      else send();
+      if (event.type === "started") yield* electronWindow.reveal(window);
+    }),
     dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action) {
       yield* Effect.annotateCurrentSpan({ action });
       const existingWindow = yield* focusedMainWindow;

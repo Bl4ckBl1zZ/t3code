@@ -93,3 +93,19 @@ export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
 export const PREVIEW_IMPORT_SOURCES_CHANNEL = "preview:import-sources";
 export const PREVIEW_IMPORT_COOKIES_CHANNEL = "preview:import-cookies";
 export const PREVIEW_FULL_DISK_ACCESS_CHANNEL = "preview:full-disk-access";
+
+export const SNAP_SHOT_EVENT_CHANNEL = "desktop:snap-shot-event";
+export const SETUP_SNAP_SHOT_CHANNEL = "desktop:setup-snap-shot";
+export const PREVIEW_SNAP_SHOT_CONFIG_CHANNEL = "desktop:preview-snap-shot-config";
+export const APPLY_SNAP_SHOT_CONFIG_CHANNEL = "desktop:apply-snap-shot-config";
+export const REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL = "desktop:request-snap-shot-permissions";
+export const GET_SNAP_SHOT_STATE_CHANNEL = "desktop:get-snap-shot-state";
+export const CHECK_SNAP_SHOT_SHORTCUT_CHANNEL = "desktop:check-snap-shot-shortcut";
+export const SET_SNAP_SHOT_SHORTCUT_SUPPRESSED_CHANNEL =
+  "desktop:set-snap-shot-shortcut-suppressed";
+export const LIST_PENDING_SNAP_SHOTS_CHANNEL = "desktop:list-pending-snap-shots";
+export const READ_SNAP_SHOT_CHANNEL = "desktop:read-snap-shot";
+export const SET_SNAP_SHOT_ANIMATION_DESTINATION_CHANNEL =
+  "desktop:set-snap-shot-animation-destination";
+export const DISMISS_SNAP_SHOT_ANIMATION_CHANNEL = "desktop:dismiss-snap-shot-animation";
+export const ACKNOWLEDGE_SNAP_SHOT_CHANNEL = "desktop:acknowledge-snap-shot";

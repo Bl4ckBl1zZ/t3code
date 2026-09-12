@@ -549,5 +549,6 @@ export function useHandleNewThread() {
       : null,
     handleNewThread,
     routeThreadRef,
+    routeDraftId: routeTarget?.kind === "draft" ? routeTarget.draftId : null,
   };
 }

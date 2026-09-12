@@ -1,3 +1,9 @@
+import { SnapShotAttachmentFrame } from "./SnapShotAttachmentFrame";
+import type { PendingSnapShotAnimation } from "../../lib/snapShotAnimation";
+import {
+  SnapShotAttachmentDetails,
+  SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
+} from "./SnapShotAttachmentDetails";
 /**
  * The composer's pending-attachment row.
  *
@@ -5,7 +11,7 @@
  * generic glyph with a truncated name and no size. Now that any file type can be
  * attached, non-images get a proper chip, and the row is reachable by keyboard.
  */
-import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
+import { type SnapShotSource, PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { formatAttachmentSize, middleTruncateFileName } from "@t3tools/shared/composerAttachments";
 import { CircleAlertIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
@@ -34,12 +40,14 @@ export interface ComposerAttachmentChip {
   readonly name: string;
   readonly mimeType: string;
   readonly sizeBytes: number;
+  readonly source?: SnapShotSource;
   readonly previewUrl?: string | undefined;
   readonly upload?: AttachmentUploadState | undefined;
 }
 
 export function ComposerAttachmentChips(props: {
   readonly attachments: ReadonlyArray<ComposerAttachmentChip>;
+  readonly pendingCaptures?: ReadonlyArray<PendingSnapShotAnimation>;
   readonly nonPersistedIds: ReadonlySet<string>;
   readonly onRetry?: (id: string) => void;
   readonly onRemove: (id: string) => void;
@@ -76,7 +84,7 @@ export function ComposerAttachmentChips(props: {
     [props],
   );
 
-  if (count === 0) return null;
+  if (count === 0 && !props.pendingCaptures?.length) return null;
 
   return (
     <div className={cn("mb-3", props.className)}>
@@ -89,13 +97,21 @@ export function ComposerAttachmentChips(props: {
             attachment.sizeBytes,
           )}`;
           return (
-            <div
+            <SnapShotAttachmentFrame
+              animationId={
+                props.pendingCaptures?.find((capture) => capture.id === attachment.id)?.id
+              }
+              source={attachment.source}
               key={attachment.id}
               role="listitem"
               data-chat-composer-expanded-image={attachment.type === "image" ? "true" : undefined}
               className={cn(
                 "group/chip relative h-16 overflow-hidden rounded-lg border border-border/80 bg-background",
-                isMedia ? "w-16" : "min-w-[168px] max-w-[240px]",
+                attachment.source
+                  ? SNAP_SHOT_ATTACHMENT_FRAME_CLASS
+                  : isMedia
+                    ? "w-16"
+                    : "min-w-[168px] max-w-[240px]",
               )}
             >
               {isMedia && attachment.type === "image" ? (
@@ -175,6 +191,7 @@ export function ComposerAttachmentChips(props: {
                 </Tooltip>
               )}
 
+              {attachment.source && <SnapShotAttachmentDetails source={attachment.source} />}
               {attachment.upload?.status === "uploading" && (
                 <span
                   role="progressbar"
@@ -232,9 +249,22 @@ export function ComposerAttachmentChips(props: {
               >
                 <XIcon />
               </Button>
-            </div>
+            </SnapShotAttachmentFrame>
           );
         })}
+        {props.pendingCaptures
+          ?.filter(
+            (capture) => !props.attachments.some((attachment) => attachment.id === capture.id),
+          )
+          .map((capture) => (
+            <SnapShotAttachmentFrame
+              key={capture.id}
+              animationId={capture.id}
+              source={capture.source}
+              aria-hidden="true"
+              className={cn(SNAP_SHOT_ATTACHMENT_FRAME_CLASS, "invisible shrink-0 bg-background")}
+            />
+          ))}
 
         {shouldShowAttachmentSlotCounter(count) && (
           <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">

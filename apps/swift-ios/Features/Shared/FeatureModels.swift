@@ -464,6 +464,7 @@ public enum FeatureMessageState: String, Sendable, Codable {
 }
 
 public struct FeatureMessageAttachment: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public var source: SnapShotSource?
     public let id: String
     public var name: String
     public var mimeType: String
@@ -479,7 +480,8 @@ public struct FeatureMessageAttachment: Identifiable, Sendable, Equatable, Hasha
         mimeType: String,
         sizeBytes: Int,
         url: URL? = nil,
-        previewData: Data? = nil
+        previewData: Data? = nil,
+        source: SnapShotSource? = nil
     ) {
         self.id = id
         self.name = name
@@ -487,6 +489,7 @@ public struct FeatureMessageAttachment: Identifiable, Sendable, Equatable, Hasha
         self.sizeBytes = sizeBytes
         self.url = url
         self.previewData = previewData
+        self.source = source
     }
 }
 

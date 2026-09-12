@@ -1,3 +1,4 @@
+import * as SnapShotIpc from "./methods/snapShot.ts";
 import * as Effect from "effect/Effect";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
@@ -63,6 +64,16 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
 
+  yield* ipc.handle(SnapShotIpc.getSnapShotState);
+  yield* ipc.handle(SnapShotIpc.requestSnapShotPermissions);
+  yield* ipc.handle(SnapShotIpc.setupSnapShot);
+  yield* ipc.handle(SnapShotIpc.checkSnapShotShortcut);
+  yield* ipc.handle(SnapShotIpc.setSnapShotShortcutSuppressed);
+  yield* ipc.handle(SnapShotIpc.listPendingSnapShots);
+  yield* ipc.handle(SnapShotIpc.readSnapShot);
+  yield* ipc.handle(SnapShotIpc.setSnapShotAnimationDestination);
+  yield* ipc.handle(SnapShotIpc.dismissSnapShotAnimation);
+  yield* ipc.handle(SnapShotIpc.acknowledgeSnapShot);
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(getConnectionCatalog);

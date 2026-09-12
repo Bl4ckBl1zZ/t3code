@@ -1,3 +1,4 @@
+import { SnapShotSource } from "@t3tools/contracts";
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -70,6 +71,7 @@ export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
 
+const isSnapShotSource = Schema.is(SnapShotSource);
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 
 // Keep the immutable state until flush. Migration writebacks already have the persisted shape.
@@ -113,6 +115,7 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 }
 
 export const PersistedComposerImageAttachment = Schema.Struct({
+  source: Schema.optional(SnapShotSource),
   type: Schema.optionalKey(Schema.Literals(["image", "file", "pdf", "video"])),
   id: Schema.String,
   name: Schema.String,
@@ -1201,6 +1204,7 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     mimeType,
     sizeBytes,
     dataUrl,
+    ...(type === "image" && isSnapShotSource(candidate.source) ? { source: candidate.source } : {}),
   };
 }
 
@@ -2276,6 +2280,7 @@ export function hydrateImagesFromPersisted(
         name: attachment.name,
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
+        ...(attachment.source ? { source: attachment.source } : {}),
         previewUrl: attachment.dataUrl,
         file,
       } satisfies ComposerAttachment,

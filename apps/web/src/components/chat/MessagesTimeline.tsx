@@ -1,3 +1,4 @@
+import { SnapShotAttachmentDetails } from "./SnapShotAttachmentDetails";
 import { ActivityFocusText } from "./ActivityFocusText";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useAssetUrlState } from "../../assets/assetUrls";
@@ -1355,7 +1356,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               (attachment: NonNullable<TimelineMessage["attachments"]>[number]) => (
                 <div
                   key={attachment.id}
-                  className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
+                  className="relative overflow-hidden rounded-lg border border-border/80 bg-background/70"
                 >
                   {attachment.type === "image" && attachment.previewUrl ? (
                     <button
@@ -1391,6 +1392,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     />
                   ) : (
                     <MessageFileAttachmentTile attachment={attachment} threadRef={ctx.threadRef} />
+                  )}
+                  {attachment.type === "image" && "source" in attachment && attachment.source && (
+                    <SnapShotAttachmentDetails source={attachment.source} />
                   )}
                   <MessageAttachmentPlacement
                     attachment={attachment}

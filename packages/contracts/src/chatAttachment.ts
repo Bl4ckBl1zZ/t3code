@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { SnapShotSource } from "./snapShot.ts";
 
 import { MessageId, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
@@ -89,6 +90,7 @@ export type ChatAttachmentId = typeof ChatAttachmentId.Type;
 
 export const ChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
+  source: Schema.optional(SnapShotSource),
   id: ChatAttachmentId,
   name: ChatAttachmentName,
   mimeType: ChatAttachmentMimeType.check(Schema.isPattern(/^image\//i)),
@@ -99,6 +101,7 @@ export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
 export const UploadChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
+  source: Schema.optional(SnapShotSource),
   name: ChatAttachmentName,
   mimeType: ChatAttachmentMimeType.check(Schema.isPattern(/^image\//i)),
   sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
