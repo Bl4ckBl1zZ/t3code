@@ -1,3 +1,4 @@
+import type { RightPanelSurface } from "~/rightPanelStore";
 import {
   type EnvironmentId,
   isProviderDriverKind,
@@ -802,4 +803,17 @@ export function recallCheckoutIsRepo(
   cwd: string | null,
 ): boolean | undefined {
   return cwd === null ? undefined : sessionCheckoutIsRepo.get(JSON.stringify([environmentId, cwd]));
+}
+
+export function shouldRenderPreviewMiniPlayer(
+  miniPlayerTabId: string | null,
+  renderedRightPanelSurface: RightPanelSurface | null,
+): boolean {
+  return (
+    miniPlayerTabId !== null &&
+    !(
+      renderedRightPanelSurface?.kind === "preview" &&
+      renderedRightPanelSurface.resourceId === miniPlayerTabId
+    )
+  );
 }

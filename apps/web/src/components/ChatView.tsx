@@ -1,3 +1,4 @@
+import { shouldRenderPreviewMiniPlayer } from "./ChatView.logic";
 import { useLoadBalancedEnvironment } from "~/hooks/useLoadBalancedEnvironment";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
@@ -1993,6 +1994,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const rightPanelPresent = rightPanelPresence.present;
   const renderedRightPanelSurface = rightPanelPresence.value?.activeSurface ?? null;
+  const previewMiniPlayerVisible = shouldRenderPreviewMiniPlayer(
+    activePreviewMiniPlayer?.tabId ?? null,
+    renderedRightPanelSurface,
+  );
   const renderedRightPanelSurfaces = rightPanelPresence.value?.surfaces ?? [];
   const activeFileSurface =
     renderedRightPanelSurface?.kind === "file" ? renderedRightPanelSurface : null;
@@ -2025,11 +2030,7 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     if (!activeThreadRef || !activePreviewMiniPlayer) return;
     const miniTabStillExists = Boolean(activePreviewState.sessions[activePreviewMiniPlayer.tabId]);
-    const sameTabOpenInPanel =
-      previewPanelOpen &&
-      activeRightPanelSurface?.kind === "preview" &&
-      activeRightPanelSurface.resourceId === activePreviewMiniPlayer.tabId;
-    if (!miniTabStillExists || sameTabOpenInPanel) {
+    if (!miniTabStillExists) {
       usePreviewMiniPlayerStore.getState().close(activeThreadRef);
     }
   }, [
@@ -8609,7 +8610,7 @@ function ChatViewContent(props: ChatViewProps) {
               </div>
             </div>
 
-            {activeThreadRef && activePreviewMiniPlayer ? (
+            {activeThreadRef && activePreviewMiniPlayer && previewMiniPlayerVisible ? (
               <ThreadPreviewMiniPlayer
                 key={`${activeThreadKey}:${activePreviewMiniPlayer.tabId}`}
                 threadRef={activeThreadRef}
@@ -8739,6 +8740,7 @@ function ChatViewContent(props: ChatViewProps) {
       ) : null}
       {shouldUsePlanSidebarSheet && rightPanelPresent && activeThreadRef ? (
         <RightPanelSheet
+          underFloatingPreview={previewMiniPlayerVisible}
           open={rightPanelOpen}
           animationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
           onClose={planSidebarOpen ? closePlanSidebar : closePreviewPanel}
