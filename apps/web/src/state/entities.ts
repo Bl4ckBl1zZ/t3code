@@ -158,6 +158,22 @@ export function readProject(ref: ScopedProjectRef): EnvironmentProject | null {
   return appAtomRegistry.get(environmentProjects.projectAtom(ref));
 }
 
+/** Waits for project creation to reach the V2 shell before opening its draft. */
+export async function waitForProject(
+  ref: ScopedProjectRef,
+  timeoutMs = 10_000,
+): Promise<EnvironmentProject> {
+  await waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: environmentProjects.projectAtom(ref),
+    predicate: (project) => project !== null,
+    timeoutMs,
+  });
+  const project = readProject(ref);
+  if (project === null) throw new Error("The project did not appear in the desktop app.");
+  return project;
+}
+
 export function readThreadShell(ref: ScopedThreadRef): EnvironmentThreadShell | null {
   return appAtomRegistry.get(environmentThreadShells.threadShellAtom(ref));
 }

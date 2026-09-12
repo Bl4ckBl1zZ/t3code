@@ -1368,3 +1368,14 @@ when their full browser panel closes. Agent activity honors explicit background-
 the desktop-local automatic floating preference. Dialogs remain above floating browser content.
 No V1 thread runtime or migration is introduced. Swift uses the existing authenticated artifact
 renderer; Electron capture/profile controls remain desktop-specific.
+
+### Local desktop CLI project opening
+
+Upstream `04efa7907e` is manually ported through the desktop's local socket/named pipe,
+renderer readiness broker, retained project aggregate and V2 shell/draft flow. `t3 app [path]`
+uses the running desktop on the same machine, waits for project creation to reach the live
+store, and reads current projects when opening the draft. Custom homes have isolated hashed
+socket addresses; default home can fall back to the development desktop only before a
+connection succeeds. SSH and Windows/WSL path mismatches fail explicitly. Requests are bounded,
+serialized, and canceled on disconnect or renderer loss. Existing desktop focus behavior is
+retained. No server startup, browser launch, V1 thread command or Swift wire change is added.

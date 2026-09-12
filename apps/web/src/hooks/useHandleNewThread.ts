@@ -29,7 +29,7 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
-import { readThreadShell, useProjects, useThreadShell } from "../state/entities";
+import { readProjects, readThreadShell, useProjects, useThreadShell } from "../state/entities";
 import {
   hasExplicitComposerModelSelection,
   resolveNewThreadModelSelectionOverride,
@@ -61,7 +61,6 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 }
 
 export function useNewThreadHandler() {
-  const projects = useProjects();
   const environmentServerConfigs = useAtomValue(environmentServerConfigsAtom);
   const primaryServerSettings = useAtomValue(primaryServerSettingsAtom);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -95,6 +94,7 @@ export function useNewThreadHandler() {
       // prepared checkout, a task to write — addresses that one rather than looking the project
       // up again and finding whichever draft it happens to hold.
     ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
+      const projects = readProjects();
       const {
         getComposerDraft,
         getDraftSessionByLogicalProjectKey,
@@ -481,7 +481,6 @@ export function useNewThreadHandler() {
       getCurrentRouteTarget,
       primaryServerSettings,
       projectGroupingSettings,
-      projects,
       router,
     ],
   );
