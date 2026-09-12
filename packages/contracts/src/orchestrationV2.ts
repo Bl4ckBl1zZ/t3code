@@ -899,11 +899,14 @@ export const OrchestrationV2PlanStep = Schema.Struct({
 export type OrchestrationV2PlanStep = typeof OrchestrationV2PlanStep.Type;
 
 export const OrchestrationV2UserInputQuestion = Schema.Struct({
+  multiSelect: Schema.optional(Schema.Boolean),
+  allowCustomAnswer: Schema.optional(Schema.Boolean),
   id: TrimmedNonEmptyString,
   header: TrimmedNonEmptyString,
   question: TrimmedNonEmptyString,
   options: Schema.Array(
     Schema.Struct({
+      value: Schema.optional(TrimmedNonEmptyString),
       label: TrimmedNonEmptyString,
       description: TrimmedNonEmptyString,
     }),

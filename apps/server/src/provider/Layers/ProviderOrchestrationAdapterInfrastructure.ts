@@ -1,3 +1,4 @@
+import { AntigravityInstallation } from "../AntigravityInstallation.ts";
 import * as Layer from "effect/Layer";
 
 import {
@@ -16,6 +17,7 @@ import { IdAllocatorV2, layer as idAllocatorLayer } from "../../orchestration-v2
 import { layer as providerContinuationRequestsLayer } from "../../orchestration-v2/ProviderContinuationRequests.ts";
 
 export type ProviderOrchestrationAdapterInfrastructure =
+  | AntigravityInstallation
   | ClaudeAgentSdkQueryRunner
   | CodexAppServerClientFactory
   | CursorAgentSdkRunner
@@ -28,6 +30,7 @@ export type ProviderOrchestrationAdapterInfrastructure =
  * Effect layer memoization yields one shared queue.
  */
 export const ProviderOrchestrationAdapterInfrastructureLive = Layer.mergeAll(
+  AntigravityInstallation.layer,
   claudeAgentSdkQueryRunnerLiveLayer,
   codexAppServerClientFactoryFromSettingsLayer,
   cursorAgentSdkRunnerLiveLayer,

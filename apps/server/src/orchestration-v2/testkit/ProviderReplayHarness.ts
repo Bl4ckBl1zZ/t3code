@@ -1,3 +1,4 @@
+import { ProviderAuthService } from "../../provider/Services/ProviderAuthService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ProviderDriverKind, ProviderReplayTranscript } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -320,6 +321,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ),
   );
   const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
+    Layer.provide(
+      Layer.mock(ProviderAuthService)({ tryHandlePromptCommand: () => Effect.succeed(false) }),
+    ),
     Layer.provide(
       Layer.mergeAll(
         attachmentMaterializationProvided,

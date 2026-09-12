@@ -87,11 +87,14 @@ public struct OrchestrationV2CheckpointFileSummary: Codable, Equatable, Sendable
 }
 
 public struct OrchestrationV2UserInputOption: Codable, Equatable, Sendable {
+    public var value: String? = nil
     public let label: String
     public let description: String
 }
 
 public struct OrchestrationV2UserInputQuestion: Codable, Equatable, Sendable {
+    public var allowCustomAnswer: Bool? = nil
+    public var multiSelect: Bool? = nil
     public let id: String
     public let header: String
     public let question: String
@@ -1547,6 +1550,7 @@ public extension OrchestrationV2ThreadProjection {
 }
 
 public struct ProviderApprovalOption: Codable, Equatable, Hashable, Sendable {
+    public var warning: String? = nil
     public let decision: String
     public let label: String
 }

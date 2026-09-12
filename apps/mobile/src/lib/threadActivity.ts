@@ -219,16 +219,15 @@ function normalizeSelectedOptionLabels(
     return [];
   }
 
-  return Array.from(
-    new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
-  );
+  return Array.from(new Set(value.filter((entry) => entry.length > 0)));
 }
 
 function resolvePendingUserInputAnswer(
   question: ThreadUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
 ): string | ReadonlyArray<string> | null {
-  const customAnswer = normalizeDraftAnswer(draft?.customAnswer);
+  const customAnswer =
+    question.allowCustomAnswer === false ? null : normalizeDraftAnswer(draft?.customAnswer);
   if (customAnswer) {
     return customAnswer;
   }
@@ -1070,12 +1069,16 @@ export function setPendingUserInputCustomAnswer(
 export function isPendingUserInputOptionSelected(
   draft: PendingUserInputDraftAnswer | undefined,
   optionLabel: string,
+  exactValue = false,
 ): boolean {
   if (normalizeDraftAnswer(draft?.customAnswer)) {
     return false;
   }
 
-  return normalizeSelectedOptionLabels(draft?.selectedOptionLabels).includes(optionLabel.trim());
+  const selected = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+  return exactValue
+    ? selected.includes(optionLabel)
+    : selected.some((entry) => entry.trim() === optionLabel.trim());
 }
 
 export function togglePendingUserInputOptionSelection(
@@ -1083,7 +1086,9 @@ export function togglePendingUserInputOptionSelection(
   draft: PendingUserInputDraftAnswer | undefined,
   optionLabel: string,
 ): PendingUserInputDraftAnswer {
-  const normalizedOptionLabel = optionLabel.trim();
+  const normalizedOptionLabel = question.options.some((option) => option.value === optionLabel)
+    ? optionLabel
+    : optionLabel.trim();
 
   if (question.multiSelect) {
     const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);

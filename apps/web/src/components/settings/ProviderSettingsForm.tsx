@@ -1,4 +1,5 @@
-"use client";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+("use client");
 
 import { useMemo, type ReactNode } from "react";
 
@@ -30,6 +31,48 @@ interface ProviderSettingsFormProps {
   readonly idPrefix: string;
   readonly variant: "card" | "dialog";
   readonly onChange: (nextConfig: Record<string, unknown> | undefined) => void;
+}
+
+/** Stores the default choice as an omitted key so unchanged configs stay small. */
+function ProviderSettingsSelect({
+  field,
+  value,
+  inputId,
+  size,
+  className,
+  onChange,
+}: {
+  readonly field: ProviderSettingsFieldModel;
+  readonly value: unknown;
+  readonly inputId: string;
+  readonly size: "sm" | "xs";
+  readonly className?: string | undefined;
+  readonly onChange: ProviderSettingsFormProps["onChange"];
+}) {
+  const options = field.options ?? [];
+  const fallback = options[0]?.value ?? "";
+  const current = readProviderConfigString(value, field.key) || fallback;
+  const label = options.find((option) => option.value === current)?.label ?? current;
+  return (
+    <Select
+      value={current}
+      onValueChange={(next) => {
+        if (typeof next !== "string") return;
+        onChange(nextProviderConfigWithFieldValue(value, field, next === fallback ? "" : next));
+      }}
+    >
+      <SelectTrigger id={inputId} size={size} className={className} aria-label={field.label}>
+        <SelectValue>{label}</SelectValue>
+      </SelectTrigger>
+      <SelectPopup align="start" alignItemWithTrigger={false}>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
+  );
 }
 
 function FieldFrame(props: {
@@ -83,6 +126,25 @@ function ProviderSettingsFieldRow({
             aria-label={field.label}
           />
         </div>
+      </FieldFrame>
+    );
+  }
+
+  if (field.control === "select") {
+    return (
+      <FieldFrame variant={variant}>
+        <label htmlFor={inputId} className={cn(variant === "card" && "block")}>
+          {label}
+          <ProviderSettingsSelect
+            field={field}
+            value={value}
+            inputId={inputId}
+            size="sm"
+            className={cn("w-full", variant === "card" && "mt-1.5")}
+            onChange={onChange}
+          />
+          {description}
+        </label>
       </FieldFrame>
     );
   }

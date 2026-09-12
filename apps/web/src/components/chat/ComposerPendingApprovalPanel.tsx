@@ -41,6 +41,13 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           restart the run to continue.
         </p>
       ) : null}
+      {approval.options
+        ?.filter((option) => option.warning)
+        .map((option) => (
+          <p key={option.decision} className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+            {option.label}: {option.warning}
+          </p>
+        ))}
       {approval.detail ? (
         <div className="mt-1.5 min-w-0 max-w-full">
           <pre

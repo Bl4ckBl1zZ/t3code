@@ -1,3 +1,4 @@
+import { ProviderAuthService } from "../provider/Services/ProviderAuthService.ts";
 import { assert, it } from "@effect/vitest";
 import {
   type ChatAttachment,
@@ -39,11 +40,17 @@ import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import {
-  layer as providerTurnStartLayer,
+  layer as providerTurnStartBaseLayer,
   ProviderTurnStartServiceV2,
 } from "./ProviderTurnStartService.ts";
 import { RunExecutionServiceV2 } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+
+const providerTurnStartLayer = providerTurnStartBaseLayer.pipe(
+  Layer.provide(
+    Layer.mock(ProviderAuthService)({ tryHandlePromptCommand: () => Effect.succeed(false) }),
+  ),
+);
 
 const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -178,6 +185,7 @@ function makeProjection(now: DateTime.Utc): OrchestrationV2ThreadProjection {
 function makeTestLayer(input: {
   readonly projection: OrchestrationV2ThreadProjection;
   readonly committed: boolean;
+  readonly handleLocalCommand?: () => Effect.Effect<boolean>;
   readonly writes: Ref.Ref<ReadonlyArray<ReadonlyArray<OrchestrationV2DomainEvent>>>;
 }) {
   const projectionLayer = Layer.succeed(
@@ -228,6 +236,7 @@ function makeTestLayer(input: {
       ProviderSessionManagerV2,
       ProviderSessionManagerV2.of({
         shutdown: Effect.void,
+        closeInstance: () => Effect.void,
         hasPendingBackgroundWork: Effect.succeed(false),
         open: () => Effect.die("unused open"),
         get: () => Effect.die("unused get"),
@@ -249,7 +258,12 @@ function makeTestLayer(input: {
       }),
     ),
   );
-  return providerTurnStartLayer.pipe(
+  return providerTurnStartBaseLayer.pipe(
+    Layer.provide(
+      Layer.mock(ProviderAuthService)({
+        tryHandlePromptCommand: input.handleLocalCommand ?? (() => Effect.succeed(false)),
+      }),
+    ),
     Layer.provide(
       Layer.mergeAll(
         projectionLayer,
@@ -521,6 +535,7 @@ function makeStartTestLayer(input: {
           ProviderSessionManagerV2,
           ProviderSessionManagerV2.of({
             shutdown: Effect.void,
+            closeInstance: () => Effect.void,
             hasPendingBackgroundWork: Effect.succeed(false),
             open: () => Effect.succeed(sessionRuntime),
             get: () => Effect.die("unused get"),
@@ -734,5 +749,38 @@ it.effect("restart continuation never falls back to a fresh provider conversatio
     assert.equal(failure._tag, "ProviderTurnStartError");
     assert.equal(yield* Ref.get(ensureCalls), 0);
     assert.deepEqual(yield* Ref.get(startInputs), []);
+  }),
+);
+
+it.effect("settles a local sign-out without opening a provider turn or materializing files", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const projection = makeStartProjection({ now, text: "/logout", attachments: [] });
+    const writes = yield* Ref.make<ReadonlyArray<ReadonlyArray<OrchestrationV2DomainEvent>>>([]);
+    let signedOut = false;
+    const testLayer = makeTestLayer({
+      projection,
+      committed: true,
+      writes,
+      handleLocalCommand: () =>
+        Effect.sync(() => {
+          signedOut = true;
+          return true;
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const service = yield* ProviderTurnStartServiceV2;
+      yield* service.start({ threadId: startThreadId, runId: startRunId });
+    }).pipe(Effect.provide(testLayer));
+    assert.isTrue(signedOut);
+    const events = (yield* Ref.get(writes)).flat();
+    assert.isTrue(
+      events.some((event) => event.type === "run.updated" && event.payload.status === "completed"),
+    );
+    assert.isTrue(
+      events.some(
+        (event) => event.type === "message.updated" && event.payload.text.includes("Signed out"),
+      ),
+    );
   }),
 );

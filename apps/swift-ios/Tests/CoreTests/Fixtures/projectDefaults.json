@@ -104,6 +104,15 @@
         "proactiveEnabled": true,
         "voiceEnabled": false
       },
+      "antigravity": {
+        "enabled": false,
+        "authMethod": "oauth-personal",
+        "apiKey": "",
+        "gcpProject": "",
+        "gcpLocation": "",
+        "binaryPath": "",
+        "customModels": []
+      },
       "opencode": {
         "enabled": false,
         "binaryPath": "opencode",

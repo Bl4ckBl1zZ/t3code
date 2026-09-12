@@ -34,7 +34,16 @@ struct SettingsProviderAccountView: View {
                     }
                     if let definition {
                         identitySection(draft, definition: definition).disabled(updatingProvider || !supported)
-                        if !draft.isNew { providerUpdateSection }
+                        if !draft.isNew {
+                            if draft.driver == "antigravity" {
+                                SettingsSection(title: "Antigravity", footer: "Save account changes before installing or signing in. Setup runs on the selected server.") {
+                                    NavigationLink {
+                                        SettingsAntigravitySetupView(manager: manager, environmentID: environmentID, instanceID: draft.instanceID, authMethod: draft.config["authMethod"]?.stringValue ?? "oauth-personal", binaryPath: draft.config["binaryPath"]?.stringValue ?? "")
+                                    } label: { Label("Install and sign in", systemImage: "person.crop.circle.badge.checkmark").frame(minHeight: T3Metrics.minimumTapTarget) }
+                                    .disabled(!supported || draft.envelope != draft.original).padding(SettingsMetrics.rowPadding)
+                                }
+                            } else { providerUpdateSection }
+                        }
                         configurationSection(draft, definition: definition).disabled(updatingProvider || !supported)
                         environmentSection(draft, definition: definition).disabled(updatingProvider || !supported)
                         if draft.canRemove {
@@ -183,6 +192,10 @@ struct SettingsProviderAccountView: View {
                             if field.control == "switch" {
                                 Toggle(field.label, isOn: Binding(get: { value.config[field.key] == .bool(true) || (value.config[field.key] == nil && field.defaultBooleanValue == true) }, set: { draft?.setField(field, value: .bool($0)) }))
                                     .frame(minHeight: T3Metrics.minimumTapTarget)
+                            } else if field.control == "select", let choices = field.options {
+                                Picker(field.label, selection: Binding(get: { draft?.config[field.key]?.stringValue ?? choices.first?.value ?? "" }, set: { draft?.setField(field, value: .string($0)) })) {
+                                    ForEach(choices, id: \.value) { choice in Text(choice.label).tag(choice.value) }
+                                }.frame(minHeight: T3Metrics.minimumTapTarget)
                             } else {
                                 Text(field.label).font(T3Typography.supportingStrong)
                                 let binding = Binding(get: { draft?.config[field.key]?.stringValue ?? "" }, set: { draft?.setField(field, value: .string($0)) })

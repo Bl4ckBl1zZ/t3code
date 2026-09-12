@@ -77,6 +77,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
+import { AntigravityInstallation } from "./provider/AntigravityInstallation.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
@@ -501,6 +502,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydrationWithHermesLive),
+  Layer.provideMerge(AntigravityInstallation.layer),
 );
 
 const HermesCronWithServerSettingsLayerLive = HermesCron.layer.pipe(

@@ -155,7 +155,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       const option = activeQuestion.options[optionIndex];
       if (!option) return;
       event.preventDefault();
-      handleOptionSelection(activeQuestion.id, option.label);
+      handleOptionSelection(activeQuestion.id, option.value ?? option.label);
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -235,10 +235,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             {activeQuestion.options.map((option, index) => {
               const isOptimisticallySelected =
                 optimisticSingleSelect?.questionId === activeQuestion.id &&
-                optimisticSingleSelect.optionLabel === option.label;
+                optimisticSingleSelect.optionLabel === (option.value ?? option.label);
               const isSelected =
                 isOptimisticallySelected ||
-                (!customAnswerActive && progress.selectedOptionLabels.includes(option.label));
+                (!customAnswerActive &&
+                  progress.selectedOptionLabels.includes(option.value ?? option.label));
               const shortcutKey = index < 9 ? index + 1 : null;
               const className = cn(
                 "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-primary/25",
@@ -272,13 +273,13 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               );
               return (
                 <button
-                  key={`${activeQuestion.id}:${option.label}`}
+                  key={`${activeQuestion.id}:${option.value ?? option.label}`}
                   type="button"
                   disabled={responseDisabled}
                   aria-disabled={responseDisabled}
                   onClick={() => {
                     if (responseDisabled) return;
-                    handleOptionSelection(activeQuestion.id, option.label);
+                    handleOptionSelection(activeQuestion.id, option.value ?? option.label);
                   }}
                   className={className}
                 >

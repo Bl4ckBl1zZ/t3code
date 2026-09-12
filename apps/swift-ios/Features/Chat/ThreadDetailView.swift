@@ -132,6 +132,11 @@ public struct ThreadDetailView: View {
                 .accessibilityIdentifier("thread-details-button")
             }
         }
+        .task(id: "\(currentThread.projectID):\(currentSelection?.providerID ?? ""):\(threadWorkspaceRoot ?? "")") {
+            guard let instanceID = currentSelection?.providerID,
+                  threadProviders.first(where: { $0.id == instanceID })?.driver == "antigravity" else { return }
+            try? await model.client.refreshProviderWorkspace(projectID: currentThread.projectID, instanceID: instanceID, cwd: threadWorkspaceRoot)
+        }
         .task(id: draftKey) {
             for await key in await draftStore.discardedDrafts() where key == draftKey {
                 draftSaveTask?.cancel()
@@ -766,7 +771,7 @@ public struct ThreadDetailView: View {
 
     private var composerPowerFeatures: FeatureComposerPowerFeatures {
         let selectedProviderID = currentSelection?.providerID
-        let provider = threadProviders.first { $0.id == selectedProviderID }
+        let provider = threadProviders.first { $0.id == selectedProviderID }?.inWorkspace(threadWorkspaceRoot)
         return FeatureComposerPowerFeatures(
             slashCommands: provider?.slashCommands ?? [],
             skills: provider?.skills ?? [],

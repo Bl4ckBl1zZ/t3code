@@ -120,6 +120,14 @@ export type ServerProviderSkill = typeof ServerProviderSkill.Type;
  * `installed: false` and `enabled: false`; the runtime refuses turn
  * starts against them with a structured error.
  */
+export const ServerProviderWorkspaceSnapshot = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  checkedAt: IsoDateTime,
+  slashCommands: Schema.Array(ServerProviderSlashCommand),
+  skills: Schema.Array(ServerProviderSkill),
+});
+export type ServerProviderWorkspaceSnapshot = typeof ServerProviderWorkspaceSnapshot.Type;
+
 export const ServerProviderAvailability = Schema.Literals(["available", "unavailable"]);
 export type ServerProviderAvailability = typeof ServerProviderAvailability.Type;
 
@@ -181,6 +189,11 @@ export const ServerProvider = Schema.Struct({
   /** Reserves context-meter space while a started thread hydrates. */
   reportsContextWindow: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
+  supportsConversationRollback: Schema.optional(Schema.Boolean),
+  supportsTextGeneration: Schema.optional(Schema.Boolean),
+  setup: Schema.optional(
+    Schema.Struct({ canAuthenticate: Schema.Boolean, canInstall: Schema.Boolean }),
+  ),
   enabled: Schema.Boolean,
   installed: Schema.Boolean,
   version: Schema.NullOr(TrimmedNonEmptyString),
@@ -197,6 +210,7 @@ export const ServerProvider = Schema.Struct({
   // Human-readable reason populated when `availability === "unavailable"`.
   // Surfaces in the UI alongside the missing-driver affordance.
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
+  workspaceSnapshots: Schema.optionalKey(Schema.Array(ServerProviderWorkspaceSnapshot)),
   models: Schema.Array(ServerProviderModel),
   slashCommands: Schema.Array(ServerProviderSlashCommand).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),

@@ -19,6 +19,7 @@ import {
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
   type ProviderApprovalDecision,
+  type ProviderApprovalOption,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRequestKind,
@@ -115,6 +116,7 @@ export type AcpAdapterV2NativeLogging = Pick<
 >;
 
 export interface AcpAdapterV2UserInputRequest {
+  readonly validateAnswers?: (answers: ProviderUserInputAnswers) => boolean;
   readonly nativeItemId: string;
   readonly nativeMethod?: string;
   readonly nativeRequestId: string;
@@ -192,6 +194,31 @@ export function acpRootTurnShouldRearmRecoveryTimers(context: {
 }
 
 export interface AcpAdapterV2Flavor {
+  readonly preferResumeSession?: boolean;
+  readonly configureSession?: (
+    runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+    selection: ModelSelection,
+    policy: ProviderAdapterV2RuntimePolicy,
+  ) => Effect.Effect<void, EffectAcpErrors.AcpError>;
+  readonly buildPrompt?: (
+    text: string,
+    attachments: ReadonlyArray<ChatAttachment>,
+  ) => Effect.Effect<Array<EffectAcpSchema.ContentBlock>, EffectAcpErrors.AcpError>;
+  readonly permissionQuestion?: (
+    request: EffectAcpSchema.RequestPermissionRequest,
+  ) => OrchestrationV2UserInputQuestion | undefined;
+  readonly isPermissionQuestion?: (request: EffectAcpSchema.RequestPermissionRequest) => boolean;
+  readonly permissionQuestionResponse?: (
+    request: EffectAcpSchema.RequestPermissionRequest,
+    answers: ProviderUserInputAnswers,
+  ) => EffectAcpSchema.RequestPermissionResponse | undefined;
+  readonly approvalOptions?: (
+    request: EffectAcpSchema.RequestPermissionRequest,
+  ) => ReadonlyArray<ProviderApprovalOption>;
+  readonly selectPermissionOption?: (
+    request: EffectAcpSchema.RequestPermissionRequest,
+    decision: ProviderApprovalDecision,
+  ) => string | undefined;
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
   readonly makeRuntime: (
@@ -261,6 +288,8 @@ export interface AcpAdapterV2Flavor {
    * can project (Grok monitors finish after the root prompt settles).
    */
   readonly deferFinalizeForBackgroundWork?: boolean;
+  /** Retain the originating V2 tool row for late native command updates. */
+  readonly preserveBackgroundToolUpdates?: boolean;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
   /**
    * When true, schedule speculative local settlement after root session
@@ -1270,6 +1299,7 @@ type PendingRuntimeRequest = {
       readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
     }
   | {
+      readonly validateAnswers?: (answers: ProviderUserInputAnswers) => boolean;
       readonly type: "user_input";
       readonly answers: Deferred.Deferred<ProviderUserInputAnswers | null>;
     }
@@ -1592,6 +1622,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         // lineages into the next turn on the same session so their terminal
         // signals can still flip the original turn items instead of leaving
         // them running forever.
+        const backgroundToolOwners = new Map<string, ActiveAcpTurn>();
         const carryoverSubagents = yield* Ref.make<{
           readonly sessionId: string;
           readonly subagents: ReadonlyArray<ActiveAcpSubagent>;
@@ -2429,6 +2460,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               context.persistentBackgroundTaskIds.add(backgroundTaskId);
             }
             const backgroundStatus = projectedStatus ?? toolStatus(toolCall.status);
+            if (flavor.preserveBackgroundToolUpdates) {
+              const key = `${context.nativeThreadId}:${toolCall.toolCallId}`;
+              if (backgroundStatus === "pending" || backgroundStatus === "running")
+                backgroundToolOwners.set(key, context);
+              else backgroundToolOwners.delete(key);
+            }
             yield* setBackgroundTaskRunning(
               backgroundTaskId,
               backgroundStatus === "pending" || backgroundStatus === "running",
@@ -3127,6 +3164,21 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         ) {
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
+          if (
+            flavor.preserveBackgroundToolUpdates &&
+            (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update")
+          ) {
+            const owner = backgroundToolOwners.get(
+              `${notification.sessionId}:${update.toolCallId}`,
+            );
+            if (owner && (owner.finalized || owner !== context)) {
+              if (yield* Ref.get(stoppedRunQuarantine)) return;
+              for (const event of parseSessionUpdateEvent(notification).events) {
+                if (event._tag === "ToolCallUpdated") yield* emitTool(owner, event.toolCall);
+              }
+              return;
+            }
+          }
           // Only while a finalized turn is still the active context. When
           // activeTurn is null, post-settle agent frames must reach
           // bufferPostSettleWake so continuation can attach (context?.finalized
@@ -3443,6 +3495,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             type: "approval_request",
             requestId,
             requestKind,
+            ...(flavor.approvalOptions ? { options: flavor.approvalOptions(params) } : {}),
             ...(parsed.detail === undefined ? {} : { prompt: parsed.detail }),
           };
           yield* Ref.update(pendingRuntimeRequests, (current) => {
@@ -3580,6 +3633,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             const updated = new Map(current);
             updated.set(String(requestId), {
               type: "user_input",
+              ...(request.validateAnswers ? { validateAnswers: request.validateAnswers } : {}),
               generation,
               nativeResponseAcknowledgement,
               requestId,
@@ -3895,6 +3949,29 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               );
               if (Option.isNone(correlated)) return yield* Effect.never;
               const correlatedTransportRequestId = correlated.value;
+              if (flavor.isPermissionQuestion?.(params)) {
+                const question = flavor.permissionQuestion?.(params);
+                if (question === undefined) return { outcome: { outcome: "cancelled" } } as const;
+                const answer = yield* requestUserInputWithAdmission(
+                  handlerGeneration,
+                  Effect.succeed({
+                    nativeItemId: params.toolCall.toolCallId,
+                    nativeRequestId: params.toolCall.toolCallId,
+                    nativeSessionId: params.sessionId,
+                    nativeMethod: "session/request_permission",
+                    questions: [question],
+                    validateAnswers: (answers: ProviderUserInputAnswers) =>
+                      flavor.permissionQuestionResponse?.(params, answers) !== undefined,
+                  }),
+                  correlatedTransportRequestId,
+                );
+                const response =
+                  answer.answers === null
+                    ? undefined
+                    : flavor.permissionQuestionResponse?.(params, answer.answers);
+                yield* answer.acknowledgeNativeResponse;
+                return response ?? ({ outcome: { outcome: "cancelled" } } as const);
+              }
               const admitted = yield* runRuntimeCallbackAtGeneration(
                 handlerGeneration,
                 Effect.gen(function* () {
@@ -3978,7 +4055,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 if (decision === "cancel") {
                   return { outcome: { outcome: "cancelled" } } as const;
                 }
-                const optionId = selectPermissionOptionId(params, decision);
+                const optionId = (flavor.selectPermissionOption ?? selectPermissionOptionId)(
+                  params,
+                  decision,
+                );
                 return optionId === undefined
                   ? ({ outcome: { outcome: "cancelled" } } as const)
                   : ({ outcome: { outcome: "selected", optionId } } as const);
@@ -4162,6 +4242,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           threadId: ThreadId | null,
         ) {
           const activationOptions = { mcpServers: acpMcpServers(threadId) };
+          if (flavor.preferResumeSession && canResumeSession) {
+            return yield* runtime.resumeSession(sessionId, activationOptions);
+          }
           if (canLoadSession) {
             return yield* runtime.loadSession(sessionId, activationOptions);
           }
@@ -4179,6 +4262,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           modelSelection: ModelSelection,
           runtimePolicy: ProviderAdapterV2RuntimePolicy,
         ) {
+          if (flavor.configureSession) {
+            return yield* flavor.configureSession(runtime, modelSelection, runtimePolicy);
+          }
           const requestedModel = flavor.resolveModelId?.(modelSelection) ?? modelSelection.model;
           if (
             requestedModel.length > 0 &&
@@ -4311,6 +4397,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               yield* Ref.set(continuationRequested, false);
               yield* Ref.set(runningBackgroundTaskIds, new Set());
               yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
+              backgroundToolOwners.clear();
               yield* Ref.set(carryoverSubagents, null);
               yield* Ref.set(lastTurnRoute, null);
             }),
@@ -4532,6 +4619,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             runOrdinal: turnInput.runOrdinal,
             hasT3Mcp: acpMcpServers(turnInput.threadId).length > 0,
           });
+          if (flavor.buildPrompt)
+            return yield* flavor.buildPrompt(text, turnInput.message.attachments);
           if (text.length > 0) {
             prompt.push({ type: "text", text });
           }
@@ -4959,7 +5048,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           providerSessionId: input.providerSessionId,
           providerSession,
           events: Stream.fromEffectRepeat(Queue.take(events)),
-          ...(postSettleContinuationEnabled
+          ...(postSettleContinuationEnabled || flavor.preserveBackgroundToolUpdates
             ? {
                 hasPendingBackgroundWork: Effect.gen(function* () {
                   if ((yield* Ref.get(wakeBuffer)).length > 0) return true;
@@ -5383,6 +5472,31 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     return yield* new ProviderAdapterProtocolError({
                       driver,
                       detail: `No pending ACP runtime request ${requestInput.requestId}`,
+                    });
+                  }
+                  if (
+                    pending.type === "user_input" &&
+                    requestInput.answers !== undefined &&
+                    pending.validateAnswers &&
+                    !pending.validateAnswers(requestInput.answers)
+                  ) {
+                    return yield* new ProviderAdapterProtocolError({
+                      driver,
+                      detail:
+                        "Select one of the offered answers. This question does not accept custom answers",
+                    });
+                  }
+                  if (
+                    pending.type === "approval" &&
+                    pending.turnItem.type === "approval_request" &&
+                    pending.turnItem.options &&
+                    !pending.turnItem.options.some(
+                      (option) => option.decision === requestInput.decision,
+                    )
+                  ) {
+                    return yield* new ProviderAdapterProtocolError({
+                      driver,
+                      detail: "Select one of the offered permission choices",
                     });
                   }
                   const settled =

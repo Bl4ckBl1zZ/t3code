@@ -157,6 +157,18 @@ public actor T3Client {
         }
     }
 
+    public func providerSetup(instanceID: String, action: NativeProviderSetupAction) async throws {
+        let _: JSONValue = try await rpc.request(action.method, payload: action.payload(instanceID: instanceID), as: JSONValue.self)
+    }
+
+    public func providerAuthEvents(instanceID: String) async -> AsyncThrowingStream<NativeProviderAuthState, Error> {
+        await rpc.subscribe("provider.auth.subscribe", payload: .object(["instanceId": .string(instanceID)]), as: NativeProviderAuthState.self)
+    }
+
+    public func providerInstallEvents(instanceID: String) async -> AsyncThrowingStream<NativeProviderInstallState, Error> {
+        await rpc.subscribe("provider.install.subscribe", payload: .object(["instanceId": .string(instanceID)]), as: NativeProviderInstallState.self)
+    }
+
     public func updateProvider(driver: String, instanceID: String) async throws -> [ServerProviderSnapshot] {
         struct Payload: Decodable { let providers: [ServerProviderSnapshot] }
         let result = try await rpc.request("server.updateProvider",
@@ -164,9 +176,13 @@ public actor T3Client {
         return result.providers
     }
 
-    public func refreshProviderSnapshots() async throws -> [ServerProviderSnapshot] {
+    public func refreshProviderSnapshots(refreshModels: Bool = false, instanceID: String? = nil, cwd: String? = nil) async throws -> [ServerProviderSnapshot] {
         struct Payload: Decodable { let providers: [ServerProviderSnapshot] }
-        let payload = try await rpc.request("server.refreshProviders", as: Payload.self)
+        var input: [String: JSONValue] = [:]
+        if refreshModels { input["refreshModels"] = .bool(true) }
+        if let instanceID { input["instanceId"] = .string(instanceID) }
+        if let cwd { input["cwd"] = .string(cwd) }
+        let payload = try await rpc.request("server.refreshProviders", payload: .object(input), as: Payload.self)
         return payload.providers
     }
 

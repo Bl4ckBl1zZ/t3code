@@ -62,7 +62,17 @@ export interface AcpSessionEventStreamBarrier {
   readonly acknowledge: Deferred.Deferred<void>;
 }
 
-export type AcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStreamBarrier;
+export type AcpSessionRuntimeEvent =
+  | AcpParsedSessionEvent
+  | AcpSessionEventStreamBarrier
+  | {
+      readonly _tag: "ConfigOptionsUpdated";
+      readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+    }
+  | {
+      readonly _tag: "AvailableCommandsUpdated";
+      readonly availableCommands: ReadonlyArray<EffectAcpSchema.AvailableCommand>;
+    };
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
@@ -72,12 +82,19 @@ export interface AcpSpawnInput {
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
+  readonly extendEnv?: boolean;
 }
 
 export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
   readonly cwd: string;
   readonly resumeSessionId?: string;
+  readonly resumeMethod?: "load" | "resume";
+  readonly cancelBehavior?: "interrupt" | "wait-for-prompt";
+  readonly cancelTimeout?: Duration.Input;
+  readonly transformStdout?: EffectAcpClient.AcpClientOptions["transformStdout"];
+  readonly transformSessionUpdate?: EffectAcpClient.AcpClientOptions["transformSessionUpdate"];
+  readonly onStderr?: (text: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
   readonly sessionLoadTimeout?: Duration.Input;
   readonly sessionLoadReplayIdleGap?: Duration.Input;
   readonly interruptPromptOnCancel?: boolean;
@@ -1159,6 +1176,10 @@ export class AcpSessionRuntime extends Context.Service<
      * Initializes the ACP connection, authenticates, and loads, resumes, or creates the session.
      * Concurrent calls share the same in-flight startup and a failed startup may be retried.
      */
+    readonly initialize: () => Effect.Effect<
+      EffectAcpSchema.InitializeResponse,
+      EffectAcpErrors.AcpError
+    >;
     readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
     /** Stream of parsed ACP session events emitted after startup. */
     readonly getEvents: () => Stream.Stream<AcpSessionRuntimeEvent, never>;
@@ -1294,6 +1315,7 @@ export const make = (
     const crypto = yield* Crypto.Crypto;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
+    const stderrFailure = yield* Deferred.make<never, EffectAcpErrors.AcpError>();
     const eventQueue = yield* Queue.unbounded<AcpSessionRuntimeEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallTrackedState>());
@@ -1327,6 +1349,7 @@ export const make = (
       logRequest({ method, payload, status: "started" }).pipe(
         Effect.flatMap(() =>
           effect.pipe(
+            Effect.raceFirst(Deferred.await(stderrFailure)),
             Effect.tap((result) =>
               logRequest({
                 method,
@@ -1350,7 +1373,9 @@ export const make = (
     const spawnCommand = yield* resolveSpawnCommand(
       options.spawn.command,
       options.spawn.args,
-      options.spawn.env ? { env: options.spawn.env, extendEnv: true } : {},
+      options.spawn.env
+        ? { env: options.spawn.env, extendEnv: options.spawn.extendEnv ?? true }
+        : {},
     );
     const linuxCgroupLease =
       options.ownDescendantProcessGroups === true && options.processGroupPlatform === "linux"
@@ -1411,7 +1436,9 @@ export const make = (
       .spawn(
         ChildProcess.make(containedSpawnCommand.command, containedSpawnCommand.args, {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-          ...(spawnEnvironment ? { env: spawnEnvironment, extendEnv: true } : {}),
+          ...(spawnEnvironment
+            ? { env: spawnEnvironment, extendEnv: options.spawn.extendEnv ?? true }
+            : {}),
           ...(options.ownDetachedProcessGroup === undefined
             ? {}
             : { detached: options.ownDetachedProcessGroup }),
@@ -1578,8 +1605,33 @@ export const make = (
       );
     }
 
+    if (options.onStderr) {
+      const onStderr = options.onStderr;
+      yield* child.stderr.pipe(
+        Stream.decodeText(),
+        Stream.runForEach(onStderr),
+        Effect.catch((cause) => {
+          const error = Schema.is(EffectAcpErrors.AcpError)(cause)
+            ? cause
+            : new EffectAcpErrors.AcpTransportError({
+                detail: "Could not read ACP process output",
+                cause,
+              });
+          return Deferred.fail(stderrFailure, error).pipe(
+            Effect.andThen(options.onTermination?.(error) ?? Effect.void),
+            Effect.andThen(child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore)),
+          );
+        }),
+        Effect.forkIn(runtimeScope),
+      );
+    }
+
     const acpContext = yield* Layer.build(
       EffectAcpClient.layerChildProcess(child, {
+        ...(options.transformStdout ? { transformStdout: options.transformStdout } : {}),
+        ...(options.transformSessionUpdate
+          ? { transformSessionUpdate: options.transformSessionUpdate }
+          : {}),
         ...(options.protocolLogging?.logIncoming !== undefined
           ? { logIncoming: options.protocolLogging.logIncoming }
           : {}),
@@ -1605,6 +1657,23 @@ export const make = (
 
     yield* acp.handleSessionUpdate((notification) =>
       Effect.gen(function* () {
+        const initialState = yield* Ref.get(startStateRef);
+        const belongsToSession =
+          initialState._tag !== "Started" ||
+          notification.sessionId === initialState.result.sessionId;
+        if (belongsToSession && notification.update.sessionUpdate === "config_option_update") {
+          yield* Ref.set(configOptionsRef, notification.update.configOptions);
+          yield* Queue.offer(eventQueue, {
+            _tag: "ConfigOptionsUpdated",
+            configOptions: notification.update.configOptions,
+          });
+        }
+        if (belongsToSession && notification.update.sessionUpdate === "available_commands_update") {
+          yield* Queue.offer(eventQueue, {
+            _tag: "AvailableCommandsUpdated",
+            availableCommands: notification.update.availableCommands,
+          });
+        }
         const gate = yield* Ref.get(sessionLoadGateRef);
         // A different session can still have an in-flight prompt while this
         // load replays history, so quarantine only the loading session.
@@ -1898,18 +1967,16 @@ export const make = (
         ),
       );
 
+    const initializePayload = {
+      protocolVersion: 1,
+      clientCapabilities: initializeClientCapabilities,
+      clientInfo: options.clientInfo,
+    } satisfies EffectAcpSchema.InitializeRequest;
+    const initialize = yield* Effect.cached(
+      runLoggedRequest("initialize", initializePayload, acp.agent.initialize(initializePayload)),
+    );
     const startOnce = Effect.gen(function* () {
-      const initializePayload = {
-        protocolVersion: 1,
-        clientCapabilities: initializeClientCapabilities,
-        clientInfo: options.clientInfo,
-      } satisfies EffectAcpSchema.InitializeRequest;
-
-      const initializeResult = yield* runLoggedRequest(
-        "initialize",
-        initializePayload,
-        acp.agent.initialize(initializePayload),
-      );
+      const initializeResult = yield* initialize;
 
       const authenticateAfterRequired = (
         authRequiredError: EffectAcpErrors.AcpError,
@@ -1966,7 +2033,9 @@ export const make = (
           } satisfies EffectAcpSchema.LoadSessionRequest;
 
           sessionId = options.resumeSessionId;
-          sessionSetupResult = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult);
+          sessionSetupResult = yield* options.resumeMethod === "resume"
+            ? runLoggedRequest("session/resume", loadPayload, acp.agent.resumeSession(loadPayload))
+            : runLoadSessionWithReplayIdle(loadPayload, initializeResult);
         } else {
           const createPayload = {
             cwd: options.cwd,
@@ -2060,6 +2129,7 @@ export const make = (
       handleUnknownExtNotification: acp.handleUnknownExtNotification,
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
+      initialize: () => initialize,
       start: () => start,
       getEvents: () => Stream.fromQueue(eventQueue),
       drainEvents: Effect.gen(function* () {
@@ -2186,27 +2256,59 @@ export const make = (
             );
           }),
         ),
-      cancel: getStartedState.pipe(
-        Effect.flatMap((started) =>
-          options.interruptPromptOnCancel === false
-            ? acp.agent.cancel({
+      cancel:
+        options.cancelBehavior === "wait-for-prompt"
+          ? Effect.gen(function* () {
+              const started = yield* getStartedState;
+              const activePrompt = yield* Ref.get(activePromptFiberRef);
+              yield* acp.agent.cancel({
                 sessionId: started.sessionId,
                 ...(options.cancelMeta === undefined ? {} : { _meta: options.cancelMeta }),
-              })
-            : Effect.gen(function* () {
-                const activePromptFiber = yield* Ref.get(activePromptFiberRef);
-                if (Option.isSome(activePromptFiber)) {
-                  yield* Fiber.interrupt(activePromptFiber.value).pipe(Effect.ignore);
-                }
-                yield* acp.agent
-                  .cancel({
-                    sessionId: started.sessionId,
-                    ...(options.cancelMeta === undefined ? {} : { _meta: options.cancelMeta }),
-                  })
-                  .pipe(Effect.ignore, Effect.forkIn(runtimeScope));
-              }),
-        ),
-      ),
+              });
+              if (Option.isNone(activePrompt)) return;
+              yield* Fiber.join(activePrompt.value).pipe(
+                Effect.timeoutOrElse({
+                  duration: options.cancelTimeout ?? "30 seconds",
+                  orElse: () => {
+                    const error = new EffectAcpErrors.AcpTransportError({
+                      detail: "The ACP agent did not finish cancellation. Its process was stopped.",
+                      cause: undefined,
+                    });
+                    return Deferred.fail(stderrFailure, error).pipe(
+                      Effect.andThen(
+                        child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore),
+                      ),
+                      Effect.andThen(Effect.fail(error)),
+                    );
+                  },
+                }),
+              );
+              // The prompt owns the serialization permit until final stream cleanup has completed.
+              yield* promptSerializationSemaphore.withPermits(1)(Effect.void);
+            })
+          : getStartedState.pipe(
+              Effect.flatMap((started) =>
+                options.interruptPromptOnCancel === false
+                  ? acp.agent.cancel({
+                      sessionId: started.sessionId,
+                      ...(options.cancelMeta === undefined ? {} : { _meta: options.cancelMeta }),
+                    })
+                  : Effect.gen(function* () {
+                      const activePromptFiber = yield* Ref.get(activePromptFiberRef);
+                      if (Option.isSome(activePromptFiber)) {
+                        yield* Fiber.interrupt(activePromptFiber.value).pipe(Effect.ignore);
+                      }
+                      yield* acp.agent
+                        .cancel({
+                          sessionId: started.sessionId,
+                          ...(options.cancelMeta === undefined
+                            ? {}
+                            : { _meta: options.cancelMeta }),
+                        })
+                        .pipe(Effect.ignore, Effect.forkIn(runtimeScope));
+                    }),
+              ),
+            ),
       ...(options.ownDetachedProcessGroup === true ? { terminateProcessGroup } : {}),
       setMode: (modeId) =>
         Ref.get(modeStateRef).pipe(

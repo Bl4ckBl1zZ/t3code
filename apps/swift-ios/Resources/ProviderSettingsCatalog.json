@@ -335,6 +335,71 @@
     ]
   },
   {
+    "driver": "antigravity",
+    "label": "Antigravity",
+    "hasDefaultInstance": true,
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "authMethod",
+        "control": "select",
+        "label": "Sign-in method",
+        "description": "Google account uses your Antigravity subscription. Gemini Enterprise needs a GCP project and location. API key and Agent Platform bill the credential you enter.",
+        "options": [
+          {
+            "value": "oauth-personal",
+            "label": "Google account"
+          },
+          {
+            "value": "oauth-business",
+            "label": "Gemini Enterprise"
+          },
+          {
+            "value": "gemini-api-key",
+            "label": "Gemini API key"
+          },
+          {
+            "value": "agent-platform",
+            "label": "Agent Platform (Vertex AI)"
+          }
+        ],
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "apiKey",
+        "control": "password",
+        "label": "API key",
+        "description": "Gemini API key, or a Vertex AI express key for Agent Platform. Stored in plain text on this environment.",
+        "placeholder": "Optional",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "gcpProject",
+        "control": "text",
+        "label": "GCP project",
+        "description": "Required for Gemini Enterprise. Agent Platform uses it when no API key is set.",
+        "placeholder": "my-project-id",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "gcpLocation",
+        "control": "text",
+        "label": "GCP location",
+        "description": "Region for Gemini Enterprise or Agent Platform, such as us-central1.",
+        "placeholder": "us-central1",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Optional path to the official Antigravity ACP executable. Leave empty for automatic selection.",
+        "placeholder": "Automatic",
+        "clearWhenEmpty": "persist"
+      }
+    ]
+  },
+  {
     "driver": "opencode",
     "label": "OpenCode",
     "hasDefaultInstance": true,

@@ -53,6 +53,7 @@ export type ProviderApprovalDecision = typeof ProviderApprovalDecision.Type;
 // An approval prompt whose choices the provider names itself (MCP elicitations
 // label their own buttons); absent when the standard accept/decline set applies.
 export const ProviderApprovalOption = Schema.Struct({
+  warning: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
   label: TrimmedNonEmptyString,
 });

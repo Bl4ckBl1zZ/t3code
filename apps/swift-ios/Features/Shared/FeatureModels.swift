@@ -584,10 +584,13 @@ public struct FeatureApproval: Identifiable, Sendable, Equatable, Hashable, Coda
 }
 
 public struct FeatureInputOption: Sendable, Equatable, Hashable, Codable {
+    public var value: String? = nil
+    public var answerValue: String { value ?? label }
     public var label: String
     public var detail: String
 
-    public init(label: String, detail: String) {
+    public init(label: String, detail: String, value: String? = nil) {
+        self.value = value
         self.label = label
         self.detail = detail
     }
@@ -655,6 +658,7 @@ extension FeatureInputAnswer {
 }
 
 public struct FeatureInputQuestion: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public var allowCustomAnswer: Bool? = nil
     public let id: String
     public var header: String
     public var question: String
@@ -666,8 +670,10 @@ public struct FeatureInputQuestion: Identifiable, Sendable, Equatable, Hashable,
         header: String,
         question: String,
         options: [FeatureInputOption] = [],
-        allowsMultiple: Bool = false
+        allowsMultiple: Bool = false,
+        allowCustomAnswer: Bool? = nil
     ) {
+        self.allowCustomAnswer = allowCustomAnswer
         self.id = id
         self.header = header
         self.question = question
@@ -1085,6 +1091,12 @@ public struct FeatureModelOptionSelection: Identifiable, Sendable, Equatable, Ha
     }
 }
 
+public struct FeatureProviderWorkspace: Sendable, Equatable, Hashable, Codable {
+    public let cwd: String
+    public let slashCommands: [FeatureProviderSlashCommand]
+    public let skills: [FeatureProviderSkill]
+}
+
 public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     public var name: String
@@ -1097,8 +1109,17 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     /// composer hides the toggle rather than sending a setting nothing honors.
     public var supportsPlanMode: Bool
     public var models: [FeatureModel]
+    public var workspaceSnapshots: [FeatureProviderWorkspace]? = nil
     public var slashCommands: [FeatureProviderSlashCommand]?
     public var skills: [FeatureProviderSkill]?
+
+    public func inWorkspace(_ cwd: String?) -> Self {
+        guard let cwd, let workspace = workspaceSnapshots?.first(where: { $0.cwd == cwd }) else { return self }
+        var resolved = self
+        resolved.slashCommands = workspace.slashCommands
+        resolved.skills = workspace.skills
+        return resolved
+    }
 
     public init(
         id: String,
@@ -1364,6 +1385,7 @@ public enum FeatureApprovalDecision: String, Sendable, Codable {
 }
 
 public struct FeatureApprovalOption: Codable, Equatable, Hashable, Sendable {
+    public var warning: String? = nil
     public let decision: FeatureApprovalDecision
     public let label: String
 }

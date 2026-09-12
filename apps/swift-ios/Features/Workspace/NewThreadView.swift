@@ -155,6 +155,11 @@ public struct NewThreadView: View {
         .onChange(of: selectedBranch) { scheduleDraftSave() }
         .onChange(of: startFromOrigin) { scheduleDraftSave() }
         .onChange(of: routing) { scheduleDraftSave() }
+        .task(id: "\(executionProject?.id ?? ""):\(selection?.providerID ?? "")") {
+            guard let project = executionProject, let instanceID = selection?.providerID,
+                  creationProviders.first(where: { $0.id == instanceID })?.driver == "antigravity" else { return }
+            try? await model.client.refreshProviderWorkspace(projectID: project.id, instanceID: instanceID, cwd: project.path)
+        }
         .task(id: balancingRequest) { await balanceEnvironment() }
         .task(id: routing?.projectID) {
             if restoredDraftProjectID == projectID, routing?.projectID != nil { await loadBranches() }
@@ -597,7 +602,7 @@ public struct NewThreadView: View {
     private var composerPowerFeatures: FeatureComposerPowerFeatures {
         let provider = creationProviders.first {
             $0.id == selection?.providerID
-        }
+        }?.inWorkspace(executionProject?.path)
         guard let project = executionProject else {
             return FeatureComposerPowerFeatures(
                 slashCommands: provider?.slashCommands ?? [],

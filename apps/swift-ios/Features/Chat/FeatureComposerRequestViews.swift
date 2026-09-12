@@ -68,6 +68,7 @@ struct FeatureComposerApprovalPanel: View {
             VStack(spacing: 9) {
                 if let options = approval.options {
                     ForEach(options, id: \.decision) { option in
+                        if let warning = option.warning { Text(warning).font(T3Typography.supporting).foregroundStyle(T3Colors.warning) }
                         approvalButton(option.label,
                             background: option.decision == .allowOnce ? T3Colors.accent : Color.clear,
                             border: T3Colors.border,
@@ -272,7 +273,7 @@ struct FeatureComposerUserInputPanel: View {
                 VStack(spacing: 6) {
                     ForEach(
                         Array(question.options.enumerated()),
-                        id: \.element.label
+                        id: \.offset
                     ) { index, option in
                         optionButton(option, number: index + 1, question: question)
                     }
@@ -283,6 +284,7 @@ struct FeatureComposerUserInputPanel: View {
             .frame(maxHeight: 320)
             .scrollIndicators(.hidden)
 
+            if question.allowCustomAnswer != false {
             HStack(spacing: 8) {
                 Image(systemName: "pencil")
                     .font(T3Typography.supporting)
@@ -310,7 +312,8 @@ struct FeatureComposerUserInputPanel: View {
             .padding(.horizontal, 10)
             .padding(.top, 7)
 
-            if input.allowsAttachments == true {
+            }
+            if input.allowsAttachments == true && question.allowCustomAnswer != false {
                 HStack {
                     FeatureImageAttachmentPicker(attachments: Binding(
                         get: { files[question.id] ?? [] }, set: { files[question.id] = $0 }
@@ -395,10 +398,10 @@ struct FeatureComposerUserInputPanel: View {
         number: Int,
         question: FeatureInputQuestion
     ) -> some View {
-        let isSelected = isOptionSelected(option.label, for: question)
+        let isSelected = isOptionSelected(option.answerValue, for: question)
 
         return Button {
-            select(option.label, for: question)
+            select(option.answerValue, for: question)
         } label: {
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -519,7 +522,7 @@ enum FeatureComposerCustomAnswer {
         in answer: FeatureInputAnswer?,
         for question: FeatureInputQuestion
     ) -> String {
-        let optionLabels = Set(question.options.map(\.label))
+        let optionLabels = Set(question.options.map(\.answerValue))
         switch answer {
         case let .text(value):
             return optionLabels.contains(value) ? "" : value
@@ -536,7 +539,7 @@ enum FeatureComposerCustomAnswer {
         for question: FeatureInputQuestion
     ) -> FeatureInputAnswer {
         guard question.allowsMultiple else { return .text(text) }
-        let optionLabels = Set(question.options.map(\.label))
+        let optionLabels = Set(question.options.map(\.answerValue))
         let selectedOptions: [String]
         if case let .selections(values) = answer {
             selectedOptions = values.filter(optionLabels.contains)

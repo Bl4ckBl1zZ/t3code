@@ -95,6 +95,16 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertEqual(decoded.payload, item.payload)
     }
 
+    func testNativeQuestionChoicesPreserveOpaqueValues() throws {
+        let item = try XCTUnwrap(try projection().turnItems.first { $0.type == "user_input_request" })
+        guard case let .userInputRequest(_, questions) = item.payload else { return XCTFail("Missing question") }
+        let question = try XCTUnwrap(questions.first)
+        XCTAssertEqual(question.allowCustomAnswer, false)
+        XCTAssertEqual(question.multiSelect, false)
+        XCTAssertEqual(question.options.first?.value, " choice: opaque ")
+        XCTAssertEqual(try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONEncoder().encode(item)), item)
+    }
+
     func testApprovalOptionsRoundTripAndUnknownDecisionsStayUnavailable() throws {
         let projection = try projection()
         let item = try XCTUnwrap(projection.turnItems.first { $0.type == "approval_request" })

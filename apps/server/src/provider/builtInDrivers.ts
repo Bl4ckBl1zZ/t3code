@@ -20,6 +20,7 @@
  *
  * @module provider/builtInDrivers
  */
+import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { AcpRegistryDriver, type AcpRegistryDriverEnv } from "./Drivers/AcpRegistryDriver.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
@@ -37,6 +38,7 @@ import type { AnyProviderDriver } from "./ProviderDriver.ts";
  * layer must provide every service in this union.
  */
 export type BuiltInDriversEnv =
+  | AntigravityDriverEnv
   | AcpRegistryDriverEnv
   | ClaudeDriverEnv
   | CodexDriverEnv
@@ -58,6 +60,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   CursorDriver,
   GrokDriver,
   OpenCodeDriver,
+  AntigravityDriver,
   AcpRegistryDriver,
   HermesAcpDriver,
   OpenClawDriver,

@@ -1,4 +1,5 @@
 import {
+  AntigravitySettings,
   AcpRegistrySettings,
   ClaudeSettings,
   CodexSettings,
@@ -148,6 +149,11 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
     badgeLabel: "V2 Preview",
     settingsSchema: AcpRegistrySettings,
     hasDefaultInstance: false,
+  },
+  {
+    value: ProviderDriverKind.make("antigravity"),
+    label: "Antigravity",
+    settingsSchema: AntigravitySettings,
   },
   {
     value: ProviderDriverKind.make("opencode"),

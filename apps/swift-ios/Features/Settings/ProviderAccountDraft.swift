@@ -18,6 +18,8 @@ struct NativeProviderSettingsDefinition: Decodable, Identifiable, Sendable {
         let placeholder: String?
         let clearWhenEmpty: String
         let defaultBooleanValue: Bool?
+        var options: [Choice]? = nil
+        struct Choice: Decodable, Sendable { let value: String; let label: String }
         var id: String { key }
     }
     struct EnvironmentField: Decodable, Identifiable, Sendable {

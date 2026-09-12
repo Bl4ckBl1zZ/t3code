@@ -14,6 +14,9 @@ import Foundation
 /// working, its rows just refuse the write instead of going missing.
 @MainActor
 public protocol FeatureServerSettingsManaging: AnyObject {
+    func providerSetup(environmentID: String, instanceID: String, action: NativeProviderSetupAction) async throws
+    func providerAuthEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderAuthState, Error>
+    func providerInstallEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderInstallState, Error>
     func updateDesktopApp(environmentID: String, progress: @escaping @Sendable (String) async -> Void) async throws -> String
     func providerUpdateEvents(environmentID: String) async throws -> AsyncThrowingStream<[ServerProviderSnapshot], Error>
     func updateProvider(environmentID: String, driver: String, instanceID: String) async throws -> [ServerProviderSnapshot]
@@ -86,4 +89,10 @@ extension FeatureServerSettingsManaging {
     public func updateDesktopApp(environmentID: String, progress: @escaping @Sendable (String) async -> Void) async throws -> String {
         throw FeatureCapabilityUnavailable("Remote desktop updates")
     }
+}
+
+extension FeatureServerSettingsManaging {
+    public func providerSetup(environmentID: String, instanceID: String, action: NativeProviderSetupAction) async throws { throw FeatureCapabilityUnavailable("Provider setup") }
+    public func providerAuthEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderAuthState, Error> { throw FeatureCapabilityUnavailable("Provider setup") }
+    public func providerInstallEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderInstallState, Error> { throw FeatureCapabilityUnavailable("Provider setup") }
 }

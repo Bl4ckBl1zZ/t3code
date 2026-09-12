@@ -1105,7 +1105,12 @@ const program = Effect.gen(function* () {
           const permission = yield* agent.client.requestPermission({
             sessionId: requestedSessionId,
             toolCall: {
-              toolCallId: index === 0 ? toolCallId : `${toolCallId}-${index + 1}`,
+              toolCallId:
+                process.env.T3_ACP_NATIVE_QUESTION === "1"
+                  ? `interaction_${toolCallId}`
+                  : index === 0
+                    ? toolCallId
+                    : `${toolCallId}-${index + 1}`,
               title: process.env.T3_ACP_PERMISSION_TITLE ?? `\`${command}\``,
               kind: "execute",
               status: "pending",
