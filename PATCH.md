@@ -1389,3 +1389,18 @@ Connect authorization is distinguished from live reachability. Typed relay failu
 safe reason/trace information, permanent rejections stop retrying, and transient failures retain
 the bounded startup retry. Tests mock service commands and relay responses. V2 activation and
 restart continuation ordering remain intact; no provider or native contract changes are needed.
+
+### Request-time Connect credential refresh
+
+The final upstream `363cde4114` behavior supersedes the intermediate socket-replacement
+approaches in `9e646ad84c` and `39abb9d1d6`. Web and Expo share one account-bound authorization
+service for HTTP and connection setup; refreshes coalesce per environment, reject stale account
+results, preserve newer tokens after late rejections, and cannot repopulate removed connections.
+V2 shell/detail HTTP loaders retain `maxVisibleItems` and V2 projections; upstream V1 keyset
+pagination stays excluded. Live sockets no longer reconnect solely because an HTTP token expires.
+Session management retains unrevoked connected sessions without extending credential validity.
+
+Swift already performs request-time renewal, shares in-flight work and reuses newer credentials.
+Its session-permission check now also renews on an unauthenticated HTTP 200 response, once only,
+and reports continued rejection. Cookie/bearer behavior is preserved. No SQLite migration or V1
+runtime is added. Authentication tests use synthetic credentials and mocked transports.

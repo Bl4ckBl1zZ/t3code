@@ -1,3 +1,4 @@
+import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { OrchestrationV2ThreadDetailSnapshot, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -9,12 +10,8 @@ import { HttpClient } from "effect/unstable/http";
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
-import {
-  executeEnvironmentHttpRequest,
-  makeEnvironmentHttpApiClient,
-  type RemoteEnvironmentRequestError,
-} from "../rpc/http.ts";
-import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
+import { type RemoteEnvironmentRequestError } from "../rpc/http.ts";
+import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 
 // Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
 // fallback for long. The cached thread renders while this runs, so the wait only
@@ -32,34 +29,25 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly prepared: PreparedConnection;
   readonly threadId: ThreadId;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
   readonly timeoutMs?: number;
   /** Windows the snapshot to roughly the last N visible turn items. */
   readonly maxVisibleItems?: number;
 }) {
-  const requestUrl = environmentEndpointUrl(
-    input.prepared.httpBaseUrl,
-    `/api/orchestration/threads/${input.threadId}`,
-  );
-  const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
-  const headers = yield* buildEnvironmentAuthHeaders(
-    input.prepared.httpAuthorization,
-    "GET",
-    requestUrl,
-    input.signer,
-  );
-  return yield* executeEnvironmentHttpRequest(
-    requestUrl,
-    input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
-    withEnvironmentCredentials(
-      input.prepared.httpAuthorization,
+  return yield* executeAuthenticatedEnvironmentHttpRequest({
+    ...input,
+    method: "GET",
+    url: (httpBaseUrl) =>
+      environmentEndpointUrl(httpBaseUrl, `/api/orchestration/threads/${input.threadId}`),
+    timeoutMs: input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
+    request: ({ client, headers }) =>
       client.orchestration.threadSnapshot({
         params: { threadId: input.threadId },
         query:
           input.maxVisibleItems === undefined ? {} : { maxVisibleItems: input.maxVisibleItems },
         headers,
       }),
-    ),
-  );
+  });
 });
 
 export type FetchEnvironmentThreadSnapshotError = RemoteEnvironmentRequestError;
@@ -93,6 +81,7 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     // connections, so the loader must not hard-require it (bearer/primary
     // connections work without one).
     const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return ThreadSnapshotLoader.of({
       load: (
         prepared: PreparedConnection,
@@ -103,6 +92,7 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
           prepared,
           threadId,
           signer,
+          remoteAuthorization,
           ...(options?.maxVisibleItems !== undefined
             ? { maxVisibleItems: options.maxVisibleItems }
             : {}),

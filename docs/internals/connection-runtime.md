@@ -41,7 +41,7 @@ loops, or RPC clients.
 
 ## Connection State
 
-The supervisor is the only retry owner.
+The supervisor is the transport retry owner.
 
 1. A persisted or platform registration marks an environment as desired.
 2. If the device is offline, the supervisor releases the active session and
@@ -181,3 +181,16 @@ Required coverage includes:
 [supervisor]: ../../packages/client-runtime/src/connection/supervisor.ts
 [session]: ../../packages/client-runtime/src/rpc/session.ts
 [client]: ../../packages/client-runtime/src/rpc/client.ts
+
+## HTTP authorization lifetime
+
+The shared authorization service is provided to connection setup and all HTTP loaders. It
+renews account-bound DPoP credentials at request time without replacing a healthy socket.
+Concurrent requests share renewal; a rejected token is retried once with a new request-bound
+proof. Refresh errors belong to the HTTP operation and retain its total deadline. V2 shell and
+thread loaders preserve their existing projection and visible-item window contracts.
+
+Session listings retain unrevoked connected sessions after token expiry so clients can still
+see and revoke them. Expired tokens cannot authorize new HTTP requests or socket upgrades.
+Swift's independent EnvironmentAPI follows the same request-time refresh model, including
+unauthenticated successful responses from the session endpoint.

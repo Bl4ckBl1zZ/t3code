@@ -478,7 +478,7 @@ export const make = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const authSessions = yield* AuthSessions.AuthSessionRepository;
   const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
-  const connectedSessionsRef = yield* Ref.make(new Map<string, number>());
+  const connectedSessionsRef = yield* Ref.make(new Map<AuthSessionId, number>());
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();
   const cookieName = resolveSessionCookieName({
     mode: serverConfig.mode,
@@ -508,6 +508,11 @@ export const make = Effect.gen(function* () {
       }
 
       const connectedSessions = yield* Ref.get(connectedSessionsRef);
+      const connected = connectedSessions.has(row.value.sessionId);
+      const now = yield* DateTime.now;
+      if (!connected && row.value.expiresAt.epochMilliseconds <= now.epochMilliseconds) {
+        return Option.none<AuthClientSession>();
+      }
       return Option.some(
         toAuthClientSession({
           sessionId: row.value.sessionId,
@@ -518,7 +523,7 @@ export const make = Effect.gen(function* () {
           issuedAt: row.value.issuedAt,
           expiresAt: row.value.expiresAt,
           lastConnectedAt: row.value.lastConnectedAt,
-          connected: connectedSessions.has(row.value.sessionId),
+          connected,
         }),
       );
     });
@@ -592,7 +597,7 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.flatMap(() => loadActiveSession(sessionId)),
       Effect.flatMap((session) =>
-        Option.isSome(session) ? emitUpsert(session.value) : Effect.void,
+        Option.isSome(session) ? emitUpsert(session.value) : emitRemoved(sessionId),
       ),
       Effect.catchCause((cause) =>
         Effect.logError("Failed to publish disconnected-session auth update.").pipe(
@@ -875,7 +880,10 @@ export const make = Effect.gen(function* () {
     function* () {
       const now = yield* DateTime.now;
       const connectedSessions = yield* Ref.get(connectedSessionsRef);
-      const rows = yield* authSessions.listActive({ now });
+      const rows = yield* authSessions.listActive({
+        now,
+        connectedSessionIds: Array.from(connectedSessions.keys()),
+      });
 
       return rows.map((row) =>
         toAuthClientSession({
