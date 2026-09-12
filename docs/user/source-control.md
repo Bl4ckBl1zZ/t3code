@@ -175,3 +175,13 @@ Compact layouts and the native iOS app keep explicit navigation.
 When right-panel tabs overflow, use the left and right arrows or the mouse wheel over the
 tab strip to reach hidden tabs. Selecting a tab brings it into view. Arrow scrolling respects
 your system's reduced-motion preference.
+
+## Completing and reversing a review
+
+When checks are still pending, the web review header offers auto-merge where your host supports it. Once armed, it shows the saved merge strategy. You can disable auto-merge or choose to merge immediately from the actions menu.
+
+On GitHub, workflows waiting for a maintainer appear as awaiting approval. **Approve workflows to run** asks you to review the code and workflow changes before allowing them to start. A merged pull request offers **Revert changes**, which opens a new pull request to reverse its changes.
+
+The native iOS review provides these actions too, including the saved auto-merge strategy. Both clients offer **Close with comment** and **Reopen with comment**. If the comment succeeds but the host refuses the state change, the comment stays posted and the error explains what failed.
+
+Actions are available only when your host supports them and your account has permission.

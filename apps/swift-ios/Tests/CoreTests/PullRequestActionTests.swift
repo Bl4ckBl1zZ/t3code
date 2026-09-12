@@ -41,6 +41,23 @@ final class PullRequestActionTests: XCTestCase {
     func testCurrentBaseHasNoUpdateAction() throws {
         XCTAssertFalse(PullRequestActionLogic.offered(try detail(["baseComparison": "up-to-date"])).contains(.updateBranch))
     }
+    func testWorkflowApprovalRequiresKnownRunsAndBothPermissions() throws {
+        let allowed: [String: Any] = ["actions": ["approve-workflows", "revert"], "mergeMethods": [], "diff": false, "comment": false]
+        var value = try detail(["capabilities": allowed, "viewerPermissions": allowed, "workflowApprovalsRequired": 2])
+        XCTAssertEqual(PullRequestActionLogic.offered(value), [.approveWorkflows])
+        value.workflowApprovalsRequired = nil
+        XCTAssertTrue(PullRequestActionLogic.offered(value).isEmpty)
+        XCTAssertTrue(PullRequestActionLogic.offered(try detail(["workflowApprovalsRequired": 2])).allSatisfy { $0 != .approveWorkflows })
+        XCTAssertEqual(PullRequestActionLogic.offered(try detail(["state": "merged", "capabilities": allowed, "viewerPermissions": allowed])), [.revert])
+        XCTAssertTrue(NativePullRequestAction.revert.needsReview)
+        XCTAssertTrue(NativePullRequestAction.approveWorkflows.needsReview)
+    }
+    func testWorkflowCheckAndStoredMergeMethodDecode() throws {
+        let value = try detail(["autoMergeMethod": "squash", "checks": [["name": "CI", "status": "action-required"]]])
+        XCTAssertEqual(value.autoMergeMethod, "squash")
+        XCTAssertEqual(value.checks.first?.status, .actionRequired)
+        XCTAssertNil(try detail().workflowApprovalsRequired)
+    }
     func testActionRequestMatchesGeneratedContract() throws {
         struct Fixture: Decodable { let input: PullRequestActionRequest }
         let input = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: fixtureURL)).input

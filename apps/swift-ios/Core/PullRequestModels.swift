@@ -21,6 +21,7 @@ public struct PullRequestLabel: Codable, Equatable, Sendable {
 }
 
 public enum PullRequestCheckStatus: String, Codable, Sendable {
+    case actionRequired = "action-required"
     case pending
     case success
     case failure
@@ -109,6 +110,8 @@ public struct PullRequestDetail: Codable, Equatable, Sendable {
     public var mergeCapabilities: [String: Bool]? = nil
     public var baseComparison: String? = nil
     public var behindBy: Int? = nil
+    public var autoMergeMethod: String? = nil
+    public var workflowApprovalsRequired: Int? = nil
     public var autoMergeEnabled: Bool? = nil
     public var viewer: String? = nil
     public var capabilities: NativePullRequestCapabilities? = nil
