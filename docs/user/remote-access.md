@@ -283,3 +283,5 @@ T3 Connect renews access credentials when needed without disconnecting a healthy
 A failed renewal affects the request that needed it; retry after restoring connectivity or
 signing in again. A session with an open connection stays listed after its access credential
 expires and can still be revoked from connection management.
+
+When T3 Connect cannot reach an environment because a request times out or the connection fails, the error suggests trying another network, such as a phone hotspot. DNS, firewall, or VPN restrictions can cause these failures. Authentication errors retain their sign-in guidance. Settings shows the full error so you can read the suggested next step.
