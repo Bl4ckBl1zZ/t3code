@@ -185,3 +185,5 @@ On GitHub, workflows waiting for a maintainer appear as awaiting approval. **App
 The native iOS review provides these actions too, including the saved auto-merge strategy. Both clients offer **Close with comment** and **Reopen with comment**. If the comment succeeds but the host refuses the state change, the comment stays posted and the error explains what failed.
 
 Actions are available only when your host supports them and your account has permission.
+
+Pull-request links can open another repository on a Git host configured in the same environment, even when that repository has no local project. Web and native iOS keep the linked repository selected throughout review, comments, diffs and actions. Your existing checkout is used to contact the host.

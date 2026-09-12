@@ -311,12 +311,14 @@ function Section({
 function CommentComposer({
   environmentId,
   detail,
+  reference,
   actionPending,
   onCommentAction,
   onCommented,
 }: {
   environmentId: EnvironmentId;
   detail: PullRequestDetailView;
+  reference: PullRequestRef;
   actionPending: boolean;
   onCommentAction: (
     body: string,
@@ -351,9 +353,7 @@ function CommentComposer({
     const result = await postComment({
       environmentId,
       input: {
-        projectId: detail.projectId,
-        repository: detail.repository,
-        number: detail.number,
+        ...reference,
         body: trimmed,
       },
     });
@@ -980,6 +980,7 @@ export function PullRequestSummaryTab({
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
             environmentId={environmentId}
             detail={detail}
+            reference={reference}
             actionPending={actionPending}
             onCommentAction={onCommentAction}
             onCommented={onRefresh}

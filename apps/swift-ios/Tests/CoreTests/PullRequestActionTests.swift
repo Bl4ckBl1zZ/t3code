@@ -58,6 +58,13 @@ final class PullRequestActionTests: XCTestCase {
         XCTAssertEqual(value.checks.first?.status, .actionRequired)
         XCTAssertNil(try detail().workflowApprovalsRequired)
     }
+    func testHostedReferencePreservesItsTargetAndOmitsAbsentHost() {
+        let fields: [String: JSONValue] = ["projectId": .string("frontend"), "repository": .string("acme/backend"), "number": .number(7)]
+        XCTAssertEqual(PullRequestWireReference.withHost(nil, fields), fields)
+        let hosted = PullRequestWireReference.withHost("GitHub.Example", fields)
+        XCTAssertEqual(hosted["host"], .string("github.example"))
+        XCTAssertEqual(hosted["repository"], fields["repository"])
+    }
     func testActionRequestMatchesGeneratedContract() throws {
         struct Fixture: Decodable { let input: PullRequestActionRequest }
         let input = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: fixtureURL)).input

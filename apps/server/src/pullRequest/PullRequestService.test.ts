@@ -3912,3 +3912,69 @@ it.effect("publishes only confirmed merges with the host terminal timestamp", ()
     });
   }).pipe(Effect.scoped),
 );
+
+it.effect("keeps hosted activity and diff caches separate and invalidates the selected host", () =>
+  Effect.gen(function* () {
+    const activityReads: string[] = [];
+    const diffReads: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p", title: "Public", workspaceRoot: "/public", repository: "org/repo" }),
+        project({
+          id: "enterprise",
+          title: "Enterprise",
+          workspaceRoot: "/enterprise",
+          repository: "org/repo",
+          host: "github.example",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestActivity: (input) =>
+            Effect.sync(() => {
+              activityReads.push(`${input.host}/${input.repository}`);
+              return {
+                author: null,
+                reviewers: [],
+                comments: [],
+                commentCount: 0,
+                commentsTruncated: false,
+                reviewThreads: [],
+                commits: [],
+                reactions: [],
+              };
+            }),
+          getDiff: (input) =>
+            Effect.sync(() => {
+              diffReads.push(`${input.host}/${input.repository}`);
+              return { patch: "", nextCursor: null, truncated: false };
+            }),
+        }),
+      ],
+    });
+    const publicRef = {
+      projectId: "p" as ProjectId,
+      host: "github.com",
+      repository: "linked/backend",
+      number: 42,
+    };
+    const enterpriseRef = { ...publicRef, host: "github.example" };
+    for (const reference of [publicRef, enterpriseRef, publicRef, enterpriseRef]) {
+      yield* service.activity(reference);
+      yield* service.diff(reference);
+    }
+    assert.deepEqual(activityReads, ["github.com/linked/backend", "github.example/linked/backend"]);
+    assert.deepEqual(diffReads, activityReads);
+    yield* service.invalidate({ reference: publicRef });
+    yield* service.activity(publicRef);
+    yield* service.diff(publicRef);
+    yield* service.activity(enterpriseRef);
+    yield* service.diff(enterpriseRef);
+    assert.deepEqual(activityReads, [
+      "github.com/linked/backend",
+      "github.example/linked/backend",
+      "github.com/linked/backend",
+    ]);
+    assert.deepEqual(diffReads, activityReads);
+  }),
+);

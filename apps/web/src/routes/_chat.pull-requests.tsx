@@ -1911,6 +1911,9 @@ function PullRequestsRouteView() {
               environmentId={panelEnvironmentId}
               reference={{
                 projectId: renderedPullRequestSurface.projectId as ProjectId,
+                ...(renderedPullRequestSurface.host === undefined
+                  ? {}
+                  : { host: renderedPullRequestSurface.host }),
                 repository: renderedPullRequestSurface.repository,
                 number: renderedPullRequestSurface.number,
               }}

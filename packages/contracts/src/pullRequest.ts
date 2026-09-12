@@ -594,6 +594,8 @@ export type PullRequestListResult = typeof PullRequestListResult.Type;
 
 export const PullRequestRef = Schema.Struct({
   projectId: ProjectId,
+  /** Explicit host routes linked PRs through a checkout on that host. */
+  host: Schema.optional(TrimmedNonEmptyString),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
 });
