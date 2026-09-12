@@ -226,3 +226,5 @@ line breaks. While a previously started thread loads, the composer reserves room
 meter. Returning to a known non-Git project keeps the branch toolbar hidden while status refreshes.
 
 The compact composer animates back to editing size while keeping send controls at its lower edge. Model names can use the available space, and workspace labels resize without pushing the trailing controls sideways. Disable panel animations or enable Reduce Motion for immediate layout changes.
+
+On native iOS, a multiline draft compacts to one line when you finish scrolling into earlier conversation history. Tap the draft to expand it again, or return to the bottom of the conversation. Recording, attachments and pending questions keep the full composer available. Your model controls stay visible.

@@ -50,6 +50,7 @@ public struct ThreadDetailView: View {
     /// two overlapping reorders would race for the same positions.
     @State private var queueBusyRunID: String?
     @FocusState private var composerFocused: Bool
+    @State private var readingHistoryThreadID: String?
 
     public init(
         model: FeatureRootModel,
@@ -146,6 +147,7 @@ public struct ThreadDetailView: View {
             await restoreDraft(from: restoreBaseline, key: restoreKey)
             isLoading = false
         }
+        .onChange(of: composerFocused) { if composerFocused { readingHistoryThreadID = nil } }
         .onChange(of: draft) { scheduleDraftSave() }
         .onChange(of: attachments) { scheduleDraftSave() }
         .onDisappear {
@@ -520,7 +522,11 @@ public struct ThreadDetailView: View {
                         }
                         composerFocused = true
                     },
-                    navigationRequest: turnNavigationRequest
+                    navigationRequest: turnNavigationRequest,
+                    onReadingHistoryChanged: { reading in
+                        let next = reading ? thread.id : nil
+                        if readingHistoryThreadID != next { readingHistoryThreadID = next }
+                    }
                 )
                 // Container only: the transcript runs on under the glass
                 // composer to the screen edge, but still rises for the
@@ -709,6 +715,7 @@ public struct ThreadDetailView: View {
             onStop: {
                 Task { await model.cancelTurn(threadID: thread.id) }
             },
+            readingHistory: readingHistoryThreadID == thread.id,
             pendingApprovals: detail.approvals,
             pendingUserInputs: detail.userInputs,
             isResolvingRequest: model.isPerformingAction,
@@ -1746,6 +1753,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
     var navigationRequest: Int = 0
+    var onReadingHistoryChanged: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -1786,6 +1794,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         // only current inside its own layout pass.
         (collectionView as? BottomAnchoredTranscriptCollectionView)?
             .floatingBottomInset = bottomContentInset
+        context.coordinator.onReadingHistoryChanged = onReadingHistoryChanged
         context.coordinator.update(
             threadID: threadID,
             detail: detail,
@@ -1989,6 +1998,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var rowContext = RowContext()
         private var onLoadEarlier: (() -> Void)?
         private var onDismissKeyboard: (() -> Void)?
+        var onReadingHistoryChanged: (Bool) -> Void = { _ in }
         var themeRefresh: T3ThemeRefresh?
 
         deinit {
@@ -2402,6 +2412,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let target = CGPoint(x: collectionView.contentOffset.x, y: geometry.bottomOffset)
             collectionView.setContentOffset(target, animated: animated)
             (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = true
+            onReadingHistoryChanged(false)
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -2427,7 +2438,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             guard let collectionView = scrollView as? BottomAnchoredTranscriptCollectionView else {
                 return
             }
-            collectionView.maintainsBottomAnchor = isNearBottom(collectionView)
+            let nearBottom = isNearBottom(collectionView)
+            collectionView.maintainsBottomAnchor = nearBottom
+            onReadingHistoryChanged(!nearBottom)
         }
     }
 }
