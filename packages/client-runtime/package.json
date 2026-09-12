@@ -147,6 +147,10 @@
       "types": "./src/state/runtime.ts",
       "default": "./src/state/runtime.ts"
     },
+    "./load-balancing": {
+      "types": "./src/load-balancing.ts",
+      "default": "./src/load-balancing.ts"
+    },
     "./state/sharedSettings": {
       "types": "./src/state/sharedSettings.ts",
       "default": "./src/state/sharedSettings.ts"

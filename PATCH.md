@@ -1219,3 +1219,11 @@ server settings keep their explicit machine scope. The V2 capability gates retai
 fallbacks; account selections propagate only when the target enables the same instance/driver.
 Disconnected targets are not overwritten with defaults. Mismatch notices offer an explicit
 apply-to-all action using loaded settings; Swift reports individual failed target names.
+
+### Whole-host resource sampling
+
+`server.getHostResources` measures machine CPU and available memory independently of V2 provider
+or process history. Sampling is on demand, deduplicates concurrent callers and expires after
+five seconds; no idle polling is introduced. Shared TypeScript and Swift routing policies use
+client receipt timestamps, reject saturated/stale machines and apply user weights. The RPC uses
+orchestration-read authorization. Automatic draft UI integration is a separate client concern.

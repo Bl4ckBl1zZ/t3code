@@ -1,0 +1,18 @@
+{
+  "samples": [
+    {
+      "sampledAt": 100000,
+      "cpuUtilization": 0.2,
+      "cpuCount": 8,
+      "availableMemoryBytes": 8000,
+      "totalMemoryBytes": 16000
+    },
+    {
+      "sampledAt": 100000,
+      "cpuUtilization": null,
+      "cpuCount": 0,
+      "availableMemoryBytes": 0,
+      "totalMemoryBytes": 16000
+    }
+  ]
+}

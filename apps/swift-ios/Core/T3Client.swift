@@ -126,6 +126,10 @@ public actor T3Client {
     /// the same narrow view the config subscription uses, so a caller sees
     /// exactly the fields this client models.
     @discardableResult
+    public func hostResources() async throws -> HostResourcesSnapshot {
+        try await rpc.request(RPCMethod.serverGetHostResources.rawValue, payload: .object([:]), as: HostResourcesSnapshot.self)
+    }
+
     public func updateServerSettings(
         patch: ServerSettingsPatchInput
     ) async throws -> ServerSettingsSnapshot {
@@ -1969,6 +1973,7 @@ public actor EnvironmentRuntime {
 public enum RPCMethod: String, Sendable {
     case serverProbe = "server.probe"
     case serverGetConfig = "server.getConfig"
+    case serverGetHostResources = "server.getHostResources"
     case serverUpdateSettings = "server.updateSettings"
     case dispatchCommand = "orchestration.dispatchCommand"
     case launchThread = "orchestration.launchThread"

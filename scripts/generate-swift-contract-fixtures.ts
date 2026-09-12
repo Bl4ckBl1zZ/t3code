@@ -20,6 +20,7 @@ import { formatAssistantCitationHref } from "../packages/shared/src/assistantCit
  *   node scripts/generate-swift-contract-fixtures.ts --check   # CI: fail if stale
  */
 import {
+  HostResourcesSnapshot,
   ServerSettings,
   ServerSettingsPatch,
   GitPreparePullRequestThreadInput,
@@ -1477,3 +1478,37 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(restartFixturePath, restartFixture);
+
+const hostResourcesPath = NodePath.join(NodePath.dirname(outputPath), "hostResources.json");
+const hostResourcesFixture =
+  JSON.stringify(
+    {
+      samples: [
+        {
+          sampledAt: 100000,
+          cpuUtilization: 0.2,
+          cpuCount: 8,
+          availableMemoryBytes: 8000,
+          totalMemoryBytes: 16000,
+        },
+        {
+          sampledAt: 100000,
+          cpuUtilization: null,
+          cpuCount: 0,
+          availableMemoryBytes: 0,
+          totalMemoryBytes: 16000,
+        },
+      ].map((sample) => Effect.runSync(Schema.encodeEffect(HostResourcesSnapshot)(sample))),
+    },
+    null,
+    2,
+  ) + "\n";
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(hostResourcesPath) ||
+    NodeFS.readFileSync(hostResourcesPath, "utf8") !== hostResourcesFixture
+  ) {
+    console.error("[swift-fixtures] hostResources.json is stale; regenerate fixtures.");
+    process.exitCode = 1;
+  }
+} else NodeFS.writeFileSync(hostResourcesPath, hostResourcesFixture);

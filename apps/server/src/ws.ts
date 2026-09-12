@@ -1,3 +1,4 @@
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import { withCreatedPullRequestLink } from "./git/linkCreatedPullRequest.ts";
 import { AgentSessionScanner } from "./project/AgentSessionScanner.ts";
 import { AgentSessionImporter } from "./project/AgentSessionImporter.ts";
@@ -847,6 +848,7 @@ const makeWsRpcLayer = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
+      const hostResources = yield* HostResources.HostResources;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
@@ -1975,6 +1977,10 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetProcessDiagnostics, processDiagnostics.read, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverGetHostResources]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetHostResources, hostResources.read, {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>

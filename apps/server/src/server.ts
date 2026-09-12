@@ -1,3 +1,4 @@
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as RestartContinuationService from "./orchestration-v2/RestartContinuationService.ts";
 import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
@@ -203,6 +204,7 @@ const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
 const UsageLayerLive = UsageService.layer.pipe(Layer.provide(ServerSettingsLayerLive));
 
 const ResourceDiagnosticsLayerLive = Layer.mergeAll(
+  HostResources.layer,
   ResourceTelemetryLayerLive,
   ProcessDiagnostics.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
