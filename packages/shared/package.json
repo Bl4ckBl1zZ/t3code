@@ -323,6 +323,10 @@
     "./nodeSqliteClient": {
       "types": "./src/nodeSqliteClient.ts",
       "import": "./src/nodeSqliteClient.ts"
+    },
+    "./desktopAppControl": {
+      "types": "./src/desktopAppControl.ts",
+      "import": "./src/desktopAppControl.ts"
     }
   },
   "scripts": {
