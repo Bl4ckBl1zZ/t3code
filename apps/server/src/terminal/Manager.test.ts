@@ -16,6 +16,8 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
@@ -209,6 +211,7 @@ const multiTerminalHistoryLogPath = (
   );
 
 interface CreateManagerOptions {
+  processTable?: Parameters<typeof TerminalManager.makeWithOptions>[0]["processTable"];
   resolveProviderInstanceEnvironment?: Parameters<
     typeof TerminalManager.makeWithOptions
   >[0]["resolveProviderInstanceEnvironment"];
@@ -251,6 +254,7 @@ const createManager = (
 
       const manager = yield* TerminalManager.makeWithOptions({
         logsDir,
+        ...(options.processTable === undefined ? {} : { processTable: options.processTable }),
         historyLineLimit,
         ptyAdapter,
         ...(options.historyByteLimit !== undefined
@@ -395,6 +399,97 @@ it.layer(
   Layer.merge(NodeServices.layer, ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
   { excludeTestServices: true },
 )("TerminalManager", (it) => {
+  it.effect("uses native process tables without spawning a Windows process scan", () =>
+    Effect.gen(function* () {
+      const activity = yield* Deferred.make<TerminalEvent>();
+      let scans = 0;
+      const { manager } = yield* createManager(5, {
+        subprocessPollIntervalMs: 20,
+        processTable: Effect.succeed([{ pid: 100, ppid: 9000, name: "ping.exe" }]),
+      }).pipe(
+        Effect.provide(withHostPlatform("win32")),
+        Effect.provideService(ProcessRunner.ProcessRunner, {
+          run: () =>
+            Effect.sync(() => {
+              scans += 1;
+              throw new Error("unexpected process scan");
+            }),
+        }),
+      );
+      const unsubscribe = yield* manager.subscribe((event) =>
+        event.type === "activity" && event.hasRunningSubprocess
+          ? Deferred.succeed(activity, event).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      yield* manager.open(openInput());
+      yield* TestClock.adjust(20);
+      expect(yield* Deferred.await(activity)).toMatchObject({ type: "activity", label: "ping" });
+      expect(scans).toBe(0);
+      const closing = yield* manager.close({ threadId: "thread-1" }).pipe(Effect.forkScoped);
+      yield* TestClock.adjust(10);
+      yield* Fiber.join(closing);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("backs off fallback scans and resumes the base cadence after native recovery", () =>
+    Effect.gen(function* () {
+      let available = false;
+      const nativeCalls: number[] = [];
+      const fallbackCalls: number[] = [];
+      const { manager, getEvents } = yield* createManager(5, {
+        subprocessPollIntervalMs: 20,
+        processTable: Effect.gen(function* () {
+          nativeCalls.push(yield* Clock.currentTimeMillis);
+          if (!available)
+            return yield* new TerminalManager.TerminalSubprocessCheckError({
+              command: "resource-monitor",
+            });
+          return [{ pid: 100, ppid: 9000, name: "vim" }];
+        }),
+      }).pipe(
+        Effect.provide(withHostPlatform("linux")),
+        Effect.provideService(ProcessRunner.ProcessRunner, {
+          run: () =>
+            Clock.currentTimeMillis.pipe(
+              Effect.map((now) => {
+                fallbackCalls.push(now);
+                return {
+                  stdout: "100 9000 vim",
+                  stderr: "",
+                  code: ChildProcessSpawner.ExitCode(0),
+                  timedOut: false,
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                  stdoutInvalidUtf8: false,
+                  stderrInvalidUtf8: false,
+                };
+              }),
+            ),
+        }),
+      );
+      yield* manager.open(openInput());
+      yield* TestClock.adjust(20);
+      expect(fallbackCalls).toHaveLength(1);
+      expect(yield* getEvents).toContainEqual(
+        expect.objectContaining({ type: "activity", hasRunningSubprocess: true, label: "vim" }),
+      );
+      yield* TestClock.adjust(40);
+      yield* TestClock.adjust(80);
+      expect(fallbackCalls.slice(1).map((time, index) => time - fallbackCalls[index]!)).toEqual([
+        40, 80,
+      ]);
+      available = true;
+      yield* TestClock.adjust(160);
+      yield* TestClock.adjust(20);
+      expect(fallbackCalls).toHaveLength(3);
+      expect(nativeCalls.at(-1)! - nativeCalls.at(-2)!).toBe(20);
+      const closing = yield* manager.close({ threadId: "thread-1" }).pipe(Effect.forkScoped);
+      yield* TestClock.adjust(10);
+      yield* Fiber.join(closing);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("spawns lazily and reuses running terminal per thread", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();

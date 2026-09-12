@@ -18,3 +18,5 @@ live screen and ANSI state as older replay history is discarded. Reconnecting
 or falling behind the retained tail restores the current tail once. Hidden web
 terminal drawers pause canvas rendering while continuing to receive output and
 answer terminal queries; revealing a drawer redraws its current screen.
+
+Terminal activity uses the native resource monitor to detect running commands. If the monitor is unavailable, process scanning falls back automatically and slows down after repeated failures to avoid excessive CPU use. Normal detection resumes when the monitor recovers.
