@@ -197,7 +197,13 @@ jobs:
         run: vp run --filter @t3tools/desktop ensure:electron
 
       - name: Check
-        run: vp check
+        run: |
+          # Avoid Vite+ panicking on EAGAIN while writing to the runner's output pipe.
+          check_log="$RUNNER_TEMP/vite-check.log"
+          check_status=0
+          vp check > "$check_log" 2>&1 || check_status=$?
+          cat "$check_log"
+          exit "$check_status"
 
       - name: Typecheck
         run: vp run typecheck
