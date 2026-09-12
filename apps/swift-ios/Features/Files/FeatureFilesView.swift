@@ -104,7 +104,7 @@ public struct FeatureFilesView: View {
     /// names no file and opens the tree root instead.
     static func deepLinkedEntry(path: String?) -> FeatureFileEntry? {
         guard let path else { return nil }
-        let segments = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).map(String.init)
+        let segments = FeatureFilePreviewPath.fileLinkSegments(path)
         guard let name = segments.last else { return nil }
         return FeatureFileEntry(
             path: FeatureFilePreviewPath.isAbsolute(path) ? path : segments.joined(separator: "/"),

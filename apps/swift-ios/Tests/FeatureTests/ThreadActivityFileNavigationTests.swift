@@ -51,4 +51,24 @@ final class ThreadActivityFileNavigationTests: XCTestCase {
         )
         XCTAssertEqual(route.path, ["apps", "mobile"])
     }
+    func testSeparatorOnlyRoutesDoNotBecomeAbsoluteFileLinks() {
+        for path in ["", "/", "//", #"\"#, #"C:\"#, "D:/"] {
+            let route = ThreadActivityFileRoute.build(environmentID: "env", currentThreadID: "thread",
+                activitySourceThreadID: "thread", relativePath: path)
+            XCTAssertEqual(route.path, [], path)
+            XCTAssertNil(route.absolutePath, path)
+        }
+    }
+
+    func testHostFilePathsPreserveTheirOriginalIdentity() {
+        for path in ["/tmp//image.png", #"C:\Users\me\image.png"#, #"\\host\share\image.png"#] {
+            let route = ThreadActivityFileRoute.build(environmentID: "env", currentThreadID: "thread",
+                activitySourceThreadID: "thread", relativePath: path, line: 4)
+            XCTAssertEqual(route.absolutePath, path)
+            XCTAssertEqual(route.path.last, "image.png")
+            XCTAssertEqual(route.line, "4")
+        }
+        XCTAssertEqual(FeatureFilePreviewPath.fileLinkSegments("src//app.swift"), ["src", "app.swift"])
+    }
+
 }
