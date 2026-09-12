@@ -33,6 +33,7 @@ struct FeatureComposerView: View {
     private let voice = VoiceComposerCoordinator.shared
     @State private var caret = VoiceComposerCaret()
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @SwiftUI.Environment(\.scenePhase) private var scenePhase
     @Binding private var storedText: String
     private var text: String {
         get { ReviewCommentContext.removingBlocks(from: AssistantCitation.removingMarkers(from: storedText)) }
@@ -62,6 +63,7 @@ struct FeatureComposerView: View {
     private let focused: FocusState<Bool>.Binding
     private let contextUsage: Double?
     private let forceExpanded: Bool
+    private let readingHistory: Bool
     private let pendingApprovals: [FeatureApproval]
     private let pendingUserInputs: [FeatureUserInput]
     private let isResolvingRequest: Bool
@@ -101,6 +103,7 @@ struct FeatureComposerView: View {
         onStop: @escaping () -> Void,
         contextUsage: Double? = nil,
         forceExpanded: Bool = false,
+        readingHistory: Bool = false,
         pendingApprovals: [FeatureApproval] = [],
         pendingUserInputs: [FeatureUserInput] = [],
         isResolvingRequest: Bool = false,
@@ -131,6 +134,7 @@ struct FeatureComposerView: View {
         self.onStop = onStop
         self.contextUsage = contextUsage
         self.forceExpanded = forceExpanded
+        self.readingHistory = readingHistory
         self.pendingApprovals = pendingApprovals
         self.pendingUserInputs = pendingUserInputs
         self.isResolvingRequest = isResolvingRequest
@@ -388,6 +392,7 @@ struct FeatureComposerView: View {
         .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: voice.state.isBusy)
         .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: isAttachMenuOpen)
         .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: mediaSurface)
+        .animation(scenePhase == .active && !reduceMotion ? .easeInOut(duration: 0.18) : nil, value: isRestingWhileReading)
     }
 
     @ViewBuilder
@@ -669,7 +674,7 @@ struct FeatureComposerView: View {
             return .handled
         }
         .font(T3Typography.composer)
-        .lineLimit(1...7)
+        .lineLimit(1...(isRestingWhileReading ? 1 : 7))
         // Ideal height, not proposed height: with the attachment strip in the
         // pill and the keyboard up (the new-thread sheet), the field's height
         // proposal gets squeezed and a vertical TextField answers that by
@@ -1031,6 +1036,14 @@ struct FeatureComposerView: View {
             cornerRadius: isAttachMenuOpen || mediaSurface != nil ? 32 : 27,
             style: .continuous
         )
+    }
+
+    /// Compact only the draft's line count. The editor, model footer, and mic never leave the tree.
+    private var isRestingWhileReading: Bool {
+        readingHistory && !forceExpanded && !focused.wrappedValue
+            && !voice.state.isBusy && !isPickingAttachment && !isAttachMenuOpen
+            && mediaSurface == nil && attachments.isEmpty && !attachmentPreparation.isPreparing
+            && pendingApprovals.isEmpty && pendingUserInputs.isEmpty && !isSending && !isStashing
     }
 
     private var isExpanded: Bool {
