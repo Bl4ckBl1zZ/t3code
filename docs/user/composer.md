@@ -224,3 +224,5 @@ foreground status.
 Multiline drafts stay expanded in the mobile browser, including text that wraps without explicit
 line breaks. While a previously started thread loads, the composer reserves room for its context
 meter. Returning to a known non-Git project keeps the branch toolbar hidden while status refreshes.
+
+The compact composer animates back to editing size while keeping send controls at its lower edge. Model names can use the available space, and workspace labels resize without pushing the trailing controls sideways. Disable panel animations or enable Reduce Motion for immediate layout changes.

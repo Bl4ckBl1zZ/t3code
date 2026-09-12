@@ -1,3 +1,4 @@
+import { usePanelAnimationSettings } from "../panelAnimations";
 import { cn } from "~/lib/utils";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -262,12 +263,13 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
 const COMPACT_EXPAND_HYSTERESIS_PX = 16;
 const COMPOSER_CONTEXT_MOTION_DURATION_MS = 180;
 const COMPOSER_CONTEXT_MOTION_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
-const COMPOSER_CONTEXT_CONTROL_SELECTOR = "[data-composer-context-control]";
+const COMPOSER_CONTEXT_LABEL_SELECTOR = "[data-composer-label]";
 
 function useLabelsOverflow(element: HTMLDivElement | null): boolean {
+  const motion = usePanelAnimationSettings();
   const [overflows, setOverflows] = useState(false);
-  const pendingControlRectsRef = useRef<Map<HTMLElement, DOMRect> | null>(null);
-  const controlAnimationsRef = useRef(new Map<HTMLElement, Animation>());
+  const pendingLabelRectsRef = useRef<Map<HTMLElement, DOMRect> | null>(null);
+  const labelAnimationsRef = useRef(new Map<HTMLElement, Animation>());
   // A render-synced mirror instead of useEffectEvent: the compiler memoizes
   // the event callback, which left observers reading the first render's null
   // element forever.
@@ -315,22 +317,14 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
       for (const inner of label.querySelectorAll<HTMLElement>("*")) {
         textWidth = Math.max(textWidth, inner.scrollWidth);
       }
-      if (compact) {
-        // Compact: the label is squeezed to zero width but keeps reporting
-        // the full width it would need when expanded.
-        needed += textWidth;
-      } else {
-        // Expanded: the label is in flow; only the clipped remainder is
-        // missing from the content sum.
-        needed += Math.max(0, textWidth - label.clientWidth);
-      }
+      needed += Math.max(0, textWidth - label.getBoundingClientRect().width);
     }
     const nextOverflows = compact
       ? needed > available - COMPACT_EXPAND_HYSTERESIS_PX
       : needed > available;
     if (nextOverflows !== compact) {
-      pendingControlRectsRef.current = new Map(
-        Array.from(current.querySelectorAll<HTMLElement>(COMPOSER_CONTEXT_CONTROL_SELECTOR)).map(
+      pendingLabelRectsRef.current = new Map(
+        Array.from(current.querySelectorAll<HTMLElement>(COMPOSER_CONTEXT_LABEL_SELECTOR)).map(
           (control) => [control, control.getBoundingClientRect()],
         ),
       );
@@ -339,28 +333,29 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
   }, []);
 
   useLayoutEffect(() => {
-    const previousRects = pendingControlRectsRef.current;
+    const previousRects = pendingLabelRectsRef.current;
     if (!previousRects) return;
-    pendingControlRectsRef.current = null;
+    pendingLabelRectsRef.current = null;
 
-    for (const animation of controlAnimationsRef.current.values()) {
+    for (const animation of labelAnimationsRef.current.values()) {
       animation.cancel();
     }
-    controlAnimationsRef.current.clear();
+    labelAnimationsRef.current.clear();
 
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!motion.active || document.visibilityState === "hidden") return;
 
-    for (const [control, previousRect] of previousRects) {
-      if (!control.isConnected) continue;
-      const nextRect = control.getBoundingClientRect();
-      const deltaX = previousRect.left - nextRect.left;
-      const deltaY = previousRect.top - nextRect.top;
-      if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) continue;
+    for (const [label, previousRect] of previousRects) {
+      if (!label.isConnected) continue;
+      const nextWidth = label.getBoundingClientRect().width;
+      if (Math.abs(previousRect.width - nextWidth) < 0.5) continue;
 
-      const animation = control.animate(
+      // Animate the space occupied by each label so flex layout keeps the
+      // trailing controls anchored. Translating the whole group after its
+      // width snaps sends expanded text beyond the strip's right edge.
+      const animation = label.animate(
         [
-          { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` },
-          { transform: "translate3d(0, 0, 0)" },
+          { width: `${previousRect.width}px`, maxWidth: `${previousRect.width}px` },
+          { width: `${nextWidth}px`, maxWidth: `${nextWidth}px` },
         ],
         {
           duration: COMPOSER_CONTEXT_MOTION_DURATION_MS,
@@ -368,22 +363,22 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
           fill: "backwards",
         },
       );
-      controlAnimationsRef.current.set(control, animation);
+      labelAnimationsRef.current.set(label, animation);
       animation.addEventListener(
         "finish",
         () => {
-          if (controlAnimationsRef.current.get(control) === animation) {
-            controlAnimationsRef.current.delete(control);
+          if (labelAnimationsRef.current.get(label) === animation) {
+            labelAnimationsRef.current.delete(label);
           }
         },
         { once: true },
       );
     }
-  }, [overflows]);
+  }, [overflows, motion.active]);
 
   useEffect(
     () => () => {
-      for (const animation of controlAnimationsRef.current.values()) {
+      for (const animation of labelAnimationsRef.current.values()) {
         animation.cancel();
       }
     },

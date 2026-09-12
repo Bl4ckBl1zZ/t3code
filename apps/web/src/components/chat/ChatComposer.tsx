@@ -1,3 +1,4 @@
+import { useComposerRestingTransition } from "./useComposerRestingTransition";
 import { Spinner } from "~/components/ui/spinner";
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import {
@@ -585,6 +586,7 @@ export interface ChatComposerProps {
   restingControlsHost?: HTMLDivElement | null;
   expandedTaskDrawer?: boolean;
   onRestingChange?: (resting: boolean) => void;
+  onOverlayHeightChange?: (height: number) => void;
   attachments?: ReactNode;
   promptHistoryMessages?: readonly ComposerPromptHistoryMessage[];
   composerDraftTarget: ScopedThreadRef | DraftId;
@@ -3112,6 +3114,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     nonPersistedComposerImageIds.length === 0;
   resting.eligible.current = canRestComposer;
   const isComposerResting = resting.collapsed && canRestComposer;
+  const restingControlsHostRef = useRef(props.restingControlsHost ?? null);
+  restingControlsHostRef.current = props.restingControlsHost ?? null;
+  const publishOverlayHeight = useCallback(
+    (height: number) => props.onOverlayHeightChange?.(height),
+    [props.onOverlayHeightChange],
+  );
+  const restingTransitionRef = useComposerRestingTransition(
+    isComposerResting || isComposerCollapsedMobile,
+    isComposerResting,
+    restingControlsHostRef,
+    publishOverlayHeight,
+    panelMotion.active,
+  );
   const expandRestingComposer = resting.expand;
   useEffect(() => {
     if (!canRestComposer) expandRestingComposer();
@@ -3332,7 +3347,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           instanceEntries={providerInstanceEntries}
           keybindings={keybindings}
           modelOptionsByInstance={modelOptionsByInstance}
-          triggerClassName={cn("-ms-2.5", isComposerResting && "min-w-12 max-w-40 px-1")}
+          triggerClassName={cn("-ms-2.5", isComposerResting && "min-w-12 px-1")}
           terminalOpen={terminalOpen}
           open={isComposerModelPickerOpen}
           {...(composerProviderState.modelPickerIconClassName
@@ -3547,6 +3562,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ? createPortal(composerModelControls, props.restingControlsHost)
         : null}
       <ComposerSurface.Main
+        ref={restingTransitionRef}
         className={composerProviderState.composerFrameClassName}
         onDragEnterCapture={composerMentionDragHandlers.onDragEnter}
         onDragOverCapture={composerMentionDragHandlers.onDragOver}
@@ -3555,6 +3571,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       >
         <div
           ref={composerSurfaceRef}
+          data-chat-composer-surface="true"
           data-chat-composer-mobile-collapsed={isComposerCollapsedMobile ? "true" : "false"}
           data-chat-composer-resting={isComposerResting ? "true" : "false"}
           onPointerDownCapture={(event) => {
@@ -3667,6 +3684,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
           <div
             ref={setComposerMenuAnchor}
+            data-chat-composer-body="true"
             inert={isComposerCollapsedMobile}
             className={cn(
               "relative px-3 pb-2 sm:px-4",
@@ -3854,6 +3872,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               {isComposerResting && composerImages.some((image) => image.type === "image") ? (
                 <div
                   data-chat-resting-composer-controls="true"
+                  data-chat-composer-resting-images="true"
                   className="flex shrink-0 items-center gap-1"
                 >
                   {composerImages
@@ -4005,6 +4024,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               {/* Right side: send / stop button */}
               <div
                 data-chat-composer-actions="right"
+                data-chat-composer-transition-actions="true"
                 data-chat-composer-primary-actions-compact={
                   isComposerPrimaryActionsCompact ? "true" : "false"
                 }

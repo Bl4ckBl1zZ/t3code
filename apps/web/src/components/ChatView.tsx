@@ -1647,6 +1647,16 @@ function ChatViewContent(props: ChatViewProps) {
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
+  const publishComposerOverlayHeight = useCallback(
+    (height: number) => {
+      if (height <= 0) return;
+      setComposerOverlayHeight((current) =>
+        resolveRestingComposerInset(current, Math.ceil(height), composerResting),
+      );
+    },
+    [composerResting],
+  );
+
   useLayoutEffect(() => {
     if (!composerOverlayElement) return;
 
@@ -8415,6 +8425,7 @@ function ChatViewContent(props: ChatViewProps) {
                             restingControlsHost={restingControlsHost}
                             expandedTaskDrawer={tasksDrawerExpanded}
                             onRestingChange={setComposerResting}
+                            onOverlayHeightChange={publishComposerOverlayHeight}
                             attachments={
                               <>
                                 <ComposerBannerStack items={composerBannerItems} />
