@@ -149,6 +149,8 @@ public protocol FeatureClient: AnyObject {
 
     func saveSettings(_ settings: FeatureSettings) async throws
 
+    func refreshProviderWorkspace(projectID: String, instanceID: String, cwd: String?) async throws
+
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry]
     func searchProjectFiles(
         projectID: String,
@@ -226,6 +228,8 @@ public protocol FeatureClient: AnyObject {
 }
 
 public extension FeatureClient {
+    func refreshProviderWorkspace(projectID: String, instanceID: String, cwd: String?) async throws {}
+
     func loadEarlierThreadTurns(id _: String) async throws -> FeatureThreadDetail? {
         nil
     }

@@ -154,7 +154,18 @@ public struct ServerProviderSkillSnapshot: Codable, Equatable, Sendable {
     public let shortDescription: String?
 }
 
+public struct ServerProviderWorkspaceSnapshot: Codable, Equatable, Sendable {
+    public let cwd: String
+    public let checkedAt: String
+    public let slashCommands: [ServerProviderSlashCommandSnapshot]
+    public let skills: [ServerProviderSkillSnapshot]
+}
+
 public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable {
+    public var workspaceSnapshots: [ServerProviderWorkspaceSnapshot]? = nil
+    public var setup: NativeProviderSetupCapabilities? = nil
+    public var supportsConversationRollback: Bool? = nil
+    public var supportsTextGeneration: Bool? = nil
     public var versionAdvisory: ServerProviderVersionAdvisory? = nil
     public var updateState: ServerProviderUpdateState? = nil
     public var usageLimits: ServerProviderUsageLimits? = nil

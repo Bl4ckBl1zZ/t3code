@@ -1,3 +1,4 @@
+import { ProviderAuthService } from "../provider/Services/ProviderAuthService.ts";
 import {
   CommandId,
   type OrchestrationV2DomainEvent,
@@ -68,6 +69,7 @@ export class ProviderTurnStartServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   never,
+  | ProviderAuthService
   | AttachmentMaterialization
   | EventSinkV2
   | ContextHandoffServiceV2
@@ -79,6 +81,7 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
+    const providerAuth = yield* ProviderAuthService;
     const attachmentMaterialization = yield* AttachmentMaterialization;
     const eventSink = yield* EventSinkV2;
     const contextHandoffService = yield* ContextHandoffServiceV2;
@@ -143,6 +146,112 @@ export const layer: Layer.Layer<
           runId,
           cause: `Run ${runId} is missing its execution projection state.`,
         });
+      }
+      if (
+        message.text.trim() === "/logout" &&
+        message.attachments.length === 0 &&
+        (yield* providerAuth.tryHandlePromptCommand({
+          instanceId: run.providerInstanceId,
+          text: message.text,
+          hasAttachments: false,
+        }))
+      ) {
+        const now = yield* DateTime.now;
+        const messageId = idAllocator.derive.messageFromProviderItem({
+          driver: providerThread.driver,
+          nativeItemId: `local-logout:${run.id}`,
+        });
+        const itemId = idAllocator.derive.turnItemFromProviderItem({
+          driver: providerThread.driver,
+          nativeItemId: `local-logout:${run.id}`,
+        });
+        const base = {
+          threadId: input.threadId,
+          runId,
+          nodeId: rootNode.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+        };
+        const text =
+          "Signed out of Google. Sign in again from your provider account in Settings to continue with Antigravity.";
+        const events: OrchestrationV2DomainEvent[] = [
+          {
+            ...base,
+            id: yield* idAllocator.allocate.event({ threadId: input.threadId }),
+            type: "message.updated",
+            payload: {
+              id: messageId,
+              threadId: input.threadId,
+              runId,
+              nodeId: rootNode.id,
+              createdBy: "agent",
+              creationSource: "server",
+              role: "assistant",
+              text,
+              attachments: [],
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          {
+            ...base,
+            id: yield* idAllocator.allocate.event({ threadId: input.threadId }),
+            type: "turn-item.updated",
+            payload: {
+              id: itemId,
+              threadId: input.threadId,
+              runId,
+              nodeId: rootNode.id,
+              providerThreadId: providerThread.id,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal:
+                Math.max(
+                  run.ordinal * 100,
+                  ...projection.turnItems
+                    .filter((item) => item.runId === run.id)
+                    .map((item) => item.ordinal),
+                ) + 1,
+              type: "assistant_message",
+              messageId,
+              text,
+              streaming: false,
+              status: "completed",
+              title: null,
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+            },
+          },
+          {
+            ...base,
+            id: yield* idAllocator.allocate.event({ threadId: input.threadId }),
+            type: "run-attempt.updated",
+            payload: { ...attempt, status: "completed", completedAt: now },
+          },
+          {
+            ...base,
+            id: yield* idAllocator.allocate.event({ threadId: input.threadId }),
+            type: "node.updated",
+            payload: { ...rootNode, status: "completed", completedAt: now },
+          },
+          {
+            ...base,
+            id: yield* idAllocator.allocate.event({ threadId: input.threadId }),
+            type: "run.updated",
+            payload: { ...run, status: "completed", completedAt: now },
+          },
+        ];
+        yield* eventSink.writeIfRunCurrent({
+          threadId: input.threadId,
+          runId,
+          activeAttemptId: attempt.id,
+          expectedStatus: "starting",
+          events,
+        });
+        return;
       }
       const providerSessionId = providerThread.providerSessionId;
       const isCurrentAttemptInStatus = (

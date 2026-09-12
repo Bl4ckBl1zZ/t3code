@@ -75,7 +75,9 @@ struct SettingsThreadOrganizationView: View {
                     ThreadDetailsDivider()
                     Text("Generated titles and Git messages").font(T3Typography.supportingStrong).padding(.horizontal, 14).padding(.top, 14)
                     ProviderModelPicker(
-                        providers: model.snapshot.providersByEnvironment?[environmentID] ?? [],
+                        providers: (model.snapshot.providersByEnvironment?[environmentID] ?? []).filter { provider in
+                            config?.providers.first(where: { $0.instanceId == provider.id })?.supportsTextGeneration != false
+                        },
                         selection: Binding(get: { generationModel }, set: { selection in
                             if let selection { Task { await save(.init(textGenerationModelSelection: coreSelection(selection))) } }
                         }),

@@ -224,3 +224,20 @@ describe("pending user input question progress", () => {
     });
   });
 });
+
+describe("native option identities", () => {
+  it("preserves opaque option values and forbids custom answers when requested", () => {
+    const question = {
+      ...singleSelectQuestion,
+      allowCustomAnswer: false,
+      options: [{ label: "Choice", description: "", value: " choice: opaque " }],
+    };
+    const draft = togglePendingUserInputOptionSelection(question, undefined, " choice: opaque ");
+    expect(resolvePendingUserInputAnswer(question, { ...draft, customAnswer: "not offered" })).toBe(
+      " choice: opaque ",
+    );
+    expect(buildPendingUserInputAnswers([question], { [question.id]: draft })).toEqual({
+      scope: " choice: opaque ",
+    });
+  });
+});

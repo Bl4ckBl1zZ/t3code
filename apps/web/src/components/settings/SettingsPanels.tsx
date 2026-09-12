@@ -2289,7 +2289,12 @@ export function GeneralSettingsPanel() {
   const textGenModel = textGenerationModelSelection.model;
   const textGenModelOptions = textGenerationModelSelection.options;
   const textGenerationModelInstanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+    applyProviderInstanceSettings(
+      deriveProviderInstanceEntries(
+        serverProviders.filter((provider) => provider.supportsTextGeneration !== false),
+      ),
+      settings,
+    ),
   );
   const textGenInstanceEntry = textGenerationModelInstanceEntries.find(
     (entry) => entry.instanceId === textGenInstanceId,
@@ -3228,7 +3233,7 @@ function EnvironmentProviderSettings(
     void (async () => {
       const result = await refreshServerProviders({
         environmentId: targetEnvironment.environmentId,
-        input: {},
+        input: { refreshModels: true },
       });
       refreshingRef.current = false;
       setIsRefreshingProviders(false);
@@ -3527,6 +3532,8 @@ function EnvironmentProviderSettings(
       ) : null;
     return (
       <ProviderInstanceCard
+        environmentId={props.environmentId}
+        environmentLabel={props.environmentLabel}
         key={row.instanceId}
         instanceId={row.instanceId}
         instance={row.instance}

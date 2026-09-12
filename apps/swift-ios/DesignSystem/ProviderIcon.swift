@@ -4,6 +4,7 @@ enum ProviderBrand: String {
     case openAI = "ProviderOpenAI"
     case claude = "ProviderClaude"
     case cursor = "ProviderCursor"
+    case antigravity = "ProviderAntigravity"
     case grok = "ProviderGrok"
     case openCode = "ProviderOpenCode"
 
@@ -25,6 +26,7 @@ enum ProviderBrand: String {
                 return .cursor
             case "grok", "xai", "xaigrok":
                 return .grok
+            case "antigravity", "googleantigravity": return .antigravity
             case "opencode":
                 return .openCode
             default:
@@ -37,7 +39,7 @@ enum ProviderBrand: String {
     var usesTemplateRendering: Bool {
         switch self {
         case .openAI, .cursor, .grok: true
-        case .claude, .openCode: false
+        case .claude, .openCode, .antigravity: false
         }
     }
 }

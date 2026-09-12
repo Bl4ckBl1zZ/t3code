@@ -3,11 +3,13 @@ import * as Schema from "effect/Schema";
 import type {
   ProviderSettingsFormAnnotation,
   ProviderSettingsFormControl,
+  ProviderSettingsFormOption,
   ProviderSettingsFormSchemaAnnotation,
 } from "@t3tools/contracts";
 import type { ProviderSettingsDefinition } from "./providerSettingsDefinitions.ts";
 
 export interface ProviderSettingsFieldModel {
+  readonly options?: ReadonlyArray<ProviderSettingsFormOption>;
   readonly key: string;
   readonly control: ProviderSettingsFormControl;
   readonly label: string;
@@ -93,6 +95,7 @@ export function deriveProviderSettingsFields(
           ...(formAnnotation.placeholder !== undefined
             ? { placeholder: formAnnotation.placeholder }
             : {}),
+          ...(formAnnotation.options ? { options: formAnnotation.options } : {}),
           clearWhenEmpty: formAnnotation.clearWhenEmpty ?? "omit",
           ...(formAnnotation.control === "switch"
             ? { defaultBooleanValue: readFieldBooleanDefault(fieldSchema) }

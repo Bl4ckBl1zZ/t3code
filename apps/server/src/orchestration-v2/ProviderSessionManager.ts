@@ -133,6 +133,9 @@ export type ProviderSessionManagerV2Error = typeof ProviderSessionManagerV2Error
 
 export interface ProviderSessionManagerV2Shape {
   readonly shutdown: Effect.Effect<void>;
+  readonly closeInstance: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
   /**
    * Whether any live session reports work held outside an active turn — the
    * same signal that pins a session against idle release, asked across all of
@@ -1443,6 +1446,22 @@ export const layerWithOptions = (
 
       return ProviderSessionManagerV2.of({
         shutdown,
+        closeInstance: (instanceId) =>
+          Effect.gen(function* () {
+            const owned = [...(yield* Ref.get(sessions)).values()].filter(
+              (entry) => entry.runtime.instanceId === instanceId,
+            );
+            yield* Effect.forEach(
+              owned,
+              (entry) =>
+                releaseEntry({
+                  providerSessionId: entry.runtime.providerSession.id,
+                  reason: "manual_shutdown",
+                  detail: "Provider account sign-in or sign-out.",
+                }),
+              { discard: true },
+            );
+          }),
         hasPendingBackgroundWork,
         open: (input) =>
           sessionOpen.withLock(

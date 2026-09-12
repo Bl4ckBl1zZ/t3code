@@ -1,3 +1,8 @@
+import {
+  isAntigravityUserInputRequest,
+  extractAntigravityUserInputQuestion,
+  makeAntigravityUserInputResponse,
+} from "../../provider/acp/AntigravityProtocol.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -9241,3 +9246,194 @@ describe("acpPostSettleMonitorPromptShouldSuppress", () => {
     );
   });
 });
+
+it.live("routes native Antigravity choices through V2 receipts even in full access", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const instanceId = ProviderInstanceId.make("antigravity-question-test");
+    const adapter = makeAcpAdapterV2({
+      crypto: yield* Crypto.Crypto,
+      instanceId,
+      flavor: {
+        driver: ACP_TEST_DRIVER,
+        capabilities: AcpProviderCapabilitiesV2,
+        isPermissionQuestion: isAntigravityUserInputRequest,
+        permissionQuestion: extractAntigravityUserInputQuestion,
+        permissionQuestionResponse: makeAntigravityUserInputResponse,
+        makeRuntime: makeMockRuntime({
+          childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+          mockAgentPath: yield* path.fromFileUrl(
+            new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+          ),
+          environment: {
+            T3_ACP_EMIT_TOOL_CALLS: "1",
+            T3_ACP_NATIVE_QUESTION: "1",
+            T3_ACP_ALLOW_ONCE_OPTION_ID: " choice: opaque ",
+          },
+        }),
+      },
+      fileSystem: yield* FileSystem.FileSystem,
+      idAllocator: yield* IdAllocatorV2,
+      serverConfig: yield* ServerConfig,
+    });
+    const threadId = ThreadId.make("antigravity-question-thread");
+    const modelSelection = { instanceId, model: "default" };
+    const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const runtime = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("antigravity-question-session"),
+      modelSelection,
+      runtimePolicy,
+    });
+    const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+    const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+    yield* runtime.events.pipe(
+      Stream.runForEach((event) => Queue.offer(events, event)),
+      Effect.forkScoped,
+    );
+    yield* runtime.startTurn(
+      makeTurnInput({
+        threadId,
+        providerThread,
+        instanceId,
+        runtimePolicy,
+        now: yield* DateTime.now,
+      }),
+    );
+    let pending: Extract<ProviderAdapterV2Event, { type: "runtime_request.updated" }> | undefined;
+    while (!pending) {
+      const event = yield* Queue.take(events);
+      if (event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending")
+        pending = event;
+    }
+    assert.equal(pending.runtimeRequest.kind, "user_input");
+    const invalid = yield* runtime
+      .respondToRuntimeRequest({
+        requestId: pending.runtimeRequest.id,
+        answers: { "interaction_tool-call-1": "not offered" },
+      })
+      .pipe(Effect.exit);
+    assert.isTrue(Exit.isFailure(invalid));
+    yield* runtime.respondToRuntimeRequest({
+      requestId: pending.runtimeRequest.id,
+      answers: { "interaction_tool-call-1": " choice: opaque " },
+    });
+    const duplicate = yield* runtime
+      .respondToRuntimeRequest({
+        requestId: pending.runtimeRequest.id,
+        answers: { "interaction_tool-call-1": " choice: opaque " },
+      })
+      .pipe(Effect.exit);
+    assert.isTrue(Exit.isFailure(duplicate));
+  }).pipe(Effect.provide(testLayer), Effect.scoped),
+);
+
+it.live("keeps late background command updates on their original V2 run", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const instanceId = ProviderInstanceId.make("antigravity-background-test");
+    let notify:
+      | Parameters<AcpSessionRuntime.AcpSessionRuntime["Service"]["handleSessionUpdate"]>[0]
+      | undefined;
+    const adapter = makeAcpAdapterV2({
+      crypto: yield* Crypto.Crypto,
+      instanceId,
+      flavor: {
+        driver: ACP_TEST_DRIVER,
+        capabilities: AcpProviderCapabilitiesV2,
+        preserveBackgroundToolUpdates: true,
+        extractBackgroundTaskId: (tool) => (tool.kind === "execute" ? tool.toolCallId : undefined),
+        makeRuntime: makeMockRuntime({
+          childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+          mockAgentPath: yield* path.fromFileUrl(
+            new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+          ),
+          wrapRuntime: (runtime) => ({
+            ...runtime,
+            handleSessionUpdate: (handler) => {
+              notify = handler;
+              return runtime.handleSessionUpdate(handler);
+            },
+            prompt: () =>
+              Effect.gen(function* () {
+                if (!notify) return yield* Effect.die("Missing native update handler");
+                yield* notify({
+                  sessionId: "mock-session-1",
+                  update: {
+                    sessionUpdate: "tool_call",
+                    toolCallId: "background-command",
+                    kind: "execute",
+                    title: "Build",
+                    status: "in_progress",
+                    rawInput: { command: "make" },
+                  },
+                });
+                return { stopReason: "end_turn" } as const;
+              }),
+          }),
+        }),
+      },
+      fileSystem: yield* FileSystem.FileSystem,
+      idAllocator: yield* IdAllocatorV2,
+      serverConfig: yield* ServerConfig,
+    });
+    const threadId = ThreadId.make("background-owner-thread");
+    const modelSelection = { instanceId, model: "default" };
+    const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const runtime = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("background-owner-session"),
+      modelSelection,
+      runtimePolicy,
+    });
+    const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+    const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+    yield* runtime.events.pipe(
+      Stream.runForEach((event) => Queue.offer(events, event)),
+      Effect.forkScoped,
+    );
+    const turnInput = makeTurnInput({
+      threadId,
+      providerThread,
+      instanceId,
+      runtimePolicy,
+      now: yield* DateTime.now,
+    });
+    yield* runtime.startTurn(turnInput);
+    let ended = false;
+    while (!ended) ended = (yield* Queue.take(events)).type === "turn.terminal";
+    assert.isTrue(yield* runtime.hasPendingBackgroundWork ?? Effect.succeed(false));
+    if (!notify) return yield* Effect.die("Missing native update handler");
+    yield* notify({
+      sessionId: "mock-session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "background-command",
+        status: "completed",
+        rawOutput: { output: "Build complete", exitCode: 0 },
+      },
+    });
+    let completed = false;
+    while (!completed) {
+      const event = yield* Queue.take(events);
+      if (
+        event.type === "turn_item.updated" &&
+        event.turnItem.type === "command_execution" &&
+        event.turnItem.status === "completed"
+      ) {
+        assert.equal(event.turnItem.runId, turnInput.runId);
+        assert.include(event.turnItem.output ?? "", "Build complete");
+        completed = true;
+      }
+    }
+    assert.isFalse(yield* runtime.hasPendingBackgroundWork ?? Effect.succeed(true));
+  }).pipe(Effect.provide(testLayer), Effect.scoped),
+);

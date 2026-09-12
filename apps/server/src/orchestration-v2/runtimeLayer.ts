@@ -1,3 +1,4 @@
+import { ProviderAuthServiceLive } from "../provider/Layers/ProviderAuthService.ts";
 import { agentBrowserAccessEnabled } from "./AgentBrowserAccessPolicy.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
@@ -141,7 +142,12 @@ const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
   ),
 );
 
+const providerAuthServiceProvided = ProviderAuthServiceLive.pipe(
+  Layer.provide(providerSessionManagerProvided),
+);
+
 const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
+  Layer.provide(providerAuthServiceProvided),
   Layer.provide(
     Layer.mergeAll(
       attachmentMaterializationProvided,
@@ -308,6 +314,7 @@ const threadTitleRegenerationWorkerProvided = threadTitleRegenerationWorkerLive.
 );
 
 export const OrchestrationV2LayerLive = Layer.mergeAll(
+  providerAuthServiceProvided,
   orchestratorProvided,
   threadManagementProvided,
   effectWorkerProvided,

@@ -269,12 +269,16 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
               </Text>
               <View className="gap-2">
                 {question.options.map((option) => {
-                  const selected = isPendingUserInputOptionSelected(draft, option.label);
+                  const selected = isPendingUserInputOptionSelected(
+                    draft,
+                    option.value ?? option.label,
+                    option.value !== undefined,
+                  );
                   const description =
                     option.description !== option.label ? option.description : undefined;
                   return (
                     <Pressable
-                      key={option.label}
+                      key={option.value ?? option.label}
                       disabled={!canRespond}
                       className={cn(
                         "min-h-12 w-full rounded-2xl border px-3.5 py-3",
@@ -286,7 +290,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                         props.onSelectOption(
                           props.pendingUserInput.requestId,
                           question,
-                          option.label,
+                          option.value ?? option.label,
                         )
                       }
                     >
@@ -311,17 +315,19 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                   );
                 })}
               </View>
-              <TextInput
-                editable={canRespond}
-                value={draft?.customAnswer ?? ""}
-                onChangeText={(value) =>
-                  props.onChangeCustomAnswer(props.pendingUserInput.requestId, question.id, value)
-                }
-                onFocus={() => props.onInputFocusChange?.(true)}
-                onBlur={() => props.onInputFocusChange?.(false)}
-                placeholder="Or type a custom answer"
-                className="min-h-[54px] rounded-2xl border border-neutral-200 bg-white px-3.5 py-3 font-sans text-base text-neutral-950 dark:border-white/8 dark:bg-neutral-950/70 dark:text-neutral-50"
-              />
+              {question.allowCustomAnswer !== false && (
+                <TextInput
+                  editable={canRespond}
+                  value={draft?.customAnswer ?? ""}
+                  onChangeText={(value) =>
+                    props.onChangeCustomAnswer(props.pendingUserInput.requestId, question.id, value)
+                  }
+                  onFocus={() => props.onInputFocusChange?.(true)}
+                  onBlur={() => props.onInputFocusChange?.(false)}
+                  placeholder="Or type a custom answer"
+                  className="min-h-[54px] rounded-2xl border border-neutral-200 bg-white px-3.5 py-3 font-sans text-base text-neutral-950 dark:border-white/8 dark:bg-neutral-950/70 dark:text-neutral-50"
+                />
+              )}
             </View>
           );
         })}

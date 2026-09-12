@@ -47,6 +47,25 @@ const multiSelectQuestion = {
 } as const;
 
 describe("pending user input answers", () => {
+  it("preserves opaque values without matching other choices by trimmed labels", () => {
+    const question = {
+      ...singleSelectQuestion,
+      allowCustomAnswer: false,
+      options: [
+        { label: "Choice", description: "", value: " choice: opaque " },
+        { label: "Choice", description: "", value: "choice: opaque" },
+      ],
+    };
+    const draft = togglePendingUserInputOptionSelection(question, undefined, " choice: opaque ");
+    expect(isPendingUserInputOptionSelected(draft, " choice: opaque ", true)).toBe(true);
+    expect(isPendingUserInputOptionSelected(draft, "choice: opaque", true)).toBe(false);
+    expect(
+      buildPendingUserInputAnswers([question], {
+        runtime: { ...draft, customAnswer: "not allowed" },
+      }),
+    ).toEqual({ runtime: " choice: opaque " });
+  });
+
   it("replaces single-select options and toggles multi-select options", () => {
     expect(
       togglePendingUserInputOptionSelection(

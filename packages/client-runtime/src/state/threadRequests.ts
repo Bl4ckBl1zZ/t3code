@@ -17,10 +17,12 @@ export interface ThreadPendingApproval {
 }
 
 export interface ThreadUserInputQuestion {
+  readonly allowCustomAnswer?: boolean | undefined;
   readonly id: string;
   readonly header: string;
   readonly question: string;
   readonly options: ReadonlyArray<{
+    readonly value?: string | undefined;
     readonly label: string;
     readonly description: string;
   }>;
@@ -58,7 +60,10 @@ export function derivePendingThreadRequests(
       userInputs.push({
         requestId: request.id,
         createdAt: DateTime.formatIso(request.createdAt),
-        questions: item.questions.map((question) => ({ ...question, multiSelect: false })),
+        questions: item.questions.map((question) => ({
+          ...question,
+          multiSelect: question.multiSelect ?? false,
+        })),
         responseCapability,
       });
       continue;

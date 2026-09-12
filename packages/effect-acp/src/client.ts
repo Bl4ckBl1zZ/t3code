@@ -1,6 +1,5 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Stdio from "effect/Stdio";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -24,6 +23,12 @@ import {
 import { makeChildStdio, makeTerminationError } from "./_internal/stdio.ts";
 
 export interface AcpClientOptions {
+  readonly transformStdout?: (
+    stdout: ChildProcessSpawner.ChildProcessHandle["stdout"],
+  ) => AcpProtocol.AcpStdio["stdin"];
+  readonly transformSessionUpdate?: (
+    notification: AcpSchema.SessionNotification,
+  ) => AcpSchema.SessionNotification;
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
   readonly logger?: (event: AcpProtocol.AcpProtocolLogEvent) => Effect.Effect<void, never>;
@@ -311,7 +316,7 @@ interface BufferedNotificationHandler<A> {
 }
 
 export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
-  stdio: Stdio.Stdio,
+  stdio: AcpProtocol.AcpStdio,
   options: AcpClientOptions = {},
   terminationError?: Effect.Effect<AcpError.AcpError>,
 ): Effect.fn.Return<AcpClient["Service"], never, Scope.Scope> {
@@ -414,6 +419,9 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
       ? { onOutgoingResponseFailure: options.onOutgoingResponseFailure }
       : {}),
     ...(options.onOutgoingResponse ? { onOutgoingResponse: options.onOutgoingResponse } : {}),
+    ...(options.transformSessionUpdate
+      ? { transformSessionUpdate: options.transformSessionUpdate }
+      : {}),
     onNotification: dispatchNotification,
     onExtRequest: dispatchExtRequest,
   });
@@ -582,14 +590,19 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
   });
 });
 
-export const layer = (stdio: Stdio.Stdio, options: AcpClientOptions = {}): Layer.Layer<AcpClient> =>
-  Layer.effect(AcpClient, make(stdio, options));
+export const layer = (
+  stdio: AcpProtocol.AcpStdio,
+  options: AcpClientOptions = {},
+): Layer.Layer<AcpClient> => Layer.effect(AcpClient, make(stdio, options));
 
 export const layerChildProcess = (
   handle: ChildProcessSpawner.ChildProcessHandle,
   options: AcpClientOptions = {},
 ): Layer.Layer<AcpClient> => {
-  const stdio = makeChildStdio(handle);
+  const stdio = {
+    ...makeChildStdio(handle),
+    stdin: options.transformStdout?.(handle.stdout) ?? handle.stdout,
+  };
   const terminationError = makeTerminationError(handle);
   return Layer.effect(AcpClient, make(stdio, options, terminationError));
 };

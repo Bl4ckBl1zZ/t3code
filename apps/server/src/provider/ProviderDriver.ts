@@ -34,6 +34,8 @@ import type * as Scope from "effect/Scope";
 import type { TextGenerationShape } from "../textGeneration/TextGeneration.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
 import type { HermesSessionCatalogShape } from "../hermes/HermesSessionCatalog.ts";
+import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
+import type { ServerProvider } from "@t3tools/contracts";
 import type { ProviderDriverError } from "./Errors.ts";
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
 
@@ -76,6 +78,9 @@ export interface ProviderInstance {
     ProviderConsumeResetCreditResult,
     ProviderDriverError
   >;
+  readonly auth?: ProviderAuthController;
+  readonly refreshModels?: () => Effect.Effect<void, ProviderDriverError>;
+  readonly snapshotForCwd?: (cwd: string) => Effect.Effect<ServerProvider, ProviderDriverError>;
   readonly orchestrationAdapter: ProviderAdapterV2Shape;
   readonly textGeneration: TextGenerationShape;
   /**

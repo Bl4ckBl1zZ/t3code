@@ -1,4 +1,7 @@
-"use client";
+import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
+import { readProviderConfigString } from "./providerSettingsFields";
+import type { EnvironmentId } from "@t3tools/contracts";
+("use client");
 
 import { Spinner } from "~/components/ui/spinner";
 
@@ -415,6 +418,8 @@ function ProviderEnvironmentFieldRow(props: {
 }
 
 interface ProviderInstanceCardProps {
+  readonly environmentId?: EnvironmentId;
+  readonly environmentLabel?: string;
   readonly instanceId: ProviderInstanceId;
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: DriverOption | undefined;
@@ -477,6 +482,8 @@ interface ProviderInstanceCardProps {
  *     false wins, then envelope, then config, then the driver default).
  */
 export function ProviderInstanceCard({
+  environmentId,
+  environmentLabel,
   instanceId,
   instance,
   driverOption,
@@ -962,6 +969,19 @@ export function ProviderInstanceCard({
               />
             </div>
 
+            {driverKind === "antigravity" && environmentId ? (
+              <ProviderSetupSection
+                environmentId={environmentId}
+                environmentLabel={environmentLabel ?? "this environment"}
+                instanceId={instanceId}
+                provider={liveProvider}
+                enabled={enabled}
+                readOnly={readOnly}
+                binaryPath={readProviderConfigString(instance.config, "binaryPath")}
+                authMethod={readAntigravityAuthMethod(instance.config)}
+                onEnable={() => updateEnabled(true)}
+              />
+            ) : null}
             {driverOption ? (
               <ProviderSettingsForm
                 definition={driverOption}

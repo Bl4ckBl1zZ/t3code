@@ -57,6 +57,19 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   activities and the continually repainting text shimmer are not imported.
   The fork's unified image/file/pdf/video upload queue replaces upstream's separate
   `files` array; per-attachment progress, retry and video playback are carried through it.
+- Antigravity is ported from upstream `06336460c9988f29c71e839c4c9c840c4552e077`
+  and its follow-ups through `d29c56a5c404cb0f58d3b2ac41762fa0d0ac28d4` onto the fork's
+  shared ACP V2 adapter. Managed installation, isolated per-account Google authentication,
+  account model catalogs, native permissions/questions, attachments and workspace skills
+  are available in web and native Swift settings/composers. `/logout` closes the configured
+  account's V2 sessions and completes as a local command; it never starts a new agent turn.
+  Antigravity subagent batches remain V2 tool items, active until the parent turn settles;
+  the native protocol supplies no individual child IDs or models, so no child threads are
+  invented. Commands that outlive the parent retain V2 background ownership. The fork's
+  process-tree supervision, cancellation quarantine and response receipts remain intact.
+  No V1 adapter, task bridge, pagination or SQLite migration is imported. Expo receives
+  only question-wire compatibility, preserving exact option IDs and custom-answer limits.
+
 - Sidebar file drops are ported to both web sidebar layouts and search results using the
   fork's unified attachment queue. Deferred drops are scoped by environment and thread,
   survive repeated drops, and are cleared individually on navigation failure or when a

@@ -1,3 +1,5 @@
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
 import { Spinner } from "~/components/ui/spinner";
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
@@ -633,7 +635,11 @@ export interface ChatComposerProps {
     isLastQuestion: boolean;
     canAdvance: boolean;
     customAnswer: string;
-    activeQuestion: { id: string; multiSelect?: boolean | undefined } | null;
+    activeQuestion: {
+      id: string;
+      multiSelect?: boolean | undefined;
+      allowCustomAnswer?: boolean | undefined;
+    } | null;
   } | null;
   activePendingResolvedAnswers: Record<string, unknown> | null;
   activePendingIsResponding: boolean;
@@ -1059,10 +1065,32 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     threadIsAuthoritative: threadOwnsModelSelection,
     settings,
   });
-  const selectedProviderStatus = useMemo(
-    () => selectedProviderEntry?.snapshot ?? null,
-    [selectedProviderEntry],
-  );
+  const selectedProviderStatus = useMemo(() => {
+    const snapshot = selectedProviderEntry?.snapshot;
+    if (!snapshot) return null;
+    const workspace = snapshot.workspaceSnapshots?.find((entry) => entry.cwd === gitCwd);
+    return workspace
+      ? { ...snapshot, slashCommands: workspace.slashCommands, skills: workspace.skills }
+      : snapshot;
+  }, [selectedProviderEntry, gitCwd]);
+  const refreshWorkspace = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+  });
+  useEffect(() => {
+    if (!gitCwd || selectedProvider !== "antigravity" || !selectedProviderEntry?.snapshot.enabled)
+      return;
+    void refreshWorkspace({
+      environmentId,
+      input: { instanceId: selectedInstanceId, cwd: gitCwd },
+    });
+  }, [
+    environmentId,
+    selectedInstanceId,
+    selectedProvider,
+    selectedProviderEntry?.snapshot.enabled,
+    gitCwd,
+    refreshWorkspace,
+  ]);
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
     [selectedProviderEntry],
@@ -3514,9 +3542,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           )}
                           onPointerDown={(event) => event.preventDefault()}
                           onClick={expandMobileComposer}
+                          disabled={
+                            activePendingProgress?.activeQuestion?.allowCustomAnswer === false
+                          }
                           aria-label="Write custom answer"
                         >
-                          {activePendingProgress?.customAnswer || "Write custom answer"}
+                          {activePendingProgress?.activeQuestion?.allowCustomAnswer === false
+                            ? "Select an answer above"
+                            : activePendingProgress?.customAnswer || "Write custom answer"}
                         </button>
                         {activePendingProgress?.activeQuestion?.multiSelect ? (
                           <ComposerPrimaryActions
@@ -3652,7 +3685,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               >
                 {activePendingProgress
                   ? activePendingProgress.customAnswer ||
-                    "Type your own answer, or leave this blank to use the selected option"
+                    (activePendingProgress.activeQuestion?.allowCustomAnswer === false
+                      ? "Select one of the offered answers"
+                      : "Type your own answer, or leave this blank to use the selected option")
                   : prompt.trim() ||
                     (noProviderAvailable
                       ? providerAvailabilityCopy.placeholder
@@ -3854,7 +3889,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isComposerApprovalState
                     ? (activePendingApproval?.detail ?? "Resolve this approval request to continue")
                     : activePendingProgress
-                      ? "Type your own answer, or leave this blank to use the selected option"
+                      ? activePendingProgress.activeQuestion?.allowCustomAnswer === false
+                        ? "Select one of the offered answers above"
+                        : "Type your own answer, or leave this blank to use the selected option"
                       : showPlanFollowUpPrompt && activeProposedPlan
                         ? "Add feedback to refine the plan, or leave this blank to implement it"
                         : projectSelectionRequired
@@ -3867,7 +3904,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 ? DISCONNECTED_COMPOSER_PLACEHOLDER
                                 : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
-                disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
+                disabled={
+                  isConnecting ||
+                  isComposerApprovalState ||
+                  projectSelectionRequired ||
+                  activePendingProgress?.activeQuestion?.allowCustomAnswer === false
+                }
               />
               {isComposerResting && composerImages.some((image) => image.type === "image") ? (
                 <div

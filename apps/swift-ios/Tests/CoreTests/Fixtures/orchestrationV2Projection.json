@@ -394,11 +394,14 @@
       "requestId": "request-input",
       "questions": [
         {
+          "multiSelect": false,
+          "allowCustomAnswer": false,
           "id": "q1",
           "header": "Pick",
           "question": "Which one?",
           "options": [
             {
+              "value": "choice: opaque",
               "label": "A",
               "description": "First"
             }
@@ -1036,11 +1039,14 @@
         "requestId": "request-input",
         "questions": [
           {
+            "multiSelect": false,
+            "allowCustomAnswer": false,
             "id": "q1",
             "header": "Pick",
             "question": "Which one?",
             "options": [
               {
+                "value": "choice: opaque",
                 "label": "A",
                 "description": "First"
               }

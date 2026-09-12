@@ -458,9 +458,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await createProject(client: client, path: path)
     }
 
+    func refreshProviderWorkspace(projectID: String, instanceID: String, cwd: String?) async throws {
+        let route = try projectRoute(for: projectID)
+        let config = try await route.client.serverConfig()
+        guard let provider = config.providers.first(where: { $0.instanceId == instanceID }),
+              provider.driver == "antigravity", provider.enabled,
+              provider.setup != nil else { return }
+        let root = cwd
+        guard let root else { return }
+        _ = try await route.client.refreshProviderSnapshots(instanceID: instanceID, cwd: root)
+    }
+
     func refreshSetupProviders(environmentID: String) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
-        return try await client.refreshProviderSnapshots()
+        return try await client.refreshProviderSnapshots(refreshModels: true)
     }
 
     func makeAgentSetupTerminal(environmentID: String, providerInstanceID: String) async throws -> any FeatureAgentSetupTerminal {
@@ -576,7 +587,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
-        if refresh { return try await client.refreshProviderSnapshots() }
+        if refresh { return try await client.refreshProviderSnapshots(refreshModels: true) }
         return try await client.serverConfig().providers
     }
 
@@ -4637,7 +4648,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         title: item.base.title ?? approvalTitle(for: requestKind),
                         detail: prompt ?? "",
                         options: options?.compactMap { option in
-                            FeatureApprovalDecision(providerDecision: option.decision).map { FeatureApprovalOption(decision: $0, label: option.label) }
+                            FeatureApprovalDecision(providerDecision: option.decision).map { FeatureApprovalOption(warning: option.warning, decision: $0, label: option.label) }
                         }
                     )
                 )
@@ -4662,8 +4673,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                                 header: $0.header,
                                 question: $0.question,
                                 options: $0.options.map {
-                                    FeatureInputOption(label: $0.label, detail: $0.description)
-                                }
+                                    FeatureInputOption(label: $0.label, detail: $0.description, value: $0.value)
+                                },
+                                allowsMultiple: $0.multiSelect ?? false,
+                                allowCustomAnswer: $0.allowCustomAnswer
                             )
                         }
                     )
@@ -5414,7 +5427,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         modelPreferences: [String: ProviderModelPreferencesSnapshot]
     ) -> [FeatureProvider] {
         Self.normalizedProviders(providers.map { provider in
-                FeatureProvider(
+                var mapped = FeatureProvider(
                     id: provider.instanceId,
                     name: provider.displayName ?? providerDisplayName(provider.driver),
                     isAvailable: provider.enabled
@@ -5468,6 +5481,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         )
                     }
                 )
+                mapped.workspaceSnapshots = provider.workspaceSnapshots?.map { workspace in
+                    FeatureProviderWorkspace(cwd: workspace.cwd,
+                        slashCommands: workspace.slashCommands.map { .init(name: $0.name, description: $0.description, inputHint: $0.input?.hint) },
+                        skills: workspace.skills.map { .init(name: $0.name, displayName: $0.displayName, description: $0.description,
+                            shortDescription: $0.shortDescription, path: $0.path, scope: $0.scope, isEnabled: $0.enabled) })
+                }
+                return mapped
             })
     }
 
@@ -6739,6 +6759,18 @@ extension NativeFeatureClient: FeatureHermesInboxManaging {
 /// touched rather than to the active one: Settings lists every paired server,
 /// and a write has to land on the one it was made against.
 extension NativeFeatureClient: FeatureServerSettingsManaging {
+    func providerSetup(environmentID: String, instanceID: String, action: NativeProviderSetupAction) async throws {
+        let client = try await environmentClient(id: environmentID)
+        try await client.providerSetup(instanceID: instanceID, action: action)
+    }
+    func providerAuthEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderAuthState, Error> {
+        let client = try await environmentClient(id: environmentID)
+        return await client.providerAuthEvents(instanceID: instanceID)
+    }
+    func providerInstallEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderInstallState, Error> {
+        let client = try await environmentClient(id: environmentID)
+        return await client.providerInstallEvents(instanceID: instanceID)
+    }
     func providerUpdateEvents(environmentID: String) async throws -> AsyncThrowingStream<[ServerProviderSnapshot], Error> {
         let client = try await environmentClient(id: environmentID)
         let events = await client.serverConfigEvents()

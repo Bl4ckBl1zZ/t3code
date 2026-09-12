@@ -1,3 +1,5 @@
+import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
+import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import { consumeInstanceResetCredit } from "./provider/consumeResetCredit.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import { withCreatedPullRequestLink } from "./git/linkCreatedPullRequest.ts";
@@ -25,6 +27,7 @@ import {
   type ApplicationStoredEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
+  ProviderSetupError,
   ClientConnectionMethod,
   ClientDeviceType,
   ClientOs,
@@ -664,6 +667,8 @@ const makeWsRpcLayer = (
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const providerAuth = yield* ProviderAuthService;
+      const providerInstallation = yield* makeProviderInstallation();
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
@@ -1858,13 +1863,62 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
-            (input.instanceId !== undefined
-              ? providerRegistry.refreshInstance(input.instanceId)
-              : providerRegistry.refresh()
-            ).pipe(
-              Effect.tap(() => usageLimitSources.refresh),
-              Effect.map((providers) => ({ providers })),
-            ),
+            Effect.gen(function* () {
+              const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+              const candidates = (yield* instances.listInstances).filter(
+                (instance) =>
+                  instance.enabled &&
+                  (input.instanceId === undefined || instance.instanceId === input.instanceId),
+              );
+              for (const instance of candidates) {
+                const snapshot = yield* instance.snapshot.getSnapshot;
+                if (input.refreshModels && snapshot.installed && instance.refreshModels) {
+                  yield* instance.refreshModels().pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderSetupError({
+                          instanceId: instance.instanceId,
+                          operation: "refreshModels",
+                          detail: cause.message,
+                          cause,
+                        }),
+                    ),
+                  );
+                }
+                if (input.cwd && instance.snapshotForCwd) {
+                  yield* instance.snapshotForCwd(input.cwd).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderSetupError({
+                          instanceId: instance.instanceId,
+                          operation: "refreshWorkspace",
+                          detail: cause.message,
+                          cause,
+                        }),
+                    ),
+                  );
+                }
+              }
+              if (input.cwd && !input.refreshModels) {
+                // Workspace discovery only reads skills. Selecting a thread must
+                // not launch a disposable provider health-check process.
+                const snapshots = yield* Effect.forEach(
+                  candidates,
+                  (instance) => instance.snapshot.getSnapshot,
+                );
+                const providers = (yield* providerRegistry.getProviders).map(
+                  (provider) =>
+                    snapshots.find((snapshot) => snapshot.instanceId === provider.instanceId) ??
+                    provider,
+                );
+                return { providers };
+              }
+              const providers = yield* input.instanceId !== undefined
+                ? providerRegistry.refreshInstance(input.instanceId)
+                : providerRegistry.refresh();
+              yield* usageLimitSources.refresh;
+              return { providers };
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.providerUploadFeedback]: (input) =>
@@ -2012,6 +2066,52 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.providerAuthStart]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerAuthStart,
+            providerAuth.start(input, currentSessionId),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerAuthComplete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerAuthComplete,
+            providerAuth.complete(input, currentSessionId),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerAuthCancel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerAuthCancel,
+            providerAuth.cancel(input, currentSessionId),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerAuthLogout]: (input) =>
+          observeRpcEffect(WS_METHODS.providerAuthLogout, providerAuth.logout(input), {
+            "rpc.aggregate": "provider",
+          }),
+        [WS_METHODS.providerAuthSubscribe]: (input) =>
+          observeRpcStream(
+            WS_METHODS.providerAuthSubscribe,
+            providerAuth.subscribe(input, currentSessionId),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerInstallStart]: (input) =>
+          observeRpcEffect(WS_METHODS.providerInstallStart, providerInstallation.start(input), {
+            "rpc.aggregate": "provider",
+          }),
+        [WS_METHODS.providerInstallCancel]: (input) =>
+          observeRpcEffect(WS_METHODS.providerInstallCancel, providerInstallation.cancel(input), {
+            "rpc.aggregate": "provider",
+          }),
+        [WS_METHODS.providerInstallSubscribe]: (input) =>
+          observeRpcStream(
+            WS_METHODS.providerInstallSubscribe,
+            providerInstallation.subscribe(input),
+            { "rpc.aggregate": "provider" },
+          ),
+        [WS_METHODS.providerInstallRemove]: (input) =>
+          observeRpcEffect(WS_METHODS.providerInstallRemove, providerInstallation.remove(input), {
+            "rpc.aggregate": "provider",
+          }),
         [WS_METHODS.providerConsumeResetCredit]: (input) =>
           observeRpcEffect(
             WS_METHODS.providerConsumeResetCredit,
