@@ -133,3 +133,12 @@ The fork's automatic updater still waits for idle V2 agents and background work.
 hold that automatic install path through the token's lifetime so it cannot race the acknowledgement.
 The Swift app implements the same handoff, bounded reconnect retries, and environment-scoped operation
 guard. Its progress subscription does not replay a preparation after reconnect.
+
+Explicit update requests carry optional `continueRunningThreads`. The server wraps both update
+paths with the V2 RestartContinuationService: prepare immediately before the launcher request, or
+at desktop commit after download. Markers identify the exact thread, run and message. Failed
+handoffs clear them, while an interrupt after accepted shutdown retains them for startup recovery.
+Desktop commits serialize marker persistence with install admission; continuation token intent
+expires after five minutes. Existing startup recovery still enforces provider-session identity and
+stop/archive/settlement guards. The target environment's capability and saved continuation preference
+determine whether shared web/mobile and native Swift update requests include the opt-in flag.

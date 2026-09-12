@@ -86,7 +86,9 @@ updates**, select the environment, then choose **Check and update**. Confirm the
 the screen open while the app downloads, restarts, and reconnects. Completion means the server has
 returned on the version the desktop app actually downloaded from its update channel.
 
-The desktop app briefly disconnects all clients on that machine. Active agent work may be interrupted.
+The desktop app briefly disconnects all clients on that machine. Enable **Continue after restarts**
+in Thread organization to resume eligible running threads after the update. With that preference off,
+active agent work may be interrupted.
 A failed installer leaves a readable error and the app attempts to restore its backend connections.
 Older desktop apps display instructions for updating on the host instead.
 

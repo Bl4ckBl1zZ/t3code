@@ -107,10 +107,16 @@ public actor T3Client {
         guard let descriptor = config.environment, descriptor.capabilities.desktopAppUpdate == true else {
             throw RPCError.remote("Update the desktop app on that machine to enable remote updates.")
         }
+        var updatePayload: [String: JSONValue] = ["targetVersion": .string(descriptor.serverVersion)]
+        if descriptor.capabilities.threadRestartContinuation == true &&
+            (config.settings?.continueThreadsAfterServerUpdate ?? false) {
+            updatePayload["continueRunningThreads"] = .bool(true)
+        }
+        let payload = JSONValue.object(updatePayload)
         return try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask { [self] in
                 let events = await rpc.subscribe("server.updateServerWithProgress",
-                    payload: .object(["targetVersion": .string(descriptor.serverVersion)]),
+                    payload: payload,
                     reconnect: false, as: NativeServerUpdateProgress.self)
                 var prepared: NativeServerUpdateResult?
                 for try await event in events {
