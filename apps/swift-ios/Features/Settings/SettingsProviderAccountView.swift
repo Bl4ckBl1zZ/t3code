@@ -13,6 +13,9 @@ struct SettingsProviderAccountView: View {
     @State private var pending = false
     @State private var errorMessage: String?
     @State private var confirmRemoval = false
+    @State private var installedProvider: ServerProviderSnapshot?
+    @State private var updatingProvider = false
+    @State private var checkingUpdate = false
     private let definitions = NativeProviderSettingsDefinition.catalog
     private var definition: NativeProviderSettingsDefinition? { definitions.first { $0.driver == draft?.driver } }
 
@@ -30,12 +33,13 @@ struct SettingsProviderAccountView: View {
                         }
                     }
                     if let definition {
-                        identitySection(draft, definition: definition)
-                        configurationSection(draft, definition: definition)
-                        environmentSection(draft, definition: definition)
+                        identitySection(draft, definition: definition).disabled(updatingProvider || !supported)
+                        if !draft.isNew { providerUpdateSection }
+                        configurationSection(draft, definition: definition).disabled(updatingProvider || !supported)
+                        environmentSection(draft, definition: definition).disabled(updatingProvider || !supported)
                         if draft.canRemove {
                             SettingsSection(title: "Remove account", footer: "Existing conversations remain, but this provider account will no longer be available for new runs.") {
-                                Button("Remove account", role: .destructive) { confirmRemoval = true }
+                                Button("Remove account", role: .destructive) { confirmRemoval = true }.disabled(updatingProvider || !supported)
                                     .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
                             }
                         }
@@ -46,7 +50,7 @@ struct SettingsProviderAccountView: View {
                     if !supported { Text("Update this server to edit provider accounts.").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary) }
                 }
                 if pending { ProgressView("Saving account…").frame(maxWidth: .infinity) }
-            }.padding(18).disabled(pending || !supported)
+            }.padding(18).disabled(pending)
         }
         .background(T3Colors.background)
         .navigationTitle(instanceID == nil ? "Add account" : "Account configuration")
@@ -55,13 +59,95 @@ struct SettingsProviderAccountView: View {
         .interactiveDismissDisabled(pending)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { Task { await save() } }.disabled(loading || pending || draft == nil || definition == nil || !supported)
+                Button("Save") { Task { await save() } }.disabled(loading || pending || updatingProvider || draft == nil || definition == nil || !supported)
             }
         }
         .task { await load() }
+        .task(id: environmentID) { await observeProviderUpdates() }
         .confirmationDialog("Remove this provider account?", isPresented: $confirmRemoval, titleVisibility: .visible) {
             Button("Remove account", role: .destructive) { Task { await remove() } }
         } message: { Text("You can add it again using the same account ID. Stored environment credentials for this account will be removed.") }
+    }
+
+    private var providerUpdateSection: some View {
+        SettingsSection(title: "Installed provider", footer: "Updates run on this account’s paired server using its owning installer. Save account changes before updating.") {
+            VStack(alignment: .leading, spacing: 12) {
+                if let provider = installedProvider {
+                    LabeledContent("Version", value: provider.version ?? "Unknown")
+                    if let latest = provider.versionAdvisory?.latestVersion {
+                        LabeledContent("Latest", value: latest)
+                    }
+                    if provider.versionAdvisory?.offersUpdate == true, provider.enabled {
+                        Button { Task { await performProviderUpdate() } } label: {
+                            Label(updatingProvider ? "Updating…" : "Update provider", systemImage: "arrow.down.circle")
+                                .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
+                        }
+                        .disabled(updatingProvider || checkingUpdate || provider.updateState?.isActive == true || draft?.envelope != draft?.original)
+                        .accessibilityIdentifier("provider-update")
+                    } else if provider.versionAdvisory?.status == "behind_latest" {
+                        Text("Update this provider using its original installer on the paired server.")
+                            .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                    }
+                    if let command = provider.versionAdvisory?.updateCommand {
+                        Button("Copy update command") { UIPasteboard.general.string = command }
+                            .frame(minHeight: T3Metrics.minimumTapTarget)
+                    }
+                    if let state = provider.updateState, state.status != "idle" {
+                        Text(state.message ?? state.status.capitalized)
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(state.status == "failed" ? T3Colors.warning : T3Colors.textSecondary)
+                        if let output = state.output, !output.isEmpty {
+                            DisclosureGroup("Update output") {
+                                Text(output).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+                if updatingProvider || checkingUpdate { ProgressView(updatingProvider ? "Updating provider…" : "Checking version…") }
+                Button("Refresh version") { Task { await refreshProviderUpdate() } }
+                    .frame(minHeight: T3Metrics.minimumTapTarget)
+                    .disabled(updatingProvider || checkingUpdate)
+            }.padding(SettingsMetrics.rowPadding)
+        }
+    }
+
+    private func observeProviderUpdates() async {
+        guard let instanceID else { return }
+        do {
+            let events = try await manager.providerUpdateEvents(environmentID: environmentID)
+            for try await providers in events {
+                guard !Task.isCancelled else { return }
+                installedProvider = providers.first { $0.instanceId == instanceID }
+            }
+        } catch {
+            if !Task.isCancelled { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func refreshProviderUpdate() async {
+        guard let instanceID, !checkingUpdate, !updatingProvider else { return }
+        checkingUpdate = true
+        defer { checkingUpdate = false }
+        do {
+            let providers = try await manager.refreshProviderUpdates(environmentID: environmentID)
+            guard !Task.isCancelled else { return }
+            installedProvider = providers.first { $0.instanceId == instanceID }
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func performProviderUpdate() async {
+        guard let instanceID, let driver, !updatingProvider, !checkingUpdate,
+              installedProvider?.enabled == true, installedProvider?.versionAdvisory?.offersUpdate == true,
+              installedProvider?.updateState?.isActive != true, draft?.envelope == draft?.original else { return }
+        updatingProvider = true
+        errorMessage = nil
+        defer { updatingProvider = false }
+        do {
+            let providers = try await manager.updateProvider(environmentID: environmentID, driver: driver, instanceID: instanceID)
+            guard !Task.isCancelled else { return }
+            installedProvider = providers.first { $0.instanceId == instanceID }
+            await onSaved()
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func identitySection(_ value: NativeProviderAccountDraft, definition: NativeProviderSettingsDefinition) -> some View {
@@ -174,6 +260,7 @@ struct SettingsProviderAccountView: View {
         do {
             let config = try await manager.providerModelConfiguration(environmentID: environmentID)
             guard !Task.isCancelled, let settings = config.settings else { return }
+            if installedProvider == nil { installedProvider = config.providers.first { $0.instanceId == instanceID } }
             let original = try NativeProviderAccountDraft.resolve(instanceID: instanceID, driver: driver,
                 instances: settings.providerInstances, legacy: settings.providerDefinitions, definition: definitions.first { $0.driver == driver })
             draft = NativeProviderAccountDraft(driver: driver, instanceID: instanceID, original: original)

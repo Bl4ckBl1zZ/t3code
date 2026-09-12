@@ -31,6 +31,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   Settings,
 >(input: {
   readonly maintenanceCapabilities: ServerProviderShape["maintenanceCapabilities"];
+  readonly resolveMaintenance?: ServerProviderShape["resolveMaintenance"];
   readonly getSettings: Effect.Effect<Settings, ServerSettingsError>;
   readonly streamSettings: Stream.Stream<Settings>;
   readonly haveSettingsChanged: (previous: Settings, next: Settings) => boolean;
@@ -255,6 +256,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
   return {
     maintenanceCapabilities: input.maintenanceCapabilities,
+    ...(input.resolveMaintenance ? { resolveMaintenance: input.resolveMaintenance } : {}),
     updateUsageLimits: (update) =>
       Effect.gen(function* () {
         const next = yield* Ref.modify(snapshotStateRef, (state) => {

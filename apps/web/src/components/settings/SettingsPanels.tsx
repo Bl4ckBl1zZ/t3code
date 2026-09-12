@@ -166,11 +166,9 @@ import { ThemeLibrary } from "./ThemeSettings";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import {
-  canOneClickUpdateProviderCandidate,
-  collectProviderUpdateCandidates,
-  hasOneClickUpdateProviderCandidate,
   isProviderUpdateActive,
-  type ProviderUpdateCandidate,
+  isProviderSettingsUpdateCandidate,
+  type ProviderSettingsUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { WorktreeRetentionSettingsSection } from "./WorktreeRetentionSettingsSection";
@@ -3170,8 +3168,9 @@ function EnvironmentProviderSettings(
   });
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
-  const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
-    ReadonlySet<ProviderDriverKind>
+  const updatingInstanceIdsRef = useRef(new Set<ProviderInstanceId>());
+  const [updatingProviderInstanceIds, setUpdatingProviderInstanceIds] = useState<
+    ReadonlySet<ProviderInstanceId>
   >(() => new Set());
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
     props.initialInstanceId ?? null,
@@ -3183,7 +3182,7 @@ function EnvironmentProviderSettings(
   const refreshingRef = useRef(false);
 
   const providerUpdateCandidates = useMemo(
-    () => collectProviderUpdateCandidates(serverProviders),
+    () => serverProviders.filter(isProviderSettingsUpdateCandidate),
     [serverProviders],
   );
   const providerUpdateCandidateByInstanceId = useMemo(
@@ -3244,21 +3243,11 @@ function EnvironmentProviderSettings(
   }, [targetEnvironment, refreshServerProviders, readOnly]);
 
   const runProviderUpdate = useCallback(
-    async (candidate: ProviderUpdateCandidate) => {
+    async (candidate: ProviderSettingsUpdateCandidate) => {
       if (readOnly || !targetEnvironment) return;
-      let started = false;
-      setUpdatingProviderDrivers((previous) => {
-        if (previous.has(candidate.driver)) {
-          return previous;
-        }
-        started = true;
-        const next = new Set(previous);
-        next.add(candidate.driver);
-        return next;
-      });
-      if (!started) {
-        return;
-      }
+      if (updatingInstanceIdsRef.current.has(candidate.instanceId)) return;
+      updatingInstanceIdsRef.current.add(candidate.instanceId);
+      setUpdatingProviderInstanceIds((previous) => new Set(previous).add(candidate.instanceId));
 
       const result = await updateProvider({
         environmentId: targetEnvironment.environmentId,
@@ -3280,12 +3269,10 @@ function EnvironmentProviderSettings(
           }),
         );
       }
-      setUpdatingProviderDrivers((previous) => {
-        if (!previous.has(candidate.driver)) {
-          return previous;
-        }
+      updatingInstanceIdsRef.current.delete(candidate.instanceId);
+      setUpdatingProviderInstanceIds((previous) => {
         const next = new Set(previous);
-        next.delete(candidate.driver);
+        next.delete(candidate.instanceId);
         return next;
       });
     },
@@ -3519,18 +3506,10 @@ function EnvironmentProviderSettings(
       : undefined;
     const isDriverUpdateRunning =
       updateCandidate !== undefined &&
-      (updatingProviderDrivers.has(updateCandidate.driver) ||
-        serverProviders.some(
-          (provider) =>
-            provider.driver === updateCandidate.driver && isProviderUpdateActive(provider),
-        ));
-    const showInlineUpdateButton =
-      updateCandidate !== undefined &&
-      hasOneClickUpdateProviderCandidate(updateCandidate, serverProviders);
-    const canRunInlineUpdate =
-      updateCandidate !== undefined &&
-      canOneClickUpdateProviderCandidate(updateCandidate, serverProviders) &&
-      !updatingProviderDrivers.has(updateCandidate.driver);
+      (updatingProviderInstanceIds.has(updateCandidate.instanceId) ||
+        isProviderUpdateActive(updateCandidate));
+    const showInlineUpdateButton = updateCandidate !== undefined;
+    const canRunInlineUpdate = updateCandidate !== undefined && !isDriverUpdateRunning;
     const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
       hiddenModels: [],
       modelOrder: [],

@@ -517,14 +517,17 @@ export const ProviderRegistryLive = Layer.effect(
 
     const getProviderMaintenanceCapabilitiesForInstance = Effect.fn(
       "getProviderMaintenanceCapabilitiesForInstance",
-    )(function* (instanceId: ProviderInstanceId, provider: ProviderDriverKind) {
-      const instance = Array.from((yield* Ref.get(liveSubsRef)).values()).find(
-        (candidate) => candidate.instanceId === instanceId,
-      );
-      return (
-        instance?.snapshot.maintenanceCapabilities ??
-        makeManualProviderMaintenanceCapabilities(provider)
-      );
+    )(function* (
+      instanceId: ProviderInstanceId,
+      provider: ProviderDriverKind,
+      options?: { readonly fresh?: boolean },
+    ) {
+      const instance = yield* instanceRegistry.getInstance(instanceId);
+      if (!instance || instance.driverKind !== provider)
+        return makeManualProviderMaintenanceCapabilities(provider);
+      return instance.snapshot.resolveMaintenance
+        ? yield* instance.snapshot.resolveMaintenance(options)
+        : instance.snapshot.maintenanceCapabilities;
     });
 
     /**

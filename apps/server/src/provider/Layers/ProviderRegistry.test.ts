@@ -891,6 +891,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             skills: [],
           } as const satisfies ServerProvider;
           const refreshCalls = yield* Ref.make(0);
+          const maintenanceReads: boolean[] = [];
+          let retired = false;
           const instance = {
             instanceId: codexInstanceId,
             driverKind: codexDriver,
@@ -901,6 +903,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             displayName: undefined,
             enabled: true,
             snapshot: {
+              resolveMaintenance: (options?: { readonly fresh?: boolean }) =>
+                Effect.sync(() => {
+                  maintenanceReads.push(options?.fresh === true);
+                  return makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: codexDriver,
+                    packageName: "@openai/codex",
+                  });
+                }),
               maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
                 provider: codexDriver,
                 packageName: null,
@@ -918,7 +928,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             ProviderInstanceRegistry.ProviderInstanceRegistry,
             {
               getInstance: (instanceId) =>
-                Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
+                Effect.sync(() =>
+                  !retired && instanceId === codexInstanceId ? instance : undefined,
+                ),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
               streamChanges: Stream.empty,
@@ -942,6 +954,21 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             const registry = yield* ProviderRegistry.ProviderRegistry;
             assert.deepStrictEqual(yield* registry.getProviders, [initialProvider]);
             assert.strictEqual(yield* Ref.get(refreshCalls), 0);
+            const owned = yield* registry.getProviderMaintenanceCapabilitiesForInstance(
+              codexInstanceId,
+              codexDriver,
+              { fresh: true },
+            );
+            assert.strictEqual(owned.packageName, "@openai/codex");
+            assert.deepStrictEqual(maintenanceReads, [true]);
+            retired = true;
+            const removed = yield* registry.getProviderMaintenanceCapabilitiesForInstance(
+              codexInstanceId,
+              codexDriver,
+              { fresh: true },
+            );
+            assert.isNull(removed.packageName);
+            assert.deepStrictEqual(maintenanceReads, [true]);
           }).pipe(Effect.provide(runtimeServices));
         }),
       );
