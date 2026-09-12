@@ -724,6 +724,14 @@ export function createServerEnvironmentAtoms<R, E>(
           target,
           Effect.gen(function* () {
             const currentConfig = atomRegistry.get(configValueAtom(target.environmentId));
+            const updateInput = {
+              ...target.input,
+              ...(target.input.continueRunningThreads === undefined &&
+              currentConfig?.environment.capabilities.threadRestartContinuation === true &&
+              currentConfig.settings.continueThreadsAfterServerUpdate
+                ? { continueRunningThreads: true }
+                : {}),
+            };
             fromVersion = currentConfig?.environment.serverVersion ?? targetVersion;
             atomRegistry.set(stateAtom, {
               status: "running",
@@ -742,7 +750,7 @@ export function createServerEnvironmentAtoms<R, E>(
                   const streamExit = yield* environmentRegistry
                     .runStream(
                       target.environmentId,
-                      runStream(WS_METHODS.serverUpdateServerWithProgress, target.input),
+                      runStream(WS_METHODS.serverUpdateServerWithProgress, updateInput),
                     )
                     .pipe(
                       Stream.runForEach((event) =>
@@ -771,7 +779,7 @@ export function createServerEnvironmentAtoms<R, E>(
               : yield* Effect.gen(function* () {
                   const selfUpdateMethod = currentConfig?.environment.capabilities.serverSelfUpdate;
                   const exit = yield* environmentRegistry
-                    .run(target.environmentId, request(WS_METHODS.serverUpdateServer, target.input))
+                    .run(target.environmentId, request(WS_METHODS.serverUpdateServer, updateInput))
                     .pipe(Effect.exit);
                   if (Exit.isSuccess(exit)) {
                     return exit.value;

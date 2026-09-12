@@ -1426,3 +1426,11 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   shared contract but gains no new screen. Fork release feeds and idle-only automatic
   installs remain intact; remote preparations temporarily hold automatic installs until
   commitment, cancellation or expiry. No V1 thread runtime is involved.
+
+- Explicit update continuation (`5b7d72aad1`) now uses V2 run/message markers at the
+  launcher handoff or desktop token commit, never at download time. Failed handoffs clear
+  their exact markers; accepted shutdown interruptions preserve them. Desktop commit
+  serialization prevents a retry from installing before marker persistence, and continuation
+  tokens expire with the preparation. Web/Expo's shared update command and Swift read the
+  target environment's saved opt-in preference and capability. No V1 thread projection,
+  provider reactor or new migration is carried.

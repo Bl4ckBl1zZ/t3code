@@ -8,6 +8,7 @@ struct SettingsDesktopUpdatesView: View {
     @State private var loading = false
     @State private var pending = false
     @State private var confirming = false
+    @State private var continueRunningThreads = false
     @State private var stage: String?
     @State private var errorMessage: String?
     @State private var successMessage: String?
@@ -31,6 +32,10 @@ struct SettingsDesktopUpdatesView: View {
                         if let descriptor { Text("Version \(descriptor.serverVersion)").font(T3Typography.supportingStrong) }
                         Text("Check the desktop app on this machine for an update. It will close and relaunch, briefly disconnecting its clients.")
                             .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                        if descriptor?.capabilities.threadRestartContinuation == true {
+                            Text(continueRunningThreads ? "Eligible threads will resume after the update." : "Enable restart continuation in Thread organization to resume running threads after updates.")
+                                .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                        }
                         if descriptor?.capabilities.desktopAppUpdate == true {
                             Button { confirming = true } label: {
                                 Label("Check and update", systemImage: "arrow.down.circle")
@@ -57,7 +62,7 @@ struct SettingsDesktopUpdatesView: View {
         .confirmationDialog("Update this machine’s desktop app?", isPresented: $confirming, titleVisibility: .visible) {
             Button("Update and relaunch") { Task { await update() } }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("Active agent work may be interrupted while the app restarts.") }
+        } message: { Text(continueRunningThreads ? "Eligible running threads will resume after the app restarts." : "Active agent work may be interrupted while the app restarts.") }
     }
 
     private var stageLabel: String {
@@ -80,6 +85,7 @@ struct SettingsDesktopUpdatesView: View {
             let config = try await manager.providerModelConfiguration(environmentID: requestedID)
             guard !Task.isCancelled, environmentID == requestedID else { return }
             descriptor = config.environment
+            continueRunningThreads = config.settings?.continueThreadsAfterServerUpdate ?? false
         } catch { if !Task.isCancelled, environmentID == requestedID { errorMessage = error.localizedDescription } }
     }
 

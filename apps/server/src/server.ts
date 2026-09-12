@@ -6,7 +6,7 @@ import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementRea
 import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
-import { EnvironmentHttpApi } from "@t3tools/contracts";
+import { ServerSelfUpdateError, EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -204,6 +204,29 @@ const HostPowerMonitorLayerLive = HostPowerMonitor.layer.pipe(
 // would open a second reader on the desktop telemetry fd.
 const DesktopAppUpdateLayerLive = DesktopAppUpdate.layer.pipe(
   Layer.provide(DesktopTelemetryReceiverLayerLive),
+);
+
+const ServerSelfUpdateLayerLive = Layer.effect(
+  ServerSelfUpdate.ServerSelfUpdate,
+  Effect.gen(function* () {
+    const selfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    const continuation = yield* RestartContinuationService.RestartContinuationService;
+    const config = yield* ServerConfig.ServerConfig;
+    const mapError = (cause: unknown) =>
+      new ServerSelfUpdateError({
+        reason: "Could not preserve running threads for the update.",
+        cause,
+      });
+    return yield* ServerSelfUpdate.withRunningThreadContinuation({
+      mode: config.mode,
+      selfUpdate,
+      prepare: continuation.prepare("update").pipe(Effect.mapError(mapError)),
+      clear: (markers) => continuation.clear(markers).pipe(Effect.mapError(mapError)),
+    });
+  }),
+).pipe(
+  Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
+  Layer.provide(RestartContinuationService.layer),
 );
 
 const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
@@ -578,7 +601,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
   Layer.provide(PreviewAutomationBroker.layer),
-  Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
+  Layer.provide(ServerSelfUpdateLayerLive),
   Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),
   Layer.provide(httpCompressionLayer),
