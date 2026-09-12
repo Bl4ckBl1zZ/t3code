@@ -24,6 +24,7 @@ export const RIGHT_PANEL_KINDS = [
   "preview",
   "terminal",
   "pull-request",
+  "thread-pull-requests",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -49,6 +50,7 @@ export type RightPanelSurface =
       revealRequestId: number;
     }
   | { id: "plan"; kind: "plan" }
+  | { id: "thread-pull-requests"; kind: "thread-pull-requests" }
   | {
       /**
        * A change request opened beside a thread or in the pull-request list's shared panel.
@@ -167,6 +169,8 @@ const singletonSurface = (
   kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request">,
 ): RightPanelSurface => {
   switch (kind) {
+    case "thread-pull-requests":
+      return { id: "thread-pull-requests", kind };
     case "diff":
       return { id: "diff", kind };
     case "files":

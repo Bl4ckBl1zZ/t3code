@@ -101,3 +101,9 @@ Pull requests created or opened through a thread’s Git actions are automatical
 thread. They appear in its pull-request collection, including requests targeting an upstream
 repository. Existing manual links keep their labels. Actions from an unsent draft have no saved
 thread to attach to.
+
+Open **Linked pull requests** from a thread’s link or stack badge to review its full collection
+beside the conversation. The panel shows checks, reviews, conflicts and stack order from the
+latest saved host state. Open individual requests in separate tabs, copy their links, or unlink
+them from the row menu. The right-panel launcher opens this collection even before a request
+has been linked.

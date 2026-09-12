@@ -1,3 +1,4 @@
+import { useRightPanelStore } from "~/rightPanelStore";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import {
   resolveThreadPullRequestChains,
@@ -205,7 +206,16 @@ export function ThreadPullRequestsControl({
       </PopoverTrigger>
       <PopoverPopup align="end" className="w-[min(28rem,calc(100vw-2rem))]">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <h3 className="text-sm font-medium">Linked pull requests</h3>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              setOpen(false);
+              useRightPanelStore.getState().open(threadRef, "thread-pull-requests");
+            }}
+          >
+            Open linked pull requests
+          </Button>
           <Button
             variant="ghost"
             size="xs"

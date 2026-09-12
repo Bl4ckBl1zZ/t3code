@@ -512,6 +512,8 @@ function surfaceTitle(
       );
     case "plan":
       return "Plan";
+    case "thread-pull-requests":
+      return "Linked pull requests";
     case "pull-request":
       return `#${surface.number}`;
     case "agents":
@@ -587,6 +589,8 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3 shrink-0" />;
     case "plan":
       return <ClipboardList className="size-3 shrink-0" />;
+    case "thread-pull-requests":
+      return <GitPullRequest className="size-3 shrink-0" />;
     case "pull-request": {
       const status = pullRequestStatuses?.[surface.id] ?? null;
       const toneClassName =

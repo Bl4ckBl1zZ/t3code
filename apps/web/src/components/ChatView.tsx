@@ -1,3 +1,4 @@
+import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { latestWorkspaceMutationId } from "../hooks/useWorkspaceMutationRefresh";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
@@ -5365,14 +5366,18 @@ function ChatViewContent(props: ChatViewProps) {
     linkedPullRequest: linkedThreadPullRequest ?? activeThreadShell?.branchPullRequest,
     linkedPullRequestStatus,
   });
-  // The right panel offers the thread's own change request, so it can only offer it once the
-  // branch has one; until then the picker says so rather than opening an empty panel.
+  const supportsThreadPullRequests =
+    isServerThread && serverConfig?.environment.capabilities.threadPullRequestsV2 === true;
   const addPullRequestSurface = useCallback(() => {
-    if (activeThreadPr === null) return;
-    openThreadPullRequest(activeThreadPr.number);
-  }, [activeThreadPr, openThreadPullRequest]);
+    if (supportsThreadPullRequests && activeThreadRef) {
+      useRightPanelStore.getState().open(activeThreadRef, "thread-pull-requests");
+      return;
+    }
+    if (activeThreadPr !== null) openThreadPullRequest(activeThreadPr.number);
+  }, [supportsThreadPullRequests, activeThreadRef, activeThreadPr, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
-    supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
+    supportsPullRequests &&
+    (supportsThreadPullRequests || (activeThreadPr !== null && threadRepository !== null));
   // Primitive slice of the displayed PR for the settle-rule memos below:
   // resolveDisplayedThreadPr returns a fresh object every render, so memoize
   // on the fields the rules read instead of the object identity.
@@ -7717,6 +7722,8 @@ function ChatViewContent(props: ChatViewProps) {
           initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
+    ) : renderedRightPanelSurface?.kind === "thread-pull-requests" ? (
+      <ThreadPullRequestsPanel threadRef={activeThreadRef} />
     ) : renderedRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
       <PullRequestDetailGhost />
     ) : renderedRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (

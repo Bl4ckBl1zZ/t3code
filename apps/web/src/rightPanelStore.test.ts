@@ -931,3 +931,19 @@ describe("document attachment panels", () => {
     ).toEqual([]);
   });
 });
+
+it("keeps the linked collection beside individual PR tabs and restores it after reload", () => {
+  const store = useRightPanelStore.getState();
+  store.open(refA, "thread-pull-requests");
+  store.openPullRequest(refA, { projectId: "project-a", repository: "owner/repo", number: 4 });
+  store.open(refA, "thread-pull-requests");
+  const saved = migratePersistedRightPanelState({
+    byThreadKey: useRightPanelStore.getState().byThreadKey,
+  });
+  expect(selectActiveRightPanel(saved.byThreadKey, refA)).toBe("thread-pull-requests");
+  expect(selectThreadRightPanelState(saved.byThreadKey, refA).surfaces).toHaveLength(2);
+  store.closeSurface(refA, "thread-pull-requests");
+  expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe(
+    "pull-request",
+  );
+});

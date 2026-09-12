@@ -1194,3 +1194,11 @@ Web and native machine preferences use `threadRestartContinuation`, default fals
 settings, capabilities and optional run/message fields. All newly added PR/settlement/recovery roots
 are registered before update activation. Cross-environment shared preferences and per-update
 handoff integration remain distinct parity work; the persisted machine opt-in covers normal updates.
+
+### Linked pull-request collection panel
+
+The upstream hydrated collection panel uses V2 shell snapshots and the fork's metadata
+link/unlink commands. It opens from the thread header/sidebar collection and right-panel
+launcher, retains independent PR detail tabs, and shows stack structure, host checks,
+review decisions, conflicts, author, branch direction and sync age. Unknown host fields
+stay unknown. The native linked-PR sheet already consumes the same snapshots.
