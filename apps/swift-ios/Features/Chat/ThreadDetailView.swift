@@ -1347,7 +1347,8 @@ enum FeatureComposerDraftRestoration {
                 saved: saved?.workspace ?? fallbackWorkspace,
                 baseline: baseline.workspace,
                 current: current.workspace
-            )
+            ),
+            routing: current.routing == baseline.routing ? saved?.routing : current.routing
         )
     }
 

@@ -4,6 +4,7 @@ import Foundation
 /// Implementations are main-actor isolated so UI state never depends on locking.
 @MainActor
 public protocol FeatureClient: AnyObject {
+    func hostResources(environmentID: String) async throws -> HostResourcesSnapshot
     func initialSnapshot() async throws -> FeatureSnapshot
     func events() -> AsyncStream<FeatureEvent>
 
@@ -558,4 +559,11 @@ public extension FeatureClient {
 
 extension FeatureClient {
     public func setActiveOrder(id: String, key: String?) async throws { throw FeatureCapabilityUnavailable("Active thread ordering") }
+}
+
+
+extension FeatureClient {
+    public func hostResources(environmentID: String) async throws -> HostResourcesSnapshot {
+        throw FeatureCapabilityUnavailable("Automatic machine selection")
+    }
 }

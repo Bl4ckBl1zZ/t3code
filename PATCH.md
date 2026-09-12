@@ -476,9 +476,9 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   - Custom model names/option descriptors (`5a433244d0`, `d92dca74eb`) are now ported
     through the fork's existing provider snapshots and V2 option selection, as detailed above.
     Imported custom-provider selection still needs a dedicated importer audit.
-  - Shared project defaults and scoped overrides (`9f40b2f563`) need the retained project
-    aggregate, fork-owned migration numbers, and Swift settings parity. Connection load balancing
-    (`420fd76f60`) needs V2 launch selection and an explicit multi-machine workspace policy.
+  - Shared project defaults and scoped overrides (`9f40b2f563`) are ported through the retained
+    project aggregate and Swift settings. Connection load balancing (`420fd76f60`) is ported
+    through V2 draft selection and native execution targets; see the policy below.
   - The welcome wizard (`09aac71563`) is now ported onto the V2 importer and account-specific
     setup terminals, as detailed below.
     Server-side PR discovery (`223ff4490f`) and actual PR terminal timestamps (`050690d1bc`)
@@ -1227,3 +1227,21 @@ or process history. Sampling is on demand, deduplicates concurrent callers and e
 five seconds; no idle polling is introduced. Shared TypeScript and Swift routing policies use
 client receipt timestamps, reject saturated/stale machines and apply user weights. The RPC uses
 orchestration-read authorization. Automatic draft UI integration is a separate client concern.
+
+### Automatic selection for new tasks
+
+Web/desktop and Swift expose client-local automatic balancing and per-machine preferences
+(default off, weight 50; zero means manual only). Only connected machines with the same
+repository identity, ready matching provider instance/driver, and selected model can compete.
+Fresh whole-host capacity decides once per draft; busy, unknown, stale, or unreachable hosts
+cannot win. Failure leaves an explicit retry/manual path and blocks automatic submission.
+Queries mount only while selecting; native capacity requests time out after five seconds.
+
+Web persists the choice on its V2 draft session and carries the selected model/options when
+changing project scope. Branch selection overrides Auto. Attachments and machine-scoped context
+prevent a fresh automatic move; late query responses recheck live draft state before moving it.
+Native keeps the draft's storage key anchored to its original project and persists a separate
+execution project, so routing cannot overwrite another machine's draft. Branches, uploads, file
+search and provider controls follow the execution project. Manual workspace choices freeze that
+project. Neither implementation imports a V1 thread runtime, and no migration is needed.
+The frozen Expo client retains compatible defaulted contracts without a new balancing screen.

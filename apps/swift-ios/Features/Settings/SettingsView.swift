@@ -15,6 +15,7 @@ public struct SettingsView: View {
     @State private var showingSetup = false
     @State private var showingProjectDefaults = false
     @State private var showingThreadOrganization = false
+    @State private var showingLoadBalancing = false
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
     @State private var showingHermesRuns = false
@@ -119,6 +120,11 @@ public struct SettingsView: View {
                         showingAddEnvironment = false
                     }
                 )
+            }
+            .sheet(isPresented: $showingLoadBalancing) {
+                NavigationStack { SettingsLoadBalancingView(model: model)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingLoadBalancing = false } } }
+                }
             }
             .sheet(isPresented: $showingThreadOrganization) {
                 NavigationStack { SettingsThreadOrganizationView(model: model)
@@ -476,6 +482,11 @@ public struct SettingsView: View {
             VStack(spacing: 0) {
                 Button { showingThreadOrganization = true } label: {
                     SettingsNavigationRow(title: "Shared preferences", systemImage: "tray.full")
+                }.buttonStyle(.plain)
+                settingsDivider
+
+                Button { showingLoadBalancing = true } label: {
+                    SettingsNavigationRow(title: "Load balancing", systemImage: "scalemass")
                 }.buttonStyle(.plain)
                 settingsDivider
 

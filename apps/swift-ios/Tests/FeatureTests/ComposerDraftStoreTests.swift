@@ -4,6 +4,27 @@ import Testing
 
 @Suite("Composer draft persistence")
 struct ComposerDraftStoreTests {
+    @Test func automaticDestinationSurvivesReloadWithoutReplacingAnotherDraft() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("drafts.json")
+        let store = FeatureComposerDraftStore(fileURL: file)
+        let source = FeatureProject(id: "source", environmentID: "one", name: "Repo", path: "/repo")
+        let target = FeatureProject(id: "target", environmentID: "two", name: "Repo", path: "/repo")
+        let sourceKey = FeatureComposerDraftStore.newTaskKey(project: source)
+        let targetKey = FeatureComposerDraftStore.newTaskKey(project: target)
+        try await store.setDraft(.init(text: "Existing target draft"), for: targetKey)
+        try await store.setDraft(.init(text: "Route this prompt", routing: .init(automatic: true, projectID: target.id)), for: sourceKey)
+        let restored = FeatureComposerDraftStore(fileURL: file)
+        #expect(try await restored.draft(for: sourceKey)?.routing == .init(automatic: true, projectID: target.id))
+        #expect(try await restored.draft(for: targetKey)?.text == "Existing target draft")
+        let merged = FeatureComposerDraftRestoration.merge(
+            saved: try await restored.draft(for: sourceKey), baseline: .init(),
+            current: .init(routing: .init(automatic: false)))
+        #expect(merged.text == "Route this prompt")
+        #expect(merged.routing == .init(automatic: false))
+    }
+
     @Test func independentDraftsSurviveReloadAndDelete() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

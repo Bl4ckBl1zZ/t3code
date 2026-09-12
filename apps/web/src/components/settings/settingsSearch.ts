@@ -341,6 +341,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     windowsOnly: true,
   },
   {
+    id: "load-balancing",
+    title: "Load balancing",
+    to: "/settings/connections",
+    searchTerms: [
+      "automatic machine environment resources cpu memory capacity preference weight shared projects",
+    ],
+  },
+  {
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",

@@ -735,3 +735,25 @@ describe("panel motion preferences", () => {
     }
   });
 });
+
+describe("ClientSettings automatic machine selection", () => {
+  it("keeps older clients manual and preserves explicit machine exclusions", () => {
+    const defaults = decodeClientSettings({});
+    expect(defaults.loadBalancingEnabled).toBe(false);
+    expect(defaults.loadBalancingWeights).toEqual({});
+    expect(
+      decodeClientSettingsPatch({
+        loadBalancingEnabled: true,
+        loadBalancingWeights: { laptop: 0, workstation: 100 },
+      }),
+    ).toEqual({
+      loadBalancingEnabled: true,
+      loadBalancingWeights: { laptop: 0, workstation: 100 },
+    });
+  });
+  it.each([-1, 101, 0.5, Infinity])("rejects invalid preference %s", (weight) => {
+    expect(() =>
+      decodeClientSettingsPatch({ loadBalancingWeights: { machine: weight } }),
+    ).toThrow();
+  });
+});

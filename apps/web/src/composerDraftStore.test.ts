@@ -1132,6 +1132,30 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("promote me");
   });
 
+  it("routes automatic drafts without losing content or changing other drafts", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "keep my prompt");
+    store.setProjectDraftThreadId(remoteProjectRef, remoteDraftId, { threadId: otherThreadId });
+    store.setPrompt(remoteDraftId, "another draft");
+    store.setDraftThreadContext(draftId, {
+      projectRef: remoteProjectRef,
+      environmentSelection: "auto",
+      loadBalancedEnvironmentId: OTHER_TEST_ENVIRONMENT_ID,
+    });
+    expect(store.getDraftThread(draftId)).toMatchObject({
+      environmentSelection: "auto",
+      loadBalancedEnvironmentId: OTHER_TEST_ENVIRONMENT_ID,
+      environmentId: OTHER_TEST_ENVIRONMENT_ID,
+    });
+    expect(draftByKey(draftId)?.prompt).toBe("keep my prompt");
+    expect(draftByKey(remoteDraftId)?.prompt).toBe("another draft");
+    store.setDraftThreadContext(draftId, { branch: "chosen-branch" });
+    expect(store.getDraftThread(draftId)?.environmentSelection).toBe("manual");
+    store.setDraftThreadContext(draftId, { projectRef, environmentSelection: "manual" });
+    expect(store.getDraftThread(draftId)?.loadBalancedEnvironmentId).toBeNull();
+  });
+
   it("updates branch context on an existing draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {

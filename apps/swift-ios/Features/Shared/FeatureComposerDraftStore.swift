@@ -5,21 +5,34 @@ public struct FeatureComposerDraft: Sendable, Equatable {
     public var attachments: [FeatureDraftAttachment]
     public var selection: FeatureSelection?
     public var workspace: FeatureComposerWorkspaceDraft?
+    public var routing: FeatureComposerRoutingDraft?
 
     public init(
         text: String = "",
         attachments: [FeatureDraftAttachment] = [],
         selection: FeatureSelection? = nil,
-        workspace: FeatureComposerWorkspaceDraft? = nil
+        workspace: FeatureComposerWorkspaceDraft? = nil,
+        routing: FeatureComposerRoutingDraft? = nil
     ) {
         self.text = text
         self.attachments = attachments
         self.selection = selection
         self.workspace = workspace
+        self.routing = routing
     }
 
     public var isEmpty: Bool {
         text.isEmpty && attachments.isEmpty && selection == nil && workspace == nil
+    }
+}
+
+public struct FeatureComposerRoutingDraft: Codable, Sendable, Equatable {
+    public var automatic: Bool
+    public var projectID: String?
+
+    public init(automatic: Bool, projectID: String? = nil) {
+        self.automatic = automatic
+        self.projectID = projectID
     }
 }
 
@@ -98,6 +111,7 @@ public actor FeatureComposerDraftStore {
         var selection: FeatureSelection?
         var workspace: PersistedWorkspace?
         var importedShareIDs: [String]?
+        var routing: FeatureComposerRoutingDraft?
 
         init(_ draft: FeatureComposerDraft) {
             text = draft.text
@@ -105,6 +119,7 @@ public actor FeatureComposerDraftStore {
             selection = draft.selection
             workspace = draft.workspace.map(PersistedWorkspace.init)
             importedShareIDs = nil
+            routing = draft.routing
         }
 
         var featureValue: FeatureComposerDraft {
@@ -112,7 +127,8 @@ public actor FeatureComposerDraftStore {
                 text: text,
                 attachments: attachments.map(\.featureValue),
                 selection: selection,
-                workspace: workspace?.featureValue
+                workspace: workspace?.featureValue,
+                routing: routing
             )
         }
     }

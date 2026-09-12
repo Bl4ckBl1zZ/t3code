@@ -1,3 +1,4 @@
+import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { EnvironmentIconPicker } from "./EnvironmentIconPicker";
@@ -3551,6 +3552,7 @@ export function ConnectionsSettings() {
           savedEnvironments={savedEnvironments}
         />
       </SettingsSection>
+      <LoadBalancingSettings environments={environments} />
     </SettingsPageContainer>
   );
 }

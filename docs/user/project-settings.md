@@ -68,3 +68,19 @@ Existing project actions keep working. Editing inherited actions creates a proje
 override; **Use machine defaults** restores inheritance. Deleting every action from
 a project keeps it empty, even when machine defaults exist. Changing machine actions
 does not rewrite project files. A failed save keeps the editor open for retry.
+
+## Choose a machine automatically
+
+Enable **Automatically balance load** in web or desktop **Settings → Connections**, or
+**Balance new tasks** in iOS **Settings → Load balancing**. These preferences apply to the
+client where you set them. Choose **Prefer**, **Normal**, **Less often**, or **Manual only** for
+each machine.
+
+For a new task, **Auto balance** chooses a connected machine with the same repository and
+selected agent model, using available CPU and memory. The computer control shows the chosen
+machine. Your draft and model choice are preserved. The machine stays selected while you write;
+choosing a branch or workspace manually stops automatic rerouting.
+
+Choose a computer directly to override Auto, or select Auto again to retry. Add attachments
+after the machine is selected. If no eligible machine has available capacity, choose one
+manually or retry; the task is not submitted to an arbitrary fallback machine.

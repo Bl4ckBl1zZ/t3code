@@ -2783,6 +2783,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return client
     }
 
+    func hostResources(environmentID: String) async throws -> HostResourcesSnapshot {
+        let client = try await environmentClient(id: environmentID)
+        return try await withThrowingTaskGroup(of: HostResourcesSnapshot.self) { group in
+            group.addTask { try await client.hostResources() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(5))
+                throw FeatureCapabilityUnavailable("Machine capacity timed out")
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw CancellationError() }
+            return result
+        }
+    }
+
     private func projectCreationClient(environmentID: String) async throws -> T3Client {
         try await environmentClient(id: environmentID)
     }

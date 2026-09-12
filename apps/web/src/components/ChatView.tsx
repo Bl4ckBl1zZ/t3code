@@ -1,3 +1,4 @@
+import { useLoadBalancedEnvironment } from "~/hooks/useLoadBalancedEnvironment";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { latestWorkspaceMutationId } from "../hooks/useWorkspaceMutationRefresh";
@@ -273,6 +274,8 @@ import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerAttachment,
+  useEffectiveComposerModelState,
+  deriveEffectiveComposerModelState,
   beginBackgroundDraftSubmissionByRef,
   clearBackgroundDraftSubmissionByRef,
   type ComposerImageAttachment,
@@ -3289,6 +3292,192 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen]);
 
   const envLocked = Boolean(activeThread && (activeMessageCount > 0 || activeRuntime !== null));
+  const loadBalancingSettings = useClientSettings();
+  const routingModelInput = useMemo(
+    () => ({
+      providers: providerStatuses,
+      selectedProvider,
+      selectedInstanceId: activeProviderInstanceId,
+      threadModelSelection: activeThread?.modelSelection,
+      projectModelSelection: activeProject?.defaultModelSelection,
+      settings,
+    }),
+    [
+      providerStatuses,
+      selectedProvider,
+      activeProviderInstanceId,
+      activeThread?.modelSelection,
+      activeProject?.defaultModelSelection,
+      settings,
+    ],
+  );
+  const routingModel = useEffectiveComposerModelState({
+    ...routingModelInput,
+    threadRef: composerDraftTarget,
+  });
+  const composerHasAttachments = useComposerDraftStore((store) => {
+    const draft = store.getComposerDraft(composerDraftTarget);
+    return Boolean(
+      draft &&
+      (draft.images.length ||
+        draft.persistedAttachments.length ||
+        draft.terminalContexts.length ||
+        draft.elementContexts.length ||
+        draft.previewAnnotations.length ||
+        draft.reviewComments.length),
+    );
+  });
+  const automaticEnvironment = Boolean(
+    clientSettingsHydrated &&
+    draftId &&
+    !envLocked &&
+    hasMultipleEnvironments &&
+    loadBalancingSettings.loadBalancingEnabled &&
+    draftThread?.environmentSelection !== "manual" &&
+    (!composerHasAttachments || Boolean(draftThread?.loadBalancedEnvironmentId)) &&
+    (!draftThread?.branch || draftThread.environmentSelection === "auto") &&
+    !draftThread?.worktreePath,
+  );
+
+  const needsLoadBalancing = automaticEnvironment && !draftThread?.loadBalancedEnvironmentId;
+  const loadBalancingCandidates = useMemo(
+    () =>
+      needsLoadBalancing
+        ? logicalProjectEnvironments
+            .filter((candidate) => {
+              const environment = environmentById.get(candidate.environmentId);
+              return (
+                environment?.connection.phase === "connected" &&
+                (loadBalancingSettings.loadBalancingWeights[candidate.environmentId] ?? 50) > 0 &&
+                environment.serverConfig?.providers.some(
+                  (provider) =>
+                    (activeProviderInstanceId === null ||
+                      provider.instanceId === activeProviderInstanceId) &&
+                    provider.driver === selectedProvider &&
+                    provider.enabled &&
+                    provider.installed &&
+                    provider.status !== "error" &&
+                    provider.auth.status !== "unauthenticated" &&
+                    provider.availability !== "unavailable" &&
+                    provider.models.some(
+                      (model) =>
+                        model.slug === routingModel.selectedModel ||
+                        model.aliases?.includes(routingModel.selectedModel),
+                    ),
+                )
+              );
+            })
+            .map((candidate) => candidate.environmentId)
+        : [],
+    [
+      needsLoadBalancing,
+      logicalProjectEnvironments,
+      environmentById,
+      loadBalancingSettings.loadBalancingWeights,
+      activeProviderInstanceId,
+      selectedProvider,
+      routingModel.selectedModel,
+    ],
+  );
+  const loadBalancing = useLoadBalancedEnvironment(
+    loadBalancingCandidates,
+    loadBalancingSettings.loadBalancingWeights,
+  );
+  useEffect(() => {
+    if (!needsLoadBalancing || loadBalancing.pending || !draftId || sendInFlightRef.current) return;
+    const target = logicalProjectEnvironments.find(
+      (environment) => environment.environmentId === loadBalancing.environmentId,
+    );
+    if (!target) return;
+    const current = useComposerDraftStore.getState().getDraftSession(draftId);
+    const content = useComposerDraftStore.getState().getComposerDraft(draftId);
+    const currentModel = deriveEffectiveComposerModelState({
+      ...routingModelInput,
+      draft: content,
+    });
+    if (
+      !current ||
+      current.environmentSelection === "manual" ||
+      current.loadBalancedEnvironmentId ||
+      current.worktreePath ||
+      (current.branch && current.environmentSelection !== "auto") ||
+      current.environmentId !== draftThread?.environmentId ||
+      current.projectId !== draftThread.projectId ||
+      content?.activeProvider !== composerActiveProvider ||
+      currentModel.selectedModel !== routingModel.selectedModel ||
+      (content &&
+        (content.images.length ||
+          content.persistedAttachments.length ||
+          content.terminalContexts.length ||
+          content.elementContexts.length ||
+          content.previewAnnotations.length ||
+          content.reviewComments.length))
+    )
+      return;
+    if (!activeProviderInstanceId) return;
+    useComposerDraftStore.getState().setModelSelection(draftId, {
+      instanceId: activeProviderInstanceId,
+      model: currentModel.selectedModel,
+      ...(currentModel.modelOptions?.[activeProviderInstanceId]
+        ? { options: currentModel.modelOptions[activeProviderInstanceId] }
+        : {}),
+    });
+    setDraftThreadContext(draftId, {
+      projectRef: scopeProjectRef(target.environmentId, target.projectId),
+      environmentSelection: "auto",
+      loadBalancedEnvironmentId: target.environmentId,
+    });
+  }, [
+    needsLoadBalancing,
+    composerActiveProvider,
+    activeProviderInstanceId,
+    routingModelInput,
+    routingModel.selectedModel,
+    draftThread,
+    loadBalancing.pending,
+    loadBalancing.environmentId,
+    draftId,
+    logicalProjectEnvironments,
+    setDraftThreadContext,
+  ]);
+  const onAutoEnvironment = useCallback(() => {
+    if (envLocked || !draftId) return;
+    if (composerHasAttachments) {
+      toastManager.add({
+        type: "warning",
+        id: "load-balancing-attachments",
+        title: "Keep attachments on this machine",
+        description:
+          "Remove attachments and machine-specific context before choosing automatic routing, then attach them on the selected machine.",
+      });
+      return;
+    }
+    loadBalancing.refresh(
+      logicalProjectEnvironments.map((environment) => environment.environmentId),
+    );
+    setDraftThreadContext(draftId, {
+      environmentSelection: "auto",
+      loadBalancedEnvironmentId: null,
+      branch: null,
+      worktreePath: null,
+    });
+  }, [
+    envLocked,
+    draftId,
+    setDraftThreadContext,
+    loadBalancing.refresh,
+    logicalProjectEnvironments,
+    composerHasAttachments,
+  ]);
+  const autoEnvironmentLabel = automaticEnvironment
+    ? draftThread?.loadBalancedEnvironmentId
+      ? "Auto balance"
+      : loadBalancing.pending
+        ? "Checking machines…"
+        : loadBalancing.failed
+          ? "Auto balance unavailable"
+          : "Auto balance"
+    : undefined;
 
   // Handle environment change for draft threads.  When the user picks a
   // different environment we update the draft context to point at the physical
@@ -3302,6 +3491,8 @@ function ChatViewContent(props: ChatViewProps) {
       if (!target) return;
       setDraftThreadContext(draftId, {
         projectRef: scopeProjectRef(target.environmentId, target.projectId),
+        environmentSelection: "manual",
+        loadBalancedEnvironmentId: null,
       });
     },
     [draftId, envLocked, logicalProjectEnvironments, setDraftThreadContext],
@@ -6238,6 +6429,17 @@ function ChatViewContent(props: ChatViewProps) {
       image: ComposerImageAttachment | null;
     },
   ) => {
+    if (needsLoadBalancing) {
+      e?.preventDefault();
+      toastManager.add({
+        type: "warning",
+        title: loadBalancing.pending ? "Checking machines…" : "Choose a machine",
+        description: loadBalancing.pending
+          ? "Wait for automatic selection before sending."
+          : "No available machine was selected. Choose a machine manually or retry Auto balance.",
+      });
+      return;
+    }
     const dispatchMode = submitOptions.dispatchMode ?? "auto";
     const submissionIntent = submitOptions.submissionIntent ?? "foreground";
     e?.preventDefault();
@@ -7565,6 +7767,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       if (isLocalDraftThread) {
         setDraftThreadContext(composerDraftTarget, {
+          environmentSelection: "manual",
           envMode: mode,
           startFromOrigin: resolveNewDraftStartFromOrigin({
             envMode: mode,
@@ -7598,6 +7801,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     if (isLocalDraftThread) {
       setDraftThreadContext(composerDraftTarget, {
+        environmentSelection: "manual",
         startFromOrigin: nextStartFromOrigin,
       });
     }
@@ -7833,6 +8037,8 @@ function ChatViewContent(props: ChatViewProps) {
     gitCwd,
     isGitRepo,
     envLocked,
+    autoEnvironmentLabel,
+    onAutoEnvironment: loadBalancingSettings.loadBalancingEnabled ? onAutoEnvironment : undefined,
     availableEnvironments: logicalProjectEnvironments,
     onEnvironmentChange,
     onEnvModeChange,
@@ -8375,6 +8581,12 @@ function ChatViewContent(props: ChatViewProps) {
                                         setPendingServerThreadBranch,
                                     }
                                   : {})}
+                                autoEnvironmentLabel={autoEnvironmentLabel}
+                                onAutoEnvironment={
+                                  loadBalancingSettings.loadBalancingEnabled
+                                    ? onAutoEnvironment
+                                    : undefined
+                                }
                                 envLocked={envLocked}
                                 onComposerFocusRequest={scheduleComposerFocus}
                                 {...(canCheckoutPullRequestIntoThread

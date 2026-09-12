@@ -115,6 +115,11 @@ public actor T3Client {
         )
     }
 
+    /// Samples whole-host CPU and available memory for new-task routing.
+    public func hostResources() async throws -> HostResourcesSnapshot {
+        try await rpc.request(RPCMethod.serverGetHostResources.rawValue, payload: .object([:]), as: HostResourcesSnapshot.self)
+    }
+
     /// Writes one or more server-authoritative settings.
     ///
     /// The patch is deliberately sparse: `ServerSettingsPatch` is optional
@@ -126,10 +131,6 @@ public actor T3Client {
     /// the same narrow view the config subscription uses, so a caller sees
     /// exactly the fields this client models.
     @discardableResult
-    public func hostResources() async throws -> HostResourcesSnapshot {
-        try await rpc.request(RPCMethod.serverGetHostResources.rawValue, payload: .object([:]), as: HostResourcesSnapshot.self)
-    }
-
     public func updateServerSettings(
         patch: ServerSettingsPatchInput
     ) async throws -> ServerSettingsSnapshot {
