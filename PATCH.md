@@ -1265,3 +1265,13 @@ line-number digit boundaries still invalidate affected measurements; hidden zero
 wait for a visible resize. The reviewed tests execute the actual installed tokenizer, workers,
 editor and virtualizer. Native source previews use Swift's read-only highlighting/layout and do
 not instantiate this editor. Reselect-to-reveal in the diff tree was already present.
+
+### Loading feedback and live activity motion
+
+The loading/refresh treatment from `f12d39359f` keeps refresh glyphs stable while requests
+run and uses a shared spinner throughout web/desktop. Usage history refresh waits for the
+selected machines' rescans; disconnects abort waiting without hanging healthy machines.
+This does not add the upstream pricing-refresh RPC. Live V2 activity uses the masked text
+highlight from `ce4712d5b0`; one shared observer pauses web motion offscreen, in hidden tabs
+and for reduced motion. Swift uses a native masked highlight that stops when its row leaves
+the view, the app becomes inactive, or reduced motion is enabled. No V1 runtime is imported.

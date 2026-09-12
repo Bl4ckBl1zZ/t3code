@@ -1,8 +1,9 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { UsageLimits } from "./UsageLimits";
 import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import type { UsageProviderKind } from "@t3tools/contracts";
-import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { CheckIcon, XIcon } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 
 import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 
@@ -55,6 +56,8 @@ export function UsagePage() {
 
 function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
   const [pricesOpen, setPricesOpen] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
     window: makeWindow(30),
@@ -106,17 +109,22 @@ function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
     });
   };
   const refreshWindow = () => {
+    if (refreshingRef.current) return;
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
     if (
-      nextWindow.sinceDay === window.sinceDay &&
-      nextWindow.untilDay === window.untilDay &&
-      nextWindow.sinceTime === window.sinceTime &&
-      nextWindow.untilTime === window.untilTime
+      nextWindow.sinceDay !== window.sinceDay ||
+      nextWindow.untilDay !== window.untilDay ||
+      nextWindow.sinceTime !== window.sinceTime ||
+      nextWindow.untilTime !== window.untilTime
     ) {
-      refresh();
-    } else {
       setWindowSelection({ days: windowDays, window: nextWindow });
     }
+    refreshingRef.current = true;
+    setIsRefreshing(true);
+    void refresh(nextWindow).finally(() => {
+      refreshingRef.current = false;
+      setIsRefreshing(false);
+    });
   };
   const windowLabel =
     isPast24Hours && window.sinceTime !== undefined && window.untilTime !== undefined
@@ -170,8 +178,15 @@ function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
         <Button size="sm" variant="ghost" onClick={() => setPricesOpen(true)}>
           Model prices
         </Button>
-        <Button onClick={refreshWindow} aria-label="Refresh usage" size="icon-sm" variant="ghost">
-          <RefreshCwIcon className="size-3.5" />
+        <Button
+          disabled={isRefreshing}
+          aria-busy={isRefreshing}
+          onClick={refreshWindow}
+          aria-label="Refresh usage"
+          size="icon-sm"
+          variant="ghost"
+        >
+          <RefreshIcon className="size-3.5" refreshing={isRefreshing} />
         </Button>
       </div>
       <div className="ms-auto flex min-w-0 items-center justify-end gap-1 lg:hidden">
@@ -219,8 +234,15 @@ function UsageHistoryPage({ onShowLimits }: { onShowLimits: () => void }) {
         <Button size="sm" variant="ghost" onClick={() => setPricesOpen(true)}>
           Model prices
         </Button>
-        <Button onClick={refreshWindow} aria-label="Refresh usage" size="icon-sm" variant="ghost">
-          <RefreshCwIcon className="size-3.5" />
+        <Button
+          disabled={isRefreshing}
+          aria-busy={isRefreshing}
+          onClick={refreshWindow}
+          aria-label="Refresh usage"
+          size="icon-sm"
+          variant="ghost"
+        >
+          <RefreshIcon className="size-3.5" refreshing={isRefreshing} />
         </Button>
       </div>
     </div>

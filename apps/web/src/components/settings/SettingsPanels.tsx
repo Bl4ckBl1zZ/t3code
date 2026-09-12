@@ -1,3 +1,5 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { Spinner } from "~/components/ui/spinner";
 import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
 import { ProviderAccountSetup } from "./ProviderAccountSetup";
 import { ProjectAutoPullSettings } from "./ProjectBooleanSettings";
@@ -16,9 +18,7 @@ import {
   ArchiveX,
   ChevronRightIcon,
   InfoIcon,
-  LoaderIcon,
   PlusIcon,
-  RefreshCwIcon,
   SettingsIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
@@ -3651,11 +3651,7 @@ function EnvironmentProviderSettings(
                     onClick={() => void refreshProviders()}
                     aria-label="Refresh provider status"
                   >
-                    {isRefreshingProviders ? (
-                      <LoaderIcon className="size-3 animate-spin" />
-                    ) : (
-                      <RefreshCwIcon className="size-3" />
-                    )}
+                    <RefreshIcon className="size-3" refreshing={isRefreshingProviders} />
                   </Button>
                 }
               />
@@ -3898,7 +3894,7 @@ export function ArchivedThreadsPanel() {
             title={
               <span className="inline-flex items-center gap-2">
                 {isLoadingArchive ? (
-                  <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
+                  <Spinner className="size-3.5 text-muted-foreground" />
                 ) : (
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}

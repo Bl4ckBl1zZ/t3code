@@ -898,7 +898,7 @@ struct ThreadWorkLog: View {
                         HStack(spacing: 8) {
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
                             ThreadToolActivityIcon(icon: focus.activityIcon, fallback: focus.icon.symbolName)
-                            Text(focus.summary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(focus.summary).lineLimit(1).shimmering(focus.inProgress).frame(maxWidth: .infinity, alignment: .leading)
                             Text("\(visibleCandidates.count)").monospacedDigit().foregroundStyle(T3Colors.textTertiary)
                         }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
                     }.buttonStyle(.plain).accessibilityLabel("\(focus.summary), \(visibleCandidates.count) tool calls")

@@ -683,6 +683,22 @@ describe("executeAtomQuery", () => {
   });
 });
 
+describe("query cancellation", () => {
+  it("settles when its caller aborts a waiting query", async () => {
+    const registry = AtomRegistry.make();
+    const controller = new AbortController();
+    const pending = executeAtomQuery(registry, Atom.make(Effect.never), {
+      reportDefect: false,
+      signal: controller.signal,
+    });
+    controller.abort();
+    const result = await pending;
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(Cause.hasInterruptsOnly(result.cause)).toBe(true);
+    registry.dispose();
+  });
+});
+
 describe("runtime command runner", () => {
   it("encodes custom command rejections as defects", async () => {
     const defect = new Error("custom command rejected");

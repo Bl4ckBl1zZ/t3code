@@ -1,7 +1,8 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { Spinner } from "~/components/ui/spinner";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { ArrowLeftIcon, ChevronRightIcon, RefreshCwIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { PierreEntryIcon } from "~/components/chat/PierreEntryIcon";
@@ -135,7 +136,7 @@ function BreadcrumbMenuContent(props: {
           </MenuItem>
         ) : entriesQuery.error && entriesQuery.data === null ? (
           <MenuItem closeOnClick={false} onClick={entriesQuery.refresh}>
-            <RefreshCwIcon className={cn(entriesQuery.isPending && "animate-spin")} />
+            <RefreshIcon refreshing={entriesQuery.isPending} />
             <span className="min-w-0 flex-1 truncate">Retry loading folder</span>
           </MenuItem>
         ) : !directoryAvailable && !entriesTruncated ? (
@@ -183,7 +184,7 @@ function BreadcrumbMenuContent(props: {
         <>
           <MenuSeparator />
           <MenuItem closeOnClick={false} onClick={entriesQuery.refresh}>
-            <RefreshCwIcon className={cn(entriesQuery.isPending && "animate-spin")} />
+            <RefreshIcon refreshing={entriesQuery.isPending} />
             Refresh failed — retry
           </MenuItem>
         </>

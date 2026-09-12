@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ServerProviderUsageWindow } from "@t3tools/contracts";
-import { GaugeIcon, RefreshCwIcon } from "lucide-react";
+import { GaugeIcon } from "lucide-react";
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useMemo, useRef, useState } from "react";
@@ -186,7 +187,7 @@ export function UsageLimits({ onShowUsage }: { onShowUsage: () => void }) {
             }
             onClick={() => void refresh()}
           >
-            <RefreshCwIcon className="size-3.5" />
+            <RefreshIcon className="size-3.5" refreshing={pending} />
             {pending ? "Refreshing…" : "Refresh limits"}
           </Button>
         </div>

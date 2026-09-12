@@ -1,3 +1,5 @@
+import { ActivityFocusText } from "./ActivityFocusText";
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useAssetUrlState } from "../../assets/assetUrls";
 import type { ToolActivityIcon } from "@t3tools/contracts";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
@@ -2111,28 +2113,16 @@ function V2EventTimelineRow({
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
   const { isPreparingWorktree } = use(TimelineRowActivityCtx);
   return (
-    <div className="py-0.5 pl-1.5">
-      <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70 tabular-nums">
-        <span className="inline-flex items-center gap-[3px]">
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
-        </span>
-        <span
-          key={isPreparingWorktree ? "setup" : "working"}
-          className="min-h-4 transition-opacity duration-150 starting:opacity-0 motion-reduce:transition-none"
-        >
-          {isPreparingWorktree ? (
-            "Setting up worktree…"
-          ) : row.createdAt ? (
-            <>
-              Working for <WorkingTimer createdAt={row.createdAt} />
-            </>
-          ) : (
-            "Working..."
-          )}
-        </span>
-      </div>
+    <div className="min-h-6 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
+      {isPreparingWorktree ? (
+        <ActivityFocusText text="Setting up worktree…" />
+      ) : row.createdAt ? (
+        <>
+          Working for <WorkingTimer createdAt={row.createdAt} />
+        </>
+      ) : (
+        <ActivityFocusText text="Thinking…" />
+      )}
     </div>
   );
 }
@@ -2297,7 +2287,7 @@ function LiveWorkGroupSection({
         />
         <Tooltip>
           <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
-            {label}
+            <ActivityFocusText text={label} active={entry.toolLifecycleStatus === "inProgress"} />
           </TooltipTrigger>
           <TooltipPopup>{label}</TooltipPopup>
         </Tooltip>
@@ -3429,6 +3419,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         canExpand &&
           "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
       )}
+      ref={showRunningIndicator ? observeVisibleAnimation : undefined}
       data-tool-logo={toolPresentation?.logo}
       data-tool-call-status={lifecycleStatus}
       data-v2-item-type={workEntry.projectedItem?.item.type}

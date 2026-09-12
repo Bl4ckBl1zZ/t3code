@@ -1,5 +1,6 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
-import { ChevronDownIcon, GitPullRequestIcon, RefreshCwIcon } from "lucide-react";
+import { ChevronDownIcon, GitPullRequestIcon } from "lucide-react";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import { useState, type ReactNode } from "react";
@@ -484,7 +485,7 @@ function EmptySourceControlDiscovery({
             onClick={onScan}
             disabled={isPending}
           >
-            <RefreshCwIcon className={cn("size-3.5", isPending && "animate-spin")} />
+            <RefreshIcon className="size-3.5" refreshing={isPending} />
             Scan
           </Button>
         </EmptyContent>
@@ -529,7 +530,7 @@ export function SourceControlSettingsPanel() {
             disabled={discovery.isPending}
             aria-label="Rescan server environment"
           >
-            <RefreshCwIcon className={cn("size-3", discovery.isPending && "animate-spin")} />
+            <RefreshIcon className="size-3" refreshing={discovery.isPending} />
           </Button>
         }
       />

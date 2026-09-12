@@ -1,3 +1,4 @@
+import { Spinner } from "~/components/ui/spinner";
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import {
   COMPOSER_FOOTER_COMPACT_BREAKPOINT_PX,
@@ -244,7 +245,6 @@ import {
   CircleAlertIcon,
   EraserIcon,
   ListTodoIcon,
-  LoaderCircleIcon,
   PencilRulerIcon,
   PlusIcon,
   PaperclipIcon,
@@ -3314,7 +3314,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           className="shrink-0 gap-2 px-2 text-muted-foreground/70 sm:px-3"
         >
           {providerCatalogAvailability === "loading" ? (
-            <LoaderCircleIcon className="size-4" />
+            <Spinner className="size-4" />
           ) : (
             <CircleAlertIcon className="size-4" />
           )}

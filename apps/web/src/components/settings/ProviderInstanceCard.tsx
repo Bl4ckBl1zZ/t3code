@@ -1,5 +1,7 @@
 "use client";
 
+import { Spinner } from "~/components/ui/spinner";
+
 import {
   type CustomModelDefinition,
   readCustomModelEntries,
@@ -11,7 +13,6 @@ import {
   ChevronDownIcon,
   CopyIcon,
   DownloadIcon,
-  LoaderIcon,
   PlusIcon,
   Trash2Icon,
   XIcon,
@@ -839,7 +840,7 @@ export function ProviderInstanceCard({
                           disabled={isUpdating}
                           onClick={onRunUpdate}
                         >
-                          {isUpdating ? <LoaderIcon className="animate-spin" /> : <DownloadIcon />}
+                          {isUpdating ? <Spinner /> : <DownloadIcon />}
                           {isUpdating ? "Updating" : "Update now"}
                         </Button>
                       ) : null}
