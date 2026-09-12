@@ -1,3 +1,4 @@
+import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
 import {
   EnvironmentId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
@@ -139,12 +140,14 @@ export const make = Effect.gen(function* () {
     launcherManaged: launcher.managed,
   });
 
+  const machine = yield* detectServerEnvironmentMachineKind();
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
     label,
     platform: {
       os: platformOs(hostPlatform),
       arch: platformArch(hostArchitecture),
+      ...(machine === null ? {} : { machine }),
     },
     serverVersion: packageJson.version,
     capabilities: {
@@ -154,15 +157,31 @@ export const make = Effect.gen(function* () {
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
       threadSettlement: true,
+      threadAutoSettlement: true,
+      threadRestartContinuation: true,
       threadSnooze: true,
       threadVisitedTracking: true,
       environmentThemes: true,
+      environmentIcon: true,
+      customModelDefinitions: true,
+      projectIcons: true,
+      agentSessionImport: true,
+      projectBrowserAccess: true,
+      projectActionDefaults: true,
+      projectDefaults: true,
+      projectAutoPull: true,
+      fileDocumentPreviews: true,
+      providerTerminalEnvironment: true,
+      assistantCitations: true,
       threadPinning: true,
       threadActiveOrderV2: true,
       threadQuestionActionsV2: true,
       threadPinReorder: true,
       threadTitleRegeneration: true,
       threadPullRequestLinking: true,
+      threadPullRequestsV2: true,
+      pullRequestStackActions: true,
+      usagePriceOverrides: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
     },

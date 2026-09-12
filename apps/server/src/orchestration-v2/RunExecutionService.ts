@@ -1,3 +1,4 @@
+import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import {
   CommandId,
   type EventId,
@@ -1119,7 +1120,10 @@ export const layer: Layer.Layer<
               attemptId: input.attemptId,
               rootNodeId: input.rootNode.id,
               providerThread: input.providerThread,
-              message: input.message,
+              message: {
+                ...input.message,
+                text: expandAssistantCitationsForProvider(input.message.text),
+              },
               modelSelection: input.modelSelection,
               runtimePolicy: input.runtimePolicy,
             })

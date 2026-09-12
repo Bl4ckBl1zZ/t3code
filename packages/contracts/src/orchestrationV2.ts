@@ -1,3 +1,10 @@
+import {
+  ThreadPullRequestLink,
+  ThreadPullRequestLinkSource,
+  ThreadPullRequestSnapshot,
+  ThreadPullRequestStack,
+} from "./threadPullRequestLinks.ts";
+import { ToolActivitySurface, ToolActivityIcon, ToolActivitySource } from "./toolActivity.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -37,6 +44,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import {
   ProviderApprovalDecision,
+  ProviderApprovalOption,
   ProviderInteractionMode,
   ProviderRequestKind,
   ProviderUserInputAnswers,
@@ -325,7 +333,12 @@ export const OrchestrationV2AppThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
+  pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink).check(Schema.isMaxLength(100))),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  linkedPullRequests: Schema.optional(
+    Schema.Array(ThreadLinkedPullRequest).check(Schema.isMaxLength(50)),
+  ),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
@@ -439,7 +452,15 @@ export const OrchestrationV2DelegatedCompletionCohort = Schema.Struct({
 export type OrchestrationV2DelegatedCompletionCohort =
   typeof OrchestrationV2DelegatedCompletionCohort.Type;
 
+export const OrchestrationV2RestartContinuation = Schema.Struct({
+  messageId: MessageId,
+  reason: Schema.Literals(["restart", "update"]),
+  status: Schema.Literals(["pending", "consumed", "cancelled"]),
+});
+export type OrchestrationV2RestartContinuation = typeof OrchestrationV2RestartContinuation.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
+  restartContinuation: Schema.optional(OrchestrationV2RestartContinuation),
   id: RunId,
   threadId: ThreadId,
   ordinal: PositiveInt,
@@ -848,6 +869,7 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  restartContinuation: Schema.optional(Schema.Boolean),
   ...OrchestrationV2CreationFields,
   id: MessageId,
   threadId: ThreadId,
@@ -1205,6 +1227,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     requestId: RuntimeRequestId,
     requestKind: ProviderRequestKind,
     prompt: Schema.optional(Schema.String),
+    options: Schema.optional(Schema.Array(ProviderApprovalOption)),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1308,6 +1331,9 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("dynamic_tool"),
+    toolSurface: Schema.optional(ToolActivitySurface),
+    toolIcon: Schema.optional(ToolActivityIcon),
+    toolSource: Schema.optional(ToolActivitySource),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
@@ -1607,6 +1633,7 @@ export const OrchestrationV2ShellThreadStatus = Schema.Union([
 export type OrchestrationV2ShellThreadStatus = typeof OrchestrationV2ShellThreadStatus.Type;
 
 export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
+  responseMode: Schema.optional(Schema.Literals(["callback", "message"])),
   id: RuntimeRequestId,
   kind: OrchestrationV2RuntimeRequest.fields.kind,
   createdAt: Schema.DateTimeUtc,
@@ -1637,7 +1664,12 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
+  pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink).check(Schema.isMaxLength(100))),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  linkedPullRequests: Schema.optional(
+    Schema.Array(ThreadLinkedPullRequest).check(Schema.isMaxLength(50)),
+  ),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2012,6 +2044,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     requestId: RuntimeRequestId,
     requestKind: ProviderRequestKind,
     prompt: Schema.optional(Schema.String),
+    options: Schema.optional(Schema.Array(ProviderApprovalOption)),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2109,6 +2142,9 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("dynamic_tool"),
+    toolSurface: Schema.optional(ToolActivitySurface),
+    toolIcon: Schema.optional(ToolActivityIcon),
+    toolSource: Schema.optional(ToolActivitySource),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
@@ -2402,6 +2438,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+    automatic: Schema.optional(Schema.Struct({ expectedSequence: NonNegativeInt })),
     // Historical settle time supplied by provider imports so imported
     // threads keep their upstream age instead of the import wall-clock.
     settledAt: Schema.optional(IsoDateTime),
@@ -2453,6 +2490,22 @@ export const OrchestrationV2Command = Schema.Union([
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     /** Absent leaves the link alone; null unlinks. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Atomic collection edits; older clients keep using the single-link field. */
+    linkPullRequest: Schema.optional(ThreadLinkedPullRequest),
+    linkPullRequestSource: Schema.optional(ThreadPullRequestLinkSource),
+    /** Background host refresh never recreates an unlinked or replaced link. */
+    syncPullRequest: Schema.optional(
+      Schema.Struct({
+        reference: ThreadPullRequestLink,
+        snapshot: ThreadPullRequestSnapshot,
+        stack: Schema.NullOr(ThreadPullRequestStack),
+      }),
+    ),
+    branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    expectedProjectId: Schema.optional(ProjectId),
+    expectedPullRequestLink: Schema.optional(ThreadPullRequestLink),
+    unlinkPullRequest: Schema.optional(ThreadLinkedPullRequest),
     pinned: Schema.optional(Schema.Boolean),
     /** Fractional key placing this thread within the pinned run. Sent alone to
         reorder, or alongside `pinned: true` to place a fresh pin. */
@@ -2492,6 +2545,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    restartContinuation: Schema.optional(Schema.Struct({ sourceRunId: RunId })),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
@@ -2534,6 +2588,21 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     runId: RunId,
     failure: OrchestrationV2ProviderFailure,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("run.restart-continuation.prepare"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    messageId: MessageId,
+    reason: Schema.Literals(["restart", "update"]),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("run.restart-continuation.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    messageId: MessageId,
   }),
   Schema.Struct({
     type: Schema.Literal("run.interrupt"),

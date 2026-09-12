@@ -60,6 +60,23 @@ describe("scoped entity keys", () => {
 });
 
 describe("V2 client presentation", () => {
+  it("keeps asynchronous questions out of blocking sidebar status", () => {
+    const request = {
+      id: RuntimeRequestId.make("async"),
+      kind: "user_input" as const,
+      createdAt: v2ThreadShell.createdAt,
+    };
+    expect(
+      presentThreadShell(environmentId, { ...v2ThreadShell, pendingRuntimeRequest: request })
+        .hasPendingUserInput,
+    ).toBe(true);
+    const asynchronous = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      pendingRuntimeRequest: { ...request, responseMode: "message" },
+    });
+    expect(asynchronous.hasPendingUserInput).toBe(false);
+    expect(asynchronous.hasPendingApprovals).toBe(false);
+  });
   it("presents shell timestamps and status without constructing V1 state", () => {
     const shell = presentThreadShell(environmentId, v2ThreadShell);
     expect(shell.environmentId).toBe(environmentId);
@@ -185,6 +202,7 @@ describe("V2 client presentation", () => {
       requestId,
       requestKind: "command" as const,
       prompt: "Allow command?",
+      options: [{ decision: "accept" as const, label: "Allow once" }],
     };
     const projection = {
       ...v2Projection,
@@ -214,6 +232,7 @@ describe("V2 client presentation", () => {
         requestKind: "command",
         createdAt: "2026-06-20T01:00:00.000Z",
         detail: "Allow command?",
+        options: [{ decision: "accept", label: "Allow once" }],
         responseCapability: "not_resumable",
       },
     ]);

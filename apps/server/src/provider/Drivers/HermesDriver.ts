@@ -1,3 +1,5 @@
+import { providerModelsFromSettings } from "../providerSnapshot.ts";
+import { readCustomModelEntries } from "@t3tools/shared/model";
 import {
   HermesSettings,
   ProviderDriverKind,
@@ -395,11 +397,23 @@ function snapshot(input: {
   readonly effectiveEndpoint: string;
   readonly connectionOwnership?: HermesServeOwnership;
 }): ServerProvider {
-  const models = hermesProviderModels(
+  const customEntries = readCustomModelEntries(input.settings.customModels);
+  const baseModels = hermesProviderModels(
     input.inventory?.models,
     input.inventory?.reasoning,
     input.inventory?.fast,
-    ["default", ...input.settings.customModels],
+    ["default", ...customEntries.map((entry) => entry.slug)],
+  ).map((model) => {
+    if (!model.isCustom) return model;
+    const entry = customEntries.find((entry) => entry.slug === model.slug);
+    return entry
+      ? { ...model, name: entry.name, capabilities: entry.capabilities ?? model.capabilities }
+      : model;
+  });
+  const models = providerModelsFromSettings(
+    baseModels,
+    input.settings.customModels,
+    baseModels.find((model) => model.slug === "default")?.capabilities ?? { optionDescriptors: [] },
   );
   const hasProfileKey = input.settings.profileKey.trim().length > 0;
   const connectionSecurity = input.effectiveEndpoint

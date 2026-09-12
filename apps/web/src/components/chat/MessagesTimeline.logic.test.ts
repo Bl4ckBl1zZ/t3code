@@ -1,3 +1,5 @@
+import { RunId } from "@t3tools/contracts";
+import type { WorkLogEntry, TimelineEntry } from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
 import {
   collapseWorkEntriesKeepingLiveBackground,
@@ -5,6 +7,8 @@ import {
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  resolveLiveWorkEntry,
+  resolveHistoricalWorkSummary,
   resolveAssistantMessageCopyState,
   resolveTimelineToolPresentation,
   shouldPreserveAssistantLineBreaks,
@@ -610,7 +614,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
-  it("keeps the first and terminal assistant messages visible around settled work", () => {
+  it("folds interim assistant messages while keeping resource cards and the terminal response", () => {
     const timelineEntries = [
       {
         id: "user-entry",
@@ -696,7 +700,6 @@ describe("deriveMessagesTimelineRows", () => {
     expect(foldRow?.label).toBe("Worked for 22s");
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
-      "assistant-first-entry",
       "turn-fold:turn-1",
       "thread-created-entry",
       "assistant-final-entry",
@@ -713,8 +716,8 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(expandedRows.map((row) => row.id)).toEqual([
       "user-entry",
-      "assistant-first-entry",
       "turn-fold:turn-1",
+      "assistant-first-entry",
       "work-entry-1",
       "thread-created-entry",
       "assistant-final-entry",
@@ -866,7 +869,6 @@ describe("deriveMessagesTimelineRows", () => {
       "user-entry",
       "turn-fold:turn-1",
       "subagent-card-entry",
-      "assistant-commentary-entry",
       "assistant-final-entry",
     ]);
   });
@@ -1410,7 +1412,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(finalRow?.kind === "message" && finalRow.showAssistantMeta).toBe(true);
   });
 
-  it("folds assistant messages between the first and terminal messages", () => {
+  it("folds every assistant message before the terminal message", () => {
     // A short follow-up must not hide a substantive opening response: both ends
     // of a settled turn stay visible and only the middle folds.
     const rows = deriveMessagesTimelineRows({
@@ -1470,11 +1472,7 @@ describe("deriveMessagesTimelineRows", () => {
       revertTurnCountByUserMessageId: new Map(),
     });
 
-    expect(rows.map((row) => row.id)).toEqual([
-      "assistant-first-entry",
-      "turn-fold:turn-1",
-      "assistant-final-entry",
-    ]);
+    expect(rows.map((row) => row.id)).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
   });
 
   it("does not fold the active in-progress turn", () => {
@@ -2031,5 +2029,182 @@ describe("day dividers", () => {
     ]);
 
     expect(rows.some((row) => row.kind === "day-divider")).toBe(false);
+  });
+});
+
+describe("V2 live work focus", () => {
+  const runId = RunId.make("live-run");
+  const at = "2026-09-10T00:00:00Z";
+  function entry(
+    id: string,
+    status: WorkLogEntry["toolLifecycleStatus"] = "completed",
+    extra: Partial<WorkLogEntry> = {},
+  ): WorkLogEntry {
+    return {
+      id,
+      createdAt: at,
+      runId,
+      label: id,
+      tone: "tool",
+      toolLifecycleStatus: status,
+      projectedItem: {
+        item: {
+          type: "command_execution",
+          status: status === "inProgress" ? "running" : "completed",
+        },
+      } as never,
+      ...extra,
+    };
+  }
+  function rows(entries: TimelineEntry[], isWorking = true) {
+    return deriveMessagesTimelineRows({
+      timelineEntries: entries,
+      latestRun: {
+        runId,
+        status: isWorking ? "running" : "completed",
+        startedAt: at,
+        completedAt: isWorking ? null : at,
+      },
+      isWorking,
+      activeTurnStartedAt: at,
+      alwaysExpandActivity: true,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+  }
+  function work(item: WorkLogEntry): TimelineEntry {
+    return { kind: "work", id: item.id, createdAt: at, entry: item };
+  }
+  it("keeps a running tool focused when a later concurrent call completes", () => {
+    const running = entry("running", "inProgress");
+    expect(resolveLiveWorkEntry([running, entry("done")], runId)).toBe(running);
+  });
+  it("holds the last successful operation between messages and replaces the extra working row", () => {
+    const result = rows([work(entry("done"))]);
+    expect(result.find((row) => row.kind === "work")?.liveEntry?.id).toBe("done");
+    expect(result.some((row) => row.kind === "working")).toBe(false);
+  });
+  it("returns to working after a failure and keeps the failure visible", () => {
+    const result = rows([work(entry("failed", "failed"))]);
+    expect(result.find((row) => row.kind === "work")?.liveEntry).toBeUndefined();
+    expect(result.some((row) => row.kind === "working")).toBe(true);
+    expect(result.find((row) => row.kind === "work")?.groupedEntries[0]?.id).toBe("failed");
+  });
+  it("does not make background activity the foreground focus", () => {
+    const background = entry("background", "inProgress", {
+      projectedItem: {
+        item: { type: "command_execution", status: "waiting", background: true },
+      } as never,
+    });
+    expect(resolveLiveWorkEntry([background], runId)).toBeNull();
+    const foreground = entry("foreground");
+    expect(resolveLiveWorkEntry([foreground, background], runId)).toBe(foreground);
+  });
+  it("does not revive another run or settled activity", () => {
+    expect(
+      resolveLiveWorkEntry([entry("old", "completed", { runId: RunId.make("other") })], runId),
+    ).toBeNull();
+    expect(
+      rows([work(entry("done"))], false).find((row) => row.kind === "work")?.liveEntry,
+    ).toBeUndefined();
+  });
+  it("keeps an ordinary failed tool outside a later successful or live group", () => {
+    const result = rows([
+      work(entry("failed", "failed")),
+      work(entry("done")),
+      work(entry("running", "inProgress")),
+    ]);
+    const groups = result.filter((row) => row.kind === "work");
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.groupedEntries.map((entry) => entry.id)).toEqual(["failed"]);
+    expect(groups[0]?.liveEntry).toBeUndefined();
+    expect(groups[1]?.liveEntry?.id).toBe("running");
+  });
+  it("separates errors and compaction from a later live operation", () => {
+    const result = rows([
+      work(entry("error", "failed", { tone: "error" })),
+      work(entry("compact", "completed", { sourceItemType: "compaction" })),
+      work(entry("next", "inProgress")),
+    ]);
+    expect(result.filter((row) => row.kind === "work")).toHaveLength(3);
+    expect(
+      result.filter((row) => row.kind === "work").find((row) => row.liveEntry)?.liveEntry?.id,
+    ).toBe("next");
+  });
+});
+
+describe("V2 historical tool summaries", () => {
+  const entry = (extra: Partial<WorkLogEntry> = {}): WorkLogEntry => ({
+    id: "tool",
+    createdAt: "2026-09-10T00:00:00Z",
+    label: "Tool",
+    tone: "tool",
+    toolLifecycleStatus: "completed",
+    ...extra,
+  });
+  it("summarizes commands and unique changed files in encounter order", () => {
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ itemType: "command_execution" }),
+        entry({ itemType: "file_change", changedFiles: ["a.ts", "b.ts"] }),
+        entry({ itemType: "file_change", changedFiles: ["a.ts"] }),
+      ]),
+    ).toBe("Ran 1 command and changed 2 files");
+  });
+  it("preserves pull-request and browser intent in grouped history", () => {
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ toolTitle: "t3-code.link_pull_request" }),
+        entry({ toolTitle: "t3-code.link_pull_request" }),
+        entry({ toolTitle: "t3-code.preview_click" }),
+      ]),
+    ).toBe("Linked 2 pull requests and used browser 1 time");
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ toolTitle: "unlink_pull_request" }),
+        entry({ toolTitle: "list_thread_pull_requests" }),
+      ]),
+    ).toBe("Unlinked 1 pull request and checked linked pull requests");
+  });
+  it("deduplicates integration sources without swallowing PR intent", () => {
+    const source = { key: "browser-use:chrome", name: "Chrome", kind: "integration" } as const;
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ toolSource: source }),
+        entry({ toolSource: source }),
+        entry({ toolSource: source, toolTitle: "link_pull_request" }),
+      ]),
+    ).toBe("Used Chrome integration and linked 1 pull request");
+  });
+  it("counts code and web searches separately", () => {
+    expect(
+      resolveHistoricalWorkSummary([
+        entry({ itemType: "file_search" }),
+        entry({ itemType: "web_search" }),
+        entry(),
+      ]),
+    ).toBe("Searched code 1 time, searched the web 1 time, and used 1 tool");
+  });
+  it("keeps individual calls and failed, declined or active tools visible", () => {
+    expect(resolveHistoricalWorkSummary([entry()])).toBeNull();
+    for (const status of ["failed", "declined", "inProgress"] as const) {
+      expect(
+        resolveHistoricalWorkSummary([entry(), entry({ toolLifecycleStatus: status })]),
+      ).toBeNull();
+    }
+  });
+  it("never folds compaction or background work into a completed summary", () => {
+    expect(
+      resolveHistoricalWorkSummary([entry(), entry({ sourceItemType: "compaction" })]),
+    ).toBeNull();
+    const background = {
+      item: { type: "command_execution", status: "waiting", background: true },
+    } as never;
+    expect(
+      resolveHistoricalWorkSummary([entry(), entry({ projectedItem: background })]),
+    ).toBeNull();
+  });
+  it("leaves non-tool bookkeeping visible", () => {
+    expect(resolveHistoricalWorkSummary([entry(), entry({ tone: "info" })])).toBeNull();
   });
 });

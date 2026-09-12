@@ -1,3 +1,4 @@
+import { ToolActivityNativeAppReference } from "./toolActivity.ts";
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -11,7 +12,13 @@ import { ProjectFaviconPath } from "./orchestration.ts";
 const ASSET_PATH_MAX_LENGTH = 1024;
 
 export const AssetResource = Schema.Union([
+  Schema.TaggedStruct("native-app-icon", { app: ToolActivityNativeAppReference }),
   Schema.TaggedStruct("workspace-file", {
+    threadId: ThreadId,
+    path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+  }),
+  /** An exact identity-checked host file, relative to the thread workspace or absolute. */
+  Schema.TaggedStruct("media-file", {
     threadId: ThreadId,
     path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
@@ -23,6 +30,7 @@ export const AssetResource = Schema.Union([
         an octet-stream download without a filename. */
     fileName: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
     mimeType: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
+    disposition: Schema.optionalKey(Schema.Literals(["inline", "attachment"])),
   }),
   /** A file in the server's browser-artifacts directory (screenshots/recordings). */
   Schema.TaggedStruct("browser-artifact", {
@@ -42,9 +50,16 @@ export const AssetCreateUrlInput = Schema.Struct({
 });
 export type AssetCreateUrlInput = typeof AssetCreateUrlInput.Type;
 
+export const AssetImageDimensions = Schema.Struct({
+  width: NonNegativeInt.check(Schema.isGreaterThanOrEqualTo(1)),
+  height: NonNegativeInt.check(Schema.isGreaterThanOrEqualTo(1)),
+});
+export type AssetImageDimensions = typeof AssetImageDimensions.Type;
+
 export const AssetCreateUrlResult = Schema.Struct({
   relativeUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
   expiresAt: Schema.Number,
+  imageDimensions: Schema.optional(AssetImageDimensions),
   sourcePath: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   ),

@@ -9,5 +9,9 @@
       "resetsAt": "2026-09-06T05:00:00.000Z",
       "windowDurationMins": 300
     }
-  ]
+  ],
+  "resetCredits": {
+    "availableCount": 2,
+    "nextExpiresAt": "2026-09-28T00:00:00.000Z"
+  }
 }

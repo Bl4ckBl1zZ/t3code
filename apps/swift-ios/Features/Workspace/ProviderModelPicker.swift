@@ -12,6 +12,7 @@ public struct ProviderModelPicker: View {
     let isLoading: Bool
     let threadSelection: FeatureSelection?
     let materializesDefaultSelection: Bool
+    let setupContext: ProviderSetupContext?
 
     @State private var isPresented = false
 
@@ -21,7 +22,8 @@ public struct ProviderModelPicker: View {
         style: Style = .row,
         isLoading: Bool = false,
         threadSelection: FeatureSelection? = nil,
-        materializesDefaultSelection: Bool = true
+        materializesDefaultSelection: Bool = true,
+        setupContext: ProviderSetupContext? = nil
     ) {
         self.providers = providers
         _selection = selection
@@ -29,6 +31,7 @@ public struct ProviderModelPicker: View {
         self.isLoading = isLoading
         self.threadSelection = threadSelection
         self.materializesDefaultSelection = materializesDefaultSelection
+        self.setupContext = setupContext
     }
 
     public var body: some View {
@@ -79,7 +82,8 @@ public struct ProviderModelPicker: View {
                 selection: $selection,
                 isLoading: isLoading,
                 threadSelection: threadSelection,
-                materializesDefaultSelection: materializesDefaultSelection
+                materializesDefaultSelection: materializesDefaultSelection,
+                setupContext: setupContext
             )
         }
         .onAppear(perform: materializeSelection)
@@ -128,7 +132,9 @@ public struct ProviderModelPicker: View {
 
     private var selectionLabel: String {
         guard let selectedOption else {
-            return "Choose model"
+            guard let value = selection ?? threadSelection else { return "Choose model" }
+            let name = normalizedProviders.first(where: { $0.id == value.providerID })?.name ?? value.providerID
+            return "\(name) · \(value.modelID) (\(isLoading ? "Loading" : "Unavailable"))"
         }
         let base = "\(selectedOption.provider.name) · \(selectedOption.model.name)"
         guard let resolvedSelection,
@@ -143,7 +149,7 @@ public struct ProviderModelPicker: View {
 
     private var compactModelName: String {
         guard let selectedOption else {
-            return "Choose model"
+            return (selection ?? threadSelection)?.modelID ?? "Choose model"
         }
         return selectedOption.model.name
     }
@@ -173,6 +179,7 @@ private struct ModelPickerSheet: View {
     let isLoading: Bool
     let threadSelection: FeatureSelection?
     let materializesDefaultSelection: Bool
+    let setupContext: ProviderSetupContext?
 
     @AppStorage("swift-ios.model-picker.favorites") private var favoriteStorage = ""
     @AppStorage("swift-ios.model-picker.recents") private var recentStorage = ""
@@ -191,11 +198,14 @@ private struct ModelPickerSheet: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if availableModelCount == 0 {
-                    ContentUnavailableView(
-                        "No models available",
-                        systemImage: "cpu",
-                        description: Text("Check the providers enabled on this environment.")
-                    )
+                    VStack {
+                        ContentUnavailableView("No models available", systemImage: "cpu", description: Text("Check the providers enabled on this environment."))
+                        if let setupContext {
+                            NavigationLink("Set up this account") {
+                                ProviderSetupView(context: setupContext, instanceID: (selection ?? threadSelection)?.providerID)
+                            }.padding(.bottom, 24)
+                        }
+                    }
                 } else {
                     modelList
                 }
@@ -220,6 +230,13 @@ private struct ModelPickerSheet: View {
 
     private var modelList: some View {
         List {
+            if let setupContext {
+                Section {
+                    NavigationLink { ProviderSetupView(context: setupContext, instanceID: nil) } label: {
+                        Label("Set up agents", systemImage: "person.crop.circle.badge.plus")
+                    }
+                }
+            }
             if modelChangesAreLocked {
                 Section {
                     Label(
@@ -680,6 +697,15 @@ private struct ModelOptionLabel: View {
                         .font(T3Typography.homeTitle)
                         .foregroundStyle(T3Colors.textPrimary)
                         .lineLimit(1)
+                    if option.model.badge == "new" {
+                        Text("New")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(T3Colors.warning)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(T3Colors.warning.opacity(0.12), in: Capsule())
+                            .accessibilityLabel("New model")
+                    }
                     if option.model.supportsImages {
                         capability("Images", icon: "photo")
                     }

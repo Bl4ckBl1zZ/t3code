@@ -112,6 +112,12 @@ struct SettingsUsageLimitsView: View {
                                     }
                                 }
                             }
+                            if let credits = limits.resetCredits, let target = account.resetTarget,
+                               let reader = model.client as? any FeatureUsageLimitsReading {
+                                SettingsResetCreditsRow(credits: credits, target: target, reader: reader) {
+                                    await reload(clearExisting: false)
+                                }
+                            }
                             if let checked = FeatureUsageLimitsMerge.date(limits.checkedAt) {
                                 Text("Checked \(checked.formatted(date: .abbreviated, time: .shortened))\(Date.now.timeIntervalSince(checked) > 300 ? " · May be stale" : "")")
                                     .font(.caption).foregroundStyle(T3Colors.textTertiary)
@@ -130,7 +136,7 @@ struct SettingsUsageLimitsView: View {
         .task(id: [reloadID, refreshTrigger]) { await reload() }
     }
 
-    private func reload() async {
+    private func reload(clearExisting: Bool = true) async {
         let request = reloadID
         let selected = selectedIDs
         guard let reader = model.client as? any FeatureUsageLimitsReading else {
@@ -139,7 +145,7 @@ struct SettingsUsageLimitsView: View {
             return
         }
         isLoading = true
-        accounts = []
+        if clearExisting { accounts = [] }
         notices = []
         var environments: [FeatureEnvironmentLimits] = []
         var failures: [String] = []

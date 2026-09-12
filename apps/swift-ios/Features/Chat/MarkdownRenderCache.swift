@@ -134,11 +134,12 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     /// posted in, which this render task does not know, and loading happens on
     /// the main actor once the block is on screen.
     case image(MarkdownInlineImage)
-    case codeBlock(language: String?, code: String)
+    case codeBlock(language: String?, code: String, citationRange: NSRange? = nil)
     /// Carried through unrendered: the embed's document is assembled on the
     /// main actor from the current colour scheme, which this render task does
     /// not know and must not capture.
     case htmlEmbed(String)
+    case artifactTemplate(CodexArtifactTemplate)
     case thematicBreak
 }
 
@@ -384,6 +385,9 @@ final class MarkdownRenderCache: @unchecked Sendable {
             case let .htmlEmbed(html):
                 rendered = .htmlEmbed(html)
 
+            case let .artifactTemplate(template):
+                rendered = .artifactTemplate(template)
+
             case .thematicBreak:
                 rendered = .thematicBreak
             }
@@ -445,7 +449,7 @@ final class MarkdownRenderCache: @unchecked Sendable {
         }
 
         let inline = MarkdownRenderedInline(
-            attributedText: MarkdownInlineFormatter.format(source, baseFont: style.font),
+            attributedText: MarkdownInlineFormatter.format(CodexMarkdownDirectives.renderFileCitations(source), baseFont: style.font),
             style: style
         )
         guard !Task.isCancelled else { return nil }

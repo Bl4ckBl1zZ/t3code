@@ -296,3 +296,87 @@ export function planPinnedMove(input: {
   newOrder.splice(to, 0, movedId);
   return planPinnedReorder({ orderedIds: newOrder, keysById, movedId });
 }
+
+/** Preserve automatic order among keyless rows; newly active threads precede
+ * arranged rows, while arranged pins precede legacy pins. */
+export function applyDurableThreadOrder<T>(
+  threads: readonly T[],
+  getKey: (thread: T) => string | null | undefined,
+  isPinned: (thread: T) => boolean,
+  getId: (thread: T) => string,
+): T[] {
+  return threads
+    .map((thread, index) => ({ thread, index }))
+    .toSorted((a, b) => {
+      const pinned = isPinned(a.thread);
+      const pinDifference = Number(isPinned(b.thread)) - Number(pinned);
+      if (pinDifference !== 0) return pinDifference;
+      const left = getKey(a.thread),
+        right = getKey(b.thread);
+      if (left != null && right != null) {
+        if (left !== right) return left < right ? -1 : 1;
+        const leftId = getId(a.thread),
+          rightId = getId(b.thread);
+        return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+      }
+      if ((left != null) !== (right != null)) return (left != null ? -1 : 1) * (pinned ? 1 : -1);
+      return a.index - b.index;
+    })
+    .map(({ thread }) => thread);
+}
+
+/** Materialize keyless sections together and reserve keys owned by hidden
+ * threads, so a filter or another device cannot introduce duplicate positions. */
+export function planDurableThreadReorder(
+  orderedIds: readonly string[],
+  movedId: string,
+  keysById: ReadonlyMap<string, string | null | undefined>,
+): ReadonlyMap<string, string> {
+  const index = orderedIds.indexOf(movedId);
+  if (index < 0 || new Set(orderedIds).size !== orderedIds.length) return new Map();
+  const visible = new Set(orderedIds);
+  const reserved = new Set(
+    [...keysById].flatMap(([id, key]) => (!visible.has(id) && key != null ? [key] : [])),
+  );
+  const unchanged = orderedIds.filter((id) => id !== movedId);
+  const keysAreOrdered = unchanged.every((id, i) => {
+    const key = keysById.get(id);
+    const previous = i === 0 ? null : keysById.get(unchanged[i - 1]!);
+    return key != null && isValidPinOrderKey(key) && (previous == null || previous < key);
+  });
+  if (keysAreOrdered) {
+    const before = index === 0 ? null : (keysById.get(orderedIds[index - 1]!) ?? null);
+    const after =
+      index + 1 === orderedIds.length ? null : (keysById.get(orderedIds[index + 1]!) ?? null);
+    let key = pinOrderKeyBetween(before, after);
+    while (key !== null && key.length <= 256 && reserved.has(key))
+      key = pinOrderKeyBetween(key, after);
+    if (key !== null && key.length <= 256) return new Map([[movedId, key]]);
+  }
+  // Dynamic width also handles imported histories exceeding the old 675 slots.
+  const slots = orderedIds.length + reserved.size + 1;
+  let capacity = 26,
+    width = 1;
+  while (capacity < slots * 2) {
+    capacity *= 26;
+    width += 1;
+  }
+  const stride = Math.max(1, Math.floor(capacity / slots));
+  const encode = (value: number) => {
+    let result = "";
+    for (let i = 0; i < width; i += 1) {
+      result = PIN_ORDER_DIGITS[value % 26] + result;
+      value = Math.floor(value / 26);
+    }
+    return result + "n";
+  };
+  const assignments = new Map<string, string>();
+  let value = 0;
+  for (const id of orderedIds) {
+    value += stride;
+    while (reserved.has(encode(value))) value += stride;
+    const key = encode(value);
+    if (keysById.get(id) !== key) assignments.set(id, key);
+  }
+  return assignments;
+}

@@ -7,6 +7,7 @@ struct GhosttyTerminalSurface: UIViewRepresentable {
     @SwiftUI.Environment(\.colorScheme) private var colorScheme
     let terminalKey: String
     let buffer: String
+    let outputCursor: FeatureTerminalOutputCursor?
     let fontSize: CGFloat
     let isRunning: Bool
     let focusRequest: Int
@@ -34,7 +35,7 @@ struct GhosttyTerminalSurface: UIViewRepresentable {
         view.terminalKey = terminalKey
         view.fontSize = fontSize
         view.isRunning = isRunning
-        view.buffer = buffer
+        view.updateOutput(buffer, cursor: outputCursor)
         view.focusRequest = focusRequest
     }
 }
@@ -511,11 +512,15 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
         }
     }
 
-    var buffer = "" {
-        didSet {
-            guard oldValue != buffer else { return }
-            applyRemoteBuffer(buffer)
-        }
+    private(set) var buffer = ""
+    private var outputCursor: FeatureTerminalOutputCursor?
+    private var appliedCursor: FeatureTerminalOutputCursor?
+
+    func updateOutput(_ value: String, cursor: FeatureTerminalOutputCursor?) {
+        guard value != buffer || cursor != outputCursor else { return }
+        buffer = value
+        outputCursor = cursor
+        applyRemoteBuffer(value)
     }
 
     var fontSize: CGFloat = 10.5 {
@@ -780,6 +785,7 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
     private func resetSurface() {
         destroySurface()
         lastAppliedBuffer = ""
+        appliedCursor = nil
         lastViewportSize = .zero
         lastContentScale = 0
         lastReportedGrid = nil
@@ -832,18 +838,17 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
             createSurfaceIfPossible()
             return
         }
-        guard newBuffer != lastAppliedBuffer else { return }
-
-        if newBuffer.isEmpty {
-            feedData(Data("\u{1B}[2J\u{1B}[H".utf8))
-            lastAppliedBuffer = ""
+        switch TerminalOutputReplay.update(buffer: newBuffer, cursor: outputCursor,
+                                           previousBuffer: lastAppliedBuffer, previousCursor: appliedCursor) {
+        case .none:
             return
-        }
-
-        if newBuffer.hasPrefix(lastAppliedBuffer) {
-            feedData(Data(newBuffer.dropFirst(lastAppliedBuffer.count).utf8))
+        case .append(let data):
+            feedData(data)
             lastAppliedBuffer = newBuffer
+            appliedCursor = outputCursor
             return
+        case .reset:
+            break
         }
 
         resetSurface()
@@ -851,7 +856,8 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
     }
 
     private func feedBuffer(_ value: String) {
-        guard !value.isEmpty else { return }
+        appliedCursor = outputCursor
+        guard !value.isEmpty else { lastAppliedBuffer = value; return }
         isReplayingBuffer = true
         defer { isReplayingBuffer = false }
         feedData(Data(value.utf8))

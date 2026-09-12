@@ -1,3 +1,11 @@
+import {
+  $consumeComposerCitationCommentRequest,
+  $createComposerCitationNode,
+  ComposerCitationCommentContext,
+  ComposerCitationNode,
+  type ComposerCitationCommentRequest,
+  type ComposerCitationCommentTarget,
+} from "./ComposerCitationNode";
 import { LexicalComposer, type InitialConfigType } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
@@ -11,6 +19,9 @@ import {
   $applyNodeReplacement,
   $createRangeSelectionFromDom,
   $createRangeSelection,
+  $getNodeByKey,
+  HISTORY_PUSH_TAG,
+  SKIP_DOM_SELECTION_TAG,
   $getSelection,
   $setSelection,
   $isElementNode,
@@ -52,6 +63,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 
 import {
@@ -432,12 +444,14 @@ function $createComposerTerminalContextNode(
 }
 
 type ComposerInlineTokenNode =
+  | ComposerCitationNode
   | ComposerMentionNode
   | ComposerSkillNode
   | ComposerTerminalContextNode;
 
 function isComposerInlineTokenNode(candidate: unknown): candidate is ComposerInlineTokenNode {
   return (
+    candidate instanceof ComposerCitationNode ||
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
     candidate instanceof ComposerTerminalContextNode
@@ -836,6 +850,10 @@ function $setComposerEditorPrompt(
 
   const segments = splitPromptIntoComposerSegments(prompt, terminalContexts);
   for (const segment of segments) {
+    if (segment.type === "citation") {
+      paragraph.append($createComposerCitationNode(segment.citation, segment.source));
+      continue;
+    }
     if (segment.type === "mention") {
       paragraph.append($createComposerMentionNode(segment.path, segment.source));
       continue;
@@ -872,6 +890,8 @@ function collectTerminalContextIds(node: LexicalNode): string[] {
 }
 
 export interface ComposerPromptEditorHandle {
+  requestCitationComment: (request: ComposerCitationCommentRequest) => void;
+  isCaretOnVisualEdge: (edge: "start" | "end") => boolean;
   focus: () => void;
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
@@ -884,6 +904,7 @@ export interface ComposerPromptEditorHandle {
 }
 
 interface ComposerPromptEditorProps {
+  onCitationSubmitAndSend?: () => void;
   value: string;
   cursor: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
@@ -891,6 +912,8 @@ interface ComposerPromptEditorProps {
   disabled: boolean;
   placeholder: string;
   className?: string;
+  containerClassName?: string | undefined;
+  placeholderClassName?: string | undefined;
   onRemoveTerminalContext: (contextId: string) => void;
   onChange: (
     nextValue: string,
@@ -905,6 +928,55 @@ interface ComposerPromptEditorProps {
   ) => boolean;
   onPaste: React.ClipboardEventHandler<HTMLElement>;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
+}
+
+function caretLineRect(range: Range, edge: "start" | "end"): DOMRect | null {
+  const collapsedRects = Array.from(range.getClientRects()).filter((rect) => rect.height > 0);
+  const collapsedRect = edge === "start" ? collapsedRects.at(-1) : collapsedRects[0];
+  if (collapsedRect) return collapsedRect;
+
+  const container = range.startContainer;
+  if (container.nodeType === Node.TEXT_NODE) {
+    const textNode = container as Text;
+    if (textNode.data.length === 0) return null;
+    const probeStart = Math.max(
+      0,
+      Math.min(
+        edge === "start" ? range.startOffset : range.startOffset - 1,
+        textNode.data.length - 1,
+      ),
+    );
+    const probeRange = document.createRange();
+    probeRange.setStart(textNode, probeStart);
+    probeRange.setEnd(textNode, probeStart + 1);
+    const probeRect = Array.from(probeRange.getClientRects()).find((rect) => rect.height > 0);
+    if (probeRect) return probeRect;
+    const boundingRect = probeRange.getBoundingClientRect();
+    return boundingRect.height > 0 ? boundingRect : null;
+  }
+
+  if (!(container instanceof HTMLElement)) return null;
+  // The caret sits between the paragraph's children, which is where Lexical
+  // puts it next to an inline chip. Measure the neighbouring child.
+  const neighbour =
+    container.childNodes[Math.max(0, range.startOffset - 1)] ??
+    container.childNodes[range.startOffset];
+  if (neighbour instanceof HTMLElement) {
+    const neighbourRect = neighbour.getBoundingClientRect();
+    if (neighbourRect.height > 0) return neighbourRect;
+  } else if (neighbour instanceof Text && neighbour.data.length > 0) {
+    // Probe the character on the caret's side. A soft-wrapped text node's
+    // first rect is its first visual line, which may not be the caret's.
+    const isBeforeCaret = neighbour === container.childNodes[range.startOffset - 1];
+    const probeStart = isBeforeCaret ? neighbour.data.length - 1 : 0;
+    const probeRange = document.createRange();
+    probeRange.setStart(neighbour, probeStart);
+    probeRange.setEnd(neighbour, probeStart + 1);
+    const probeRect = Array.from(probeRange.getClientRects()).find((rect) => rect.height > 0);
+    if (probeRect) return probeRect;
+  }
+  const containerRect = container.getBoundingClientRect();
+  return containerRect.height > 0 ? containerRect : null;
 }
 
 function ComposerCommandKeyPlugin(props: {
@@ -1257,6 +1329,7 @@ function ComposerInlineTokenPastePlugin() {
   useEffect(
     () =>
       registerComposerInlineTokenPaste(editor, {
+        createCitationNode: $createComposerCitationNode,
         createMentionNode: $createComposerMentionNode,
         getExpandedAbsoluteOffsetForPoint,
       }),
@@ -1540,7 +1613,10 @@ function ComposerPromptEditorInner({
   disabled,
   placeholder,
   className,
+  containerClassName,
+  placeholderClassName,
   onRemoveTerminalContext,
+  onCitationSubmitAndSend,
   onChange,
   onCommandKeyDown,
   onPaste,
@@ -1561,6 +1637,21 @@ function ComposerPromptEditorInner({
     terminalContextIds: terminalContexts.map((context) => context.id),
   });
   const isApplyingControlledUpdateRef = useRef(false);
+  const citationCommentRequestRef = useRef<ComposerCitationCommentRequest | null>(null);
+  const [openCitationComment, setOpenCitationComment] =
+    useState<ComposerCitationCommentTarget | null>(null);
+  const citationCommentActions = useMemo(
+    () => ({
+      openComment: openCitationComment,
+      onOpenChange: (nodeKey: NodeKey, open: boolean) => {
+        setOpenCitationComment((current) =>
+          open ? { nodeKey } : current?.nodeKey === nodeKey ? null : current,
+        );
+      },
+      onSubmitAndSend: onCitationSubmitAndSend ?? (() => {}),
+    }),
+    [onCitationSubmitAndSend, openCitationComment],
+  );
   const terminalContextActions = useMemo(
     () => ({ onRemoveTerminalContext }),
     [onRemoveTerminalContext],
@@ -1577,6 +1668,22 @@ function ComposerPromptEditorInner({
   useEffect(() => {
     editor.setEditable(!disabled);
   }, [disabled, editor]);
+
+  useEffect(() => {
+    const openCitationNodeKey = openCitationComment?.nodeKey;
+    if (!openCitationNodeKey) return;
+    return editor.registerUpdateListener(({ editorState }) => {
+      const isAttached = editorState.read(() => {
+        const node = $getNodeByKey(openCitationNodeKey);
+        return node instanceof ComposerCitationNode && node.isAttached();
+      });
+      if (!isAttached) {
+        setOpenCitationComment((current) =>
+          current?.nodeKey === openCitationNodeKey ? null : current,
+        );
+      }
+    });
+  }, [editor, openCitationComment?.nodeKey]);
 
   useLayoutEffect(() => {
     const normalizedCursor = clampCollapsedComposerCursor(value, cursor);
@@ -1608,16 +1715,27 @@ function ComposerPromptEditorInner({
     }
 
     isApplyingControlledUpdateRef.current = true;
-    editor.update(() => {
-      const shouldRewriteEditorState =
-        previousSnapshot.value !== value || contextsChanged || skillsChanged;
-      if (shouldRewriteEditorState) {
-        $setComposerEditorPrompt(value, terminalContexts, skillMetadataRef.current);
-      }
-      if (shouldRewriteEditorState || isFocused) {
-        $setSelectionAtComposerOffset(normalizedCursor);
-      }
-    });
+    const isCiteInsertion = citationCommentRequestRef.current?.value === value;
+    let citationToOpen: ComposerCitationCommentTarget | null = null;
+    editor.update(
+      () => {
+        const shouldRewriteEditorState =
+          previousSnapshot.value !== value || contextsChanged || skillsChanged;
+        if (shouldRewriteEditorState) {
+          $setComposerEditorPrompt(value, terminalContexts, skillMetadataRef.current);
+        }
+        if (shouldRewriteEditorState || isFocused) {
+          $setSelectionAtComposerOffset(normalizedCursor);
+        }
+        citationToOpen = $consumeComposerCitationCommentRequest(citationCommentRequestRef);
+      },
+      {
+        ...(isCiteInsertion ? { tag: [HISTORY_PUSH_TAG, SKIP_DOM_SELECTION_TAG] } : {}),
+        onUpdate: () => {
+          if (citationToOpen) setOpenCitationComment(citationToOpen);
+        },
+      },
+    );
     queueMicrotask(() => {
       isApplyingControlledUpdateRef.current = false;
     });
@@ -1698,7 +1816,44 @@ function ComposerPromptEditorInner({
           ),
         );
       },
+      requestCitationComment: (request) => {
+        citationCommentRequestRef.current = request;
+        const target = editor
+          .getEditorState()
+          .read(() => $consumeComposerCitationCommentRequest(citationCommentRequestRef));
+        if (target) setOpenCitationComment(target);
+      },
       readSnapshot,
+      isCaretOnVisualEdge: (edge) => {
+        const snapshot = readSnapshot();
+        if (snapshot.value.length === 0) return true;
+        const beforeCaret = snapshot.value.slice(0, snapshot.expandedCursor);
+        const afterCaret = snapshot.value.slice(snapshot.expandedCursor);
+        if (edge === "start" ? beforeCaret.includes("\n") : afterCaret.includes("\n")) {
+          return false;
+        }
+        const rootElement = editor.getRootElement();
+        const selection = window.getSelection();
+        if (
+          !rootElement ||
+          !selection ||
+          !selection.isCollapsed ||
+          selection.rangeCount === 0 ||
+          !selection.anchorNode ||
+          !rootElement.contains(selection.anchorNode)
+        ) {
+          return false;
+        }
+        const caretRect = caretLineRect(selection.getRangeAt(0), edge);
+        if (!caretRect) return false;
+        const edgeElement =
+          edge === "start" ? rootElement.firstElementChild : rootElement.lastElementChild;
+        const edgeRect = (edgeElement ?? rootElement).getBoundingClientRect();
+        const threshold = caretRect.height / 2;
+        return edge === "start"
+          ? caretRect.top - edgeRect.top < threshold
+          : edgeRect.bottom - caretRect.bottom < threshold;
+      },
     }),
     [focusAt, readSnapshot],
   );
@@ -1753,43 +1908,55 @@ function ComposerPromptEditorInner({
   }, []);
 
   return (
-    <ComposerTerminalContextActionsContext value={terminalContextActions}>
-      <div className="relative [font-family:var(--font-composer,var(--font-sans))] [font-size:var(--font-size-prompt,0.875rem)] [@media(max-width:39.999rem)_and_(pointer:coarse)]:[font-size:max(var(--font-size-prompt,1rem),16px)]">
-        <PlainTextPlugin
-          contentEditable={
-            <ContentEditable
-              className={cn(
-                // The wrapper owns the appearance preference; keep everything else here.
-                "block max-h-50 min-h-17.5 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none",
-                className,
-              )}
-              data-testid="composer-editor"
-              aria-placeholder={placeholder}
-              placeholder={<span />}
-              onPaste={onPaste}
-            />
-          }
-          placeholder={
-            terminalContexts.length > 0 ? null : (
-              <div className="pointer-events-none absolute inset-0 leading-relaxed text-placeholder/75">
-                {placeholder}
-              </div>
-            )
-          }
-          ErrorBoundary={LexicalErrorBoundary}
-        />
-        <OnChangePlugin onChange={handleEditorChange} />
-        <ComposerCommandKeyPlugin {...(onCommandKeyDown ? { onCommandKeyDown } : {})} />
-        <ComposerSurroundSelectionPlugin terminalContexts={terminalContexts} skills={skills} />
-        <ComposerHomeEndKeyPlugin />
-        <ComposerInlineTokenArrowPlugin />
-        <ComposerInlineTokenSelectionNormalizePlugin />
-        <ComposerInlineTokenBackspacePlugin />
-        <ComposerInlineTokenPastePlugin />
-        <ComposerChipSelectionPlugin />
-        <HistoryPlugin />
-      </div>
-    </ComposerTerminalContextActionsContext>
+    <ComposerCitationCommentContext value={citationCommentActions}>
+      <ComposerTerminalContextActionsContext value={terminalContextActions}>
+        <div
+          className={cn(
+            "relative [font-family:var(--font-composer,var(--font-sans))] [font-size:var(--font-size-prompt,0.875rem)] [@media(max-width:39.999rem)_and_(pointer:coarse)]:[font-size:max(var(--font-size-prompt,1rem),16px)]",
+            containerClassName,
+          )}
+        >
+          <PlainTextPlugin
+            contentEditable={
+              <ContentEditable
+                className={cn(
+                  // The wrapper owns the appearance preference; keep everything else here.
+                  "block max-h-50 min-h-17.5 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none",
+                  className,
+                )}
+                data-testid="composer-editor"
+                aria-placeholder={placeholder}
+                placeholder={<span />}
+                onPaste={onPaste}
+              />
+            }
+            placeholder={
+              terminalContexts.length > 0 ? null : (
+                <div
+                  className={cn(
+                    "pointer-events-none absolute inset-0 leading-relaxed text-placeholder/75",
+                    placeholderClassName,
+                  )}
+                >
+                  {placeholder}
+                </div>
+              )
+            }
+            ErrorBoundary={LexicalErrorBoundary}
+          />
+          <OnChangePlugin onChange={handleEditorChange} />
+          <ComposerCommandKeyPlugin {...(onCommandKeyDown ? { onCommandKeyDown } : {})} />
+          <ComposerSurroundSelectionPlugin terminalContexts={terminalContexts} skills={skills} />
+          <ComposerHomeEndKeyPlugin />
+          <ComposerInlineTokenArrowPlugin />
+          <ComposerInlineTokenSelectionNormalizePlugin />
+          <ComposerInlineTokenBackspacePlugin />
+          <ComposerInlineTokenPastePlugin />
+          <ComposerChipSelectionPlugin />
+          <HistoryPlugin />
+        </div>
+      </ComposerTerminalContextActionsContext>
+    </ComposerCitationCommentContext>
   );
 }
 
@@ -1801,7 +1968,10 @@ export function ComposerPromptEditor({
   disabled,
   placeholder,
   className,
+  containerClassName,
+  placeholderClassName,
   onRemoveTerminalContext,
+  onCitationSubmitAndSend,
   onChange,
   onCommandKeyDown,
   onPaste,
@@ -1814,7 +1984,12 @@ export function ComposerPromptEditor({
     () => ({
       namespace: "t3tools-composer-editor",
       editable: true,
-      nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode],
+      nodes: [
+        ComposerCitationNode,
+        ComposerMentionNode,
+        ComposerSkillNode,
+        ComposerTerminalContextNode,
+      ],
       editorState: () => {
         $setComposerEditorPrompt(
           initialValueRef.current,
@@ -1838,12 +2013,15 @@ export function ComposerPromptEditor({
         skills={skills}
         disabled={disabled}
         placeholder={placeholder}
+        {...(onCitationSubmitAndSend ? { onCitationSubmitAndSend } : {})}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}
         onPaste={onPaste}
         editorRef={editorRef}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
+        containerClassName={containerClassName}
+        placeholderClassName={placeholderClassName}
       />
     </LexicalComposer>
   );

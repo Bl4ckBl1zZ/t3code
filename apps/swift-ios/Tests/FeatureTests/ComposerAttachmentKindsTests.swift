@@ -56,7 +56,7 @@ final class ComposerAttachmentKindsTests: XCTestCase {
         for kind in [ComposerAttachmentKind.pdf, .video, .file] {
             XCTAssertEqual(
                 ComposerAttachments.maximumBytes(for: kind),
-                20 * 1024 * 1024,
+                50 * 1024 * 1024,
                 "\(kind.rawValue) should share the file cap"
             )
         }

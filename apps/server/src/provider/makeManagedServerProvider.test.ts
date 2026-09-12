@@ -151,6 +151,55 @@ const enrichedSnapshotSecond: ServerProvider = {
 
 describe("makeManagedServerProvider", () => {
   it.effect(
+    "publishes account-local usage and retains it when an older in-flight probe completes",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const releaseCheck = yield* Deferred.make<void>();
+          const limits = {
+            checkedAt: "2026-09-10T01:00:00.000Z",
+            windows: [
+              { id: "five_hour", kind: "session" as const, label: "Session", usedPercent: 50 },
+            ],
+          };
+          const makeProvider = () =>
+            makeManagedServerProvider<TestSettings>({
+              maintenanceCapabilities,
+              getSettings: Effect.succeed({ enabled: true }),
+              streamSettings: Stream.empty,
+              haveSettingsChanged: () => false,
+              initialSnapshot: () => Effect.succeed(initialSnapshot),
+              checkProvider: Deferred.await(releaseCheck).pipe(
+                Effect.as({
+                  ...refreshedSnapshot,
+                  usageLimits: { ...limits, checkedAt: "2026-09-10T00:00:00.000Z" },
+                }),
+              ),
+              refreshOnInterval: false,
+            });
+          const first = yield* makeProvider();
+          const second = yield* makeProvider();
+          const updates = yield* first.streamChanges.pipe(
+            Stream.take(2),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* Effect.yieldNow;
+          yield* first.updateUsageLimits(() => limits);
+          assert.deepStrictEqual((yield* first.getSnapshot).usageLimits, limits);
+          assert.strictEqual((yield* second.getSnapshot).usageLimits, undefined);
+          yield* first.updateUsageLimits((current) => current);
+          yield* Deferred.succeed(releaseCheck, undefined);
+          const emitted = yield* Fiber.join(updates);
+          assert.strictEqual(emitted.length, 2);
+          assert.deepStrictEqual(
+            emitted.map((snapshot) => snapshot.usageLimits),
+            [limits, limits],
+          );
+        }),
+      ).pipe(Effect.provide(AlwaysRunTestLayer)),
+  );
+  it.effect(
     "runs the initial provider check in the background and streams the refreshed snapshot",
     () =>
       Effect.scoped(

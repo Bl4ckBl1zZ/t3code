@@ -41,6 +41,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   },
   reviewers: { request: true, listCandidates: true },
   edit: { changeRequest: true, comment: true },
+  labels: true,
 };
 
 /**
@@ -78,6 +79,8 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
     // leaves them commenting, which is what an author has to say about their own change anyway.
     verdicts: access.didAuthor ? (["comment"] as const) : CAPABILITIES.review.verdicts,
     requestReviewers: access.canWrite,
+    labels: access.canTriage ?? access.canWrite,
+    ...(access.canWrite ? { stackRebase: true } : {}),
     ...(access.canUpdateBranch === true ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
 }
@@ -222,6 +225,16 @@ export const make = Effect.gen(function* () {
           changeRequests: input.changeRequests,
         })
         .pipe(Effect.mapError(fail("listChangeRequestStats"))),
+
+    // A single CLI read supplies live overview fields without detail permissions or comparisons.
+    getChangeRequestSummary: (input) =>
+      cli.getPullRequestDetail(input).pipe(
+        Effect.map((summary) => ({
+          ...summary,
+          author: withAvatar(summary.author, new Map(), input.host),
+        })),
+        Effect.mapError(fail("getChangeRequestSummary")),
+      ),
 
     getChangeRequest: (input) =>
       Effect.all(
@@ -414,6 +427,25 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("setReviewerRequest"))),
 
+    getStack: (input) =>
+      cli
+        .getPullRequestStack({ ...input, includeDetails: input.includeDetails !== false })
+        .pipe(Effect.mapError(fail("getStack"))),
+    listLabelCandidates: (input) =>
+      cli.listLabelCandidates(input).pipe(Effect.mapError(fail("listLabelCandidates"))),
+
+    setLabels: (input) =>
+      cli
+        .setLabels({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          labels: input.labels,
+          applied: input.applied,
+        })
+        .pipe(Effect.mapError(fail("setLabels"))),
+
     runAction: (input) =>
       cli
         .runPullRequestAction({
@@ -422,6 +454,10 @@ export const make = Effect.gen(function* () {
           host: input.host,
           number: input.number,
           action: input.action,
+          ...(input.stackNumber === undefined ? {} : { stackNumber: input.stackNumber }),
+          ...(input.expectedStackHeads === undefined
+            ? {}
+            : { expectedStackHeads: input.expectedStackHeads }),
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
           ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
         })

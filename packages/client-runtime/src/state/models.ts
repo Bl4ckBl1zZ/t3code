@@ -12,6 +12,7 @@ import type {
   RunId,
   ThreadId,
   ThreadLinkedPullRequest,
+  ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
@@ -68,6 +69,7 @@ export function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]):
 }
 
 export interface EnvironmentThreadShell {
+  readonly serverAutoSettlement?: boolean | undefined;
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -80,6 +82,9 @@ export interface EnvironmentThreadShell {
   readonly worktreePath: string | null;
   /** Pull request a user pinned to this thread; null when nothing is linked. */
   readonly linkedPullRequest: ThreadLinkedPullRequest | null;
+  readonly linkedPullRequests?: readonly ThreadLinkedPullRequest[] | undefined;
+  readonly pullRequests?: readonly ThreadPullRequestLink[] | undefined;
+  readonly branchPullRequest?: ThreadLinkedPullRequest | null | undefined;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
@@ -124,6 +129,7 @@ export interface EnvironmentThreadShell {
   /** Fractional sort key for the user-arranged pinned run; null on threads
       pinned before reordering existed (they sort below arranged ones). */
   readonly pinOrderKey: string | null;
+  readonly activeOrderKey?: string | null;
   readonly workInboxRole: "main" | "chat" | null;
   readonly timelineClearedAt?: string | null;
   readonly snoozedUntil: string | null;
@@ -201,6 +207,7 @@ export function scopeProject(
 export function presentThreadShell(
   environmentId: EnvironmentId,
   thread: OrchestrationV2ThreadShell,
+  serverAutoSettlement = false,
 ): EnvironmentThreadShell {
   const updatedAt = iso(thread.updatedAt);
   const latestRun =
@@ -220,6 +227,7 @@ export function presentThreadShell(
           assistantMessageId: null,
         } satisfies ThreadRunSummary);
   return {
+    serverAutoSettlement,
     environmentId,
     id: thread.id,
     projectId: thread.projectId,
@@ -231,6 +239,13 @@ export function presentThreadShell(
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     linkedPullRequest: thread.linkedPullRequest ?? null,
+    ...(thread.linkedPullRequests === undefined
+      ? {}
+      : { linkedPullRequests: thread.linkedPullRequests }),
+    ...(thread.pullRequests === undefined ? {} : { pullRequests: thread.pullRequests }),
+    ...(thread.branchPullRequest === undefined
+      ? {}
+      : { branchPullRequest: thread.branchPullRequest }),
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
     activeProviderThreadId: thread.activeProviderThreadId,
@@ -246,9 +261,12 @@ export function presentThreadShell(
           },
     hasPendingApprovals:
       thread.pendingRuntimeRequest !== null &&
+      thread.pendingRuntimeRequest.responseMode !== "message" &&
       thread.pendingRuntimeRequest.kind !== "user_input" &&
       thread.pendingRuntimeRequest.kind !== "auth_refresh",
-    hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
+    hasPendingUserInput:
+      thread.pendingRuntimeRequest?.kind === "user_input" &&
+      thread.pendingRuntimeRequest.responseMode !== "message",
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     backgroundProcessCount: thread.backgroundProcessCount ?? 0,
     activeAgentCount: thread.activeAgentCount ?? 0,
@@ -262,6 +280,7 @@ export function presentThreadShell(
     unsettledAt: nullableIso(thread.unsettledAt ?? null),
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,
+    activeOrderKey: thread.activeOrderKey ?? null,
     workInboxRole: thread.workInboxRole ?? null,
     timelineClearedAt: nullableIso(thread.timelineClearedAt ?? null),
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),

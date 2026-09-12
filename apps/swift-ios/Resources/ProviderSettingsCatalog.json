@@ -1,0 +1,369 @@
+[
+  {
+    "driver": "codex",
+    "label": "Codex",
+    "hasDefaultInstance": true,
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Path to the Codex binary used by this instance.",
+        "placeholder": "codex",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "homePath",
+        "control": "text",
+        "label": "CODEX_HOME path",
+        "description": "Custom Codex home and config directory.",
+        "placeholder": "~/.codex",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "shadowHomePath",
+        "control": "text",
+        "label": "Shadow home path",
+        "description": "Account-specific Codex home. Keeps auth.json separate while sharing state from CODEX_HOME.",
+        "placeholder": "~/.codex-t3/personal",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "launchArgs",
+        "control": "text",
+        "label": "Launch arguments",
+        "description": "Additional CLI arguments passed to codex app-server on session start.",
+        "clearWhenEmpty": "omit"
+      }
+    ]
+  },
+  {
+    "driver": "claudeAgent",
+    "label": "Claude",
+    "hasDefaultInstance": true,
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Path to the Claude binary used by this instance.",
+        "placeholder": "claude",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "homePath",
+        "control": "text",
+        "label": "CLAUDE_CONFIG_DIR path",
+        "description": "Custom Claude home and config directory. Keeps .claude.json and .claude separate.",
+        "placeholder": "~/.claude",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "autoCompactWindow",
+        "control": "text",
+        "label": "Auto-compact after",
+        "description": "Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude's default.",
+        "placeholder": "e.g. 300000",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "launchArgs",
+        "control": "text",
+        "label": "Launch arguments",
+        "description": "Additional CLI arguments passed on session start.",
+        "placeholder": "e.g. --chrome",
+        "clearWhenEmpty": "omit"
+      }
+    ]
+  },
+  {
+    "driver": "cursor",
+    "label": "Cursor",
+    "hasDefaultInstance": true,
+    "environmentFields": [
+      {
+        "name": "CURSOR_API_KEY",
+        "label": "Cursor API key",
+        "description": "Required by the Cursor Agent SDK.",
+        "placeholder": "Paste API key",
+        "sensitive": true
+      }
+    ],
+    "fields": []
+  },
+  {
+    "driver": "grok",
+    "label": "Grok",
+    "hasDefaultInstance": true,
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Path to the Grok CLI binary.",
+        "placeholder": "grok",
+        "clearWhenEmpty": "omit"
+      }
+    ]
+  },
+  {
+    "driver": "hermes",
+    "label": "Hermes",
+    "hasDefaultInstance": true,
+    "defaultInstance": {
+      "driver": "hermes",
+      "enabled": false,
+      "config": {
+        "endpoint": "",
+        "remoteAccessEnabled": false,
+        "profileKey": "default",
+        "managedServerEnabled": true,
+        "customModels": [],
+        "importEnabled": false,
+        "mcpEnabled": true,
+        "attachmentsEnabled": true,
+        "proactiveEnabled": true,
+        "voiceEnabled": false
+      }
+    },
+    "badgeLabel": "Preview",
+    "environmentFields": [
+      {
+        "name": "HERMES_GATEWAY_TOKEN",
+        "label": "Hermes gateway token",
+        "description": "Shared only with the attached gateway or a Hermes Serve process launched by T3.",
+        "placeholder": "Paste gateway token",
+        "sensitive": true
+      }
+    ],
+    "fields": [
+      {
+        "key": "endpoint",
+        "control": "text",
+        "label": "Gateway endpoint",
+        "description": "Leave blank to use ws://127.0.0.1:9119/api/ws. T3 attaches there first and can start Hermes Serve when it is unused.",
+        "placeholder": "ws://127.0.0.1:9119/api/ws",
+        "clearWhenEmpty": "persist"
+      },
+      {
+        "key": "profileKey",
+        "control": "text",
+        "label": "Profile key",
+        "description": "Durable Hermes profile containing the sessions owned by this instance.",
+        "placeholder": "default",
+        "clearWhenEmpty": "persist"
+      },
+      {
+        "key": "managedServerEnabled",
+        "control": "switch",
+        "label": "Start Hermes automatically",
+        "description": "Attach to a compatible gateway at this endpoint, or launch and supervise `hermes serve` when no local gateway is running.",
+        "clearWhenEmpty": "persist",
+        "defaultBooleanValue": true
+      },
+      {
+        "key": "remoteAccessEnabled",
+        "control": "switch",
+        "label": "Remote gateway",
+        "description": "Allow this instance to connect to a credential-free wss:// endpoint.",
+        "clearWhenEmpty": "persist",
+        "defaultBooleanValue": false
+      },
+      {
+        "key": "importEnabled",
+        "control": "switch",
+        "label": "Profile import",
+        "description": "Expose import controls only when the gateway advertises a compatible import API.",
+        "clearWhenEmpty": "persist",
+        "defaultBooleanValue": false
+      },
+      {
+        "key": "mcpEnabled",
+        "control": "switch",
+        "label": "MCP",
+        "description": "Allow MCP only when session-scoped registration and revocation are advertised.",
+        "clearWhenEmpty": "persist",
+        "defaultBooleanValue": true
+      },
+      {
+        "key": "attachmentsEnabled",
+        "control": "switch",
+        "label": "Attachments",
+        "description": "Allow attachment uploads supported by the connected gateway.",
+        "clearWhenEmpty": "persist",
+        "defaultBooleanValue": true
+      },
+      {
+        "key": "proactiveEnabled",
+        "control": "switch",
+        "label": "Proactive mode",
+        "description": "Keep Hermes threads subscribed so gateway-side runs stream in on their own, and answer requests those runs raise. Off still shows that work — it arrives when the thread is opened instead.",
+        "clearWhenEmpty": "persist",
+        "defaultBooleanValue": true
+      },
+      {
+        "key": "voiceEnabled",
+        "control": "switch",
+        "label": "Voice",
+        "description": "Allow voice features only when explicitly supported by the gateway.",
+        "clearWhenEmpty": "persist",
+        "defaultBooleanValue": false
+      }
+    ]
+  },
+  {
+    "driver": "openclaw",
+    "label": "OpenClaw",
+    "hasDefaultInstance": true,
+    "defaultInstance": {
+      "driver": "openclaw",
+      "enabled": false,
+      "config": {
+        "binaryPath": "openclaw",
+        "url": "",
+        "tokenFile": "",
+        "passwordFile": "",
+        "session": "",
+        "resetSession": false,
+        "customModels": []
+      }
+    },
+    "badgeLabel": "ACP",
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Path to the OpenClaw CLI binary that exposes `openclaw acp`.",
+        "placeholder": "openclaw",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "url",
+        "control": "text",
+        "label": "Gateway URL",
+        "description": "Optional OpenClaw Gateway URL passed to `openclaw acp --url`.",
+        "placeholder": "ws://127.0.0.1:18789",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "tokenFile",
+        "control": "text",
+        "label": "Token file",
+        "description": "Optional path passed to `--token-file`. The token itself is never placed on the command line.",
+        "placeholder": "/path/to/openclaw-token",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "passwordFile",
+        "control": "text",
+        "label": "Password file",
+        "description": "Optional path passed to `--password-file`. The password itself is never placed on the command line.",
+        "placeholder": "/path/to/openclaw-password",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "session",
+        "control": "text",
+        "label": "Gateway session",
+        "description": "Optional OpenClaw Gateway session override passed to `--session`.",
+        "placeholder": "agent:main:main",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "resetSession",
+        "control": "switch",
+        "label": "Reset gateway session",
+        "description": "Start `openclaw acp` with `--reset-session`.",
+        "clearWhenEmpty": "persist",
+        "defaultBooleanValue": false
+      }
+    ]
+  },
+  {
+    "driver": "hermesAcp",
+    "label": "Hermes in Code",
+    "hasDefaultInstance": false,
+    "badgeLabel": "ACP",
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Path to a Hermes Agent CLI that exposes the `hermes acp` stdio protocol.",
+        "placeholder": "hermes",
+        "clearWhenEmpty": "omit"
+      }
+    ]
+  },
+  {
+    "driver": "acpRegistry",
+    "label": "ACP Registry",
+    "hasDefaultInstance": false,
+    "badgeLabel": "V2 Preview",
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "agentId",
+        "control": "text",
+        "label": "Registry agent ID",
+        "description": "Agent identifier from the official ACP Registry, for example 'devin'.",
+        "placeholder": "devin",
+        "clearWhenEmpty": "persist"
+      },
+      {
+        "key": "commandPath",
+        "control": "text",
+        "label": "Executable override",
+        "description": "Optional local executable to use instead of installing the registry distribution. Registry arguments and environment are still applied.",
+        "placeholder": "devin",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "authMethodId",
+        "control": "text",
+        "label": "Authentication method",
+        "description": "Optional ACP authentication method ID. By default, the first agent-managed method is selected.",
+        "placeholder": "auto",
+        "clearWhenEmpty": "omit"
+      }
+    ]
+  },
+  {
+    "driver": "opencode",
+    "label": "OpenCode",
+    "hasDefaultInstance": true,
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Path to the OpenCode binary.",
+        "placeholder": "opencode",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "serverUrl",
+        "control": "text",
+        "label": "Server URL",
+        "description": "Leave blank to let T3 Code spawn the server when needed.",
+        "placeholder": "http://127.0.0.1:4096",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "serverPassword",
+        "control": "password",
+        "label": "Server password",
+        "description": "Stored in plain text on disk.",
+        "placeholder": "Optional",
+        "clearWhenEmpty": "omit"
+      }
+    ]
+  }
+]

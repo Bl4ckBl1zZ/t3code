@@ -1,3 +1,15 @@
+import type { PullRequestLabelCandidateList } from "@t3tools/contracts";
+import {
+  LABEL_CANDIDATES_GRAPHQL_QUERY,
+  decodeLabelCandidatesJson,
+  buildLabelRequestJson,
+} from "./gitHubPullRequestJson.ts";
+import { runGitHubStackAction, type GitHubStackActionError } from "./githubStackActions.ts";
+import {
+  decodePullRequestStacksJson,
+  type GitHubPullRequestStack,
+} from "./gitHubPullRequestJson.ts";
+import type { PullRequestStackHead } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -241,6 +253,7 @@ export class GitHubSubjectScopeError extends Schema.TaggedErrorClass<GitHubSubje
 }
 
 export type GitHubPullRequestCliError =
+  | GitHubStackActionError
   | GitHubCli.GitHubCliError
   | GitHubPullRequestReadError
   | GitHubDiffCursorError
@@ -477,12 +490,39 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly requested: boolean;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
 
+    readonly getPullRequestStack: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly includeDetails?: boolean;
+    }) => Effect.Effect<GitHubPullRequestStack | null, GitHubPullRequestCliError>;
+    /** The repository's labels, and which of them this pull request already wears. */
+    readonly listLabelCandidates: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    }) => Effect.Effect<PullRequestLabelCandidateList, GitHubPullRequestCliError>;
+
+    readonly setLabels: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly labels: ReadonlyArray<string>;
+      /** False takes each label off; true adds each to whatever is already there. */
+      readonly applied: boolean;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly host: string;
       readonly number: number;
       readonly action: PullRequestAction;
+      readonly stackNumber?: number;
+      readonly expectedStackHeads?: ReadonlyArray<PullRequestStackHead>;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
@@ -1655,6 +1695,56 @@ export const make = Effect.gen(function* () {
       });
     },
 
+    listLabelCandidates: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "listLabelCandidates",
+        allowReserve: true,
+        variables: [
+          ["-f", `owner=${owner}`],
+          ["-f", `name=${name}`],
+          ["-F", `number=${input.number}`],
+        ],
+        query: LABEL_CANDIDATES_GRAPHQL_QUERY,
+        decode: decodeLabelCandidatesJson,
+      });
+    },
+
+    setLabels: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      // A pull request is an issue to the labels API. Adding posts a list and leaves what was
+      // already there; taking off is one delete per label, since the endpoint names one in its
+      // path. The name goes into the path encoded, because a label may carry a space or a slash.
+      const issue = `repos/${owner}/${name}/issues/${input.number}/labels`;
+      if (input.applied) {
+        return github
+          .execute({
+            cwd: input.cwd,
+            args: ["api", "--method", "POST", "--hostname", input.host, issue, "--input", "-"],
+            stdin: buildLabelRequestJson(input.labels),
+          })
+          .pipe(Effect.asVoid);
+      }
+      return Effect.forEach(
+        input.labels,
+        (label) =>
+          github.execute({
+            cwd: input.cwd,
+            args: [
+              "api",
+              "--method",
+              "DELETE",
+              "--hostname",
+              input.host,
+              `${issue}/${encodeURIComponent(label)}`,
+            ],
+          }),
+        { concurrency: 1, discard: true },
+      );
+    },
+
     listReviewerCandidates: (input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return graphqlRead({
@@ -1696,7 +1786,73 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.asVoid);
     },
 
+    getPullRequestStack: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return github
+        .execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            "--hostname",
+            input.host,
+            `repos/${owner}/${name}/stacks?pull_request=${input.number}`,
+          ],
+        })
+        .pipe(
+          Effect.flatMap((result) => {
+            const decoded = decodePullRequestStacksJson(result.stdout.trim());
+            return Result.isSuccess(decoded)
+              ? Effect.succeed(decoded.success)
+              : Effect.fail(
+                  new GitHubPullRequestReadError({
+                    command: "gh",
+                    cwd: input.cwd,
+                    operation: "getPullRequestStack",
+                    cause: decoded.failure,
+                  }),
+                );
+          }),
+          Effect.flatMap((stack) => {
+            if (!input.includeDetails || stack === null) return Effect.succeed(stack);
+            return github
+              .execute({
+                cwd: input.cwd,
+                args: [
+                  "api",
+                  "--hostname",
+                  input.host,
+                  `repos/${owner}/${name}/stacks/${stack.number}`,
+                ],
+              })
+              .pipe(
+                Effect.flatMap((result) => {
+                  const decoded = decodePullRequestStacksJson(`[${result.stdout.trim()}]`);
+                  return Result.isSuccess(decoded)
+                    ? Effect.succeed(decoded.success)
+                    : Effect.fail(
+                        new GitHubPullRequestReadError({
+                          command: "gh",
+                          cwd: input.cwd,
+                          operation: "getPullRequestStack",
+                          cause: decoded.failure,
+                        }),
+                      );
+                }),
+              );
+          }),
+          // Hosts without the stacks preview return 404. Other failures must preserve the
+          // previously synced stack and let the caller retry.
+          Effect.catchTags({
+            GitHubPullRequestNotFoundError: () => Effect.succeed(null),
+          }),
+        );
+    },
+
     runPullRequestAction: (input) => {
+      if (input.stackNumber !== undefined)
+        return runGitHubStackAction({ ...input, stackNumber: input.stackNumber }).pipe(
+          Effect.provideService(GitHubCli.GitHubCli, github),
+        );
       const [subcommand, ...flags] = actionArgs(
         input.action,
         input.mergeMethod,

@@ -38,6 +38,7 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     /// as source. The block carries the fence body verbatim; assembling the
     /// document around it belongs to `HtmlEmbed`.
     case htmlEmbed(String)
+    case artifactTemplate(CodexArtifactTemplate)
     case thematicBreak
 }
 
@@ -100,6 +101,12 @@ private struct MarkdownBlockParser {
 
             if let fence = fenceMarker(in: lines[index]) {
                 blocks.append(parseCodeBlock(opening: fence))
+                continue
+            }
+
+            if let template = CodexArtifactTemplate.parse(lines[index]) {
+                blocks.append(.artifactTemplate(template))
+                index += 1
                 continue
             }
 
@@ -432,7 +439,8 @@ private struct MarkdownBlockParser {
     }
 
     private func isBlockStarter(_ line: String) -> Bool {
-        fenceMarker(in: line) != nil
+        CodexArtifactTemplate.parse(line) != nil
+            || fenceMarker(in: line) != nil
             || atxHeading(in: line) != nil
             || blockquoteContent(in: line) != nil
             || listMarker(in: line) != nil

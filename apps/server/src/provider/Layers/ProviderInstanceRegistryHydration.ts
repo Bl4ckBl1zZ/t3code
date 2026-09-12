@@ -1,3 +1,4 @@
+import * as CodexResetCredit from "./codexResetCredit.ts";
 /**
  * ProviderInstanceRegistryHydration — derive a `ProviderInstanceConfigMap`
  * from `ServerSettings` and keep `ProviderInstanceRegistry` in sync with it.
@@ -73,7 +74,9 @@ import {
 type ProviderInstanceRegistryHydrationEnv =
   | Exclude<
       BuiltInDriversEnv,
-      ProviderOrchestrationAdapterInfrastructure | HermesSessionBindingRepository
+      | ProviderOrchestrationAdapterInfrastructure
+      | HermesSessionBindingRepository
+      | CodexResetCredit.CodexResetCreditCoordinator
     >
   | ServerSettingsService;
 
@@ -279,6 +282,7 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
       Layer.provide(
         Layer.mergeAll(
           ProviderOrchestrationAdapterInfrastructureLive,
+          CodexResetCredit.layer,
           Layer.succeed(
             HermesSessionBindingRepository,
             Option.getOrElse(hermesRepository, () => UnavailableHermesSessionBindingRepository),

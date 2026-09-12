@@ -1,3 +1,4 @@
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { Fragment } from "react";
 import type {
   OrchestrationV2Run,
@@ -312,6 +313,7 @@ function RelatedThreadCard(props: {
             "mt-0.5 block truncate text-xs text-muted-foreground",
             props.detailShimmer && "text-shimmer",
           )}
+          ref={props.detailShimmer ? observeVisibleAnimation : undefined}
         >
           {props.detail}
         </span>

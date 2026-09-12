@@ -48,7 +48,9 @@ public struct WorkspaceView: View {
     @State private var showingNewWorkConversation = false
     @State private var newTaskInitialProjectID: String?
     @State private var showingAddProject = false
+    @State private var editingProjectIcon: FeatureProject?
     @State private var showingSettings = false
+    @State private var showingPullRequests = false
     @State private var showingArrangement = false
     @State private var renamingThread: FeatureThread?
     @State private var renameTitle = ""
@@ -229,8 +231,18 @@ public struct WorkspaceView: View {
                 }
             )
         }
+        .sheet(item: $editingProjectIcon) { project in
+            if let manager = model.client as? any FeatureProjectIconManaging {
+                ProjectIconPickerView(project: project, manager: manager)
+            }
+        }
         .sheet(isPresented: $showingAddProject) {
             AddProjectView(model: model)
+        }
+        .sheet(isPresented: $showingPullRequests) {
+            if let manager = model.client as? any FeatureProjectPullRequestManaging {
+                PullRequestWorkspaceView(model: model, manager: manager)
+            }
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView(model: model)
@@ -284,6 +296,11 @@ public struct WorkspaceView: View {
         } message: { _ in
             Text("This thread will return to its normal place in the list.")
         }
+        .environment(\.pullRequestHandoff, (model.client is any FeaturePullRequestThreadPreparing) ? PullRequestHandoffHandler { scope, overview, kind, mode, selection in
+            let threadID = try await model.stagePullRequestTask(scope: scope, overview: overview, kind: kind, mode: mode, selection: selection)
+            showingPullRequests = false
+            openThread(threadID)
+        } : nil)
         .onChange(of: selectedThreadIsAvailable) { _, isAvailable in
             if !isAvailable { closeSelectedThread() }
         }
@@ -365,6 +382,17 @@ public struct WorkspaceView: View {
         return VStack(spacing: 0) {
             if WorkspaceSwitcher.showsProjectFilter(workspace) {
                 projectFilter
+                if model.client is any FeatureProjectPullRequestManaging,
+                   model.snapshot.environments.contains(where: { $0.supportsPullRequests == true }) {
+                    Button { showingPullRequests = true } label: {
+                        HStack {
+                            Label("Pull requests", systemImage: "arrow.triangle.pull")
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                        }.font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                            .frame(minHeight: 44).padding(.horizontal, 18).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityIdentifier("sidebar-pull-requests")
+                }
             }
             if workspace != .chat && presentation.active.contains(where: { $0.supportsActiveOrder == true }) {
                 Button("Arrange threads", systemImage: "arrow.up.arrow.down") { showingArrangement = true }
@@ -434,7 +462,8 @@ public struct WorkspaceView: View {
                     isSelecting = true
                     if !batchSelection.insert(id).inserted { batchSelection.remove(id) }
                 },
-                onDiscardDraft: { draftToDiscard = $0 }
+                onDiscardDraft: { draftToDiscard = $0 },
+                onDropFiles: receiveThreadFileDrop
             )
         }
         .background(T3Colors.background)
@@ -719,7 +748,7 @@ public struct WorkspaceView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(T3Colors.textTertiary)
-            TextField("Search tasks and projects", text: $searchText)
+            TextField("Search tasks, projects and PRs", text: $searchText)
                 .font(.subheadline)
                 .foregroundStyle(T3Colors.textPrimary)
                 .focused($isSearchFocused)
@@ -782,6 +811,12 @@ public struct WorkspaceView: View {
                         Text("All projects")
                     }
                 }
+                if let project = selectedProject,
+                   model.snapshot.environments.first(where: { $0.id == project.environmentID })?.supportsProjectIcons == true,
+                   model.client is any FeatureProjectIconManaging {
+                    Button { editingProjectIcon = project } label: { Label("Change project icon", systemImage: "paintpalette") }
+                    Divider()
+                }
                 ForEach(filterableProjects) { project in
                     Button {
                         selectedProjectID = project.id
@@ -796,8 +831,14 @@ public struct WorkspaceView: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 13, weight: .medium))
+                    if let project = selectedProject {
+                        ProjectFaviconBadge(environmentID: project.environmentID, workspaceRoot: project.path,
+                            faviconPath: project.faviconPath, projectIcon: project.projectIcon, projectTitle: project.name) {
+                            Image(systemName: "folder")
+                        }
+                    } else {
+                        Image(systemName: "folder").font(.system(size: 13, weight: .medium))
+                    }
                     Text(selectedProject?.name ?? "All projects")
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
@@ -852,6 +893,7 @@ public struct WorkspaceView: View {
                     repositoryIdentity: nil,
                     defaultModelSelection: nil,
                     faviconPath: project.faviconPath,
+                    projectIcon: project.projectIcon,
                     scripts: project.scripts,
                     createdAt: "",
                     updatedAt: "",
@@ -942,6 +984,25 @@ public struct WorkspaceView: View {
     private var selectedProjectIsAvailable: Bool {
         guard let selectedProjectID else { return true }
         return filterableProjects.contains { $0.id == selectedProjectID }
+    }
+
+    private func receiveThreadFileDrop(_ thread: FeatureThread, providers: [NSItemProvider]) -> Bool {
+        guard !isSelecting, !thread.isArchived,
+            model.snapshot.threads.contains(where: { $0.id == thread.id && !$0.isArchived }) else { return false }
+        let supported = providers.filter { ThreadFileDropBatch.supportedType($0) != nil }
+        guard !supported.isEmpty else { return false }
+        guard model.pendingThreadFileDrops[thread.id] == nil else {
+            noticeAlert = ThreadListActionAlert(title: "Files are being prepared", message: "Finish adding the previous drop before dropping more files on this thread.")
+            openThread(thread.id)
+            return false
+        }
+        guard model.pendingThreadFileDrops.count < 8 else {
+            noticeAlert = ThreadListActionAlert(title: "Pending file drops", message: "Open the threads with pending files before adding more.")
+            return false
+        }
+        model.pendingThreadFileDrops[thread.id] = ThreadFileDropBatch(draftKey: FeatureComposerDraftStore.threadKey(thread), providers: supported)
+        openThread(thread.id)
+        return true
     }
 
     private func openThread(_ id: String) {
@@ -1283,7 +1344,9 @@ struct HomeThreadRowContext: Equatable {
     /// The project's manually chosen icon, forwarded to favicon resolution as
     /// a cache-key hint so icon changes reach existing rows.
     let projectFaviconPath: String?
+    var projectIcon: ProjectIconOverride? = nil
     let environmentLabel: String?
+    var machineSymbol: String = "server.rack"
     let providerID: String
     let providerDriver: String
     let providerName: String
@@ -1357,7 +1420,9 @@ struct HomeThreadRowContext: Equatable {
                 projectEnvironmentID: project?.environmentID,
                 projectWorkspaceRoot: project?.path,
                 projectFaviconPath: project?.faviconPath,
+                projectIcon: project?.projectIcon,
                 environmentLabel: environmentLabel?.isEmpty == false ? environmentLabel : nil,
+                machineSymbol: environment?.machineSymbol ?? "server.rack",
                 providerID: providerID,
                 providerDriver: providerDriver,
                 providerName: providerName,
@@ -1432,7 +1497,8 @@ struct FeatureThreadRow: View, Equatable {
                 ProjectFaviconBadge(
                     environmentID: context.projectEnvironmentID,
                     workspaceRoot: context.projectWorkspaceRoot,
-                    faviconPath: context.projectFaviconPath
+                    faviconPath: context.projectFaviconPath,
+                    projectIcon: context.projectIcon, projectTitle: context.projectName
                 ) {
                     ProjectBadge(name: context.projectName)
                 }
@@ -1457,12 +1523,20 @@ struct FeatureThreadRow: View, Equatable {
                 // row does not already say. Once the work has a change request,
                 // that is what this line reports instead.
                 if let pullRequest = context.pullRequest {
-                    Image(systemName: "arrow.triangle.pull")
+                    let stackSize = FeaturePullRequestLines.stackSize(thread.allLinkedPullRequests)
+                    let draft = pullRequest.state == "open" && pullRequest.isDraft == true
+                    let icon = stackSize != nil ? "square.3.layers.3d" : pullRequest.state == "merged" ? "arrow.triangle.merge" : pullRequest.state == "closed" ? "xmark.circle" : draft ? "pencil.circle" : "arrow.triangle.pull"
+                    let color = draft ? T3Colors.textSecondary : Self.pullRequestColor(pullRequest.state)
+                    Image(systemName: icon)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Self.pullRequestColor(pullRequest.state))
-                    Text("#\(pullRequest.number)")
+                        .foregroundStyle(color)
+                    Text(stackSize.map { "\($0)" } ?? "#\(pullRequest.number)")
                         .monospacedDigit()
-                        .foregroundStyle(Self.pullRequestColor(pullRequest.state))
+                        .foregroundStyle(color)
+                    if stackSize == nil && thread.allLinkedPullRequests.count > 1 {
+                        Text("+\(thread.allLinkedPullRequests.count - 1)")
+                            .foregroundStyle(T3Colors.textSecondary)
+                    }
                     Text(pullRequest.title)
                         .lineLimit(1)
                 } else {
@@ -1522,7 +1596,8 @@ struct FeatureThreadRow: View, Equatable {
             ProjectFaviconBadge(
                 environmentID: context.projectEnvironmentID,
                 workspaceRoot: context.projectWorkspaceRoot,
-                faviconPath: context.projectFaviconPath
+                faviconPath: context.projectFaviconPath,
+                    projectIcon: context.projectIcon, projectTitle: context.projectName
             ) {
                 ProjectBadge(name: context.projectName)
             }
@@ -1723,7 +1798,7 @@ struct FeatureThreadRow: View, Equatable {
         case .disconnected:
             "wifi.slash"
         case .connected, nil:
-            "server.rack"
+            context.machineSymbol
         }
     }
 
@@ -1820,7 +1895,7 @@ struct FeatureThreadRow: View, Equatable {
             }
             if let pullRequest = context.pullRequest {
                 values.append(
-                    "Pull request #\(pullRequest.number) \(pullRequest.state). \(pullRequest.title)"
+                    "Pull request #\(pullRequest.number) \(pullRequest.state == "open" && pullRequest.isDraft == true ? "draft" : pullRequest.state). \(pullRequest.title)"
                 )
             } else {
                 values.append(

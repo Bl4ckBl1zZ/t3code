@@ -1,3 +1,4 @@
+import type { ToolActivitySurface, ToolActivityIcon, ToolActivitySource } from "@t3tools/contracts";
 import {
   orchestrationV2CommandExecutionIsLiveInBackground,
   ProviderDriverKind,
@@ -12,6 +13,7 @@ import {
   type RunId,
   type ThreadId,
 } from "@t3tools/contracts";
+import { resolveT3McpToolPresentation } from "@t3tools/shared/t3McpToolPresentation";
 import { resolveOrchestrationV2ItemAttempt } from "@t3tools/shared/orchestrationV2Timeline";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type {
@@ -78,6 +80,9 @@ export interface WorkLogEntry {
   readonly changedFiles?: ReadonlyArray<string>;
   readonly tone: "thinking" | "tool" | "info" | "error";
   readonly toolTitle?: string;
+  readonly toolSurface?: ToolActivitySurface;
+  readonly toolIcon?: ToolActivityIcon;
+  readonly toolSource?: ToolActivitySource;
   readonly toolData?: unknown;
   readonly requestKind?: string;
   readonly itemType?: OrchestrationV2TurnItem["type"];
@@ -512,8 +517,16 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
     case "dynamic_tool":
       return {
         ...common,
-        label: title ?? item.toolName ?? "Tool call",
+        label:
+          resolveT3McpToolPresentation(item.toolName ?? title, item.status, item.input)
+            ?.displayName ??
+          title ??
+          item.toolName ??
+          "Tool call",
         toolTitle: title ?? item.toolName ?? "Tool",
+        ...(item.toolSurface ? { toolSurface: item.toolSurface } : {}),
+        ...(item.toolIcon ? { toolIcon: item.toolIcon } : {}),
+        ...(item.toolSource ? { toolSource: item.toolSource } : {}),
         toolData: { input: item.input, output: item.output },
       };
     default:

@@ -16,6 +16,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
+  rememberCheckoutIsRepo,
+  recallCheckoutIsRepo,
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
@@ -30,6 +32,7 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
+  shouldRefocusComposerOnWindowFocus,
   isHermesClearChatCommand,
   isHermesFreshChatCommand,
   isBranchMismatchDismissedForSession,
@@ -84,7 +87,7 @@ describe("draft hero submission transition", () => {
     expect(
       resolveDraftPromotionNavigationTarget({
         serverThreadRef: { environmentId, threadId },
-        serverThreadStarted: true,
+        serverThread: makeThread({ latestRun: completedTurn }),
         backgroundSubmissionPending: true,
       }),
     ).toBeNull();
@@ -1186,5 +1189,110 @@ describe("deriveCommittedServerUserMessageIds", () => {
     expect(deriveCommittedServerUserMessageIds(visibleTurnItems)).toEqual(
       new Set([turnStartId, steerId]),
     );
+  });
+});
+
+describe("V2 preparation feedback", () => {
+  it.each(["preparing", "queued", "starting"] as const)(
+    "keeps the draft mounted during %s",
+    (status) => {
+      expect(
+        resolveDraftPromotionNavigationTarget({
+          serverThreadRef: { environmentId, threadId },
+          serverThread: makeThread({
+            latestRun: { ...completedTurn, status, startedAt: null, completedAt: null },
+          }),
+          backgroundSubmissionPending: false,
+        }),
+      ).toBeNull();
+    },
+  );
+  it.each(["failed", "interrupted", "cancelled"] as const)(
+    "reveals canonical startup %s without a start timestamp",
+    (status) => {
+      const ref = { environmentId, threadId };
+      expect(
+        resolveDraftPromotionNavigationTarget({
+          serverThreadRef: ref,
+          serverThread: makeThread({ latestRun: { ...completedTurn, status, startedAt: null } }),
+          backgroundSubmissionPending: false,
+        }),
+      ).toEqual(ref);
+    },
+  );
+  it("does not clear worktree feedback merely because a user message was projected", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestRun: null, runtime: null }),
+      { preparingWorktree: true },
+    );
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestRun: { ...completedTurn, status: "starting", startedAt: null, completedAt: null },
+        latestUserMessageId: MessageId.make("new-message"),
+        runtime: { ...readySession, status: "starting" },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldRefocusComposerOnWindowFocus", () => {
+  function element(
+    tagName: string,
+    options?: { editable?: boolean; role?: string; within?: string },
+  ) {
+    return {
+      tagName,
+      isContentEditable: options?.editable ?? false,
+      getAttribute: (name: string) => (name === "role" ? (options?.role ?? null) : null),
+      closest: (selector: string) =>
+        options?.within !== undefined && selector.includes(options.within) ? ({} as Element) : null,
+    };
+  }
+
+  it("refocuses when nothing or the body holds focus", () => {
+    expect(shouldRefocusComposerOnWindowFocus(null)).toBe(true);
+    expect(shouldRefocusComposerOnWindowFocus(element("BODY"))).toBe(true);
+  });
+
+  it("refocuses away from a plain button, such as a pull request tab", () => {
+    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON"))).toBe(true);
+  });
+
+  it("leaves other text fields alone", () => {
+    expect(shouldRefocusComposerOnWindowFocus(element("INPUT"))).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element("TEXTAREA"))).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { editable: true }))).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { role: "textbox" }))).toBe(false);
+  });
+
+  it("leaves a focused terminal alone in the drawer and the right panel", () => {
+    expect(
+      shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "data-terminal-owner" })),
+    ).toBe(false);
+  });
+
+  it("leaves focus inside a dialog or popup alone", () => {
+    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "dialog" }))).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "-popup" }))).toBe(false);
+  });
+});
+
+describe("checkout Git identity while loading", () => {
+  it("remembers false and separates environments and worktrees", () => {
+    const a = EnvironmentId.make("repo-memory-a"),
+      b = EnvironmentId.make("repo-memory-b");
+    rememberCheckoutIsRepo(a, "/project", false);
+    rememberCheckoutIsRepo(b, "/project", true);
+    expect(recallCheckoutIsRepo(a, "/project")).toBe(false);
+    expect(recallCheckoutIsRepo(b, "/project")).toBe(true);
+    expect(recallCheckoutIsRepo(a, "/worktree")).toBeUndefined();
+    expect(recallCheckoutIsRepo(a, null)).toBeUndefined();
+    rememberCheckoutIsRepo(a, "/project", true);
+    expect(recallCheckoutIsRepo(a, "/project")).toBe(true);
   });
 });

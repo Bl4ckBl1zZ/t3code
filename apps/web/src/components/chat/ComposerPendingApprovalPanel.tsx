@@ -12,7 +12,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
 }: ComposerPendingApprovalPanelProps) {
   const approvalSummary =
     approval.requestKind === "mcp-elicitation"
-      ? "App access approval requested"
+      ? `App access approval requested${approval.title ? ` · ${approval.title}` : ""}`
       : approval.requestKind === "command"
         ? "Command approval requested"
         : approval.requestKind === "file-read"
@@ -28,10 +28,9 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           : "File change";
 
   return (
-    <div className="min-w-0 px-4 py-3.5 sm:px-5 sm:py-4">
+    <div className="min-w-0 px-3 py-2 sm:px-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="uppercase text-sm tracking-[0.2em]">PENDING APPROVAL</span>
-        <span className="text-sm font-medium">{approvalSummary}</span>
+        <span className="text-xs font-medium">{approvalSummary}</span>
         {pendingCount > 1 ? (
           <span className="text-xs text-muted-foreground">1/{pendingCount}</span>
         ) : null}
@@ -43,11 +42,11 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
         </p>
       ) : null}
       {approval.detail ? (
-        <div className="mt-3 min-w-0 max-w-full rounded-lg border border-border/65 bg-background/70 p-3">
-          <p className="text-xs font-medium text-muted-foreground">{detailLabel}</p>
+        <div className="mt-1.5 min-w-0 max-w-full">
           <pre
+            tabIndex={0}
             aria-label={detailLabel}
-            className="mt-2 min-w-0 max-w-full max-h-40 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-xs leading-relaxed text-foreground"
+            className="min-w-0 max-w-full max-h-20 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11px] leading-relaxed text-foreground/85 [scrollbar-width:thin] focus-visible:outline-ring"
             data-approval-detail="complete"
           >
             {approval.detail}

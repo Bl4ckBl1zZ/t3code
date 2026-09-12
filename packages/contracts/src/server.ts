@@ -1,7 +1,11 @@
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { ExecutionEnvironmentDescriptor, ServerSelfUpdateMethod } from "./environment.ts";
+import {
+  type EnvironmentMachineKind,
+  ExecutionEnvironmentDescriptor,
+  ServerSelfUpdateMethod,
+} from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
   ForwardCompatibleArray,
@@ -67,6 +71,8 @@ export const ServerProviderModel = Schema.Struct({
   name: TrimmedNonEmptyString,
   shortName: Schema.optional(TrimmedNonEmptyString),
   subProvider: Schema.optional(TrimmedNonEmptyString),
+  aliases: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  badge: Schema.optional(Schema.Literal("new")),
   isCustom: Schema.Boolean,
   isDefault: Schema.optional(Schema.Boolean),
   isLegacy: Schema.optional(Schema.Boolean),
@@ -172,6 +178,8 @@ export const ServerProvider = Schema.Struct({
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
   showInteractionModeToggle: Schema.optional(Schema.Boolean),
+  /** Reserves context-meter space while a started thread hydrates. */
+  reportsContextWindow: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   enabled: Schema.Boolean,
   installed: Schema.Boolean,
@@ -678,6 +686,9 @@ export const ServerLifecycleWelcomePayload = Schema.Struct({
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
+  bootstrapProjectCreated: Schema.optional(Schema.Boolean),
+  bootstrapThreadCreated: Schema.optional(Schema.Boolean),
+  bootstrapStatus: Schema.optional(Schema.Literals(["pending", "complete"])),
 });
 export type ServerLifecycleWelcomePayload = typeof ServerLifecycleWelcomePayload.Type;
 
@@ -786,4 +797,11 @@ export class ServerSelfUpdateError extends Schema.TaggedErrorClass<ServerSelfUpd
   override get message(): string {
     return `Server update failed: ${this.reason}`;
   }
+}
+
+/** User override, host detection, then a generic server while disconnected. */
+export function resolveEnvironmentMachineKind(
+  config: Pick<ServerConfig, "environment" | "settings"> | null,
+): EnvironmentMachineKind {
+  return config?.settings.environmentIcon ?? config?.environment.platform.machine ?? "server";
 }

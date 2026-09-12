@@ -193,12 +193,12 @@ struct CheckpointRestoreSheet: View {
             if file.additions > 0 {
                 Text("+\(file.additions)")
                     .font(ChatTimelineStyle.smallMono)
-                    .foregroundStyle(T3Colors.success)
+                    .foregroundStyle(T3Colors.diffAddition)
             }
             if file.deletions > 0 {
                 Text("−\(file.deletions)")
                     .font(ChatTimelineStyle.smallMono)
-                    .foregroundStyle(T3Colors.danger)
+                    .foregroundStyle(T3Colors.diffDeletion)
             }
         }
         .padding(.leading, 30)

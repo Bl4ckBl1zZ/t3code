@@ -27,9 +27,10 @@ import {
   AttachmentMaterialization,
   type AttachmentMaterializationResult,
 } from "../attachments/AttachmentMaterialization.ts";
-import type {
-  ProviderAdapterV2SessionRuntime,
-  ProviderAdapterV2TurnMessage,
+import {
+  ProviderAdapterResumeThreadError,
+  type ProviderAdapterV2SessionRuntime,
+  type ProviderAdapterV2TurnMessage,
 } from "./ProviderAdapter.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { EventSinkV2 } from "./EventSink.ts";
@@ -431,6 +432,7 @@ function makeStartTestLayer(input: {
   readonly materialization: AttachmentMaterializationResult;
   readonly startInputs: Ref.Ref<ReadonlyArray<ProviderAdapterV2TurnMessage>>;
   readonly placementWrites: Ref.Ref<ReadonlyArray<OrchestrationV2DomainEvent>>;
+  readonly ensureCalls?: Ref.Ref<number>;
   readonly now: DateTime.Utc;
 }) {
   const providerSession = {
@@ -452,7 +454,19 @@ function makeStartTestLayer(input: {
     providerSessionId: startProviderSessionId,
     providerSession,
     events: Stream.empty,
-    ensureThread: () => Effect.succeed(input.projection.providerThreads[0]!),
+    ensureThread: () =>
+      (input.ensureCalls ? Ref.update(input.ensureCalls, (count) => count + 1) : Effect.void).pipe(
+        Effect.as(input.projection.providerThreads[0]!),
+      ),
+    resumeThread: () =>
+      Effect.fail(
+        new ProviderAdapterResumeThreadError({
+          driver,
+          providerSessionId: startProviderSessionId,
+          providerThreadId: input.projection.providerThreads[0]!.id,
+          cause: "Saved session is missing",
+        }),
+      ),
   } as unknown as ProviderAdapterV2SessionRuntime;
 
   return providerTurnStartLayer.pipe(
@@ -681,5 +695,44 @@ it.effect("stays silent about placement when there was no workspace to write to"
     });
 
     assert.isUndefined(placement.find((event) => event.type === "message.updated"));
+  }),
+);
+
+it.effect("restart continuation never falls back to a fresh provider conversation", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const original = makeStartProjection({ now, text: "Continue", attachments: [] });
+    const projection = {
+      ...original,
+      providerThreads: original.providerThreads.map((thread) => ({
+        ...thread,
+        nativeThreadRef: { driver, nativeId: "saved", strength: "strong" as const },
+      })),
+      messages: original.messages.map((message) => ({ ...message, restartContinuation: true })),
+    };
+    const startInputs = yield* Ref.make<ReadonlyArray<ProviderAdapterV2TurnMessage>>([]);
+    const placementWrites = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
+    const ensureCalls = yield* Ref.make(0);
+    const layer = makeStartTestLayer({
+      projection,
+      now,
+      startInputs,
+      placementWrites,
+      ensureCalls,
+      materialization: {
+        materialized: [],
+        promptBlock: "",
+        inlineAttachments: [],
+        outcome: "written",
+      },
+    });
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* ProviderTurnStartServiceV2)
+        .start({ threadId: startThreadId, runId: startRunId })
+        .pipe(Effect.flip);
+    }).pipe(Effect.provide(layer));
+    assert.equal(failure._tag, "ProviderTurnStartError");
+    assert.equal(yield* Ref.get(ensureCalls), 0);
+    assert.deepEqual(yield* Ref.get(startInputs), []);
   }),
 );

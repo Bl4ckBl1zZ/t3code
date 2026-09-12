@@ -1,22 +1,34 @@
 import SwiftUI
 
-// Ported from apps/mobile/src/components/ShimmerText.tsx.
+// Native live activity highlight shared by running work rows.
 
-/// The standard "AI is working" treatment: opacity sweeps smoothly while work
-/// is in flight, and holds at full opacity once it is not (or under reduced
-/// motion). Terminal rows never shimmer — a pulsing line reads as live.
-private struct ShimmerOpacityModifier: ViewModifier {
+/// A masked highlight moves over live status text without a per-frame Swift timer.
+/// Scene, visibility and reduced-motion changes stop the animation immediately.
+private struct ShimmerHighlightModifier: ViewModifier {
     let isActive: Bool
-
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var dimmed = false
-
-    private var animates: Bool { isActive && !reduceMotion }
+    @SwiftUI.Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
+    @State private var traversed = false
+    private var animates: Bool { isActive && !reduceMotion && visible && scenePhase == .active }
 
     func body(content: Content) -> some View {
         content
-            .opacity(dimmed ? 0.55 : 1)
-            .onAppear { synchronize() }
+            .overlay {
+                content.foregroundStyle(T3Colors.textPrimary)
+                    .mask {
+                        GeometryReader { geometry in
+                            LinearGradient(colors: [.clear, .black.opacity(0.55), .black, .black.opacity(0.55), .clear], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: 72)
+                                .offset(x: traversed ? geometry.size.width + 72 : -72)
+                        }
+                    }
+                    .opacity(animates ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .onAppear { visible = true; synchronize() }
+            .onDisappear { visible = false; synchronize() }
             .onChange(of: animates) { synchronize() }
     }
 
@@ -24,19 +36,17 @@ private struct ShimmerOpacityModifier: ViewModifier {
         guard animates else {
             var transaction = Transaction()
             transaction.disablesAnimations = true
-            withTransaction(transaction) { dimmed = false }
+            withTransaction(transaction) { traversed = false }
             return
         }
-        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-            dimmed = true
-        }
+        withAnimation(.linear(duration: 2.2).repeatForever(autoreverses: false)) { traversed = true }
     }
 }
 
 extension View {
-    /// Sweeps opacity while `isActive`, matching the RN `ShimmerText`.
+    /// Sweeps a highlight while `isActive`, matching the upstream live activity treatment.
     func shimmering(_ isActive: Bool = true) -> some View {
-        modifier(ShimmerOpacityModifier(isActive: isActive))
+        modifier(ShimmerHighlightModifier(isActive: isActive))
     }
 }
 

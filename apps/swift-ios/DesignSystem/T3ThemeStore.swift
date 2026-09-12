@@ -147,6 +147,7 @@ struct T3ResolvedColors {
 @Observable
 final class T3ThemeStore {
     static let shared = T3ThemeStore()
+    var diffColorScheme: FeatureDiffColorScheme = .redGreen
 
     private(set) var lightPaletteID: String = T3Palette.defaultID
     private(set) var darkPaletteID: String = T3Palette.defaultID

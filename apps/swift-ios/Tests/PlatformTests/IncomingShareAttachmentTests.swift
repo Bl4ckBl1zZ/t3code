@@ -111,7 +111,7 @@ final class IncomingShareAttachmentTests: XCTestCase {
             ComposerAttachments.maximumFileBytes
         )
         XCTAssertEqual(T3IncomingShareStore.maximumBytes(isImage: true), 10 * 1_024 * 1_024)
-        XCTAssertEqual(T3IncomingShareStore.maximumBytes(isImage: false), 20 * 1_024 * 1_024)
+        XCTAssertEqual(T3IncomingShareStore.maximumBytes(isImage: false), 50 * 1_024 * 1_024)
     }
 
     // MARK: - Pre-read validation
@@ -142,15 +142,15 @@ final class IncomingShareAttachmentTests: XCTestCase {
     }
 
     /// Just over the cap rounds to the same number as the cap, and
-    /// "is 20 MB — over the 20 MB limit" reads like a bug.
+    /// "is 50 MB — over the 50 MB limit" reads like a bug.
     func testAFileJustOverTheCapDoesNotReportTheSameNumberTwice() {
         let outcome = PlatformIncomingShareValidation.validate(
             fileName: "archive.zip",
             mimeType: "application/zip",
-            byteCount: 20 * 1_024 * 1_024 + 1
+            byteCount: 50 * 1_024 * 1_024 + 1
         )
 
-        XCTAssertEqual(outcome, .rejected("'archive.zip' is over the 20 MB limit for a file."))
+        XCTAssertEqual(outcome, .rejected("'archive.zip' is over the 50 MB limit for a file."))
     }
 
     func testAnEmptyFileIsRejected() {

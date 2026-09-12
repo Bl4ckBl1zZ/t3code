@@ -1,3 +1,4 @@
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { type ChatAttachment, CommandId, type ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -36,7 +37,7 @@ export function formatThreadTitleContext(
     if (message.role === "system") {
       continue;
     }
-    const text = message.text.trim();
+    const text = assistantCitationsToPlainText(message.text).trim();
     const attachmentSummary = (message.attachments ?? [])
       .map((attachment) => attachment.name)
       .join(", ");

@@ -1,0 +1,30 @@
+[
+  "legacy-model",
+  {
+    "slug": "private/model",
+    "name": "Private model",
+    "capabilities": {
+      "optionDescriptors": [
+        {
+          "id": "effort",
+          "label": "Reasoning",
+          "type": "select",
+          "options": [
+            {
+              "id": "high",
+              "label": "High",
+              "isDefault": true
+            }
+          ],
+          "currentValue": "high"
+        },
+        {
+          "id": "thinking",
+          "label": "Thinking",
+          "type": "boolean",
+          "currentValue": true
+        }
+      ]
+    }
+  }
+]

@@ -1132,6 +1132,30 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("promote me");
   });
 
+  it("routes automatic drafts without losing content or changing other drafts", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "keep my prompt");
+    store.setProjectDraftThreadId(remoteProjectRef, remoteDraftId, { threadId: otherThreadId });
+    store.setPrompt(remoteDraftId, "another draft");
+    store.setDraftThreadContext(draftId, {
+      projectRef: remoteProjectRef,
+      environmentSelection: "auto",
+      loadBalancedEnvironmentId: OTHER_TEST_ENVIRONMENT_ID,
+    });
+    expect(store.getDraftThread(draftId)).toMatchObject({
+      environmentSelection: "auto",
+      loadBalancedEnvironmentId: OTHER_TEST_ENVIRONMENT_ID,
+      environmentId: OTHER_TEST_ENVIRONMENT_ID,
+    });
+    expect(draftByKey(draftId)?.prompt).toBe("keep my prompt");
+    expect(draftByKey(remoteDraftId)?.prompt).toBe("another draft");
+    store.setDraftThreadContext(draftId, { branch: "chosen-branch" });
+    expect(store.getDraftThread(draftId)?.environmentSelection).toBe("manual");
+    store.setDraftThreadContext(draftId, { projectRef, environmentSelection: "manual" });
+    expect(store.getDraftThread(draftId)?.loadBalancedEnvironmentId).toBeNull();
+  });
+
   it("updates branch context on an existing draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {
@@ -1278,6 +1302,98 @@ describe("composerDraftStore modelSelection", () => {
 
   beforeEach(() => {
     resetComposerDraftStore();
+  });
+
+  it("migrates empty seeds without losing invested drafts, explicit choices or sticky accounts", async () => {
+    const store = useComposerDraftStore.getState();
+    const ids = ["empty-seed", "invested-seed", "explicit-pick"].map((id) => DraftId.make(id));
+    for (const id of ids) {
+      store.setProjectDraftThreadId(scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make(id)), id, {
+        threadId: ThreadId.make(`thread-${id}`),
+      });
+      store.setModelSelection(id, modelSelection(CODEX_DRIVER, "old-model"), {
+        explicit: id === "explicit-pick",
+      });
+    }
+    store.setPrompt(ids[1]!, "Keep my unfinished task");
+    store.setStickyModelSelection(modelSelection(CLAUDE_AGENT_DRIVER, "sticky-model"));
+    store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "real-thread-model"));
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+    const migrated = (await useComposerDraftStore.persist.getOptions().migrate!(
+      persisted,
+      8,
+    )) as typeof persisted;
+    expect(migrated.draftsByThreadKey[ids[0]!]?.modelSelectionByProvider).toBeUndefined();
+    expect(
+      migrated.draftsByThreadKey[ids[1]!]?.modelSelectionByProvider?.[CODEX_INSTANCE]?.model,
+    ).toBe("old-model");
+    expect(migrated.draftsByThreadKey[ids[2]!]?.modelSelectionExplicit).toBe(true);
+    expect(
+      migrated.draftsByThreadKey[scopedThreadKey(threadRef)]?.modelSelectionByProvider?.[
+        CODEX_INSTANCE
+      ]?.model,
+    ).toBe("real-thread-model");
+    expect(migrated.stickyModelSelectionByProvider?.[CLAUDE_AGENT_INSTANCE]?.model).toBe(
+      "sticky-model",
+    );
+  });
+
+  it("marks picker writes explicit and seeding writes non-explicit", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"));
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionExplicit).toBeUndefined();
+
+    store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"), {
+      explicit: true,
+    });
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionExplicit).toBe(true);
+
+    // Last writer defines intent: a later seed clears the marker.
+    store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"), {
+      replaceOptions: true,
+    });
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionExplicit).toBeUndefined();
+  });
+
+  it("persists the explicit marker through storage round-trips", async () => {
+    vi.useFakeTimers();
+    try {
+      useComposerDraftStore
+        .getState()
+        .setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"), {
+          explicit: true,
+        });
+      // Land the debounced persist write.
+      await vi.advanceTimersByTimeAsync(300);
+
+      // Hydrate from the same storage the store persists into and verify the
+      // marker survives the partialize → decode → merge path.
+      resetComposerDraftStore();
+      await useComposerDraftStore.persist.rehydrate();
+      expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionExplicit).toBe(true);
+      expect(
+        draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CODEX_INSTANCE],
+      ).toEqual(modelSelection(CODEX_DRIVER, "gpt-5.4"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks trait edits as explicit model intent", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"));
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionExplicit).toBeUndefined();
+
+    store.setProviderModelOptions(
+      threadRef,
+      CODEX_DRIVER,
+      toSelections({ reasoningEffort: "xhigh" }),
+    );
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionExplicit).toBe(true);
+    expect(
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CODEX_INSTANCE],
+    ).toEqual(modelSelection(CODEX_DRIVER, "gpt-5.4", { reasoningEffort: "xhigh" }));
   });
 
   it("stores a model selection in the draft", () => {

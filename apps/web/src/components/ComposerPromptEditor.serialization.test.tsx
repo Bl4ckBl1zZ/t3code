@@ -1,3 +1,5 @@
+import { ComposerCitationNode } from "./ComposerCitationNode";
+import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $copyNode, $getRoot, $isElementNode, PASTE_COMMAND, type LexicalEditor } from "lexical";
 import { act, createRef } from "react";
@@ -180,5 +182,32 @@ describe("composer mention serialization", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(editorRef.current?.readSnapshot().value).toBe("[README.md](README.md) ");
     expect(lexicalEditor.getEditorState().read(() => $firstMention().isInline())).toBe(true);
+  });
+});
+
+describe("composer citation serialization", () => {
+  it("keeps the quote through comment edits, export and reload", async () => {
+    const href = "t3-citation://v1/e/t/m?text=Selected+answer&start=0&end=15&prefix=&suffix=";
+    await renderPrompt(`[Assistant quote](${href}) explain`);
+    const firstCitation = () => {
+      const paragraph = $getRoot().getFirstChild();
+      if (!$isElementNode(paragraph)) throw new Error("Missing paragraph");
+      const citation = paragraph.getFirstChild();
+      if (!(citation instanceof ComposerCitationNode)) throw new Error("Missing citation");
+      return citation;
+    };
+    await act(() => {
+      lexicalEditor.update(() => firstCitation().setComment("Why this?"), { discrete: true });
+    });
+    const text = editorRef.current!.readSnapshot().value;
+    const source = lexicalEditor.getEditorState().read(() => firstCitation().getTextContent());
+    expect(parseAssistantCitationHref(source.slice("[Assistant quote](".length, -1))).toMatchObject(
+      { text: "Selected answer", comment: "Why this?" },
+    );
+    expect(text).toBe(`${source} explain`);
+    const exported = lexicalEditor.getEditorState().toJSON();
+    await renderPrompt("");
+    await act(() => lexicalEditor.setEditorState(lexicalEditor.parseEditorState(exported)));
+    expect(editorRef.current?.readSnapshot().value).toBe(text);
   });
 });

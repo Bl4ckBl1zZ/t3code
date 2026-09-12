@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  MessageId,
   type ModelSelection,
   NodeId,
   type OrchestrationV2ProviderThread,
@@ -302,5 +303,118 @@ it.effect(
       assert.equal(interrupted?.providerSessionId, oldSessionId);
       assert.equal(interrupted?.id, providerThreadId);
       assert.equal(interrupted?.nativeThreadRef?.nativeId, "native-thread:restart-session");
+    }),
+);
+
+it.effect(
+  "delivers readable citation context when steering a V2 provider without changing history",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:citation-steer");
+      const sessionId = ProviderSessionId.make("session:citation-steer");
+      const providerThreadId = ProviderThreadId.make("provider-thread:citation-steer");
+      const providerTurnId = ProviderTurnId.make("provider-turn:citation-steer");
+      const attemptId = RunAttemptId.make("attempt:citation-steer");
+      const messageId = MessageId.make("message:citation-steer");
+      const text =
+        "Explain [Assistant quote](t3-citation://v1/e/t/m?text=Selected+answer&start=0&end=15&prefix=&suffix=&comment=Why%3F)";
+      const providerThread = {
+        id: providerThreadId,
+        providerSessionId: sessionId,
+        driver,
+        providerInstanceId,
+      } as OrchestrationV2ProviderThread;
+      const base = makeProjection({ now, threadId, providerThread, providerTurnId, attemptId });
+      const projection = {
+        ...base,
+        runs: [
+          {
+            id: RunId.make("run:citation-steer"),
+            activeAttemptId: attemptId,
+            modelSelection,
+            threadId,
+            ordinal: 1,
+            providerInstanceId,
+            providerThreadId,
+            userMessageId: messageId,
+            rootNodeId: null,
+            status: "running",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: null,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        ],
+        messages: [
+          {
+            id: messageId,
+            text,
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+            threadId,
+            runId: null,
+            nodeId: null,
+            role: "user",
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      } satisfies OrchestrationV2ThreadProjection;
+      let received = "";
+      const runtime = {
+        steerTurn: (input: { message: { text: string } }) =>
+          Effect.sync(() => {
+            received = input.message.text;
+          }),
+      } as unknown as ProviderAdapterV2SessionRuntime;
+      const layer = providerTurnControlLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStoreV2)({
+              getThreadProjection: () => Effect.succeed(projection),
+            }),
+            Layer.mock(ProviderSessionManagerV2)({
+              get: () => Effect.succeed(Option.some(runtime)),
+            }),
+            Layer.mock(RuntimePolicyV2)({
+              resolve: () =>
+                Effect.succeed({
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  cwd: "/workspace",
+                }),
+            }),
+            Layer.mock(AttachmentMaterialization)({
+              materialize: () =>
+                Effect.succeed({
+                  inlineAttachments: [],
+                  materialized: [],
+                  outcome: "written" as const,
+                  promptBlock: "Attached file context",
+                }),
+            }),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const control = yield* ProviderTurnControlServiceV2;
+        yield* control.steer({
+          threadId,
+          providerSessionId: sessionId,
+          providerThreadId,
+          providerTurnId,
+          messageId,
+        });
+      }).pipe(Effect.provide(layer));
+      assert.include(received, "Explain [assistant-quote-1]");
+      assert.include(received, '"text": "Selected answer"');
+      assert.include(received, '"comment": "Why?"');
+      assert.include(received, "Attached file context");
+      assert.notInclude(received, "t3-citation://");
+      assert.equal(projection.messages[0]?.text, text);
     }),
 );

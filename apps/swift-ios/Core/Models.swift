@@ -35,12 +35,15 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
     public struct Platform: Codable, Equatable, Sendable {
         public let os: String
         public let arch: String
+        public var machine: String? = nil
     }
 
     public struct Capabilities: Codable, Equatable, Sendable {
         public let repositoryIdentity: Bool
         public let connectionProbe: Bool?
         public let threadSettlement: Bool?
+        public var threadRestartContinuation: Bool? = nil
+        public var threadAutoSettlement: Bool? = nil
         public let threadSnooze: Bool?
         public let threadPinning: Bool?
         public let threadActiveOrderV2: Bool?
@@ -50,6 +53,23 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         /// Absent on older servers, so the link action stays hidden rather than
         /// sending a command the server will reject.
         public let threadPullRequestLinking: Bool?
+        public let threadPullRequestsV2: Bool?
+        public struct FileAttachments: Codable, Equatable, Sendable { public let maxUploadBytes: Int }
+        public let attachmentUploads: Bool?
+        public let fileAttachments: FileAttachments?
+        public let assistantCitations: Bool?
+        public let customModelDefinitions: Bool?
+        public let projectActionDefaults: Bool?
+        public let projectDefaults: Bool?
+        public let projectBrowserAccess: Bool?
+        public let projectAutoPull: Bool?
+        public let fileDocumentPreviews: Bool?
+        public let agentSessionImport: Bool?
+        public let providerTerminalEnvironment: Bool?
+        public let projectIcons: Bool?
+        public let environmentIcon: Bool?
+        public let usagePriceOverrides: Bool?
+        public let pullRequestStackActions: Bool?
         public let pullRequests: Bool?
         public let serverSelfUpdate: String?
         public let serverSelfUpdateProgress: Bool?
@@ -57,11 +77,27 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         private enum CodingKeys: String, CodingKey {
             case repositoryIdentity
             case connectionProbe
+            case threadRestartContinuation
+            case threadAutoSettlement
             case threadSettlement
             case threadSnooze
             case threadPinning, threadActiveOrderV2, threadQuestionActionsV2
             case threadTitleRegeneration
             case threadPullRequestLinking
+            case threadPullRequestsV2
+            case attachmentUploads, fileAttachments
+            case assistantCitations
+            case projectActionDefaults
+            case projectDefaults
+            case projectBrowserAccess
+            case projectAutoPull
+            case fileDocumentPreviews
+            case agentSessionImport, providerTerminalEnvironment
+            case projectIcons
+            case customModelDefinitions
+            case environmentIcon
+            case usagePriceOverrides
+            case pullRequestStackActions
             case pullRequests
             case serverSelfUpdate
             case serverSelfUpdateProgress
@@ -72,6 +108,8 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             repositoryIdentity =
                 try container.decodeIfPresent(Bool.self, forKey: .repositoryIdentity) ?? false
             connectionProbe = try container.decodeIfPresent(Bool.self, forKey: .connectionProbe)
+            threadRestartContinuation = try container.decodeIfPresent(Bool.self, forKey: .threadRestartContinuation)
+            threadAutoSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadAutoSettlement)
             threadSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadSettlement)
             threadSnooze = try container.decodeIfPresent(Bool.self, forKey: .threadSnooze)
             threadPinning = try container.decodeIfPresent(Bool.self, forKey: .threadPinning)
@@ -81,6 +119,22 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
                 Bool.self,
                 forKey: .threadTitleRegeneration
             )
+            threadPullRequestsV2 = try container.decodeIfPresent(Bool.self, forKey: .threadPullRequestsV2)
+            attachmentUploads = try container.decodeIfPresent(Bool.self, forKey: .attachmentUploads)
+            fileAttachments = try container.decodeIfPresent(FileAttachments.self, forKey: .fileAttachments)
+            assistantCitations = try container.decodeIfPresent(Bool.self, forKey: .assistantCitations)
+            projectActionDefaults = try container.decodeIfPresent(Bool.self, forKey: .projectActionDefaults)
+            projectDefaults = try container.decodeIfPresent(Bool.self, forKey: .projectDefaults)
+            projectBrowserAccess = try container.decodeIfPresent(Bool.self, forKey: .projectBrowserAccess)
+            projectAutoPull = try container.decodeIfPresent(Bool.self, forKey: .projectAutoPull)
+            fileDocumentPreviews = try container.decodeIfPresent(Bool.self, forKey: .fileDocumentPreviews)
+            agentSessionImport = try container.decodeIfPresent(Bool.self, forKey: .agentSessionImport)
+            providerTerminalEnvironment = try container.decodeIfPresent(Bool.self, forKey: .providerTerminalEnvironment)
+            projectIcons = try container.decodeIfPresent(Bool.self, forKey: .projectIcons)
+            customModelDefinitions = try container.decodeIfPresent(Bool.self, forKey: .customModelDefinitions)
+            environmentIcon = try container.decodeIfPresent(Bool.self, forKey: .environmentIcon)
+            usagePriceOverrides = try container.decodeIfPresent(Bool.self, forKey: .usagePriceOverrides)
+            pullRequestStackActions = try container.decodeIfPresent(Bool.self, forKey: .pullRequestStackActions)
             threadPullRequestLinking = try container.decodeIfPresent(
                 Bool.self,
                 forKey: .threadPullRequestLinking
@@ -287,8 +341,25 @@ public struct ProjectScript: Codable, Identifiable, Equatable, Sendable {
     public let command: String
     public let icon: String
     public let runOnWorktreeCreate: Bool
+    public let runOnWorktreeDelete: Bool?
     public let previewUrl: String?
     public let autoOpenPreview: Bool?
+    public let singleRun: Bool?
+
+    public init(id: String, name: String, command: String, icon: String, runOnWorktreeCreate: Bool, runOnWorktreeDelete: Bool? = nil, previewUrl: String? = nil, autoOpenPreview: Bool? = nil, singleRun: Bool? = nil) {
+        self.id = id; self.name = name; self.command = command; self.icon = icon
+        self.runOnWorktreeCreate = runOnWorktreeCreate; self.runOnWorktreeDelete = runOnWorktreeDelete
+        self.previewUrl = previewUrl; self.autoOpenPreview = autoOpenPreview; self.singleRun = singleRun
+    }
+
+    public var json: JSONValue {
+        var fields: [String: JSONValue] = ["id": .string(id), "name": .string(name), "command": .string(command), "icon": .string(icon), "runOnWorktreeCreate": .bool(runOnWorktreeCreate)]
+        if let runOnWorktreeDelete { fields["runOnWorktreeDelete"] = .bool(runOnWorktreeDelete) }
+        if let previewUrl { fields["previewUrl"] = .string(previewUrl) }
+        if let autoOpenPreview { fields["autoOpenPreview"] = .bool(autoOpenPreview) }
+        if let singleRun { fields["singleRun"] = .bool(singleRun) }
+        return .object(fields)
+    }
 }
 
 public struct OrchestrationProject: Codable, Identifiable, Equatable, Sendable {
@@ -300,6 +371,7 @@ public struct OrchestrationProject: Codable, Identifiable, Equatable, Sendable {
     /// A manually chosen project icon, workspace-relative. Absent on servers
     /// predating manual icons and on projects that rely on auto-discovery.
     public let faviconPath: String?
+    public var projectIcon: ProjectIconOverride? = nil
     public let scripts: [ProjectScript]
     public let createdAt: String
     public let updatedAt: String

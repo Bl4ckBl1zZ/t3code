@@ -120,6 +120,8 @@ public struct ServerModelCapabilities: Codable, Equatable, Sendable {
 }
 
 public struct ServerProviderModelSnapshot: Codable, Identifiable, Equatable, Sendable {
+    public var aliases: [String]? = nil
+    public var badge: String? = nil
     public var id: String { slug }
 
     public let slug: String
@@ -161,6 +163,7 @@ public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable
     public let displayName: String?
     public let accentColor: String?
     public let badgeLabel: String?
+    public var reportsContextWindow: Bool? = nil
     public let showInteractionModeToggle: Bool?
     public let requiresNewThreadForModelChange: Bool?
     public let enabled: Bool
@@ -245,7 +248,35 @@ public struct ProviderModelPreferencesSnapshot: Codable, Equatable, Sendable {
 
 /// New-thread preferences are server-authoritative, so every saved environment
 /// can resolve these differently even though they share one mobile client.
+public struct UsageModelPriceOverride: Codable, Equatable, Sendable {
+    public let inputCostPerMillionTokens: Double
+    public let outputCostPerMillionTokens: Double
+    public let cacheReadCostPerMillionTokens: Double?
+    public let cacheWriteCostPerMillionTokens: Double?
+
+    public var json: JSONValue {
+        var fields: [String: JSONValue] = ["inputCostPerMillionTokens": .number(inputCostPerMillionTokens),
+            "outputCostPerMillionTokens": .number(outputCostPerMillionTokens)]
+        if let cacheReadCostPerMillionTokens { fields["cacheReadCostPerMillionTokens"] = .number(cacheReadCostPerMillionTokens) }
+        if let cacheWriteCostPerMillionTokens { fields["cacheWriteCostPerMillionTokens"] = .number(cacheWriteCostPerMillionTokens) }
+        return .object(fields)
+    }
+}
+
 public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
+    /// Opaque envelopes preserve unknown driver fields while editing one account's models.
+    public let providerInstances: [String: JSONValue]
+    public let providerDefinitions: [String: JSONValue]
+    public let textGenerationModelSelection: ModelSelection?
+    public let sourceControlWritingStyle: SourceControlWritingStyle?
+    public let defaultModelSelection: ModelSelection?
+    public let defaultProjectScripts: [ProjectScript]
+    public let projectScriptOverrides: [String: [ProjectScript]?]
+    public let defaultAutoPull: Bool
+    public let projectAgentBrowserAccessOverrides: [String: Bool]
+    public let projectAutoPullOverrides: [String: Bool]
+    public let environmentIcon: String?
+    public let usagePriceOverrides: [String: UsageModelPriceOverride]?
     /// The default window matching `DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS` in
     /// `packages/contracts`, applied when a server predates the setting.
     public static let defaultSidebarAutoSettleAfterDays: Double = 3
@@ -265,6 +296,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let sidebarAutoSettleAfterDays: Double?
     /// Whether a merged change request settles its thread on its own. A closed
     /// one always does; only the merge half is configurable.
+    public let continueThreadsAfterServerUpdate: Bool
     public let sidebarAutoSettleOnMerge: Bool
     /// Keyed by provider instance id (the default instance for a driver uses
     /// the driver kind, so `"hermes"`, `"codex"`, `"claudeAgent"`, …). Empty
@@ -284,10 +316,23 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let defaultThemeSetAt: String
 
     public init(
+        providerInstances: [String: JSONValue] = [:],
+        providerDefinitions: [String: JSONValue] = [:],
+        textGenerationModelSelection: ModelSelection? = nil,
+        sourceControlWritingStyle: SourceControlWritingStyle? = nil,
+        defaultModelSelection: ModelSelection? = nil,
+        defaultProjectScripts: [ProjectScript] = [],
+        projectScriptOverrides: [String: [ProjectScript]?] = [:],
+        defaultAutoPull: Bool = false,
+        projectAutoPullOverrides: [String: Bool] = [:],
+        projectAgentBrowserAccessOverrides: [String: Bool] = [:],
+        environmentIcon: String? = nil,
+        usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
         newWorktreesStartFromOrigin: Bool = true,
         sidebarAutoSettleAfterDays: Double? = ServerSettingsSnapshot
             .defaultSidebarAutoSettleAfterDays,
+        continueThreadsAfterServerUpdate: Bool = false,
         sidebarAutoSettleOnMerge: Bool = ServerSettingsSnapshot
             .defaultSidebarAutoSettleOnMerge,
         providerModelPreferences: [String: ProviderModelPreferencesSnapshot] = [:],
@@ -297,9 +342,22 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         defaultTheme: String = "",
         defaultThemeSetAt: String = ""
     ) {
+        self.providerInstances = providerInstances
+        self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
+        self.textGenerationModelSelection = textGenerationModelSelection
+        self.sourceControlWritingStyle = sourceControlWritingStyle
+        self.defaultModelSelection = defaultModelSelection
+        self.defaultProjectScripts = defaultProjectScripts
+        self.projectScriptOverrides = projectScriptOverrides
+        self.defaultAutoPull = defaultAutoPull
+        self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
+        self.projectAutoPullOverrides = projectAutoPullOverrides
+        self.environmentIcon = environmentIcon
+        self.usagePriceOverrides = usagePriceOverrides
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
+        self.continueThreadsAfterServerUpdate = continueThreadsAfterServerUpdate
         self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
         self.providerModelPreferences = providerModelPreferences
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
@@ -308,10 +366,28 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.defaultThemeSetAt = defaultThemeSetAt
     }
 
+    public func projectScriptsInheritDefaults(projectID: String, legacyScripts: [ProjectScript]) -> Bool {
+        if let override = projectScriptOverrides[projectID] { return override == nil }
+        return legacyScripts.isEmpty
+    }
+
+    public func resolvedProjectScripts(projectID: String, legacyScripts: [ProjectScript]) -> [ProjectScript] {
+        if let override = projectScriptOverrides[projectID] { return override ?? defaultProjectScripts }
+        return legacyScripts.isEmpty ? defaultProjectScripts : legacyScripts
+    }
+
     private enum CodingKeys: String, CodingKey {
+        case providerInstances
+        case textGenerationModelSelection, sourceControlWritingStyle
+        case defaultModelSelection
+        case defaultProjectScripts, projectScriptOverrides
+        case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
+        case environmentIcon
+        case usagePriceOverrides
         case defaultThreadEnvMode
         case newWorktreesStartFromOrigin
         case sidebarAutoSettleAfterDays
+        case continueThreadsAfterServerUpdate
         case sidebarAutoSettleOnMerge
         case providerModelPreferences
         case enableAgentBrowserAccess
@@ -333,6 +409,17 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        providerInstances = try container.decodeIfPresent([String: JSONValue].self, forKey: .providerInstances) ?? [:]
+        textGenerationModelSelection = try container.decodeIfPresent(ModelSelection.self, forKey: .textGenerationModelSelection)
+        sourceControlWritingStyle = try container.decodeIfPresent(SourceControlWritingStyle.self, forKey: .sourceControlWritingStyle)
+        defaultModelSelection = try container.decodeIfPresent(ModelSelection.self, forKey: .defaultModelSelection)
+        defaultProjectScripts = try container.decodeIfPresent([ProjectScript].self, forKey: .defaultProjectScripts) ?? []
+        projectScriptOverrides = try container.decodeIfPresent([String: [ProjectScript]?].self, forKey: .projectScriptOverrides) ?? [:]
+        defaultAutoPull = try container.decodeIfPresent(Bool.self, forKey: .defaultAutoPull) ?? false
+        projectAgentBrowserAccessOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAgentBrowserAccessOverrides) ?? [:]
+        projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
+        environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
+        usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
         defaultThreadEnvMode = try container.decode(
             ServerThreadEnvironmentMode.self,
             forKey: .defaultThreadEnvMode
@@ -344,6 +431,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         sidebarAutoSettleAfterDays = container.contains(.sidebarAutoSettleAfterDays)
             ? try container.decodeIfPresent(Double.self, forKey: .sidebarAutoSettleAfterDays)
             : Self.defaultSidebarAutoSettleAfterDays
+        continueThreadsAfterServerUpdate = try container.decodeIfPresent(Bool.self, forKey: .continueThreadsAfterServerUpdate) ?? false
         sidebarAutoSettleOnMerge = try container.decodeIfPresent(
             Bool.self,
             forKey: .sidebarAutoSettleOnMerge
@@ -360,6 +448,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             ProvidersContainer.self,
             forKey: .providers
         )?.claudeAgent?.autoCompactWindow ?? ""
+        let rawProviders = try container.decodeIfPresent([String: JSONValue].self, forKey: .providers) ?? [:]
+        providerDefinitions = rawProviders.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : rawProviders
         defaultTheme = try container.decodeIfPresent(String.self, forKey: .defaultTheme) ?? ""
         defaultThemeSetAt = try container.decodeIfPresent(
             String.self,
@@ -369,20 +459,31 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(providerInstances, forKey: .providerInstances)
+        try container.encodeIfPresent(textGenerationModelSelection, forKey: .textGenerationModelSelection)
+        try container.encodeIfPresent(sourceControlWritingStyle, forKey: .sourceControlWritingStyle)
+        try container.encode(defaultModelSelection, forKey: .defaultModelSelection)
+        try container.encode(defaultProjectScripts, forKey: .defaultProjectScripts)
+        try container.encode(projectScriptOverrides, forKey: .projectScriptOverrides)
+        try container.encode(defaultAutoPull, forKey: .defaultAutoPull)
+        try container.encode(projectAgentBrowserAccessOverrides, forKey: .projectAgentBrowserAccessOverrides)
+        try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
+        try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
+        try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
         try container.encode(defaultThreadEnvMode, forKey: .defaultThreadEnvMode)
         try container.encode(newWorktreesStartFromOrigin, forKey: .newWorktreesStartFromOrigin)
         // Encoded as explicit null so "never" survives a round trip instead of
         // decoding back as the absent-key default.
         try container.encode(sidebarAutoSettleAfterDays, forKey: .sidebarAutoSettleAfterDays)
+        try container.encode(continueThreadsAfterServerUpdate, forKey: .continueThreadsAfterServerUpdate)
         try container.encode(sidebarAutoSettleOnMerge, forKey: .sidebarAutoSettleOnMerge)
         try container.encode(providerModelPreferences, forKey: .providerModelPreferences)
         try container.encode(enableAgentBrowserAccess, forKey: .enableAgentBrowserAccess)
         // Round-tripped under the same nested key the server sends, so an
         // encoded snapshot decodes back to itself.
-        try container.encode(
-            ProvidersContainer(claudeAgent: .init(autoCompactWindow: claudeAutoCompactWindow)),
-            forKey: .providers
-        )
+        if providerDefinitions.isEmpty {
+            try container.encode(ProvidersContainer(claudeAgent: .init(autoCompactWindow: claudeAutoCompactWindow)), forKey: .providers)
+        } else { try container.encode(providerDefinitions, forKey: .providers) }
         try container.encode(defaultTheme, forKey: .defaultTheme)
         try container.encode(defaultThemeSetAt, forKey: .defaultThemeSetAt)
     }
@@ -396,6 +497,27 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 /// whatever another client changed in between. Add a field here — and one line
 /// to `json` — as each new server setting reaches this client.
 public struct ServerSettingsPatchInput: Equatable, Sendable {
+    /// Outer nil omits the preference; a present nil disables inactivity settlement.
+    public var sidebarAutoSettleAfterDays: Double??
+    public var continueThreadsAfterServerUpdate: Bool?
+    public var sidebarAutoSettleOnMerge: Bool?
+    /// Outer nil omits the field; a present nil restores automatic selection.
+    public var textGenerationModelSelection: ModelSelection?
+    public var sourceControlWritingStyle: SourceControlWritingStylePatch?
+    public var newWorktreesStartFromOrigin: Bool?
+    public var defaultModelSelection: ModelSelection??
+    public var defaultThreadEnvMode: ServerThreadEnvironmentMode?
+    public var defaultProjectScripts: [ProjectScript]?
+    public var projectScriptOverrides: [String: [ProjectScript]?]?
+    public var defaultAutoPull: Bool?
+    public var projectAgentBrowserAccessOverrides: [String: Bool?]?
+    public var projectAutoPullOverrides: [String: Bool?]?
+    public var providerInstances: [String: JSONValue]?
+    public var customModelsByDriver: [String: [JSONValue]]?
+    /// A present nil entry resets one model. Omitted models are unchanged.
+    public var environmentIcon: String??
+    public var usagePriceOverrides: [String: UsageModelPriceOverride?]?
+    public var enableHermes: Bool?
     public var enableAgentBrowserAccess: Bool?
     /// Claude's auto-compaction threshold, as the string the server validates:
     /// an integer from 100000 to 1000000, or empty to fall back to Claude's own
@@ -404,10 +526,44 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var hiddenModelsByProvider: [String: [String]]?
 
     public init(
+        sidebarAutoSettleAfterDays: Double?? = nil,
+        continueThreadsAfterServerUpdate: Bool? = nil,
+        sidebarAutoSettleOnMerge: Bool? = nil,
+        textGenerationModelSelection: ModelSelection? = nil,
+        sourceControlWritingStyle: SourceControlWritingStylePatch? = nil,
+        newWorktreesStartFromOrigin: Bool? = nil,
+        defaultModelSelection: ModelSelection?? = nil,
+        defaultThreadEnvMode: ServerThreadEnvironmentMode? = nil,
+        defaultProjectScripts: [ProjectScript]? = nil,
+        projectScriptOverrides: [String: [ProjectScript]?]? = nil,
+        defaultAutoPull: Bool? = nil,
+        projectAutoPullOverrides: [String: Bool?]? = nil,
+        projectAgentBrowserAccessOverrides: [String: Bool?]? = nil,
+        providerInstances: [String: JSONValue]? = nil,
+        customModelsByDriver: [String: [JSONValue]]? = nil,
+        environmentIcon: String?? = nil,
+        usagePriceOverrides: [String: UsageModelPriceOverride?]? = nil,
         enableAgentBrowserAccess: Bool? = nil,
         claudeAutoCompactWindow: String? = nil,
         hiddenModelsByProvider: [String: [String]]? = nil
     ) {
+        self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
+        self.continueThreadsAfterServerUpdate = continueThreadsAfterServerUpdate
+        self.sidebarAutoSettleOnMerge = sidebarAutoSettleOnMerge
+        self.textGenerationModelSelection = textGenerationModelSelection
+        self.sourceControlWritingStyle = sourceControlWritingStyle
+        self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
+        self.defaultModelSelection = defaultModelSelection
+        self.defaultThreadEnvMode = defaultThreadEnvMode
+        self.defaultProjectScripts = defaultProjectScripts
+        self.projectScriptOverrides = projectScriptOverrides
+        self.defaultAutoPull = defaultAutoPull
+        self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
+        self.projectAutoPullOverrides = projectAutoPullOverrides
+        self.providerInstances = providerInstances
+        self.customModelsByDriver = customModelsByDriver
+        self.environmentIcon = environmentIcon
+        self.usagePriceOverrides = usagePriceOverrides
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
         self.claudeAutoCompactWindow = claudeAutoCompactWindow
         self.hiddenModelsByProvider = hiddenModelsByProvider
@@ -415,6 +571,27 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
 
     public var json: JSONValue {
         var fields: [String: JSONValue] = [:]
+        if let sidebarAutoSettleAfterDays { fields["sidebarAutoSettleAfterDays"] = sidebarAutoSettleAfterDays.map(JSONValue.number) ?? .null }
+        if let continueThreadsAfterServerUpdate { fields["continueThreadsAfterServerUpdate"] = .bool(continueThreadsAfterServerUpdate) }
+        if let sidebarAutoSettleOnMerge { fields["sidebarAutoSettleOnMerge"] = .bool(sidebarAutoSettleOnMerge) }
+        if let textGenerationModelSelection { fields["textGenerationModelSelection"] = textGenerationModelSelection.settingsJSON }
+        if let sourceControlWritingStyle { fields["sourceControlWritingStyle"] = sourceControlWritingStyle.json }
+        if let newWorktreesStartFromOrigin { fields["newWorktreesStartFromOrigin"] = .bool(newWorktreesStartFromOrigin) }
+        if let defaultModelSelection {
+            if let selection = defaultModelSelection {
+                var value: [String: JSONValue] = ["instanceId": .string(selection.instanceId), "model": .string(selection.model)]
+                if let options = selection.options { value["options"] = .array(options.map { .object(["id": .string($0.id), "value": $0.value]) }) }
+                fields["defaultModelSelection"] = .object(value)
+            } else { fields["defaultModelSelection"] = .null }
+        }
+        if let defaultThreadEnvMode { fields["defaultThreadEnvMode"] = .string(defaultThreadEnvMode.rawValue) }
+        if let defaultProjectScripts { fields["defaultProjectScripts"] = .array(defaultProjectScripts.map(\.json)) }
+        if let projectScriptOverrides { fields["projectScriptOverrides"] = .object(projectScriptOverrides.mapValues { scripts in scripts.map { .array($0.map(\.json)) } ?? .null }) }
+        if let defaultAutoPull { fields["defaultAutoPull"] = .bool(defaultAutoPull) }
+        if let projectAgentBrowserAccessOverrides { fields["projectAgentBrowserAccessOverrides"] = .object(projectAgentBrowserAccessOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
+        if let projectAutoPullOverrides { fields["projectAutoPullOverrides"] = .object(projectAutoPullOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
+        if let environmentIcon { fields["environmentIcon"] = environmentIcon.map(JSONValue.string) ?? .null }
+        if let enableHermes { fields["enableHermes"] = .bool(enableHermes) }
         if let enableAgentBrowserAccess {
             fields["enableAgentBrowserAccess"] = .bool(enableAgentBrowserAccess)
         }
@@ -427,6 +604,19 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
                 ]),
             ])
         }
+        if let providerInstances { fields["providerInstances"] = .object(providerInstances) }
+        if let customModelsByDriver {
+            var providers: [String: JSONValue] = [:]
+            if case let .object(existing) = fields["providers"] { providers = existing }
+            for (driver, models) in customModelsByDriver {
+                var config: [String: JSONValue] = [:]
+                if case let .object(existing) = providers[driver] { config = existing }
+                config["customModels"] = .array(models)
+                providers[driver] = .object(config)
+            }
+            fields["providers"] = .object(providers)
+        }
+        if let usagePriceOverrides { fields["usagePriceOverrides"] = .object(usagePriceOverrides.mapValues { $0?.json ?? .null }) }
         if let hiddenModelsByProvider {
             fields["providerModelPreferences"] = .object(hiddenModelsByProvider.mapValues {
                 .object(["hiddenModels": .array($0.map(JSONValue.string))])
@@ -444,8 +634,10 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
 
 /// Narrow decode view of the much larger `ServerConfig` RPC result.
 public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
+    public var environment: EnvironmentDescriptor? = nil
+    public var cwd: String? = nil
     public let providers: [ServerProviderSnapshot]
-    public let settings: ServerSettingsSnapshot?
+    public var settings: ServerSettingsSnapshot?
     /// The server's dedicated non-project workspace for projectless T3 Work
     /// conversations. Matching it against a project's `workspaceRoot` is what
     /// stops a Work launch attaching to an arbitrary project, so its absence
@@ -475,13 +667,21 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         self.shellResumeCompletionMarker = shellResumeCompletionMarker
     }
 
+    public func replacingSettings(_ settings: ServerSettingsSnapshot?) -> Self {
+        var copy = self
+        copy.settings = settings
+        return copy
+    }
+
     private enum CodingKeys: String, CodingKey {
-        case providers, settings, t3WorkDirectory
+        case providers, settings, t3WorkDirectory, cwd, environment
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        environment = try container.decodeIfPresent(EnvironmentDescriptor.self, forKey: .environment)
         providers = try container.decode(
             [LossyDecodableElement<ServerProviderSnapshot>].self,
             forKey: .providers
@@ -504,6 +704,8 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try container.encodeIfPresent(environment, forKey: .environment)
         try container.encode(providers, forKey: .providers)
         try container.encodeIfPresent(settings, forKey: .settings)
         try container.encodeIfPresent(t3WorkDirectory, forKey: .t3WorkDirectory)

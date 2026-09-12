@@ -48,3 +48,19 @@ After installing or changing the Uniwind patch, restart Metro once with
 `vp run dev:client:reset` from `apps/mobile`. pnpm gives patched packages new
 filesystem paths, and cached transforms can otherwise retain references to the
 previous package. Ordinary development starts should retain the transform cache.
+
+## Native project icon catalogue
+
+The Swift client mirrors `ProjectIconOverride` and the optional `projectIcons` capability.
+Project mutations travel through `projects.mutate`; thread V2 state is not involved. Generated
+contract fixtures cover Lucide, emoji and explicit reset values. Project shell and feature-model
+copies must preserve `projectIcon`, including when repository metadata is enriched.
+
+`NativeProjectIconCatalog` draws cached native paths from `Resources/ProjectIconPaths.json`.
+The catalogue includes aliases from the web client's pinned Lucide package, with its license
+bundled beside it. After changing Lucide, install `fonttools==4.59.1` in a development Python
+virtual environment and run `node scripts/generate-swift-project-icons.mjs --python <venv>/bin/python`.
+The generator converts SVG arcs and primitives to native path commands; Python is not an app
+or server runtime dependency. Keep the name classifier in `ProjectIconDefaults.swift` aligned
+with `apps/web/src/projectIconModel.ts`. Wire color names are translated by the native palette;
+settings chrome uses the existing T3 theme and screen-shell conventions.

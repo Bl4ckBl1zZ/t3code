@@ -1,0 +1,147 @@
+{
+  "patch": {
+    "defaultProjectScripts": [
+      {
+        "id": "setup",
+        "name": "Setup",
+        "command": "echo setup",
+        "icon": "configure",
+        "runOnWorktreeCreate": true,
+        "runOnWorktreeDelete": true,
+        "singleRun": true
+      }
+    ],
+    "projectScriptOverrides": {
+      "reset": null,
+      "empty": []
+    }
+  },
+  "settings": {
+    "continueThreadsAfterServerUpdate": false,
+    "sidebarAutoSettleAfterDays": 3,
+    "sidebarAutoSettleOnMerge": true,
+    "enableLegacyTokenStreaming": false,
+    "enableHermes": false,
+    "enableRemoteHermes": false,
+    "enableProviderUpdateChecks": true,
+    "enableAgentBrowserAccess": true,
+    "projectAgentBrowserAccessOverrides": {},
+    "defaultProjectScripts": [
+      {
+        "id": "setup",
+        "name": "Setup",
+        "command": "echo setup",
+        "icon": "configure",
+        "runOnWorktreeCreate": true,
+        "runOnWorktreeDelete": true,
+        "singleRun": true
+      }
+    ],
+    "projectScriptOverrides": {
+      "reset": null,
+      "empty": []
+    },
+    "defaultAutoPull": false,
+    "projectAutoPullOverrides": {},
+    "backgroundActivity": {
+      "schemaVersion": 1,
+      "profile": "balanced",
+      "overrides": {}
+    },
+    "automaticGitFetchInterval": 30000,
+    "providerHealthRefreshInterval": 300000,
+    "backgroundActivityProfile": "balanced",
+    "defaultTheme": "",
+    "defaultThemeSetAt": "",
+    "environmentIcon": null,
+    "defaultModelSelection": null,
+    "defaultThreadEnvMode": "local",
+    "newWorktreesStartFromOrigin": true,
+    "worktreeRetention": {
+      "schemaVersion": 1,
+      "mode": "off",
+      "maxAge": null,
+      "staleAfter": null,
+      "deleteOnPullRequestMerge": false,
+      "scanInterval": 86400000
+    },
+    "addProjectBaseDirectory": "",
+    "textGenerationModelSelection": {
+      "instanceId": "codex",
+      "model": "gpt-5.6-luna",
+      "options": [
+        {
+          "id": "reasoningEffort",
+          "value": "low"
+        }
+      ]
+    },
+    "sourceControlWritingStyle": {
+      "mode": "repo_conventions",
+      "customInstructions": "",
+      "followChangeRequestTemplates": true
+    },
+    "sourceControlWriterModelSelection": null,
+    "providers": {
+      "codex": {
+        "enabled": true,
+        "binaryPath": "codex",
+        "homePath": "",
+        "shadowHomePath": "",
+        "launchArgs": "",
+        "customModels": []
+      },
+      "claudeAgent": {
+        "enabled": true,
+        "binaryPath": "claude",
+        "homePath": "",
+        "customModels": [],
+        "launchArgs": "",
+        "autoCompactWindow": ""
+      },
+      "cursor": {
+        "enabled": false,
+        "customModels": []
+      },
+      "grok": {
+        "enabled": false,
+        "binaryPath": "grok",
+        "customModels": []
+      },
+      "hermes": {
+        "enabled": false,
+        "endpoint": "",
+        "remoteAccessEnabled": false,
+        "profileKey": "default",
+        "managedServerEnabled": true,
+        "customModels": [],
+        "importEnabled": false,
+        "mcpEnabled": true,
+        "attachmentsEnabled": true,
+        "proactiveEnabled": true,
+        "voiceEnabled": false
+      },
+      "opencode": {
+        "enabled": false,
+        "binaryPath": "opencode",
+        "serverUrl": "",
+        "serverPassword": "",
+        "customModels": []
+      }
+    },
+    "providerInstances": {},
+    "providerModelPreferences": {},
+    "providerModelPreferencesMigrated": false,
+    "observability": {
+      "otlpTracesUrl": "",
+      "otlpMetricsUrl": ""
+    },
+    "hermesProactiveDefaultApplied": false,
+    "projectFileBackfillApplied": false,
+    "usagePriceOverrides": {}
+  },
+  "capabilities": {
+    "projectActionDefaults": true,
+    "repositoryIdentity": true
+  }
+}

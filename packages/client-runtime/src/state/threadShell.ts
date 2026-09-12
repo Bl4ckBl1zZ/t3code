@@ -30,6 +30,7 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
 > = new Map();
 
 export function createEnvironmentThreadShellAtoms(input: {
+  readonly autoSettlementAtom?: ((environmentId: EnvironmentId) => Atom.Atom<boolean>) | undefined;
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
@@ -103,14 +104,21 @@ export function createEnvironmentThreadShellAtoms(input: {
   const threadShellAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     let previousSource: OrchestrationV2ThreadShell | null = null;
+    let previousAutoSettlement = false;
     let previousValue: EnvironmentThreadShell | null = null;
     return Atom.make((get) => {
       const source = get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId) ?? null;
-      if (source === previousSource) {
+      const automatic =
+        input.autoSettlementAtom === undefined
+          ? false
+          : get(input.autoSettlementAtom(ref.environmentId));
+      if (source === previousSource && automatic === previousAutoSettlement) {
         return previousValue;
       }
       previousSource = source;
-      previousValue = source === null ? null : presentThreadShell(ref.environmentId, source);
+      previousAutoSettlement = automatic;
+      previousValue =
+        source === null ? null : presentThreadShell(ref.environmentId, source, automatic);
       return previousValue;
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
   });

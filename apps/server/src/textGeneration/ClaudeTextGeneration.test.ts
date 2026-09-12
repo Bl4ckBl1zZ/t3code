@@ -1,3 +1,7 @@
+import {
+  BUNDLED_CLAUDE_MODEL_CATALOG,
+  type ClaudeModelCatalog,
+} from "../provider/ClaudeModelCatalog.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { ClaudeSettings, ProviderInstanceId } from "@t3tools/contracts";
@@ -108,6 +112,7 @@ function makeFakeClaudeBinary(dir: string) {
 function withFakeClaudeEnv<A, E, R>(
   input: {
     output: string;
+    catalog?: ClaudeModelCatalog;
     exitCode?: number;
     stderr?: string;
     argsMustContain?: string;
@@ -222,12 +227,59 @@ function withFakeClaudeEnv<A, E, R>(
     );
 
     const config = decodeClaudeSettings(input.claudeConfig ?? {});
-    const textGeneration = yield* makeClaudeTextGeneration(config);
+    const textGeneration = yield* makeClaudeTextGeneration(
+      config,
+      undefined,
+      Effect.succeed(input.catalog ?? BUNDLED_CLAUDE_MODEL_CATALOG),
+    );
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
 }
 
 it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
+  it.effect("uses a refreshed catalog for the model alias and CLI effort", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({ structured_output: { subject: "Catalog test", body: "" } }),
+        argsMustContain: "--model remote-model --effort max",
+        catalog: {
+          models: [
+            {
+              model: {
+                slug: "remote-model",
+                aliases: ["remote"],
+                name: "Remote",
+                isCustom: false,
+                capabilities: {
+                  optionDescriptors: [
+                    {
+                      id: "effort",
+                      label: "Effort",
+                      type: "select",
+                      options: [{ id: "custom", label: "Custom", isDefault: true }],
+                    },
+                  ],
+                },
+              },
+              runtime: { effortMap: { custom: "max" } },
+              compatibility: {},
+            },
+          ],
+        },
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "topic",
+            stagedSummary: "M README.md",
+            stagedPatch: "diff",
+            modelSelection: createModelSelection(ProviderInstanceId.make("claudeAgent"), "remote"),
+          });
+          expect(result.subject).toBe("Catalog test");
+        }),
+    ),
+  );
   it.effect("forwards Claude thinking settings for Haiku without passing effort", () =>
     withFakeClaudeEnv(
       {

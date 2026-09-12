@@ -39,7 +39,7 @@ public enum ComposerAttachments {
     public static let maximumImageBytes = 10 * 1024 * 1024
     /// `PROVIDER_SEND_TURN_MAX_FILE_BYTES` — PDFs, video and generic files all
     /// share the looser cap.
-    public static let maximumFileBytes = 20 * 1024 * 1024
+    public static let maximumFileBytes = 50 * 1024 * 1024
 
     public static func maximumBytes(for kind: ComposerAttachmentKind) -> Int {
         kind == .image ? maximumImageBytes : maximumFileBytes

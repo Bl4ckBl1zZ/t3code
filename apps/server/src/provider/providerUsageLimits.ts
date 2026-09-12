@@ -1,3 +1,6 @@
+import * as Context from "effect/Context";
+import type * as Effect from "effect/Effect";
+import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import type { ServerProviderUsageLimits, ServerProviderUsageWindow } from "@t3tools/contracts";
@@ -35,6 +38,12 @@ export interface CodexRateLimitSnapshot {
 export function codexUsageLimits(
   snapshot: CodexRateLimitSnapshot,
   checkedAt: string,
+  resetCredits?: {
+    readonly availableCount: number;
+    readonly credits?:
+      | readonly { readonly status: string; readonly expiresAt?: number | null }[]
+      | null;
+  } | null,
 ): ServerProviderUsageLimits {
   if (snapshot.limitId && snapshot.limitId !== "codex") return { checkedAt, windows: [] };
   const monthly = snapshot.planType === "free" || snapshot.planType === "go";
@@ -68,7 +77,27 @@ export function codexUsageLimits(
       ...(resetsAt ? { resetsAt } : {}),
     });
   }
-  return { checkedAt, windows };
+  const expiries =
+    resetCredits?.credits?.flatMap((credit) =>
+      credit.status === "available" &&
+      typeof credit.expiresAt === "number" &&
+      Number.isFinite(credit.expiresAt)
+        ? [credit.expiresAt]
+        : [],
+    ) ?? [];
+  const nextExpiresAt = expiries.length ? iso(Math.min(...expiries) * 1000) : undefined;
+  return {
+    checkedAt,
+    windows,
+    ...(resetCredits && Number.isFinite(resetCredits.availableCount)
+      ? {
+          resetCredits: {
+            availableCount: Math.max(0, Math.floor(resetCredits.availableCount)),
+            ...(nextExpiresAt ? { nextExpiresAt } : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 export function claudeUsageLimits(
@@ -127,4 +156,136 @@ export function claudeUsageLimits(
     }
   }
   return { checkedAt, windows };
+}
+
+/** A driver supplies this listener to its own V2 adapter; accounts never share it. */
+export class ClaudeUsageLimitListener extends Context.Service<
+  ClaudeUsageLimitListener,
+  {
+    readonly publish: (info: SDKRateLimitInfo) => Effect.Effect<void>;
+  }
+>()("t3/provider/providerUsageLimits/ClaudeUsageLimitListener") {}
+
+/** Sparse live windows retain the probe's reset time and unrelated account windows. */
+export function applyClaudeRateLimitEvent(
+  previous: ServerProviderUsageLimits | undefined,
+  info: SDKRateLimitInfo,
+  checkedAt: string,
+): ServerProviderUsageLimits | undefined {
+  if (
+    previous?.unavailable?.reason === "unsupported" ||
+    typeof info.utilization !== "number" ||
+    !Number.isFinite(info.utilization)
+  )
+    return previous;
+  const type: string | undefined = info.rateLimitType;
+  const scoped =
+    type === "seven_day_overage_included"
+      ? previous?.windows.find(
+          (window) => window.id.startsWith("seven_day_") && window.kind === "weekly",
+        )
+      : undefined;
+  const id = type === "five_hour" || type === "seven_day" ? type : scoped?.id;
+  if (!id) return previous;
+  const existing = previous?.windows.find((window) => window.id === id);
+  const reset =
+    typeof info.resetsAt === "number" && Number.isFinite(info.resetsAt) && info.resetsAt > 0
+      ? iso(info.resetsAt * 1000)
+      : undefined;
+  const kind = id === "five_hour" ? "session" : "weekly";
+  const next: ServerProviderUsageWindow = {
+    id,
+    kind,
+    label: scoped?.label ?? (kind === "session" ? "Session" : "Weekly"),
+    windowDurationMins:
+      existing?.windowDurationMins ?? (kind === "session" ? SESSION_MINS : WEEK_MINS),
+    usedPercent: clamp(info.utilization * 100),
+    ...((reset ?? existing?.resetsAt) ? { resetsAt: reset ?? existing?.resetsAt } : {}),
+  };
+  if (
+    existing &&
+    existing.usedPercent === next.usedPercent &&
+    existing.resetsAt === next.resetsAt &&
+    existing.label === next.label &&
+    !previous?.unavailable
+  )
+    return previous;
+  // Preserve the probe's scoped-model order: its first model names the
+  // overage-included event bucket, even when another model sorts before it.
+  const windows = previous?.windows.map((window) => (window.id === id ? next : window)) ?? [];
+  if (!existing) {
+    if (kind === "session") windows.unshift(next);
+    else windows.push(next);
+  }
+  return { checkedAt, windows };
+}
+
+/** Failed or cached probes cannot erase fresher usage received during a turn. */
+export function usageLimitsAfterProbe(
+  published: ServerProviderUsageLimits | undefined,
+  probed: ServerProviderUsageLimits | undefined,
+): ServerProviderUsageLimits | undefined {
+  if (probed?.unavailable?.reason === "unsupported") return probed;
+  if (
+    published &&
+    !published.unavailable &&
+    (probed?.unavailable?.reason === "probeFailed" ||
+      (probed && Date.parse(published.checkedAt) > Date.parse(probed.checkedAt)))
+  )
+    return published;
+  return probed;
+}
+
+export class CodexUsageLimitListener extends Context.Service<
+  CodexUsageLimitListener,
+  {
+    readonly publish: (snapshot: CodexRateLimitSnapshot) => Effect.Effect<void>;
+  }
+>()("t3/provider/providerUsageLimits/CodexUsageLimitListener") {}
+
+export function applyCodexRateLimitEvent(
+  previous: ServerProviderUsageLimits | undefined,
+  snapshot: CodexRateLimitSnapshot,
+  checkedAt: string,
+): ServerProviderUsageLimits | undefined {
+  if (previous?.unavailable?.reason === "unsupported") return previous;
+  const incoming = codexUsageLimits(snapshot, checkedAt);
+  if (incoming.windows.length === 0) return previous;
+  const windows = [...(previous?.windows ?? [])];
+  let changed = false;
+  for (const window of incoming.windows) {
+    const index = windows.findIndex((current) => current.id === window.id);
+    const existing = windows[index];
+    const raw = window.id === "primary" ? snapshot.primary : snapshot.secondary;
+    const next = {
+      ...window,
+      ...(window.resetsAt === undefined && existing?.resetsAt
+        ? { resetsAt: existing.resetsAt }
+        : {}),
+      ...(raw?.windowDurationMins == null && snapshot.planType == null && existing
+        ? {
+            kind: existing.kind,
+            label: existing.label,
+            windowDurationMins: existing.windowDurationMins,
+          }
+        : {}),
+    };
+    if (
+      existing &&
+      existing.kind === next.kind &&
+      existing.usedPercent === next.usedPercent &&
+      existing.resetsAt === next.resetsAt &&
+      existing.windowDurationMins === next.windowDurationMins
+    )
+      continue;
+    changed = true;
+    if (index < 0) windows.push(next);
+    else windows[index] = next;
+  }
+  if (!changed && previous && !previous.unavailable) return previous;
+  return {
+    checkedAt,
+    windows,
+    ...(previous?.resetCredits ? { resetCredits: previous.resetCredits } : {}),
+  };
 }

@@ -7,6 +7,7 @@ import UIKit
 /// nothing to resolve against and stays a named placeholder.
 struct MarkdownMediaContext {
     let threadID: String
+    var resolveDocumentURL: (@MainActor (FeatureMessageAttachment) async throws -> URL)? = nil
     /// Mints a signed asset URL for media that lives on the environment rather
     /// than on the open web. Throwing is the normal failure path: an
     /// environment without the capability, a purged worktree, a missing file.
@@ -23,7 +24,7 @@ struct MarkdownMediaContext {
     /// The transcript's context: workspace files and browser artifacts both go
     /// through the client's signed asset route, which is also what resolves
     /// them for the file viewer and for message attachments.
-    init(threadID: String, client: any FeatureClient) {
+    init(threadID: String, client: any FeatureClient, baseDirectory: String? = nil) {
         let resolver = client as? any FeatureWorkspaceAssetResolving
         self.init(threadID: threadID) { resource in
             guard let resolver else {
@@ -31,13 +32,16 @@ struct MarkdownMediaContext {
             }
             switch resource {
             case let .workspaceFile(threadID, path):
-                return try await resolver.workspaceAssetURL(threadID: threadID, path: path)
+                return try await resolver.workspaceAssetURL(threadID: threadID, path: FeatureFilePreviewPath.resolve(path, relativeTo: baseDirectory))
             case let .browserArtifact(fileName):
                 return try await resolver.browserArtifactAssetURL(
                     threadID: threadID,
                     fileName: fileName
                 )
             }
+        }
+        if let documents = client as? any FeatureDocumentAttachmentResolving {
+            resolveDocumentURL = { attachment in try await documents.documentAttachmentURL(threadID: threadID, attachment: attachment) }
         }
     }
 }
@@ -340,9 +344,7 @@ struct FeatureImagePreviewSheet: View {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFit()
+                            ZoomableMessageImage(image: image)
                         case .failure:
                             ContentUnavailableView(
                                 "Image unavailable",
@@ -403,7 +405,7 @@ struct MarkdownGallerySheet: View {
                         } else if let url = urls[page] {
                             AsyncImage(url: url) { phase in
                                 switch phase {
-                                case let .success(image): image.resizable().scaledToFit()
+                                case let .success(image): ZoomableMessageImage(image: image, isCurrentPage: page == index)
                                 case .failure: ContentUnavailableView("Image unavailable", systemImage: "photo")
                                 default: ProgressView()
                                 }

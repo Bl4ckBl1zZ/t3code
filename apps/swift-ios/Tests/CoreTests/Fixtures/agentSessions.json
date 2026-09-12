@@ -1,0 +1,54 @@
+{
+  "scan": {
+    "candidates": [
+      {
+        "path": "/work/app",
+        "title": "app",
+        "sources": [
+          "codex",
+          "claudeAgent"
+        ],
+        "threadCount": 4,
+        "lastActiveAt": "2026-09-10T12:00:00.000Z",
+        "alreadyImported": false,
+        "git": {
+          "remoteKey": "github.com/team/app",
+          "repository": "team/app"
+        }
+      },
+      {
+        "path": "/work/notes",
+        "title": "notes",
+        "projectId": "project-notes",
+        "sources": [
+          "codex"
+        ],
+        "threadCount": 5,
+        "lastActiveAt": "2026-09-10T12:00:00Z",
+        "alreadyImported": true,
+        "git": null
+      },
+      {
+        "path": "/work/legacy",
+        "title": "legacy",
+        "sources": [
+          "claudeAgent"
+        ],
+        "threadCount": 3,
+        "lastActiveAt": "2026-09-10T12:00:00Z",
+        "alreadyImported": false
+      }
+    ],
+    "scannedAt": "2026-09-10T13:00:00Z",
+    "truncated": true
+  },
+  "imported": {
+    "importedCount": 3,
+    "skippedCount": 1
+  },
+  "capabilities": {
+    "agentSessionImport": true,
+    "providerTerminalEnvironment": true,
+    "repositoryIdentity": true
+  }
+}

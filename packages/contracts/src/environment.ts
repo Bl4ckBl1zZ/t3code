@@ -1,7 +1,13 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleOptional,
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
@@ -14,9 +20,28 @@ export type ExecutionEnvironmentPlatformOs = typeof ExecutionEnvironmentPlatform
 export const ExecutionEnvironmentPlatformArch = Schema.Literals(["arm64", "x64", "other"]);
 export type ExecutionEnvironmentPlatformArch = typeof ExecutionEnvironmentPlatformArch.Type;
 
+/**
+ * The curated set of machine shapes and OS identities an environment can wear as its icon.
+ * Servers detect one from the hardware they run on (`platform.machine`), and
+ * the `environmentIcon` server setting lets a user pick one instead.
+ */
+export const ENVIRONMENT_MACHINE_KINDS = [
+  "server",
+  "cloud",
+  "linux",
+  "desktop",
+  "laptop",
+  "mac-mini",
+  "mac-studio",
+] as const;
+export const EnvironmentMachineKind = Schema.Literals(ENVIRONMENT_MACHINE_KINDS);
+export type EnvironmentMachineKind = typeof EnvironmentMachineKind.Type;
+export const isEnvironmentMachineKind = Schema.is(EnvironmentMachineKind);
+
 export const ExecutionEnvironmentPlatform = Schema.Struct({
   os: ExecutionEnvironmentPlatformOs,
   arch: ExecutionEnvironmentPlatformArch,
+  machine: ForwardCompatibleOptional(EnvironmentMachineKind),
 });
 
 /**
@@ -46,6 +71,16 @@ export const ServerSelfUpdateCapability = Schema.Literals([
 export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  /** Exact host media and read-only host text previews, plus inline document attachments. */
+  projectBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  projectActionDefaults: Schema.optionalKey(Schema.Boolean),
+  projectDefaults: Schema.optionalKey(Schema.Boolean),
+  projectAutoPull: Schema.optionalKey(Schema.Boolean),
+  fileDocumentPreviews: Schema.optionalKey(Schema.Boolean),
+  /** Bounded CLI transcript discovery and V2 history import. */
+  agentSessionImport: Schema.optionalKey(Schema.Boolean),
+  /** Terminal launch resolves the selected provider account on the server. */
+  providerTerminalEnvironment: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   /** Missing on older servers, which still accept inline image attachments. */
@@ -63,6 +98,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */
   threadSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Server evaluates inactivity and PR settlement without an open client. */
+  threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
+  threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */
   threadSnooze: Schema.optionalKey(Schema.Boolean),
@@ -76,6 +114,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       client reconnecting to one must drop published themes rather than keep
       showing a set nothing will ever update. */
   environmentThemes: Schema.optionalKey(Schema.Boolean),
+  environmentIcon: Schema.optionalKey(Schema.Boolean),
+  /** Custom model entries can include names and composer option descriptors. */
+  assistantCitations: Schema.optional(Schema.Boolean),
+  projectIcons: Schema.optionalKey(Schema.Boolean),
+  customModelDefinitions: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pin / thread.unpin commands. Same
       version-skew contract as threadSettlement. */
   threadPinning: Schema.optionalKey(Schema.Boolean),
@@ -90,6 +133,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
   /** Server persists a pull request reference on thread.meta.update. */
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
+  /** V2 atomic metadata link/unlink operations and a linkedPullRequests collection. */
+  threadPullRequestsV2: Schema.optionalKey(Schema.Boolean),
+  usagePriceOverrides: Schema.optionalKey(Schema.Boolean),
+  pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

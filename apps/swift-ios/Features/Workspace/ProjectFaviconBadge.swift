@@ -3,7 +3,7 @@ import SwiftUI
 // The mobile port of the desktop sidebar's repo icon (web
 // `ProjectFavicon.tsx`): each project resolves its favicon through the signed
 // asset route — `t3.json` `iconPath` first, then well-known favicon files in
-// the workspace — and falls back to the letter badge when the repo has none.
+// the workspace — and falls back to a deterministic colored icon when the repo has none.
 
 /// One app-wide cache of resolved favicon URLs, keyed per project workspace.
 /// App-wide because every thread row of the same project would otherwise
@@ -84,11 +84,13 @@ final class ProjectFaviconStore {
 }
 
 /// The repo icon a thread row shows: the project's favicon when it has one,
-/// the letter `ProjectBadge` otherwise (and while loading).
+/// a name-derived Lucide icon otherwise (and while loading).
 struct ProjectFaviconBadge<Fallback: View>: View {
     let environmentID: String?
     let workspaceRoot: String?
     var faviconPath: String?
+    var projectIcon: ProjectIconOverride?
+    var projectTitle: String?
     var size: CGFloat = 16
     @ViewBuilder let fallback: Fallback
 
@@ -96,7 +98,9 @@ struct ProjectFaviconBadge<Fallback: View>: View {
 
     var body: some View {
         Group {
-            if let url = store.url(
+            if let projectIcon, projectIcon.kind == "emoji" || projectIcon.kind == "lucide" {
+                NativeProjectIcon(icon: projectIcon, size: size)
+            } else if let url = store.url(
                 environmentID: environmentID,
                 workspaceRoot: workspaceRoot,
                 faviconPath: faviconPath
@@ -108,18 +112,19 @@ struct ProjectFaviconBadge<Fallback: View>: View {
                             .resizable()
                             .scaledToFill()
                     default:
-                        fallback
+                        automaticFallback
                     }
                 }
                 .frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: size * 0.25))
             } else {
-                fallback
+                automaticFallback
             }
         }
         .task(
-            id: (environmentID ?? "") + "|" + (workspaceRoot ?? "") + "|" + (faviconPath ?? "")
+            id: (environmentID ?? "") + "|" + (workspaceRoot ?? "") + "|" + (faviconPath ?? "") + "|" + (projectIcon?.kind ?? "")
         ) {
+            guard projectIcon?.kind != "lucide" && projectIcon?.kind != "emoji" else { return }
             store.resolve(
                 environmentID: environmentID,
                 workspaceRoot: workspaceRoot,
@@ -127,5 +132,11 @@ struct ProjectFaviconBadge<Fallback: View>: View {
             )
         }
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private var automaticFallback: some View {
+        if let workspaceRoot {
+            NativeProjectIcon(icon: ProjectIconDefaults.select(title: projectTitle ?? "", workspaceRoot: workspaceRoot), size: size)
+        } else { fallback }
     }
 }

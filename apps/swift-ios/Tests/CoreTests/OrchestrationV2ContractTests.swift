@@ -10,6 +10,22 @@ import XCTest
 /// regenerate the fixture after a contract change and anything the Swift models
 /// got wrong fails here rather than at runtime on a device.
 final class OrchestrationV2ContractTests: XCTestCase {
+    func testRestartContinuationContracts() throws {
+        struct Fixture: Decodable {
+            let run: OrchestrationV2Run
+            let message: OrchestrationV2ConversationMessage
+            let capabilities: EnvironmentDescriptor.Capabilities
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/restartContinuation.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.run.restartContinuation?.messageId, fixture.message.id)
+        XCTAssertEqual(fixture.run.restartContinuation?.status, "pending")
+        XCTAssertEqual(fixture.run.restartContinuation?.reason, "restart")
+        XCTAssertEqual(fixture.message.restartContinuation, true)
+        XCTAssertEqual(fixture.capabilities.threadRestartContinuation, true)
+        XCTAssertEqual(try JSONDecoder().decode(OrchestrationV2Run.self, from: JSONEncoder().encode(fixture.run)), fixture.run)
+    }
+
     /// Every turn item type the contract defines, as of the generated fixture.
     /// Kept explicit so adding a contract variant without a Swift case fails
     /// loudly rather than silently decoding to `.unknown`.
@@ -44,10 +60,51 @@ final class OrchestrationV2ContractTests: XCTestCase {
     func testNativeParityFieldsDecodeFromServerContract() throws {
         let projection = try projection()
         XCTAssertEqual(projection.thread.activeOrderKey, "n")
+        XCTAssertEqual(projection.thread.linkedPullRequests?.map(\.number), [41, 42])
+        XCTAssertEqual(projection.thread.linkedPullRequest?.number, 41)
         XCTAssertEqual(projection.runtimeRequests.first?.responseMode, "message")
         let dismiss = OrchestrationCommands.respondToUserInput(threadID: "t", requestID: "q", answers: [:], dismiss: true)
         XCTAssertEqual(dismiss["dismiss"], .bool(true))
         XCTAssertNil(dismiss["answers"])
+    }
+
+    func testPullRequestLinkSourcesSnapshotsAndDismissedLayersRoundTrip() throws {
+        let thread = try projection().thread
+        let links = try XCTUnwrap(thread.pullRequests)
+        XCTAssertEqual(links.filter(\.isVisible).map(\.number), [41, 42])
+        XCTAssertEqual(links.map(\.source), ["agent", "stack", "stack-dismissed"])
+        XCTAssertEqual(links[1].snapshot?.isDraft, true)
+        XCTAssertEqual(links[1].snapshot?.additions, 12)
+        XCTAssertEqual(links[1].snapshot?.checksState, "passing")
+        XCTAssertEqual(links[0].stack?.layers.map(\.number), [41, 42, 43])
+        XCTAssertEqual(thread.branchPullRequest?.number, 42)
+        XCTAssertEqual(try JSONDecoder().decode([OrchestrationV2ThreadPullRequestLink].self, from: JSONEncoder().encode(links)), links)
+    }
+
+    func testToolPresentationMetadataRoundTripsAndOldRowsRemainReadable() throws {
+        let item = try XCTUnwrap(try projection().turnItems.first { $0.type == "dynamic_tool" })
+        XCTAssertEqual(item.toolSurface, "browser")
+        XCTAssertEqual(item.toolSource?.name, "Chrome")
+        XCTAssertEqual(item.toolSource?.icon?.app?.displayName, "Google Chrome")
+        XCTAssertEqual(item.toolIcon?.pageUrl, "https://github.com/org/repo")
+        XCTAssertEqual(try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONEncoder().encode(item)), item)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any])
+        for key in ["toolSurface", "toolIcon", "toolSource"] { legacy.removeValue(forKey: key) }
+        let decoded = try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(decoded.toolSource)
+        XCTAssertEqual(decoded.payload, item.payload)
+    }
+
+    func testApprovalOptionsRoundTripAndUnknownDecisionsStayUnavailable() throws {
+        let projection = try projection()
+        let item = try XCTUnwrap(projection.turnItems.first { $0.type == "approval_request" })
+        guard case let .approvalRequest(_, _, _, options) = item.payload else { return XCTFail("Missing approval") }
+        XCTAssertEqual(options?.map(\.label), ["Allow once", "Allow this session", "Decline"])
+        let decoded = try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONEncoder().encode(item))
+        XCTAssertEqual(decoded, item)
+        XCTAssertEqual(FeatureApprovalDecision(providerDecision: "acceptAlways"), .allowAlways)
+        XCTAssertEqual(FeatureApprovalDecision(providerDecision: "cancel"), .cancel)
+        XCTAssertNil(FeatureApprovalDecision(providerDecision: "future-grant"))
     }
 
     func testContractGeneratedProjectionDecodes() throws {

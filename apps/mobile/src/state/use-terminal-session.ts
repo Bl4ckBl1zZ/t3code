@@ -1,5 +1,6 @@
 import {
   combineTerminalSessionState,
+  terminalOutputText,
   EMPTY_TERMINAL_BUFFER_STATE,
   EMPTY_TERMINAL_SESSION_STATE,
   type KnownTerminalSession,
@@ -14,7 +15,7 @@ import { terminalEnvironment } from "./terminal";
 export function useAttachedTerminalSession(input: {
   readonly environmentId: EnvironmentId | null;
   readonly terminal: TerminalAttachInput | null;
-}): TerminalSessionState {
+}): TerminalSessionState & { readonly buffer: string } {
   const attach = useEnvironmentQuery(
     input.environmentId !== null && input.terminal !== null
       ? terminalEnvironment.attach({
@@ -34,7 +35,7 @@ export function useAttachedTerminalSession(input: {
 
   return useMemo(() => {
     if (input.environmentId === null || input.terminal === null) {
-      return EMPTY_TERMINAL_SESSION_STATE;
+      return { ...EMPTY_TERMINAL_SESSION_STATE, buffer: "" };
     }
     const summary =
       metadata.data?.find(
@@ -42,7 +43,11 @@ export function useAttachedTerminalSession(input: {
           terminal.threadId === input.terminal?.threadId &&
           terminal.terminalId === input.terminal?.terminalId,
       ) ?? null;
-    const state = combineTerminalSessionState(summary, attach.data ?? EMPTY_TERMINAL_BUFFER_STATE);
+    const session = combineTerminalSessionState(
+      summary,
+      attach.data ?? EMPTY_TERMINAL_BUFFER_STATE,
+    );
+    const state = { ...session, buffer: terminalOutputText(session.output) };
     return attach.error === null ? state : { ...state, error: attach.error, status: "error" };
   }, [attach.data, attach.error, input.environmentId, input.terminal, metadata.data]);
 }

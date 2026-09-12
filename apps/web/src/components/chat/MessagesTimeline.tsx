@@ -1,3 +1,32 @@
+import { ActivityFocusText } from "./ActivityFocusText";
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
+import { useAssetUrlState } from "../../assets/assetUrls";
+import type { ToolActivityIcon } from "@t3tools/contracts";
+import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
+import { MonitorIcon } from "lucide-react";
+import { GitPullRequestIcon } from "lucide-react";
+import {
+  WorkGroupHistoryState,
+  captureWorkGroupAnchor,
+  restoreWorkGroupAnchor,
+  shouldFollowWorkGroupAppend,
+} from "./workGroupHistoryState";
+import { HammerIcon } from "lucide-react";
+import { resolveHistoricalWorkSummary } from "./MessagesTimeline.logic";
+import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
+import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
+import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
+import type { AssistantCitation } from "@t3tools/contracts";
+import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
+import {
+  AssistantCitationSource,
+  type AssistantCitationRequest,
+  type AssistantCitationTarget,
+} from "./AssistantCitationSource";
+import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
+import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
+import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
+import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
   type EnvironmentId,
   type MessageId,
@@ -93,6 +122,7 @@ import {
   resolveAssistantMessageCopyState,
   resolveTimelineIsAtEnd,
   resolveTimelineMinimapHasPersistentGutter,
+  resolveTimelineMinimapCurrentIndex,
   resolveTimelineMinimapHeightStyle,
   resolveTimelineMinimapHitStripWidth,
   resolveTimelineMinimapIndexFromPointer,
@@ -159,6 +189,10 @@ import {
 // ---------------------------------------------------------------------------
 
 interface TimelineRowSharedState {
+  workGroupHistory: WorkGroupHistoryState;
+  citationRequest: AssistantCitationTarget | null;
+  listRef: React.RefObject<LegendListRef | null>;
+  onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
   threadRef: ScopedThreadRef | null;
@@ -194,6 +228,7 @@ interface TimelineRowSharedState {
 }
 
 interface TimelineRowActivityState {
+  isPreparingWorktree: boolean;
   isWorking: boolean;
   isRevertingCheckpoint: boolean;
   activeTurnInProgress: boolean;
@@ -214,6 +249,14 @@ const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
+  isPreparingWorktree?: boolean;
+  citationRequest?: AssistantCitationRequest | null;
+  citationHistoryLoading?: boolean;
+  onCiteAssistantText?: (
+    citation: AssistantCitation,
+    sourceAnchor: AssistantCitationSourceAnchor,
+  ) => boolean;
+  onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
@@ -268,7 +311,12 @@ interface MessagesTimelineProps {
 // ---------------------------------------------------------------------------
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  citationRequest = null,
+  citationHistoryLoading = false,
+  onCiteAssistantText,
+  onUseArtifactTemplate,
   isWorking,
+  isPreparingWorktree = false,
   activeTurnInProgress,
   activeTurnStartedAt,
   listRef,
@@ -418,6 +466,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
+  const [minimapCurrentIndex, setMinimapCurrentIndex] = useState<number | null>(null);
   const handleAnchorReady = useCallback(
     (info: { anchorIndex: number | undefined }) => {
       if (anchorMessageId !== null && info.anchorIndex !== undefined) {
@@ -464,14 +513,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const scrollTop = state.scroll ?? 0;
     const scrollBottom = scrollTop + (state.scrollLength ?? 0);
 
-    for (const item of minimapItems) {
+    const itemBounds = minimapItems.map((item) => ({
+      top: resolveTimelineRowTop(state, item.rowIndex),
+      height: resolveTimelineRowHeight(state, item.rowIndex),
+    }));
+    for (const [index, item] of minimapItems.entries()) {
       const strip = minimapStripMap.get(item.id);
       if (!strip) {
         continue;
       }
 
-      const rowTop = resolveTimelineRowTop(state, item.rowIndex);
-      const rowHeight = resolveTimelineRowHeight(state, item.rowIndex);
+      const rowTop = itemBounds[index]?.top ?? null;
+      const rowHeight = itemBounds[index]?.height ?? null;
       const inView =
         rowTop !== null &&
         rowTop < scrollBottom &&
@@ -484,6 +537,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         strip.dataset.inView = next;
       }
     }
+    const nextCurrentIndex = resolveTimelineMinimapCurrentIndex({
+      scrollTop,
+      scrollBottom,
+      itemBounds,
+    });
+    setMinimapCurrentIndex((current) =>
+      current === nextCurrentIndex ? current : nextCurrentIndex,
+    );
   }, [contentInsetEndAdjustment, listRef, minimapItems, minimapStripMap, onIsAtEndChange]);
 
   useEffect(() => {
@@ -518,8 +579,33 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const threadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
 
+  const expandCitationTurn = useCallback(
+    (runId: RunId | null, attemptId: RunAttemptId | null) => {
+      const expandRun = runId !== null && !expandedRunIds.has(runId);
+      const expandAttempt = attemptId !== null && !expandedAttemptIds.has(attemptId);
+      if (expandRun) setExpandedRunIds((current) => new Set([...current, runId]));
+      if (expandAttempt) setExpandedAttemptIds((current) => new Set([...current, attemptId]));
+      return expandRun || expandAttempt;
+    },
+    [expandedRunIds, expandedAttemptIds],
+  );
+  const citationTarget = useAssistantCitationTarget({
+    request: citationRequest,
+    entries: timelineEntries,
+    rows,
+    listRef,
+    viewport: timelineViewportElement,
+    historyLoading: citationHistoryLoading,
+    onExpandTurn: expandCitationTurn,
+    onManualNavigation,
+  });
+
+  const workGroupHistory = useMemo(() => new WorkGroupHistoryState(), [routeThreadKey]);
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
+      workGroupHistory,
+      citationRequest: citationTarget.target,
+      listRef,
       timestampFormat,
       routeThreadKey,
       threadRef,
@@ -534,6 +620,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenWorkspaceFile,
       onCopyWorkspacePath,
+      onUseArtifactTemplate,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -543,6 +630,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       alwaysExpandActivity,
     }),
     [
+      workGroupHistory,
+      citationTarget.target,
+      listRef,
       alwaysExpandActivity,
       timestampFormat,
       routeThreadKey,
@@ -558,6 +648,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenWorkspaceFile,
       onCopyWorkspacePath,
+      onUseArtifactTemplate,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -569,11 +660,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const activityState = useMemo<TimelineRowActivityState>(
     () => ({
       isWorking,
+      isPreparingWorktree,
       isRevertingCheckpoint,
       activeTurnInProgress,
       latestRunId: latestRun?.runId ?? null,
     }),
-    [activeTurnInProgress, isRevertingCheckpoint, isWorking, latestRun?.runId],
+    [isPreparingWorktree, activeTurnInProgress, isRevertingCheckpoint, isWorking, latestRun?.runId],
   );
   const listHeader = useMemo(
     () =>
@@ -624,10 +716,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   return (
     <TimelineRowCtx value={sharedState}>
       <TimelineRowActivityCtx value={activityState}>
-        <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+        <div
+          ref={setTimelineViewportElement}
+          className="relative h-full min-h-0"
+          data-assistant-citation-viewport="true"
+        >
+          {threadRef && onCiteAssistantText ? (
+            <AssistantSelectionToolbar
+              viewport={timelineViewportElement}
+              threadRef={threadRef}
+              onCite={onCiteAssistantText}
+            />
+          ) : null}
           <LegendList<MessagesTimelineRow>
             ref={listRef}
             data={rows}
+            onLoad={citationTarget.onListLoad}
+            {...(citationTarget.alwaysRender ? { alwaysRender: citationTarget.alwaysRender } : {})}
+            {...(citationTarget.target ? { dataVersion: citationTarget.target.key } : {})}
             keyExtractor={keyExtractor}
             getItemType={getItemType}
             renderItem={renderItem}
@@ -654,6 +760,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ListFooterComponent={TIMELINE_LIST_FOOTER}
           />
           <TimelineMinimap
+            currentIndex={minimapCurrentIndex}
             items={minimapItems}
             hasPersistentGutter={minimapHasPersistentGutter}
             hitStripWidth={minimapHitStripWidth}
@@ -758,12 +865,14 @@ function timelineMinimapEventTargetsPreview(target: EventTarget): boolean {
 function TimelineMinimap({
   hasPersistentGutter,
   hitStripWidth,
+  currentIndex,
   items,
   stripMap,
   onSelect,
 }: {
   hasPersistentGutter: boolean;
   hitStripWidth: number;
+  currentIndex: number | null;
   items: ReadonlyArray<TimelineMinimapItem>;
   stripMap: Map<string, HTMLSpanElement>;
   onSelect: (item: TimelineMinimapItem) => void;
@@ -785,6 +894,11 @@ function TimelineMinimap({
         : resolvedActiveIndex === items.length - 1
           ? "-100%"
           : "-50%";
+  const resolvedCurrentIndex =
+    currentIndex !== null && currentIndex >= 0 && currentIndex < items.length ? currentIndex : null;
+  const previousItem =
+    resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex - 1] ?? null);
+  const nextItem = resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex + 1] ?? null);
 
   const resolveActiveIndexFromPointer = useCallback(
     (event: MouseEvent<HTMLElement>) => {
@@ -833,135 +947,193 @@ function TimelineMinimap({
       data-persistent-gutter={hasPersistentGutter ? "true" : "false"}
     >
       <div className="relative h-full w-full select-none">
-        <button
-          aria-label={`Jump to message: ${activeItem?.userText ?? "User message"}`}
+        <div
           className={cn(
-            "absolute top-1/2 left-3 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+            "absolute top-1/2 left-3 -translate-y-1/2",
             // The strip is width-capped to the side gutter so it never overlays
             // the centered content column; with no usable gutter it goes inert.
             hitStripWidth > 0 ? "pointer-events-auto" : "pointer-events-none",
           )}
-          onBlur={() => setActiveIndex(null)}
-          onClick={(event) => {
-            if (timelineMinimapEventTargetsPreview(event.target)) {
-              return;
-            }
-            const nextIndex = resolveActiveIndexFromPointer(event);
-            const nextItem = nextIndex === null ? null : (items[nextIndex] ?? null);
-            if (nextItem) {
-              onSelect(nextItem);
-            }
-            event.currentTarget.blur();
-          }}
-          onFocus={() => setActiveIndex((current) => current ?? 0)}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              moveActiveIndex(1);
-            } else if (event.key === "ArrowUp") {
-              event.preventDefault();
-              moveActiveIndex(-1);
-            } else if (event.key === "Home") {
-              event.preventDefault();
-              setActiveIndex(0);
-            } else if (event.key === "End") {
-              event.preventDefault();
-              setActiveIndex(items.length - 1);
-            } else if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              if (activeItem) {
-                onSelect(activeItem);
-              }
-            }
-          }}
-          onMouseLeave={() => setActiveIndex(null)}
-          onMouseMove={updateActiveIndexFromPointer}
-          onMouseDown={(event) => {
-            if (timelineMinimapEventTargetsPreview(event.target)) {
-              return;
-            }
-            event.preventDefault();
-          }}
           style={{
             height: resolveTimelineMinimapHeightStyle(items.length),
             width: resolveTimelineMinimapInteractiveWidth(hitStripWidth, activeItem !== null),
           }}
-          type="button"
         >
-          <div className="absolute top-0 left-3 h-full w-px bg-border/15" />
-          {items.map((item, index) => {
-            const top = `${resolveTimelineMinimapTopPercent(index, items.length)}%`;
-            const activeDistance =
-              resolvedActiveIndex === null ? null : Math.abs(index - resolvedActiveIndex);
-            return (
-              // Compositor-friendly on purpose: in-view state and the hover
-              // fisheye animate constantly (every scroll tick and streaming
-              // update flips a band of strips), so the strip animates only
-              // transform and opacity. Width tiers are a scale-x on a fixed
-              // w-6 box, and the in-view highlight is an opacity-faded bright
-              // overlay — never background-color or width, which would force
-              // main-thread style/layout/paint at 60fps for each transition.
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "group/strip pointer-events-none absolute left-0 h-0.5 w-6 origin-left -translate-y-1/2 rounded-full transition-transform duration-150",
-                  activeDistance === 0 ? "bg-muted-foreground/75" : "bg-muted-foreground/35",
-                  activeDistance === 0
-                    ? "scale-x-100"
-                    : activeDistance === 1
-                      ? "scale-x-[0.667]"
-                      : activeDistance === 2
-                        ? "scale-x-[0.417]"
-                        : "scale-x-[0.333]",
-                )}
-                data-in-view="false"
-                data-minimap-strip
-                key={item.id}
-                ref={(node) => {
-                  if (node) {
-                    stripMap.set(item.id, node);
-                  } else {
-                    stripMap.delete(item.id);
-                  }
-                }}
-                style={{ top }}
-              >
-                <span className="absolute inset-0 rounded-full bg-foreground/90 opacity-0 transition-opacity duration-150 group-data-[in-view=true]/strip:opacity-100" />
-              </span>
-            );
-          })}
-          {activeItem ? (
-            <span
-              className="pointer-events-auto absolute left-8 w-80 cursor-text select-text"
-              data-minimap-preview
-              onMouseMove={(event) => event.stopPropagation()}
-              style={{
-                top: `${activeTopPercent}%`,
-                transform: `translateY(${activeTooltipTranslate})`,
-              }}
-            >
-              <span className="dropdown-glass block rounded-xl p-3 text-left text-popover-foreground shadow-xl shadow-black/25">
-                <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
-                  {activeItem.userText ?? "User message"}
+          <TimelineMinimapNavigationButton
+            interactive={hitStripWidth > 0}
+            direction="previous"
+            disabled={previousItem === null}
+            onClick={() => {
+              if (previousItem) onSelect(previousItem);
+            }}
+          />
+          <button
+            aria-label={`Jump to message: ${activeItem?.userText ?? "User message"}`}
+            className="absolute inset-y-0 left-0 w-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
+            onBlur={() => setActiveIndex(null)}
+            onClick={(event) => {
+              if (timelineMinimapEventTargetsPreview(event.target)) {
+                return;
+              }
+              const nextIndex = resolveActiveIndexFromPointer(event);
+              const selectedItem = nextIndex === null ? null : (items[nextIndex] ?? null);
+              if (selectedItem) {
+                onSelect(selectedItem);
+              }
+              event.currentTarget.blur();
+            }}
+            onFocus={() => setActiveIndex((current) => current ?? resolvedCurrentIndex ?? 0)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                moveActiveIndex(1);
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                moveActiveIndex(-1);
+              } else if (event.key === "Home") {
+                event.preventDefault();
+                setActiveIndex(0);
+              } else if (event.key === "End") {
+                event.preventDefault();
+                setActiveIndex(items.length - 1);
+              } else if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                if (activeItem) {
+                  onSelect(activeItem);
+                }
+              }
+            }}
+            onMouseLeave={() => setActiveIndex(null)}
+            onMouseMove={updateActiveIndexFromPointer}
+            onMouseDown={(event) => {
+              if (timelineMinimapEventTargetsPreview(event.target)) {
+                return;
+              }
+              event.preventDefault();
+            }}
+            tabIndex={hitStripWidth > 0 ? 0 : -1}
+            type="button"
+          >
+            <div className="absolute top-0 left-3 h-full w-px bg-border/15" />
+            {items.map((item, index) => {
+              const top = `${resolveTimelineMinimapTopPercent(index, items.length)}%`;
+              const activeDistance =
+                resolvedActiveIndex === null ? null : Math.abs(index - resolvedActiveIndex);
+              return (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "group/strip pointer-events-none absolute left-0 h-0.5 w-6 origin-left -translate-y-1/2 rounded-full transition-transform duration-150",
+                    activeDistance === 0 ? "bg-muted-foreground/75" : "bg-muted-foreground/35",
+                    activeDistance === 0
+                      ? "scale-x-100"
+                      : activeDistance === 1
+                        ? "scale-x-[0.667]"
+                        : activeDistance === 2
+                          ? "scale-x-[0.417]"
+                          : "scale-x-[0.333]",
+                  )}
+                  data-in-view="false"
+                  data-minimap-strip
+                  key={item.id}
+                  ref={(node) => {
+                    if (node) {
+                      stripMap.set(item.id, node);
+                    } else {
+                      stripMap.delete(item.id);
+                    }
+                  }}
+                  style={{ top }}
+                >
+                  <span className="absolute inset-0 rounded-full bg-foreground/90 opacity-0 transition-opacity duration-150 group-data-[in-view=true]/strip:opacity-100" />
                 </span>
-                {activeItem.assistantText ? (
-                  <span
-                    className="mt-1 max-h-[3.75rem] overflow-hidden text-muted-foreground text-sm leading-5"
-                    style={{
-                      display: "-webkit-box",
-                      WebkitBoxOrient: "vertical",
-                      WebkitLineClamp: 3,
-                    }}
-                  >
-                    {activeItem.assistantText}
+              );
+            })}
+            {activeItem ? (
+              <span
+                className="pointer-events-auto absolute left-8 w-80 cursor-text select-text"
+                data-minimap-preview
+                onMouseMove={(event) => event.stopPropagation()}
+                style={{
+                  top: `${activeTopPercent}%`,
+                  transform: `translateY(${activeTooltipTranslate})`,
+                }}
+              >
+                <span className="dropdown-glass block rounded-xl p-3 text-left text-popover-foreground shadow-xl shadow-black/25">
+                  <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
+                    {activeItem.userText ?? "User message"}
                   </span>
-                ) : null}
+                  {activeItem.assistantText ? (
+                    <span
+                      className="mt-1 max-h-[3.75rem] overflow-hidden text-muted-foreground text-sm leading-5"
+                      style={{
+                        display: "-webkit-box",
+                        WebkitBoxOrient: "vertical",
+                        WebkitLineClamp: 3,
+                      }}
+                    >
+                      {activeItem.assistantText}
+                    </span>
+                  ) : null}
+                </span>
               </span>
-            </span>
-          ) : null}
-        </button>
+            ) : null}
+          </button>
+          <TimelineMinimapNavigationButton
+            interactive={hitStripWidth > 0}
+            direction="next"
+            disabled={nextItem === null}
+            onClick={() => {
+              if (nextItem) onSelect(nextItem);
+            }}
+          />
+        </div>
       </div>
     </div>
+  );
+}
+
+function TimelineMinimapNavigationButton({
+  interactive,
+  direction,
+  disabled,
+  onClick,
+}: {
+  interactive: boolean;
+  direction: "previous" | "next";
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const previous = direction === "previous";
+  const label = previous ? "Previous turn" : "Next turn";
+  const Icon = previous ? ChevronUpIcon : ChevronDownIcon;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "absolute left-1 z-10 inline-flex -translate-x-1/2 opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100",
+              interactive ? "pointer-events-auto" : "pointer-events-none",
+              previous ? "bottom-[calc(100%+2px)]" : "top-[calc(100%+2px)]",
+            )}
+          />
+        }
+      >
+        <Button
+          aria-label={label}
+          disabled={disabled || !interactive}
+          onClick={onClick}
+          size="icon-micro"
+          type="button"
+          variant="ghost-muted"
+        >
+          <Icon className="size-4 text-foreground/90" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipPopup side={previous ? "top" : "bottom"}>{label}</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -995,7 +1167,17 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     >
       {row.kind === "chat-cleared" ? <ChatClearedTimelineRow /> : null}
       {row.kind === "day-divider" ? <DayDividerTimelineRow row={row} /> : null}
-      {row.kind === "work" ? <WorkGroupSection groupedEntries={row.groupedEntries} /> : null}
+      {row.kind === "work" ? (
+        row.liveEntry ? (
+          <LiveWorkGroupSection
+            groupedEntries={row.groupedEntries}
+            entry={row.liveEntry}
+            startedAt={row.liveStartedAt ?? null}
+          />
+        ) : (
+          <WorkGroupSection groupedEntries={row.groupedEntries} />
+        )
+      ) : null}
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
       {row.kind === "attempt-fold" ? <AttemptFoldTimelineRow row={row} /> : null}
       {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
@@ -1196,15 +1378,19 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       />
                     </button>
                   ) : attachment.type === "video" && attachment.previewUrl ? (
-                    <video
+                    <MediaVideoPlayer
                       src={attachment.previewUrl}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      className="block h-auto max-h-[220px] w-full bg-black object-contain"
+                      label={attachment.name}
+                      className="block w-full"
+                      videoClassName="block h-auto max-h-[220px] w-full bg-black object-contain"
+                      actionsSource={{
+                        kind: "video",
+                        name: attachment.name,
+                        src: attachment.previewUrl,
+                      }}
                     />
                   ) : (
-                    <MessageFileAttachmentTile attachment={attachment} />
+                    <MessageFileAttachmentTile attachment={attachment} threadRef={ctx.threadRef} />
                   )}
                   <MessageAttachmentPlacement
                     attachment={attachment}
@@ -1261,7 +1447,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           ) : null}
         </div>
       ) : null}
-      <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
+      <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
             <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -1416,14 +1602,23 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
-        <ChatMarkdown
-          text={messageText}
-          cwd={ctx.markdownCwd}
+        <AssistantCitationSource
+          messageId={row.message.id}
           threadRef={ctx.threadRef ?? undefined}
-          isStreaming={Boolean(row.message.streaming)}
-          lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-          skills={ctx.skills}
-        />
+          itemKey={row.id}
+          request={ctx.citationRequest}
+          listRef={ctx.listRef}
+        >
+          <ChatMarkdown
+            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+            text={messageText}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            isStreaming={Boolean(row.message.streaming)}
+            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+            skills={ctx.skills}
+          />
+        </AssistantCitationSource>
         {attachments.length > 0 ? <AssistantMessageAttachments attachments={attachments} /> : null}
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
@@ -1531,13 +1726,12 @@ function AssistantMessageAttachments({
               key={attachment.id}
               className="min-w-0 overflow-hidden rounded-xl border border-border/60 bg-muted/20 sm:col-span-2"
             >
-              <video
+              <MediaVideoPlayer
                 src={attachment.previewUrl}
-                controls
-                playsInline
-                preload="metadata"
-                aria-label={attachment.name}
-                className="block max-h-[32rem] w-full bg-black object-contain"
+                label={attachment.name}
+                className="block w-full"
+                videoClassName="block max-h-[32rem] w-full bg-black object-contain"
+                actionsSource={{ kind: "video", name: attachment.name, src: attachment.previewUrl }}
               />
               <figcaption className="truncate border-t border-border/50 px-2.5 py-1.5 text-[11px] text-muted-foreground">
                 {attachment.name}
@@ -1885,6 +2079,7 @@ function V2EventTimelineRow({
           {presentation.detail ? (
             <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
               <ChatMarkdown
+                onUseArtifactTemplate={ctx.onUseArtifactTemplate}
                 text={presentation.detail}
                 cwd={ctx.markdownCwd}
                 threadRef={ctx.threadRef ?? undefined}
@@ -1916,24 +2111,18 @@ function V2EventTimelineRow({
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
+  const { isPreparingWorktree } = use(TimelineRowActivityCtx);
   return (
-    <div className="py-0.5 pl-1.5">
-      <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70 tabular-nums">
-        <span className="inline-flex items-center gap-[3px]">
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
-        </span>
-        <span>
-          {row.createdAt ? (
-            <>
-              Working for <WorkingTimer createdAt={row.createdAt} />
-            </>
-          ) : (
-            "Working..."
-          )}
-        </span>
-      </div>
+    <div className="min-h-6 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
+      {isPreparingWorktree ? (
+        <ActivityFocusText text="Setting up worktree…" />
+      ) : row.createdAt ? (
+        <>
+          Working for <WorkingTimer createdAt={row.createdAt} />
+        </>
+      ) : (
+        <ActivityFocusText text="Thinking…" />
+      )}
     </div>
   );
 }
@@ -1971,6 +2160,161 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
 // re-render only the affected row, not the entire list.
 // ---------------------------------------------------------------------------
 
+/** Reader choices survive both group collapse and the outer timeline virtualizer. */
+function useWorkHistoryExpansion(key: string, defaultExpanded: boolean) {
+  const { workGroupHistory } = use(TimelineRowCtx);
+  const [choice, setChoice] = useState(() => ({ key, value: workGroupHistory.get(key)?.expanded }));
+  if (choice.key !== key) setChoice({ key, value: workGroupHistory.get(key)?.expanded });
+  const expanded =
+    (choice.key === key ? choice.value : workGroupHistory.get(key)?.expanded) ?? defaultExpanded;
+  const toggle = useCallback(() => {
+    workGroupHistory.set(key, { expanded: !expanded });
+    setChoice({ key, value: !expanded });
+  }, [expanded, key, workGroupHistory]);
+  return [expanded, toggle] as const;
+}
+
+function ExpandedToolHistory({
+  entries,
+  anchorKey,
+  label,
+}: {
+  entries: TimelineWorkEntry[];
+  anchorKey: string;
+  label: string;
+}) {
+  const { workGroupHistory, workspaceRoot } = use(TimelineRowCtx);
+  const listRef = useRef<LegendListRef>(null);
+  const [initialScrollIndex] = useState(() =>
+    restoreWorkGroupAnchor(entries, workGroupHistory.get(anchorKey)?.anchor),
+  );
+  const [restoring, setRestoring] = useState(initialScrollIndex !== undefined);
+  const atEnd = useRef(false);
+  const [append, setAppend] = useState({ entries, follow: false });
+  if (append.entries !== entries)
+    setAppend({
+      entries,
+      follow: shouldFollowWorkGroupAppend(append.entries, entries, atEnd.current),
+    });
+  const savePosition = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const state = list.getState();
+    const anchor = captureWorkGroupAnchor(state);
+    if (anchor) workGroupHistory.set(anchorKey, { anchor });
+    const node = list.getScrollableNode();
+    if (node) atEnd.current = node.scrollHeight - node.clientHeight - node.scrollTop <= 1;
+  }, [anchorKey, workGroupHistory]);
+  const handleLoad = useCallback(() => {
+    const list = listRef.current;
+    const node = list?.getScrollableNode();
+    if (list && node && initialScrollIndex) {
+      const offset = Math.max(
+        0,
+        Math.min(list.getState().scroll, node.scrollHeight - node.clientHeight),
+      );
+      if (Math.abs(node.scrollTop - offset) > 1)
+        void list.scrollToOffset({ offset, animated: false });
+    }
+    setRestoring(false);
+    savePosition();
+  }, [initialScrollIndex, savePosition]);
+  return (
+    <div className="overflow-hidden rounded-md border border-border/50">
+      <LegendList
+        ref={listRef}
+        data={entries}
+        keyExtractor={(item) => item.id}
+        estimatedItemSize={40}
+        style={{ height: Math.min(320, Math.max(80, entries.length * 40)) }}
+        {...(initialScrollIndex ? { initialScrollIndex } : {})}
+        {...(restoring && initialScrollIndex
+          ? { alwaysRender: { indices: [initialScrollIndex.index] } }
+          : {})}
+        maintainVisibleContentPosition
+        maintainScrollAtEnd={append.follow ? { animated: false, on: { dataChange: true } } : false}
+        onLoad={handleLoad}
+        onScroll={savePosition}
+        tabIndex={0}
+        role="region"
+        aria-label={label}
+        className="scrollbar-gutter-stable focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        renderItem={({ item }) => (
+          <SimpleWorkEntryRow workEntry={item} workspaceRoot={workspaceRoot} />
+        )}
+      />
+    </div>
+  );
+}
+
+/** One current operation, with its history mounted only on explicit expansion. */
+function LiveWorkGroupSection({
+  groupedEntries,
+  entry,
+  startedAt,
+}: {
+  groupedEntries: TimelineWorkEntry[];
+  entry: TimelineWorkEntry;
+  startedAt: string | null;
+}) {
+  const { workspaceRoot, alwaysExpandActivity } = use(TimelineRowCtx);
+  const anchorKey = `group:${groupedEntries[0]?.id ?? entry.id}`;
+  const [expanded, toggleExpanded] = useWorkHistoryExpansion(anchorKey, alwaysExpandActivity);
+  const visible = useMemo(() => groupedEntries.filter(workLogEntryIsVisible), [groupedEntries]);
+  const background = useMemo(
+    () =>
+      visible.filter((candidate) => {
+        const item = candidate.projectedItem?.item;
+        return item !== undefined && orchestrationV2CommandExecutionIsLiveInBackground(item);
+      }),
+    [visible],
+  );
+  const label = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
+  return (
+    <section aria-label="Current activity" className="min-w-0 space-y-1">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={toggleExpanded}
+        className="flex min-h-7 w-full items-center gap-2 rounded-md px-1 text-left text-xs text-foreground/80 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+      >
+        <ChevronRightIcon
+          aria-hidden
+          className={cn(
+            "size-3.5 shrink-0 transition-transform motion-reduce:transition-none",
+            expanded && "rotate-90",
+          )}
+        />
+        <Tooltip>
+          <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
+            <ActivityFocusText text={label} active={entry.toolLifecycleStatus === "inProgress"} />
+          </TooltipTrigger>
+          <TooltipPopup>{label}</TooltipPopup>
+        </Tooltip>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          {visible.length} {visible.length === 1 ? "tool call" : "tool calls"}
+        </span>
+        {startedAt && (
+          <span className="shrink-0 text-[11px] text-muted-foreground">
+            <WorkingTimer createdAt={startedAt} />
+          </span>
+        )}
+      </button>
+      {expanded ? (
+        <ExpandedToolHistory
+          entries={visible}
+          anchorKey={anchorKey}
+          label="Tool activity history"
+        />
+      ) : (
+        background.map((item) => (
+          <SimpleWorkEntryRow key={item.id} workEntry={item} workspaceRoot={workspaceRoot} />
+        ))
+      )}
+    </section>
+  );
+}
+
 /** Collapsed state shows the earliest chunk so "Show more" only appends rows downward. */
 const WorkGroupSection = memo(function WorkGroupSection({
   groupedEntries,
@@ -1978,19 +2322,20 @@ const WorkGroupSection = memo(function WorkGroupSection({
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
   const { workspaceRoot, alwaysExpandActivity } = use(TimelineRowCtx);
-  const [isExpanded, setIsExpanded] = useState(alwaysExpandActivity);
-  // Flipping the setting has to reach groups that are already mounted, while
-  // still leaving a per-group toggle that outlives the next render.
-  const [appliedAlwaysExpand, setAppliedAlwaysExpand] = useState(alwaysExpandActivity);
-  if (appliedAlwaysExpand !== alwaysExpandActivity) {
-    setAppliedAlwaysExpand(alwaysExpandActivity);
-    setIsExpanded(alwaysExpandActivity);
-  }
+  const anchorKey = `group:${groupedEntries[0]?.id ?? "empty"}`;
+  const [isExpanded, toggleHistoryExpanded] = useWorkHistoryExpansion(
+    anchorKey,
+    alwaysExpandActivity,
+  );
   const sectionRef = useRef<HTMLElement>(null);
   const anchorBottomBeforeToggleRef = useRef<number | null>(null);
   const nonEmptyEntries = useMemo(
     () => groupedEntries.filter(workLogEntryIsVisible),
     [groupedEntries],
+  );
+  const historicalSummary = useMemo(
+    () => resolveHistoricalWorkSummary(nonEmptyEntries),
+    [nonEmptyEntries],
   );
   const hasOverflow = nonEmptyEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleEntries = useMemo(
@@ -2043,48 +2388,95 @@ const WorkGroupSection = memo(function WorkGroupSection({
   const toggleExpanded = () => {
     anchorBottomBeforeToggleRef.current =
       sectionRef.current?.getBoundingClientRect().bottom ?? null;
-    setIsExpanded((v) => !v);
+    toggleHistoryExpanded();
   };
 
   if (nonEmptyEntries.length === 0) return null;
 
   return (
     <section ref={sectionRef} className="-mx-1 space-y-0.5 px-1 py-0.5" aria-label={groupLabel}>
-      {!onlyToolEntries && (
-        <p className="px-0.5 pb-0.5 font-medium text-[11px] text-muted-foreground/65">
-          {groupLabel}
-        </p>
-      )}
-      <div className="space-y-px">
-        {visibleEntries.map((workEntry) => (
-          <SimpleWorkEntryRow
-            key={workEntry.id}
-            workEntry={workEntry}
-            workspaceRoot={workspaceRoot}
-          />
-        ))}
-      </div>
-      {hasOverflow && showOverflowControl && (
-        <button
-          type="button"
-          className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-          onClick={toggleExpanded}
-        >
-          <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
-            {isExpanded ? (
-              <ChevronUpIcon className="size-3.5 shrink-0 opacity-70" />
-            ) : (
-              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
-            )}
-          </span>
-          {isExpanded ? (
-            <span className="font-medium text-foreground/82">Show fewer tool calls</span>
-          ) : (
-            <span className="font-medium text-foreground/82">
-              +{hiddenCount} previous tool {hiddenCount === 1 ? "call" : "calls"}
-            </span>
+      {historicalSummary ? (
+        <>
+          <button
+            type="button"
+            aria-expanded={isExpanded}
+            onClick={toggleHistoryExpanded}
+            className="flex min-h-7 w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+          >
+            <ToolSourceIcon
+              icon={
+                nonEmptyEntries.every(
+                  (entry) =>
+                    entry.toolSource?.key &&
+                    entry.toolSource.key === nonEmptyEntries[0]?.toolSource?.key &&
+                    workEntryIconName(entry) !== "pull-request",
+                )
+                  ? nonEmptyEntries[0]?.toolSource?.icon
+                  : undefined
+              }
+              fallbackName={
+                new Set(nonEmptyEntries.map(workEntryIconName)).size === 1
+                  ? workEntryIconName(nonEmptyEntries[0]!)
+                  : "hammer"
+              }
+              className="size-4 shrink-0 opacity-70"
+            />
+            <span className="min-w-0 flex-1 truncate">{historicalSummary}</span>
+            <ChevronRightIcon
+              aria-hidden
+              className={cn(
+                "size-3.5 shrink-0 transition-transform motion-reduce:transition-none",
+                isExpanded && "rotate-90",
+              )}
+            />
+          </button>
+          {isExpanded && (
+            <ExpandedToolHistory
+              entries={nonEmptyEntries}
+              anchorKey={anchorKey}
+              label="Completed tool activity"
+            />
           )}
-        </button>
+        </>
+      ) : (
+        <>
+          {!onlyToolEntries && (
+            <p className="px-0.5 pb-0.5 font-medium text-[11px] text-muted-foreground/65">
+              {groupLabel}
+            </p>
+          )}
+          <div className="space-y-px">
+            {visibleEntries.map((workEntry) => (
+              <SimpleWorkEntryRow
+                key={workEntry.id}
+                workEntry={workEntry}
+                workspaceRoot={workspaceRoot}
+              />
+            ))}
+          </div>
+          {hasOverflow && showOverflowControl && (
+            <button
+              type="button"
+              className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+              onClick={toggleExpanded}
+            >
+              <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
+                {isExpanded ? (
+                  <ChevronUpIcon className="size-3.5 shrink-0 opacity-70" />
+                ) : (
+                  <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
+                )}
+              </span>
+              {isExpanded ? (
+                <span className="font-medium text-foreground/82">Show fewer tool calls</span>
+              ) : (
+                <span className="font-medium text-foreground/82">
+                  +{hiddenCount} previous tool {hiddenCount === 1 ? "call" : "calls"}
+                </span>
+              )}
+            </button>
+          )}
+        </>
       )}
     </section>
   );
@@ -2370,6 +2762,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         {leadingWhitespace ? <span aria-hidden="true">{leadingWhitespace}</span> : null}
         {content ? (
           <ChatMarkdown
+            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
             text={content}
             cwd={props.markdownCwd}
             threadRef={ctx.threadRef ?? undefined}
@@ -2393,6 +2786,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             segment.text.trim().length > 0 ? (
               <div key={segment.id} className="wrap-break-word">
                 <ChatMarkdown
+                  onUseArtifactTemplate={ctx.onUseArtifactTemplate}
                   text={segment.text.trim()}
                   cwd={props.markdownCwd}
                   threadRef={ctx.threadRef ?? undefined}
@@ -2481,6 +2875,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     if (props.text.length > 0) {
       inlineNodes.push(
         <ChatMarkdown
+          onUseArtifactTemplate={ctx.onUseArtifactTemplate}
           key="user-message-terminal-context-inline-text"
           text={props.text}
           cwd={props.markdownCwd}
@@ -2508,6 +2903,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
 
   return (
     <ChatMarkdown
+      onUseArtifactTemplate={ctx.onUseArtifactTemplate}
       text={props.text}
       cwd={props.markdownCwd}
       threadRef={ctx.threadRef ?? undefined}
@@ -2544,6 +2940,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
       )}
       {fenceLanguage !== "diff" && comment.diff.trim().length > 0 && (
         <ChatMarkdown
+          onUseArtifactTemplate={ctx.onUseArtifactTemplate}
           text={formatReviewCommentFence(fenceLanguage, comment.diff)}
           cwd={ctx.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
@@ -2553,15 +2950,17 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
       )}
       {renderablePatch?.kind === "files" &&
         renderablePatch.files.map((fileDiff) => (
-          <FileDiff
-            key={resolveFileDiffPath(fileDiff)}
-            fileDiff={fileDiff}
-            options={{
-              collapsed: false,
-              diffStyle: "unified",
-              theme: resolveDiffThemeName(ctx.resolvedTheme),
-            }}
-          />
+          <DiffWorkerPoolProvider key={resolveFileDiffPath(fileDiff)}>
+            <FileDiff
+              fileDiff={fileDiff}
+              options={{
+                collapsed: false,
+                diffStyle: "unified",
+                theme: resolveDiffThemeName(ctx.resolvedTheme),
+                preferredHighlighter: PREFERRED_HIGHLIGHTER,
+              }}
+            />
+          </DiffWorkerPoolProvider>
         ))}
       {renderablePatch?.kind === "raw" && (
         <pre className="overflow-x-auto rounded-md bg-muted/40 p-2 text-xs">
@@ -2656,6 +3055,9 @@ function formatWorkingTimerNow(startIso: string): string {
 }
 
 type WorkEntryIconName =
+  | "pull-request"
+  | "computer"
+  | "hammer"
   | "bot"
   | "check"
   | "circle-alert"
@@ -2670,6 +3072,12 @@ type WorkEntryIconName =
 
 function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; className: string }) {
   switch (name) {
+    case "computer":
+      return <MonitorIcon className={className} aria-hidden />;
+    case "pull-request":
+      return <GitPullRequestIcon className={className} aria-hidden />;
+    case "hammer":
+      return <HammerIcon className={className} aria-hidden />;
     case "bot":
       return <BotIcon className={className} aria-hidden />;
     case "check":
@@ -2852,6 +3260,15 @@ const toolCallExpandedBodyClassName =
   "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
+  const item = workEntry.projectedItem?.item;
+  const presentation = resolveTimelineToolPresentation(
+    item?.type === "dynamic_tool" ? item.toolName : (workEntry.toolTitle ?? workEntry.label),
+    workEntry.toolLifecycleStatus,
+    item?.type === "dynamic_tool" ? item.input : undefined,
+  );
+  if (presentation?.logo === "pull-request") return "pull-request";
+  if (presentation?.logo === "browser" || workEntry.toolSurface === "browser") return "globe";
+  if (workEntry.toolSurface === "computer") return "computer";
   if (workEntry.itemType === "user_input_request") {
     return "message-circle";
   }
@@ -2917,7 +3334,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const { workEntry, workspaceRoot } = props;
   const activity = use(TimelineRowActivityCtx);
   const ctx = use(TimelineRowCtx);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, toggleExpanded] = useWorkHistoryExpansion(
+    `entry:${workEntry.id}`,
+    ctx.alwaysExpandActivity,
+  );
   const backgroundItem = backgroundProcessItemFromWorkEntry(workEntry);
   if (backgroundItem !== null) {
     // A command detached from its turn cannot be a one-line tool row: the row
@@ -2927,7 +3347,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = false;
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
-  const toolPresentation = resolveTimelineToolPresentation(workEntry.toolTitle ?? workEntry.label);
+  const item = workEntry.projectedItem?.item;
+  const toolPresentation = resolveTimelineToolPresentation(
+    item?.type === "dynamic_tool" ? item.toolName : (workEntry.toolTitle ?? workEntry.label),
+    workEntry.toolLifecycleStatus,
+    item?.type === "dynamic_tool" ? item.input : undefined,
+  );
   const heading = toolPresentation?.displayName ?? toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
   const preview =
@@ -2977,11 +3402,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         role: "button" as const,
         tabIndex: 0 as const,
         "aria-label": displayText,
-        onClick: () => setExpanded((v) => !v),
+        onClick: toggleExpanded,
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setExpanded((v) => !v);
+            toggleExpanded();
           }
         },
       }
@@ -2994,6 +3419,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         canExpand &&
           "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
       )}
+      ref={showRunningIndicator ? observeVisibleAnimation : undefined}
       data-tool-logo={toolPresentation?.logo}
       data-tool-call-status={lifecycleStatus}
       data-v2-item-type={workEntry.projectedItem?.item.type}
@@ -3005,8 +3431,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           {toolPresentation?.logo === "t3-code" ? (
             <T3CodeToolLogo />
           ) : (
-            <WorkEntryIconSvg
-              name={entryIconName}
+            <ToolSourceIcon
+              icon={workEntry.toolIcon ?? workEntry.toolSource?.icon}
+              fallbackName={entryIconName}
               className="block size-3.5 shrink-0 stroke-[1.8] opacity-80"
             />
           )}
@@ -3082,7 +3509,13 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       />
                     }
                   >
-                    <XIcon className="block size-3 shrink-0 text-destructive" aria-hidden />
+                    <CircleAlertIcon
+                      className={cn(
+                        "block size-3 shrink-0",
+                        showDestructiveRowStyle ? "text-destructive" : "text-muted-foreground",
+                      )}
+                      aria-hidden
+                    />
                   </TooltipTrigger>
                   <TooltipPopup>Failed</TooltipPopup>
                 </Tooltip>
@@ -3156,3 +3589,89 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     </div>
   );
 });
+
+function ToolSourceIcon({
+  icon,
+  fallbackName,
+  className,
+}: {
+  icon: ToolActivityIcon | undefined;
+  fallbackName: WorkEntryIconName;
+  className: string;
+}) {
+  const { resolvedTheme } = use(TimelineRowCtx);
+  if (icon?._tag === "native-app")
+    return <NativeAppSourceIcon app={icon.app} fallbackName={fallbackName} className={className} />;
+  return (
+    <ToolSourceImageIcon
+      icon={icon}
+      fallbackName={fallbackName}
+      className={className}
+      resolvedTheme={resolvedTheme}
+    />
+  );
+}
+
+function ToolSourceImageIcon({
+  icon,
+  fallbackName,
+  className,
+  resolvedTheme,
+}: {
+  icon: ToolActivityIcon | undefined;
+  fallbackName: WorkEntryIconName;
+  className: string;
+  resolvedTheme: "light" | "dark";
+}) {
+  const src =
+    icon?._tag === "website"
+      ? toolActivityFaviconUrl(icon, resolvedTheme)
+      : icon?._tag === "themed-logo"
+        ? resolvedTheme === "dark"
+          ? (icon.logoUrlDark ?? icon.logoUrl)
+          : icon.logoUrl
+        : null;
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  if (!src || failedSrc === src)
+    return <WorkEntryIconSvg name={fallbackName} className={className} />;
+  return (
+    <span className={cn(className, "relative inline-block")}>
+      {loadedSrc !== src && <WorkEntryIconSvg name={fallbackName} className="size-full" />}
+      <img
+        src={src}
+        alt=""
+        aria-hidden
+        decoding="async"
+        referrerPolicy="no-referrer"
+        className={cn(
+          "absolute inset-0 size-full rounded-[3px] object-contain",
+          loadedSrc !== src && "opacity-0",
+        )}
+        onLoad={() => setLoadedSrc(src)}
+        onError={() => setFailedSrc(src)}
+      />
+    </span>
+  );
+}
+
+function NativeAppSourceIcon({
+  app,
+  fallbackName,
+  className,
+}: {
+  app: Extract<ToolActivityIcon, { _tag: "native-app" }>["app"];
+  fallbackName: WorkEntryIconName;
+  className: string;
+}) {
+  const { activeThreadEnvironmentId, resolvedTheme } = use(TimelineRowCtx);
+  const asset = useAssetUrlState(activeThreadEnvironmentId, { _tag: "native-app-icon", app });
+  return (
+    <ToolSourceImageIcon
+      icon={asset._tag === "Success" ? { _tag: "themed-logo", logoUrl: asset.url } : undefined}
+      fallbackName={fallbackName}
+      className={className}
+      resolvedTheme={resolvedTheme}
+    />
+  );
+}

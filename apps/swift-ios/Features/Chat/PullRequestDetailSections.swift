@@ -3,10 +3,11 @@ import Foundation
 // The pull-request sheet's rules, kept apart from the view so the timeline
 // merge and the status vocabulary are testable without SwiftUI.
 
-/// The two read-only halves of a change request the sheet offers.
+/// Sections of a change request available from a thread or the workspace.
 enum PullRequestDetailTab: String, CaseIterable {
     case summary = "Summary"
     case timeline = "Timeline"
+    case code = "Code"
 }
 
 /// A color the view resolves to a `T3Colors` token. Logic names the meaning;

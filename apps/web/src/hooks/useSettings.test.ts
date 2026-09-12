@@ -51,6 +51,26 @@ describe("resolveEnvironmentIdentificationMode", () => {
 });
 
 describe("mergeEnvironmentSettings", () => {
+  it("uses server settlement preferences only when the environment supports automatic settlement", () => {
+    const server = {
+      ...DEFAULT_SERVER_SETTINGS,
+      sidebarAutoSettleAfterDays: 7,
+      sidebarAutoSettleOnMerge: true,
+    };
+    const client = {
+      ...DEFAULT_CLIENT_SETTINGS,
+      sidebarAutoSettleAfterDays: null,
+      sidebarAutoSettleOnMerge: false,
+    };
+    expect(mergeEnvironmentSettings(server, client, true)).toMatchObject({
+      sidebarAutoSettleAfterDays: 7,
+      sidebarAutoSettleOnMerge: true,
+    });
+    expect(mergeEnvironmentSettings(server, client, false)).toMatchObject({
+      sidebarAutoSettleAfterDays: null,
+      sidebarAutoSettleOnMerge: false,
+    });
+  });
   it("combines the selected environment's server settings with client preferences", () => {
     const serverSettings = {
       ...DEFAULT_SERVER_SETTINGS,

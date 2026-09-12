@@ -1,3 +1,6 @@
+import { agentBrowserAccessEnabled } from "./AgentBrowserAccessPolicy.ts";
+import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
+import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -25,7 +28,7 @@ import { layerFromOrchestrationEventStore as eventStoreLayer } from "./EventStor
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
 import { layer as legacyV1ThreadImporterLayer } from "./LegacyV1ThreadImporter.ts";
 import { layer as orchestratorLayer } from "./Orchestrator.ts";
-import { layer as projectionStoreLayer } from "./ProjectionStore.ts";
+import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
 import { layer as projectionMaintenanceLayer } from "./ProjectionMaintenance.ts";
 import { layerFromProviderInstanceRegistry as providerAdapterRegistryLayerFromProviderInstances } from "./ProviderAdapterRegistry.ts";
 import { layer as providerContinuationRequestsLayer } from "./ProviderContinuationRequests.ts";
@@ -109,27 +112,11 @@ const providerSwitchServiceProvided = providerSwitchServiceLayer.pipe(
   Layer.provide(providerAdapterRegistryProvided),
 );
 
-/**
- * Denies on an unreadable settings file rather than letting the read failure
- * escape into session startup: an explicit "off" silently becoming "on" would
- * violate the user's stated choice, whereas the reverse costs an agent one
- * toolset and is visible immediately.
- */
-const agentBrowserAccessEnabled = ServerSettingsService.pipe(
-  Effect.flatMap((serverSettings) => serverSettings.getSettings),
-  Effect.map((settings) => settings.enableAgentBrowserAccess),
-  Effect.catch((cause) =>
-    Effect.logWarning(
-      "Could not read server settings; withholding agent browser access for this session.",
-      { cause },
-    ).pipe(Effect.as(false)),
-  ),
-);
-
 const providerSessionManagerProvided = Layer.unwrap(
-  Effect.map(Effect.context<ServerSettingsService>(), (context) =>
+  Effect.map(Effect.context<ServerSettingsService | ProjectionStoreV2>(), (context) =>
     providerSessionManagerLayerWithOptions({
-      agentBrowserAccessEnabled: Effect.provideContext(agentBrowserAccessEnabled, context),
+      agentBrowserAccessEnabled: (threadId) =>
+        Effect.provideContext(agentBrowserAccessEnabled(threadId), context),
     }),
   ),
 ).pipe(
@@ -332,7 +319,16 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   threadFeedbackServiceProvided,
 );
 
+const agentSessionScannerProvided = AgentSessionScanner.layer.pipe(
+  Layer.provide(ProjectServiceLayerLive),
+);
+const agentSessionImporterProvided = AgentSessionImporter.layer.pipe(
+  Layer.provide(Layer.mergeAll(agentSessionScannerProvided, eventSinkProvided, idAllocatorLayer)),
+);
+
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
+  agentSessionScannerProvided,
+  agentSessionImporterProvided,
   OrchestrationLayerLive,
   OrchestrationV2LayerLive,
   threadTitleRegenerationWorkerProvided,

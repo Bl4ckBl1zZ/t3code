@@ -1,3 +1,9 @@
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as RestartContinuationService from "./orchestration-v2/RestartContinuationService.ts";
+import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
+import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
+import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
+import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import { EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
@@ -28,6 +34,7 @@ import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
+import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -197,6 +204,7 @@ const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
 const UsageLayerLive = UsageService.layer.pipe(Layer.provide(ServerSettingsLayerLive));
 
 const ResourceDiagnosticsLayerLive = Layer.mergeAll(
+  HostResources.layer,
   ResourceTelemetryLayerLive,
   ProcessDiagnostics.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
@@ -323,6 +331,7 @@ const GitLayerLive = Layer.empty.pipe(
 );
 
 const ProjectTeardownScriptRunnerLayerLive = ProjectTeardownScriptRunner.layer.pipe(
+  Layer.provide(ServerSettingsLayerLive),
   Layer.provide(ProjectServiceLayerLive),
   Layer.provide(ProcessRunner.layer),
 );
@@ -350,7 +359,17 @@ const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(GitWorkflowLayerLive),
   Layer.provideMerge(ReviewLayerLive),
   Layer.provideMerge(SourceControlRepositoryServiceLayerLive),
-  Layer.provideMerge(VcsStatusBroadcaster.layer.pipe(Layer.provide(GitWorkflowLayerLive))),
+  Layer.provideMerge(
+    VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(GitWorkflowLayerLive),
+      Layer.provide(
+        VcsStatusBroadcaster.autoPullPolicyLayer.pipe(
+          Layer.provide(ProjectServiceLayerLive),
+          Layer.provide(ServerSettingsLayerLive),
+        ),
+      ),
+    ),
+  ),
 );
 
 const CheckpointStoreLayerLive = CheckpointStore.layer.pipe(
@@ -360,6 +379,7 @@ const CheckpointStoreLayerLive = CheckpointStore.layer.pipe(
 const PortScannerLayerLive = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
 
 const TerminalLayerLive = TerminalManager.layer.pipe(
+  Layer.provide(ServerSettingsLayerLive),
   Layer.provide(PtyAdapterLive),
   Layer.provide(PortScannerLayerLive),
 );
@@ -476,6 +496,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
+  Layer.provideMerge(NativeAppIconResolver.layer),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
@@ -513,6 +534,7 @@ const commandReadinessLayer = HttpRouter.middleware(
 );
 
 const PullRequestServiceLive = PullRequestService.layer.pipe(
+  Layer.provide(PullRequestReadCache.layer),
   // One registry entry per supported host; the service only knows the registry.
   Layer.provide(PullRequestProviderRegistry.layer),
   Layer.provide(SourceControlProviderRegistryLayerLive),
@@ -737,7 +759,18 @@ export const makeServerLayer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          PullRequestSyncReactor.layer,
+          ThreadPullRequestReactor.layer,
+          ThreadSettlementReactor.layer,
+          RestartContinuationService.layer,
+        ).pipe(Layer.provide(PullRequestServiceLive)),
+      ),
+      Layer.provideMerge(RuntimeDependenciesLive),
+      Layer.provide(launcherLayer),
+    );
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,

@@ -36,12 +36,23 @@ public protocol FeatureThreadRoleAssigning: AnyObject {
 /// time so the caller can merge and report partial coverage per environment.
 @MainActor
 public protocol FeatureUsageReading: AnyObject {
+    func refreshUsageRates(environmentID: String) async throws
+    func usageSummary(environmentID: String, input: UsageSummaryInput) async throws -> UsageSummary
     func usageSummary(
         environmentID: String,
         sinceDay: String,
         untilDay: String,
         timeZone: String
     ) async throws -> UsageSummary
+}
+
+public extension FeatureUsageReading {
+    func usageSummary(environmentID: String, input: UsageSummaryInput) async throws -> UsageSummary {
+        guard input.resolution == "day" else { throw RPCError.protocolViolation("This connection does not support hourly usage.") }
+        return try await usageSummary(environmentID: environmentID, sinceDay: input.sinceDay,
+                                      untilDay: input.untilDay, timeZone: input.timeZone)
+    }
+    func refreshUsageRates(environmentID: String) async throws {}
 }
 
 /// Optional project-favicon capability: the same signed asset route the desktop
@@ -129,6 +140,8 @@ public struct FeatureFileContent: Sendable, Equatable, Codable {
 }
 
 public enum FeatureFilePreviewKind: Sendable, Equatable {
+    case video
+    case browserDocument
     case image
     case markdown
     case source
@@ -136,6 +149,8 @@ public enum FeatureFilePreviewKind: Sendable, Equatable {
 
     public static func infer(path: String, language: String? = nil) -> Self {
         let fileExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
+        if ["mp4", "mov", "m4v", "webm"].contains(fileExtension) { return .video }
+        if ["pdf", "html", "htm", "svg"].contains(fileExtension) { return .browserDocument }
         if imageExtensions.contains(fileExtension) { return .image }
         if language?.lowercased() == "markdown" || ["md", "mdx"].contains(fileExtension) {
             return .markdown
@@ -893,6 +908,7 @@ public struct FeaturePullRequest: Sendable, Equatable, Hashable, Codable {
     public var number: Int
     public var title: String
     public var state: String
+    public var isDraft: Bool? = nil
     public var url: URL?
     /// Last provider-side activity. For a merged or closed request this bounds
     /// when it reached that state, which is what
@@ -906,13 +922,15 @@ public struct FeaturePullRequest: Sendable, Equatable, Hashable, Codable {
         title: String,
         state: String,
         url: URL? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        isDraft: Bool? = nil
     ) {
         self.number = number
         self.title = title
         self.state = state
         self.url = url
         self.updatedAt = updatedAt
+        self.isDraft = isDraft
     }
 }
 
@@ -1027,7 +1045,18 @@ public enum FeatureTerminalState: String, Sendable, Codable {
     case failed
 }
 
+/// Local renderer position; never sent to the server. A new attach or clear creates a generation.
+public struct FeatureTerminalOutputCursor: Sendable, Equatable, Codable {
+    public var generation: UUID
+    public var byteOffset: Int
+    public init(generation: UUID = UUID(), byteOffset: Int = 0) {
+        self.generation = generation
+        self.byteOffset = byteOffset
+    }
+}
+
 public struct FeatureTerminalSnapshot: Sendable, Equatable, Codable {
+    public var outputCursor: FeatureTerminalOutputCursor? = nil
     public var threadID: String
     public var terminalID: String
     public var state: FeatureTerminalState
@@ -1066,5 +1095,17 @@ public struct FeatureTerminalSnapshot: Sendable, Equatable, Codable {
 
 @MainActor
 public protocol FeatureUsageLimitsReading: AnyObject {
+    func consumeResetCredit(environmentID: String, instanceID: String) async throws -> ProviderConsumeResetCreditResult
     func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot]
+}
+
+@MainActor
+public protocol FeatureDocumentAttachmentResolving: AnyObject {
+    func documentAttachmentURL(threadID: String, attachment: FeatureMessageAttachment) async throws -> URL
+}
+
+public extension FeatureUsageLimitsReading {
+    func consumeResetCredit(environmentID: String, instanceID: String) async throws -> ProviderConsumeResetCreditResult {
+        throw RPCError.protocolViolation("This connection does not support reset credits.")
+    }
 }

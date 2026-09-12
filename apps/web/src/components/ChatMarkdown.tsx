@@ -1,3 +1,15 @@
+import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
+import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
+import { pullRequestEnvironment } from "~/state/pullRequests";
+import { CodexArtifactTemplateCard } from "./CodexArtifactTemplateCard";
+import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import {
+  CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES,
+  artifactTemplateFromHastProperties,
+  remarkCodexDirectives,
+  renderCodexFileCitationsAsMarkdown,
+} from "@t3tools/client-runtime/codex-markdown-directives";
 import { useAtomValue } from "@effect/atom-react";
 import {
   CheckIcon,
@@ -138,6 +150,8 @@ import {
 } from "../browser/openFileInPreview";
 
 interface ChatMarkdownProps {
+  imageBaseDir?: string | undefined;
+  onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   text: string;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
@@ -246,10 +260,11 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
     video: ["src", "controls", "muted", "loop", "playsInline", "poster", "preload"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
+    div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "file"],
+    href: [...(defaultSchema.protocols?.href ?? []), "file", "t3-citation"],
     src: [...(defaultSchema.protocols?.src ?? []), "file"],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
@@ -258,6 +273,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
+  remarkCodexDirectives,
   remarkPreserveCodeMeta,
   remarkNormalizeLinksAndTagInlineCode,
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
@@ -266,6 +282,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkGfm,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
+  remarkCodexDirectives,
   remarkBreaks,
   remarkPreserveCodeMeta,
   remarkNormalizeLinksAndTagInlineCode,
@@ -1615,6 +1632,9 @@ function areMarkdownFileLinkPropsEqual(
 }
 
 interface ChatMarkdownComponentsContext {
+  readonly hostFilePreviews: boolean;
+  readonly imageBaseDir: string | undefined;
+  readonly onUseArtifactTemplate: ChatMarkdownProps["onUseArtifactTemplate"];
   readonly text: string;
   readonly cwd: string | undefined;
   readonly inlineCodeFileLinkMetaByText: ReadonlyMap<string, MarkdownFileLinkMeta>;
@@ -1662,6 +1682,7 @@ interface ChatMarkdownComponentsContext {
 const ChatMarkdownComponentsImplContext = React.createContext<Components | null>(null);
 
 const CHAT_MARKDOWN_COMPONENT_TAGS = [
+  "div",
   "p",
   "blockquote",
   "li",
@@ -1701,8 +1722,10 @@ const STABLE_CHAT_MARKDOWN_COMPONENTS = Object.fromEntries(
 
 function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): Components {
   const {
+    hostFilePreviews,
     text,
     cwd,
+    imageBaseDir,
     inlineCodeFileLinkMetaByText,
     skills,
     threadRef,
@@ -1748,7 +1771,9 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         targetPath={fileLinkMeta.targetPath}
         iconPath={fileLinkMeta.filePath}
         displayPath={fileLinkMeta.displayPath}
-        workspaceRelativePath={fileLinkMeta.workspaceRelativePath}
+        workspaceRelativePath={
+          fileLinkMeta.workspaceRelativePath ?? (hostFilePreviews ? fileLinkMeta.filePath : null)
+        }
         line={fileLinkMeta.line}
         label={labelParts.join(" · ")}
         copyMarkdown={copyMarkdown}
@@ -1764,7 +1789,10 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         }
         revealLabel={revealInFileManagerLabel}
         onOpenInBrowser={
-          threadRef && isPreviewSupportedInRuntime() && isBrowserPreviewFile(fileLinkMeta.filePath)
+          threadRef &&
+          (fileLinkMeta.workspaceRelativePath !== null || hostFilePreviews) &&
+          isPreviewSupportedInRuntime() &&
+          isBrowserPreviewFile(fileLinkMeta.filePath)
             ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
             : undefined
         }
@@ -1774,6 +1802,14 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
   };
 
   return {
+    div({ node, children, ...props }) {
+      const template = artifactTemplateFromHastProperties(node?.properties);
+      return template ? (
+        <CodexArtifactTemplateCard template={template} onUse={context.onUseArtifactTemplate} />
+      ) : (
+        <div {...props}>{children}</div>
+      );
+    },
     p({ node: _node, children, ...props }) {
       return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
     },
@@ -1844,6 +1880,8 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
       );
     },
     a({ node, href, children, title: _title, ...props }) {
+      const citation = href ? parseAssistantCitationHref(href) : null;
+      if (citation) return <AssistantCitationChip citation={citation} />;
       const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
       // The href map is built by regex-scanning the markdown source, which
       // misses destinations the regex can't express (spaces, parentheses);
@@ -1913,8 +1951,13 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
               const api = readLocalApi();
               if (!api) return;
               const pullRequest = resolveThreadPullRequest(href);
-              const currentPullRequest =
-                threadRef === undefined ? null : readThreadShell(threadRef)?.linkedPullRequest;
+              const shell = threadRef === undefined ? null : readThreadShell(threadRef);
+              const links =
+                shell?.linkedPullRequests ??
+                (shell?.linkedPullRequest ? [shell.linkedPullRequest] : []);
+              const currentPullRequest = links.find((link) =>
+                matchesLinkedPullRequestUrl(link, href),
+              );
               const threadLinkAction =
                 currentPullRequest != null && matchesLinkedPullRequestUrl(currentPullRequest, href)
                   ? "unlink-from-thread"
@@ -1972,6 +2015,16 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         if (!href || (!faviconHost && !unresolvedPathHref)) {
           return link;
         }
+        const pullRequest = resolveThreadPullRequest(href);
+        if (pullRequest && threadRef) {
+          return (
+            <PullRequestLinkPreview
+              link={link}
+              originalUrl={href}
+              target={{ environmentId: threadRef.environmentId, input: pullRequest }}
+            />
+          );
+        }
         return (
           <Tooltip>
             <TooltipTrigger render={link} />
@@ -2007,12 +2060,16 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         </code>
       );
     },
-    img({ node: _node, src, alt }) {
+    img({ node: _node, src, alt, width, height }) {
       return (
         <MarkdownMedia
           src={typeof src === "string" ? src : undefined}
           alt={alt}
+          width={width}
+          height={height}
+          hostFilePreviews={hostFilePreviews}
           threadRef={threadRef}
+          baseDirectory={imageBaseDir}
         />
       );
     },
@@ -2021,7 +2078,9 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         <MarkdownMedia
           src={typeof src === "string" ? src : undefined}
           threadRef={threadRef}
+          baseDirectory={imageBaseDir}
           kind="video"
+          hostFilePreviews={hostFilePreviews}
         />
       );
     },
@@ -2070,8 +2129,10 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
 }
 
 function ChatMarkdown({
+  onUseArtifactTemplate,
   text,
   cwd,
+  imageBaseDir,
   threadRef,
   environmentId: explicitEnvironmentId,
   onTaskListChange,
@@ -2106,6 +2167,8 @@ function ChatMarkdown({
   const threadServerConfig = useAtomValue(
     serverEnvironment.configValueAtom(threadRef?.environmentId ?? environmentId),
   );
+  const hostFilePreviews =
+    threadServerConfig?.environment.capabilities.fileDocumentPreviews === true;
   const projects = useProjects();
   const availableEditors = serverConfig?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const [preferredEditor] = usePreferredEditor(availableEditors);
@@ -2144,7 +2207,7 @@ function ChatMarkdown({
       string,
       NonNullable<ReturnType<typeof resolveMarkdownFileLinkMeta>>
     >();
-    for (const href of extractMarkdownLinkHrefs(text)) {
+    for (const href of extractMarkdownLinkHrefs(renderCodexFileCitationsAsMarkdown(text))) {
       const normalizedHref = normalizeMarkdownLinkHrefKey(href);
       if (metaByHref.has(normalizedHref)) continue;
       const meta = resolveMarkdownFileLinkMeta(normalizedHref, cwd);
@@ -2173,6 +2236,7 @@ function ChatMarkdown({
     return buildFileLinkParentSuffixByPath(filePaths);
   }, [inlineCodeFileLinkMetaByText, markdownFileLinkMetaByHref]);
   const markdownUrlTransform = useCallback((href: string) => {
+    if (parseAssistantCitationHref(href)) return href;
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
   // Re-emit highlighted content as markdown so copying out of the rendered
@@ -2192,7 +2256,7 @@ function ChatMarkdown({
       if (
         threadRef === undefined ||
         readThreadShell(threadRef) === null ||
-        threadServerConfig?.environment.capabilities.threadPullRequestLinking !== true
+        threadServerConfig?.environment.capabilities.threadPullRequestsV2 !== true
       ) {
         return null;
       }
@@ -2212,28 +2276,42 @@ function ChatMarkdown({
     },
     [projects, threadRef, threadServerConfig],
   );
+  const readPullRequestDetail = useAtomCommand(pullRequestEnvironment.readDetail, {
+    reportFailure: false,
+  });
   const updateThreadPullRequestLink = useCallback(
     async (href: string, linked: boolean) => {
       if (threadRef === undefined) return;
-      const linkedPullRequest = linked ? resolveThreadPullRequest(href) : null;
-      if (linked && linkedPullRequest === null) {
-        throw new Error("The pull request is not available in this environment.");
+      const shell = readThreadShell(threadRef);
+      const links =
+        shell?.linkedPullRequests ?? (shell?.linkedPullRequest ? [shell.linkedPullRequest] : []);
+      const link = linked
+        ? resolveThreadPullRequest(href)
+        : links.find((candidate) => matchesLinkedPullRequestUrl(candidate, href));
+      if (!link) {
+        if (linked) throw new Error("The pull request is not available in this environment.");
+        return;
       }
-      if (!linked) {
-        const currentPullRequest = readThreadShell(threadRef)?.linkedPullRequest;
-        if (currentPullRequest == null || !matchesLinkedPullRequestUrl(currentPullRequest, href)) {
-          return;
-        }
+      let confirmedLink = link;
+      if (linked) {
+        const detail = await readPullRequestDetail({
+          environmentId: threadRef.environmentId,
+          input: link,
+        });
+        if (detail._tag === "Failure") throw squashAtomCommandFailure(detail);
+        confirmedLink = { ...link, url: detail.value.url };
       }
       const result = await updateThreadMetadata({
         environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId, linkedPullRequest },
+        input: {
+          threadId: threadRef.threadId,
+          ...(linked ? { linkPullRequest: confirmedLink } : { unlinkPullRequest: confirmedLink }),
+        },
       });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
         throw squashAtomCommandFailure(result);
-      }
     },
-    [resolveThreadPullRequest, threadRef, updateThreadMetadata],
+    [resolveThreadPullRequest, threadRef, updateThreadMetadata, readPullRequestDetail],
   );
   const openExternalLinkInPreview = useCallback(
     (url: string) => {
@@ -2271,12 +2349,13 @@ function ChatMarkdown({
       return openFileInPreview({
         threadRef,
         filePath: path,
+        ...(cwd ? { workspaceRoot: cwd } : {}),
         httpBaseUrl: preparedConnection.value.httpBaseUrl,
         createAssetUrl,
         openPreview,
       });
     },
-    [createAssetUrl, openPreview, preparedConnection, threadRef],
+    [createAssetUrl, cwd, openPreview, preparedConnection, threadRef],
   );
   const findWorkspaceBasenameMatch = useCallback(
     async (workspaceRelativePath: string) => {
@@ -2334,8 +2413,11 @@ function ChatMarkdown({
   const markdownComponents = useMemo<Components>(
     () =>
       createChatMarkdownComponents({
+        hostFilePreviews,
+        onUseArtifactTemplate,
         text,
         cwd,
+        imageBaseDir,
         inlineCodeFileLinkMetaByText,
         skills,
         threadRef,
@@ -2360,12 +2442,15 @@ function ChatMarkdown({
     [
       canUseShellActions,
       cwd,
+      imageBaseDir,
+      hostFilePreviews,
       diffThemeName,
       fileLinkParentSuffixByPath,
       inlineCodeFileLinkMetaByText,
       isStreaming,
       markdownFileLinkMetaByHref,
       onTaskListChange,
+      onUseArtifactTemplate,
       openFileInPanel,
       openInPreferredEditor,
       openExternalLinkInPreview,

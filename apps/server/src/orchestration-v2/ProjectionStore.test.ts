@@ -149,6 +149,32 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         payload: thread,
       });
 
+      const links = [41, 42].map((number) => ({
+        projectId,
+        repository: "owner/repo",
+        number,
+        url: `https://github.com/owner/repo/pull/${number}`,
+      }));
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-read-state:links"),
+        type: "thread.metadata-updated",
+        threadId,
+        occurredAt: markedUnreadOccurredAt,
+        payload: { ...thread, linkedPullRequest: links[0]!, linkedPullRequests: links },
+      });
+      assert.deepEqual(
+        (yield* projectionStore.getThreadProjection(threadId)).thread.linkedPullRequests,
+        links,
+      );
+      assert.deepEqual(
+        (yield* projectionStore.getThreadShell(threadId))?.linkedPullRequests,
+        links,
+      );
+      assert.deepEqual(
+        (yield* projectionStore.getShellSnapshot()).threads.find((shell) => shell.id === threadId)
+          ?.linkedPullRequests,
+        links,
+      );
       const markedUnread = yield* projectionStore.getThreadProjection(threadId);
       assert.isNull(markedUnread.thread.lastVisitedAt);
       assert.deepEqual(markedUnread.thread.updatedAt, createdAt);

@@ -1,3 +1,7 @@
+import {
+  filterSidebarProjectScopeItems,
+  reduceSidebarProjectScopeMenuState,
+} from "./Sidebar.logic";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import {
@@ -31,7 +35,7 @@ import {
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   resolveWorkInboxBadge,
-  searchSidebarThreadsByTitle,
+  searchSidebarThreads,
   resolveWorkspaceSwitchNavigation,
   sidebarProjectKey,
   sidebarProviderInstanceKey,
@@ -1364,7 +1368,26 @@ describe("formatBackgroundWorkTooltip", () => {
   });
 });
 
-describe("searchSidebarThreadsByTitle", () => {
+describe("searchSidebarThreads", () => {
+  it("finds the V2 linked PR by number, repository or URL without changing order", () => {
+    const linkedPullRequest = {
+      projectId: ProjectId.make("project"),
+      repository: "Bl4ckBl1zZ/t3code",
+      number: 287,
+      url: "https://github.com/Bl4ckBl1zZ/t3code/pull/287",
+    };
+    const threads = [
+      { title: "First", linkedPullRequest },
+      { title: "Unlinked", linkedPullRequest: null },
+      { title: "Last", linkedPullRequest },
+    ];
+    for (const query of [" #287 ", "bl4ckbl1zz/t3code#287", linkedPullRequest.url]) {
+      expect(searchSidebarThreads(threads, query)).toEqual([threads[0], threads[2]]);
+    }
+    expect(searchSidebarThreads(threads, "#999")).toEqual([]);
+    expect(searchSidebarThreads([{ title: "Older server" }], "#287")).toEqual([]);
+  });
+
   const threads = [
     { id: "thread-1", title: "Fix workspace search", project: "Alpha" },
     { id: "thread-2", title: "Review providers", project: "Workspace" },
@@ -1372,15 +1395,15 @@ describe("searchSidebarThreadsByTitle", () => {
   ];
 
   it("matches thread titles case-insensitively and preserves their order", () => {
-    expect(searchSidebarThreadsByTitle(threads, "work")).toEqual([threads[0], threads[2]]);
+    expect(searchSidebarThreads(threads, "work")).toEqual([threads[0], threads[2]]);
   });
 
   it("does not match project metadata", () => {
-    expect(searchSidebarThreadsByTitle(threads, "workspace")).toEqual([threads[0]]);
+    expect(searchSidebarThreads(threads, "workspace")).toEqual([threads[0]]);
   });
 
   it("returns no results for an empty query", () => {
-    expect(searchSidebarThreadsByTitle(threads, "   ")).toEqual([]);
+    expect(searchSidebarThreads(threads, "   ")).toEqual([]);
   });
 });
 
@@ -2460,5 +2483,68 @@ describe("resolveWorkInboxBadge", () => {
     expect(resolveWorkInboxBadge({ status: "background", hasUnseenCompletion: false })).toBe(
       "working",
     );
+  });
+});
+
+describe("filterSidebarProjectScopeItems", () => {
+  const items = [
+    { value: "all", label: "All projects" },
+    { value: "alpha", label: "Alpha workspace" },
+    { value: "beta", label: "Beta tools" },
+  ] as const;
+  const filter = (activeScopeKey: string | null, query: string) =>
+    filterSidebarProjectScopeItems({
+      items,
+      activeScopeKey,
+      query,
+      matches: (item, candidate) =>
+        item.label.toLocaleLowerCase().includes(candidate.toLocaleLowerCase()),
+    });
+
+  it("omits the reset row when the sidebar is already unscoped", () => {
+    expect(filter(null, "")).toEqual(items.slice(1));
+  });
+
+  it("shows the reset row first while a project scope is active", () => {
+    expect(filter("alpha", "")).toEqual(items);
+  });
+
+  it("hides the reset row while filtering an active scope", () => {
+    expect(filter("alpha", "all")).toEqual([]);
+  });
+
+  it("returns matching projects in source order and supports no-match results", () => {
+    expect(filter(null, "WORK")).toEqual([items[1]]);
+    expect(filter(null, "missing")).toEqual([]);
+  });
+});
+
+describe("reduceSidebarProjectScopeMenuState", () => {
+  const queriedOpenState = { open: true, query: "alpha" };
+
+  it("clears the query when the combobox closes through onOpenChange", () => {
+    expect(
+      reduceSidebarProjectScopeMenuState(queriedOpenState, {
+        type: "open-changed",
+        open: false,
+      }),
+    ).toEqual({ open: false, query: "" });
+  });
+
+  it("clears the query when project settings closes the combobox", () => {
+    expect(
+      reduceSidebarProjectScopeMenuState(queriedOpenState, {
+        type: "project-settings-opened",
+      }),
+    ).toEqual({ open: false, query: "" });
+  });
+
+  it("keeps the popup open while the query changes", () => {
+    expect(
+      reduceSidebarProjectScopeMenuState(
+        { open: true, query: "" },
+        { type: "query-changed", query: "beta" },
+      ),
+    ).toEqual({ open: true, query: "beta" });
   });
 });

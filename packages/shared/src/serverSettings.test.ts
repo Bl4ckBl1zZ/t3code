@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -10,6 +11,8 @@ import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySet
 import { createModelSelection } from "./model.ts";
 import {
   applyServerSettingsPatch,
+  resolveProjectAutoPull,
+  resolveProjectAgentBrowserAccess,
   extractPersistedServerObservabilitySettings,
   isModelSelectionProviderEnabled,
   normalizePersistedServerSettingString,
@@ -564,4 +567,97 @@ describe("serverSettings helpers", () => {
 
     expect(resolved.pauseWhenOnBattery).toBe(false);
   });
+});
+
+it("patches model prices per entry and replaces optional cache rates", () => {
+  const first = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+    usagePriceOverrides: {
+      one: {
+        inputCostPerMillionTokens: 2,
+        outputCostPerMillionTokens: 8,
+        cacheReadCostPerMillionTokens: 1,
+      },
+      two: { inputCostPerMillionTokens: 3, outputCostPerMillionTokens: 9 },
+    },
+  });
+  const second = applyServerSettingsPatch(first, {
+    usagePriceOverrides: {
+      one: { inputCostPerMillionTokens: 4, outputCostPerMillionTokens: 10 },
+    },
+  });
+  expect(second.usagePriceOverrides.one?.cacheReadCostPerMillionTokens).toBeUndefined();
+  expect(second.usagePriceOverrides.two).toEqual(first.usagePriceOverrides.two);
+  expect(
+    applyServerSettingsPatch(second, { usagePriceOverrides: { one: null } }).usagePriceOverrides,
+  ).toEqual({ two: first.usagePriceOverrides.two });
+});
+
+describe("project automatic pull preferences", () => {
+  it("defaults off and preserves explicit off when the machine default is on", () => {
+    const project = ProjectId.make("project");
+    expect(resolveProjectAutoPull(DEFAULT_SERVER_SETTINGS, project)).toBe(false);
+    const defaults = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { defaultAutoPull: true });
+    expect(resolveProjectAutoPull(defaults, project)).toBe(true);
+    const overridden = applyServerSettingsPatch(defaults, {
+      projectAutoPullOverrides: { [project]: false },
+    });
+    expect(resolveProjectAutoPull(overridden, project)).toBe(false);
+    expect(resolveProjectAutoPull(overridden, ProjectId.make("another"))).toBe(true);
+  });
+  it("sparse edits and resets preserve other project overrides", () => {
+    const a = ProjectId.make("a"),
+      b = ProjectId.make("b");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      projectAutoPullOverrides: { [a]: true, [b]: false },
+    });
+    const reset = applyServerSettingsPatch(initial, { projectAutoPullOverrides: { [a]: null } });
+    expect(reset.projectAutoPullOverrides).toEqual({ [b]: false });
+    expect(initial.projectAutoPullOverrides).toEqual({ [a]: true, [b]: false });
+    expect(resolveProjectAutoPull(reset, a)).toBe(false);
+    expect(
+      applyServerSettingsPatch(reset, { defaultAutoPull: true }).projectAutoPullOverrides[b],
+    ).toBe(false);
+  });
+});
+
+it("project browser overrides are sparse, reversible and preserve an explicit denial", () => {
+  const a = ProjectId.make("a"),
+    b = ProjectId.make("b");
+  const denied = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+    projectAgentBrowserAccessOverrides: { [a]: false, [b]: true },
+  });
+  expect(resolveProjectAgentBrowserAccess(denied, a)).toBe(false);
+  expect(resolveProjectAgentBrowserAccess(denied, b)).toBe(true);
+  const reset = applyServerSettingsPatch(denied, {
+    projectAgentBrowserAccessOverrides: { [a]: null },
+    enableAgentBrowserAccess: false,
+  });
+  expect(reset.projectAgentBrowserAccessOverrides).toEqual({ [b]: true });
+  expect(resolveProjectAgentBrowserAccess(reset, a)).toBe(false);
+  expect(resolveProjectAgentBrowserAccess(reset, b)).toBe(true);
+  expect(
+    resolveProjectAgentBrowserAccess(
+      applyServerSettingsPatch(reset, { enableAgentBrowserAccess: true }),
+      a,
+    ),
+  ).toBe(true);
+});
+
+it("replaces a machine model selection without retaining previous model options and resets to automatic", () => {
+  const current = {
+    ...DEFAULT_SERVER_SETTINGS,
+    defaultModelSelection: createModelSelection(ProviderInstanceId.make("codex"), "old", [
+      { id: "reasoningEffort", value: "high" },
+    ]),
+  };
+  const next = createModelSelection(ProviderInstanceId.make("claudeAgent"), "new");
+  expect(
+    applyServerSettingsPatch(current, { defaultModelSelection: next }).defaultModelSelection,
+  ).toEqual(next);
+  expect(
+    applyServerSettingsPatch(current, { defaultModelSelection: null }).defaultModelSelection,
+  ).toBeNull();
+  expect(
+    applyServerSettingsPatch(current, { defaultAutoPull: true }).defaultModelSelection,
+  ).toEqual(current.defaultModelSelection);
 });

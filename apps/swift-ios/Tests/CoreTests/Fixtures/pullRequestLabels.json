@@ -1,0 +1,17 @@
+{
+  "candidates": [
+    {
+      "name": "bug",
+      "color": "d73a4a",
+      "description": "Something is broken",
+      "isApplied": true
+    },
+    {
+      "name": "legacy",
+      "color": null,
+      "description": null,
+      "isApplied": false
+    }
+  ],
+  "truncated": true
+}

@@ -1,3 +1,4 @@
+import type { CodexRateLimitSnapshot } from "../../provider/providerUsageLimits.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CheckpointId,
@@ -615,6 +616,32 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
     });
   });
 
+  it("carries MCP presentation beside the output into V2", () => {
+    const projection = projectCodexDynamicToolItem({
+      type: "mcpToolCall",
+      id: "browser",
+      server: "browser",
+      tool: "js",
+      status: "completed",
+      arguments: { title: "Review page" },
+      result: {
+        content: [],
+        _meta: {
+          "codex/toolSurface": {
+            kind: "browserUse",
+            backend: "safari",
+            openTabs: [{ url: "https://example.com" }],
+          },
+        },
+      },
+    });
+    assert.equal(projection.toolSurface, "browser");
+    assert.equal(projection.title, "Review page");
+    assert.equal(projection.toolSource?.name, "Safari");
+    assert.deepEqual(projection.toolIcon, { _tag: "website", pageUrl: "https://example.com/" });
+    assert.deepEqual(projection.output, []);
+  });
+
   it("preserves namespaced dynamic tool output", () => {
     const projection = projectCodexDynamicToolItem({
       type: "dynamicToolCall",
@@ -928,6 +955,7 @@ function codexReplayPreamble(input: {
   readonly nativeThreadId: string;
   readonly nativeTurnId: string;
   readonly prompt: string;
+  readonly promptless?: boolean;
 }): Array<CodexReplay.CodexAppServerReplayEntry> {
   return [
     {
@@ -1008,7 +1036,7 @@ function codexReplayPreamble(input: {
         method: "turn/start",
         params: {
           threadId: input.nativeThreadId,
-          input: [{ type: "text", text: input.prompt }],
+          input: input.promptless ? [] : [{ type: "text", text: input.prompt }],
           cwd: "/workspace",
           model: "gpt-5.4",
           approvalPolicy: "never",
@@ -1064,7 +1092,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       return yield* Effect.die(`Timed out waiting for ${label}.`);
     });
 
-  const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
+  const makeCodexReplayHarness = (
+    transcript: CodexReplay.CodexAppServerReplayTranscript,
+    usageLimitListener?: {
+      readonly publish: (snapshot: CodexRateLimitSnapshot) => Effect.Effect<void>;
+    },
+  ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const idAllocator = yield* IdAllocatorV2;
@@ -1087,6 +1120,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ),
       };
       const adapter = makeCodexAdapterV2({
+        ...(usageLimitListener ? { usageLimitListener } : {}),
         instanceId: CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
         environment: {},
@@ -1115,10 +1149,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       });
       const events: Array<ProviderAdapterV2Event> = [];
       const terminalReceipt = yield* Deferred.make<void>();
+      const approvalReceipt =
+        yield* Deferred.make<Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }>>();
       yield* runtime.events.pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             events.push(event);
+            if (event.type === "turn_item.updated" && event.turnItem.type === "approval_request")
+              yield* Deferred.succeed(approvalReceipt, event);
             if (event.type === "turn.terminal") yield* Deferred.succeed(terminalReceipt, undefined);
           }),
         ),
@@ -1146,16 +1184,281 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         continuationRequests,
         terminalEvents,
         awaitTerminal: Deferred.await(terminalReceipt),
+        awaitApproval: Deferred.await(approvalReceipt),
         subagentUpdates,
         hasPendingBackgroundWork,
       };
     });
+
+  for (const malformed of [false, true]) {
+    it.effect(
+      `resumes metadata independently of historical error enums (malformed=${malformed})`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const nativeThreadId = "resume-saved-thread";
+            const transcript = makeCodexReplayTranscript({
+              scenario: `resume-metadata-${malformed}`,
+              entries: [
+                ...codexReplayPreamble({
+                  nativeThreadId,
+                  nativeTurnId: "old-turn",
+                  prompt: "unused",
+                }).slice(0, 5),
+                {
+                  type: "expect_outbound",
+                  label: "resume metadata",
+                  frame: {
+                    id: 3,
+                    method: "thread/resume",
+                    params: { threadId: nativeThreadId, excludeTurns: true },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "historical unknown error",
+                  frame: {
+                    id: 3,
+                    result: {
+                      thread: {
+                        id: malformed ? null : nativeThreadId,
+                        updatedAt: 1782622450,
+                        turns: [
+                          {
+                            id: "old-turn",
+                            status: "failed",
+                            error: {
+                              message: "Historical failure",
+                              codexErrorInfo: "misalignment_policy_violation",
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              ],
+            });
+            const h = yield* makeCodexReplayHarness(transcript);
+            const resume = h.runtime.resumeThread({ providerThread: h.providerThread });
+            if (malformed) {
+              const error = yield* Effect.flip(resume);
+              assert.equal(error._tag, "ProviderAdapterResumeThreadError");
+            } else {
+              const resumed = yield* resume;
+              assert.equal(resumed.nativeThreadRef?.nativeId, nativeThreadId);
+              assert.equal(resumed.id, h.providerThread.id);
+              assert.equal(DateTime.toEpochMillis(resumed.updatedAt), 1782622450000);
+            }
+          }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+        ),
+    );
+  }
+
+  it.effect("sends promptless input for a restart continuation", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const nativeThreadId = "promptless-restart";
+        const nativeTurnId = "promptless-turn";
+        const entries = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId,
+          prompt: "Continue after restart",
+          promptless: true,
+        });
+        const h = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({ scenario: "promptless-restart", entries }),
+        );
+        const input = makeCodexTestTurnInput({
+          threadId: h.threadId,
+          providerThread: h.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("promptless-attempt"),
+          text: "Continue after restart",
+        });
+        yield* h.runtime.startTurn({
+          ...input,
+          message: {
+            ...input.message,
+            createdBy: "agent",
+            creationSource: "server",
+            restartContinuation: true,
+          },
+        });
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
 
   const assistantMessages = (events: ReadonlyArray<ProviderAdapterV2Event>) =>
     events.filter(
       (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
         event.type === "message.updated" && event.message.role === "assistant",
     );
+
+  it.effect("forwards account usage notifications through the V2 adapter", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const receipt = yield* Deferred.make<CodexRateLimitSnapshot>();
+        const nativeThreadId = "usage-thread";
+        const nativeTurnId = "usage-turn";
+        const rateLimits = {
+          limitId: "codex",
+          primary: { usedPercent: 42, resetsAt: 1788652800, windowDurationMins: 300 },
+          secondary: null,
+          credits: null,
+          planType: "plus" as const,
+        };
+        const transcript = makeCodexReplayTranscript({
+          scenario: "usage-limits",
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Hello." }),
+            {
+              type: "emit_inbound",
+              label: "account usage",
+              frame: { method: "account/rateLimits/updated", params: { rateLimits } },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript, {
+          publish: (snapshot) => Deferred.succeed(receipt, snapshot).pipe(Effect.asVoid),
+        });
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("usage-attempt"),
+            text: "Hello.",
+          }),
+        );
+        assert.equal((yield* Deferred.await(receipt)).primary?.usedPercent, 42);
+        yield* harness.awaitTerminal;
+      }),
+    ).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect(
+    "routes Codex app-access approval choices through V2 and rejects unoffered persistence",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = "mcp-thread";
+          const nativeTurnId = "mcp-turn";
+          const transcript = makeCodexReplayTranscript({
+            scenario: "mcp-approval",
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Use Safari." }),
+              {
+                type: "emit_inbound",
+                label: "mcp approval",
+                frame: {
+                  id: 99,
+                  method: "mcpServer/elicitation/request",
+                  params: {
+                    mode: "form",
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    serverName: "computer-use",
+                    message: "Allow ChatGPT to use Safari?",
+                    requestedSchema: {
+                      type: "object",
+                      properties: {
+                        approval: {
+                          type: "string",
+                          oneOf: [
+                            { const: "once", title: "Once" },
+                            { const: "session", title: "Allow Safari this session" },
+                          ],
+                        },
+                      },
+                      required: ["approval"],
+                    },
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "approval response",
+                frame: {
+                  id: 99,
+                  result: {
+                    action: "accept",
+                    _meta: { persist: "session" },
+                    content: { approval: "session" },
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn completed",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("mcp-attempt"),
+              text: "Use Safari.",
+            }),
+          );
+          const event = yield* harness.awaitApproval;
+          if (event.turnItem.type !== "approval_request")
+            return yield* Effect.die("Missing approval");
+          const item = event.turnItem;
+          assert.equal(item.requestKind, "mcp-elicitation");
+          assert.equal(item.prompt, "Allow ChatGPT to use Safari?");
+          assert.equal(item.title, "Safari");
+          const requestNode = harness.events.find(
+            (event) => event.type === "node.updated" && event.node.id === item.nodeId,
+          );
+          assert.ok(requestNode?.type === "node.updated");
+          if (requestNode?.type === "node.updated")
+            assert.equal(requestNode.node.parentNodeId, "node-mcp-attempt");
+          assert.equal(item.nativeItemRef, null);
+          assert.deepEqual(
+            item.options?.map((option) => option.decision),
+            ["cancel", "decline", "acceptForSession", "accept"],
+          );
+          assert.equal(
+            item.options?.find((option) => option.decision === "acceptForSession")?.label,
+            "Allow Safari this session",
+          );
+          const rejected = yield* Effect.exit(
+            harness.runtime.respondToRuntimeRequest({
+              requestId: item.requestId,
+              decision: "acceptAlways",
+            }),
+          );
+          assert.equal(rejected._tag, "Failure");
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: item.requestId,
+            decision: "acceptForSession",
+          });
+          yield* harness.awaitTerminal;
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
 
   it.effect("projects async questions without holding the provider turn open", () =>
     Effect.scoped(

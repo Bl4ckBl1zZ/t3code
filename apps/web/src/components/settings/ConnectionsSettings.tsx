@@ -1,3 +1,7 @@
+import { LoadBalancingSettings } from "./LoadBalancingSettings";
+import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentIconPicker } from "./EnvironmentIconPicker";
 import { ChevronsLeftRightEllipsisIcon, PlusIcon, QrCodeIcon, TerminalIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -1458,6 +1462,10 @@ function SavedBackendListRow({
                   : null
               }
             />
+            <EnvironmentMachineIcon
+              kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
             <h3 className="min-w-0 truncate text-sm font-medium text-foreground">
               {environment.label}
             </h3>
@@ -1465,6 +1473,15 @@ function SavedBackendListRow({
           {metadataBits.length > 0 ? (
             <p className="truncate text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
           ) : null}
+          {isConnected && (
+            <div className="pt-1">
+              <EnvironmentIconPicker
+                environmentId={environmentId}
+                serverConfig={environment.serverConfig}
+                size="xs"
+              />
+            </div>
+          )}
           {serverUpdateState.status !== "idle" ? (
             <div className="max-w-md">
               <ServerUpdateProgress state={serverUpdateState} />
@@ -3124,6 +3141,18 @@ export function ConnectionsSettings() {
                 }
               />
             ) : null}
+            {primaryEnvironmentId && (
+              <SettingsRow
+                title="Environment icon"
+                description="Used across connected clients."
+                control={
+                  <EnvironmentIconPicker
+                    environmentId={primaryEnvironmentId}
+                    serverConfig={primaryServerConfig}
+                  />
+                }
+              />
+            )}
             {desktopBridge ? (
               <>
                 {renderNetworkAccessRow()}
@@ -3523,6 +3552,7 @@ export function ConnectionsSettings() {
           savedEnvironments={savedEnvironments}
         />
       </SettingsSection>
+      <LoadBalancingSettings environments={environments} />
     </SettingsPageContainer>
   );
 }

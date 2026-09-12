@@ -1080,7 +1080,7 @@ export default function GitActionsControl({
   let runGitActionWithToast: (input: RunGitActionWithToastInput) => Promise<void>;
 
   const persistThreadBranchSync = useCallback(
-    (branch: string | null) => {
+    (branch: string | null, manualSelection = false) => {
       if (!activeThreadRef) {
         return;
       }
@@ -1108,6 +1108,10 @@ export default function GitActionsControl({
       setDraftThreadContext(draftId ?? activeThreadRef, {
         branch,
         worktreePath: activeDraftThread.worktreePath,
+        environmentSelection: manualSelection
+          ? "manual"
+          : (activeDraftThread.environmentSelection ??
+            (activeDraftThread.branch ? "manual" : "auto")),
       });
     },
     [
@@ -1127,7 +1131,7 @@ export default function GitActionsControl({
         return;
       }
 
-      persistThreadBranchSync(branchUpdate.branch);
+      persistThreadBranchSync(branchUpdate.branch, true);
     },
     [persistThreadBranchSync],
   );
@@ -1347,6 +1351,7 @@ export default function GitActionsControl({
       const actionId = randomUUID();
 
       const result = await runImmediateGitAction.run({
+        ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
         actionId,
         action,
         ...(commitMessage ? { commitMessage } : {}),
@@ -1864,8 +1869,8 @@ export default function GitActionsControl({
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
           <span className="flex-1 text-left">Changes</span>
           <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
-            <span className="text-success">+{changeStat?.insertions ?? 0}</span>
-            <span className="text-destructive">-{changeStat?.deletions ?? 0}</span>
+            <span className="text-diff-addition">+{changeStat?.insertions ?? 0}</span>
+            <span className="text-diff-deletion">-{changeStat?.deletions ?? 0}</span>
           </span>
         </Button>
       ) : null}
@@ -1973,9 +1978,9 @@ export default function GitActionsControl({
                                     <span className="text-muted-foreground">Excluded</span>
                                   ) : (
                                     <>
-                                      <span className="text-success">+{file.insertions}</span>
+                                      <span className="text-diff-addition">+{file.insertions}</span>
                                       <span className="text-muted-foreground"> / </span>
-                                      <span className="text-destructive">-{file.deletions}</span>
+                                      <span className="text-diff-deletion">-{file.deletions}</span>
                                     </>
                                   )}
                                 </span>
@@ -1986,11 +1991,11 @@ export default function GitActionsControl({
                       </div>
                     </ScrollArea>
                     <div className="flex justify-end font-mono">
-                      <span className="text-success">
+                      <span className="text-diff-addition">
                         +{selectedFiles.reduce((sum, f) => sum + f.insertions, 0)}
                       </span>
                       <span className="text-muted-foreground"> / </span>
-                      <span className="text-destructive">
+                      <span className="text-diff-deletion">
                         -{selectedFiles.reduce((sum, f) => sum + f.deletions, 0)}
                       </span>
                     </div>

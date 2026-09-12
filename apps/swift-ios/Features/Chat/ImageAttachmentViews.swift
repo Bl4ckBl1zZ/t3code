@@ -658,7 +658,7 @@ enum FeatureImageAttachmentError: LocalizedError, Equatable {
 /// Turns a picked file into a draft attachment without re-encoding it.
 ///
 /// The size cap comes from the classified kind rather than a single constant:
-/// the contract gives PDFs, video and generic files 20 MB while images keep the
+/// the contract gives PDFs, video and generic files 50 MB while images keep the
 /// tighter 10 MB limit, and validating here means a rejection is a picker error
 /// instead of a failed turn.
 enum FeatureDocumentProcessor {
@@ -698,6 +698,48 @@ enum FeatureDocumentAttachmentError: LocalizedError, Equatable {
             "‘\(name)’ is empty."
         case let .tooLarge(name, maximumBytes):
             "‘\(name)’ is larger than \(maximumBytes / (1_024 * 1_024)) MB."
+        }
+    }
+}
+
+/// NSItemProvider deletes its temporary file as soon as the callback returns.
+/// Read and process inside that callback, never pass the temporary URL to a Task.
+enum FeatureDroppedAttachment {
+    static func presentationURL(temporaryURL: URL, suggestedName: String?, typeIdentifier: String) -> URL {
+        let suggested = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = suggested.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0).lastPathComponent } ?? temporaryURL.lastPathComponent
+        var result = URL(fileURLWithPath: name.isEmpty ? "Attachment" : name)
+        if result.pathExtension.isEmpty, let suffix = UTType(typeIdentifier)?.preferredFilenameExtension {
+            result.appendPathExtension(suffix)
+        }
+        return result
+    }
+
+    static func load(_ provider: NSItemProvider, typeIdentifier: String) async throws -> FeatureDraftAttachment {
+        let suggestedName = provider.suggestedName
+        return try await withCheckedThrowingContinuation { continuation in
+            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
+                do {
+                    if let error { throw error }
+                    guard let url else { throw CocoaError(.fileReadUnknown) }
+                    let maximum = 50 * 1_024 * 1_024
+                    let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                    guard values.isRegularFile == true else { throw CocoaError(.fileReadUnsupportedScheme) }
+                    guard (values.fileSize ?? 0) <= maximum else {
+                        throw FeatureDocumentAttachmentError.tooLarge(name: url.lastPathComponent, maximumBytes: maximum)
+                    }
+                    let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                    let namedURL = presentationURL(temporaryURL: url, suggestedName: suggestedName, typeIdentifier: typeIdentifier)
+                    let document = try FeatureDocumentProcessor.attachment(from: data, url: namedURL)
+                    if ComposerAttachments.classify(mimeType: document.mimeType, name: document.filename) == .image {
+                        var image = try FeatureImageProcessor.attachment(from: data, ordinal: 1, sourceMIMEType: document.mimeType)
+                        image.filename = namedURL.deletingPathExtension().lastPathComponent + ".jpg"
+                        continuation.resume(returning: image)
+                    } else {
+                        continuation.resume(returning: document)
+                    }
+                } catch { continuation.resume(throwing: error) }
+            }
         }
     }
 }

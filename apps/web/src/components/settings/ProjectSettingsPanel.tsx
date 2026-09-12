@@ -1,3 +1,13 @@
+import {
+  resolveProjectScripts,
+  projectScriptsInheritDefaults,
+} from "@t3tools/shared/projectScripts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { useProjectScriptSettings } from "./useProjectScriptSettings";
+import { ProjectAutoPullSettings, ProjectBrowserAccessSettings } from "./ProjectBooleanSettings";
+import type { ProjectIconOverride } from "@t3tools/contracts";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { ProjectIconPickerDialog } from "./ProjectIconPickerDialog";
 import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
@@ -13,9 +23,11 @@ import {
   selectProjectGroupingSettings,
 } from "../../logicalProject";
 import type {
+  EnvironmentId,
   ContextMenuItem,
   ModelSelection,
   ProviderDriverKind,
+  ProviderInstanceId,
   SidebarProjectGroupingMode,
   T3ProjectFileScript,
   ThreadEnvMode,
@@ -24,7 +36,6 @@ import { resolveEnvModeLabel } from "../BranchToolbar.logic";
 import { createModelSelection } from "@t3tools/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
-import * as Cause from "effect/Cause";
 import { ChevronDownIcon, CopyIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import {
   useCallback,
@@ -40,20 +51,14 @@ import { isElectron } from "../../env";
 import {
   useClientSettings,
   useUpdateClientSettings,
-  usePrimarySettings,
+  useEnvironmentSettings,
 } from "../../hooks/useSettings";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
 import { shortcutLabelForCommand } from "../../keybindings";
-import { keybindingValueForCommand } from "../../lib/projectScriptKeybindings";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { readLocalApi } from "../../localApi";
-import {
-  buildProjectScript,
-  commandForProjectScript,
-  nextProjectScriptId,
-} from "../../projectScripts";
-import { decodeProjectScriptKeybindingRule } from "../../lib/projectScriptKeybindings";
+import { commandForProjectScript } from "../../projectScripts";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -69,7 +74,7 @@ import {
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
-import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
@@ -241,41 +246,59 @@ function ProjectSettingsBreadcrumb({ projectKey }: { projectKey: string }) {
   );
 }
 
-export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
+export function ProjectSettingsPanel({
+  projectKey,
+  environmentId = null,
+}: {
+  projectKey: string;
+  environmentId?: EnvironmentId | null;
+}) {
   const groups = useSettingsProjectGroups();
   const navigate = useNavigate();
 
   const selected = groups.find((group) => group.projectKey === projectKey) ?? null;
+  const members = useMemo(
+    () =>
+      selected?.memberProjects.filter(
+        (member) => environmentId === null || member.environmentId === environmentId,
+      ) ?? [],
+    [selected, environmentId],
+  );
 
   // Remember the members of the last rendered group so a grouping-rule change
   // (which changes the group key) can follow the project to its new group.
-  const lastSelectionRef = useRef<{ key: string; memberKeys: string[] } | null>(null);
+  const lastSelectionRef = useRef<{
+    key: string;
+    environmentId: EnvironmentId | null;
+    memberKeys: string[];
+  } | null>(null);
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || members.length === 0) return;
     lastSelectionRef.current = {
       key: selected.projectKey,
-      memberKeys: selected.memberProjects.map((member) => member.physicalProjectKey),
+      environmentId,
+      memberKeys: members.map((member) => member.physicalProjectKey),
     };
-  }, [selected]);
+  }, [selected, members, environmentId]);
 
   // A grouping-rule change replaces the group key mid-visit; follow the
   // project to its new key instead of parking on the not-found state.
   useEffect(() => {
-    if (selected !== null) return;
+    if (members.length > 0) return;
     const last = lastSelectionRef.current;
-    if (last?.key !== projectKey) return;
+    if (last?.key !== projectKey || last.environmentId !== environmentId) return;
     const successor = groups.find((group) =>
       group.memberProjects.some((member) => last.memberKeys.includes(member.physicalProjectKey)),
     );
     if (successor) {
       void navigate({
-        to: "/projects/$projectKey",
-        params: { projectKey: successor.projectKey },
+        to: "/settings/projects",
+        search: { project: successor.projectKey, machine: environmentId ?? undefined },
         replace: true,
         hashScrollIntoView: false,
       });
     }
-  }, [groups, navigate, projectKey, selected]);
+  }, [groups, navigate, projectKey, members.length, environmentId]);
 
   if (!selected) {
     return (
@@ -286,25 +309,40 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
       </div>
     );
   }
-  return <ProjectDetail key={selected.projectKey} group={selected} />;
+  if (members.length === 0)
+    return (
+      <p className="p-8 text-sm text-muted-foreground">
+        This project has no checkout on this machine.
+      </p>
+    );
+  const scopedGroup = {
+    ...selected,
+    memberProjects: members,
+    environmentId: members[0]!.environmentId,
+    id: members[0]!.id,
+  };
+  return (
+    <ProjectDetail key={`${selected.projectKey}:${environmentId ?? "all"}`} group={scopedGroup} />
+  );
 }
 
 function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
+  const allServerConfigs = useAtomValue(environmentServerConfigsAtom);
+  const representative =
+    group.memberProjects.find((member) => allServerConfigs.has(member.environmentId)) ??
+    group.memberProjects[0]!;
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const settings = usePrimarySettings();
+  const settings = useEnvironmentSettings(representative.environmentId);
   const updateClientSettings = useUpdateClientSettings();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const serverProviders =
+    useAtomValue(serverEnvironment.providersValueAtom(representative.environmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
   const threads = useThreadShells();
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
-  const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
-    reportFailure: false,
-  });
-  const removeKeybinding = useAtomCommand(serverEnvironment.removeKeybinding, {
-    reportFailure: false,
-  });
+
   const projectNameEditedRef = useRef(false);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
@@ -321,11 +359,13 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     },
   });
 
-  const representative =
-    group.memberProjects.find(
-      (member) => member.environmentId === group.environmentId && member.id === group.id,
-    ) ?? group.memberProjects[0]!;
   const faviconPath = representative.faviconPath ?? null;
+  const projectIcon = representative.projectIcon ?? null;
+  const supportsProjectIcons = group.memberProjects.every(
+    (member) =>
+      allServerConfigs.get(member.environmentId)?.environment.capabilities.projectIcons === true,
+  );
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const pickProjectFavicon =
     typeof window !== "undefined" &&
     group.memberProjects.every(
@@ -365,6 +405,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         defaultModelSelection: ModelSelection | null;
         defaultThreadEnvMode: ThreadEnvMode | null;
         faviconPath: string | null;
+        projectIcon: ProjectIconOverride | null;
       }>,
       failureTitle: string,
     ): Promise<AtomCommandResult<void, unknown>> => {
@@ -416,7 +457,10 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
 
   // ----- default model -----
   const storedSelection = representative.defaultModelSelection;
-  const resolvedSelection = resolveDefaultProviderModelSelection(serverProviders, storedSelection);
+  const resolvedSelection = resolveDefaultProviderModelSelection(
+    serverProviders,
+    storedSelection ?? settings.defaultModelSelection,
+  );
   const instanceEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
@@ -432,9 +476,39 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     (entry) => entry.instanceId === resolvedSelection?.instanceId,
   );
   const setDefaultModel = useCallback(
-    (selection: ModelSelection | null) =>
-      void updateAllMembers({ defaultModelSelection: selection }, "Failed to update default model"),
-    [updateAllMembers],
+    (selection: ModelSelection | null) => {
+      if (selection) {
+        for (const member of group.memberProjects) {
+          const config = allServerConfigs.get(member.environmentId);
+          const entry =
+            config &&
+            applyProviderInstanceSettings(
+              deriveProviderInstanceEntries(config.providers),
+              config.settings,
+            ).find((candidate) => candidate.instanceId === selection.instanceId);
+          const options =
+            config &&
+            getCustomModelOptionsByInstance(
+              { ...settings, ...config.settings },
+              config.providers,
+            ).get(selection.instanceId);
+          if (
+            !entry?.enabled ||
+            !entry.isAvailable ||
+            !options?.some((option) => option.slug === selection.model && !option.isUnavailable)
+          ) {
+            toastManager.add({
+              type: "error",
+              title: "Default model not saved",
+              description: `This model is unavailable on ${member.environmentLabel ?? "one of this project's machines"}. Select that machine to configure its default separately.`,
+            });
+            return;
+          }
+        }
+      }
+      void updateAllMembers({ defaultModelSelection: selection }, "Failed to update default model");
+    },
+    [allServerConfigs, group.memberProjects, settings, updateAllMembers],
   );
 
   // ----- new-thread workspace mode -----
@@ -453,18 +527,21 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const [isSavingFavicon, setIsSavingFavicon] = useState(false);
   const savingFaviconRef = useRef(false);
   const setFaviconPath = useCallback(
-    async (faviconPath: string | null) => {
+    async (faviconPath: string | null, projectIcon: ProjectIconOverride | null = null) => {
       if (savingFaviconRef.current) return;
       savingFaviconRef.current = true;
       setIsSavingFavicon(true);
       try {
-        await updateAllMembers({ faviconPath }, "Failed to update project icon");
+        await updateAllMembers(
+          { faviconPath, ...(supportsProjectIcons ? { projectIcon } : {}) },
+          "Failed to update project icon",
+        );
       } finally {
         savingFaviconRef.current = false;
         setIsSavingFavicon(false);
       }
     },
-    [updateAllMembers],
+    [updateAllMembers, supportsProjectIcons],
   );
 
   // ----- checkout selection and scripts -----
@@ -476,12 +553,32 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     serverEnvironment.configValueAtom(selectedCheckout.environmentId),
   );
   const keybindings = selectedServerConfig?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS;
-  const scripts = selectedCheckout.scripts;
+  const scriptSettings = selectedServerConfig?.settings ?? DEFAULT_SERVER_SETTINGS;
+  const supportsActionDefaults =
+    selectedServerConfig?.environment.capabilities.projectActionDefaults === true;
+  const scripts = supportsActionDefaults
+    ? resolveProjectScripts(scriptSettings, selectedCheckout)
+    : selectedCheckout.scripts;
+  const scriptsInherited =
+    supportsActionDefaults && projectScriptsInheritDefaults(scriptSettings, selectedCheckout);
+  const {
+    saving: isSavingScripts,
+    persist: persistScripts,
+    submit: submitScript,
+  } = useProjectScriptSettings(
+    selectedServerConfig
+      ? [
+          {
+            environmentId: selectedCheckout.environmentId,
+            settings: scriptSettings,
+            keybindings,
+            project: selectedCheckout,
+            supportsDefaults: supportsActionDefaults,
+          },
+        ]
+      : [],
+  );
   const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
-  // Script writes replace the whole array, so two overlapping writes computed
-  // from the same snapshot would drop each other's changes. One at a time.
-  const [isSavingScripts, setIsSavingScripts] = useState(false);
-  const savingScriptsRef = useRef(false);
   const t3File = useT3ProjectFileState(
     selectedCheckout.environmentId,
     selectedCheckout.workspaceRoot,
@@ -503,135 +600,12 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     [scripts, t3File.scripts],
   );
 
-  const persistScripts = useCallback(
-    async (
-      nextScripts: ReadonlyArray<ReturnType<typeof buildProjectScript>>,
-      keybinding: string | null | undefined,
-      keybindingCommand: ReturnType<typeof commandForProjectScript>,
-    ): Promise<AtomCommandResult<void, unknown>> => {
-      if (savingScriptsRef.current) {
-        return AsyncResult.failure(
-          Cause.fail(new Error("Another script change is still saving. Try again.")),
-        );
-      }
-      savingScriptsRef.current = true;
-      setIsSavingScripts(true);
-      try {
-        // Captured before the write so a cleared or deleted binding can be
-        // removed from the keybindings config afterwards.
-        const previousKeybinding = keybindingValueForCommand(keybindings, keybindingCommand);
-        const updateResult = mapAtomCommandResult(
-          await updateProject({
-            environmentId: selectedCheckout.environmentId,
-            input: { projectId: selectedCheckout.id, scripts: nextScripts },
-          }),
-          () => undefined,
-        );
-        if (updateResult._tag === "Failure") {
-          reportFailure("Failed to save scripts", updateResult);
-          return updateResult;
-        }
-
-        const keybindingRule = decodeProjectScriptKeybindingRule({
-          keybinding,
-          command: keybindingCommand,
-        });
-        if (!isElectron) return updateResult;
-        const environmentIds = [selectedCheckout.environmentId];
-        const previousTarget = previousKeybinding
-          ? decodeProjectScriptKeybindingRule({
-              keybinding: previousKeybinding,
-              command: keybindingCommand,
-            })
-          : null;
-        if (keybindingRule) {
-          // `replace` swaps the command's previous rule instead of appending a
-          // second one that would keep the old shortcut alive.
-          const input =
-            previousTarget && previousTarget.key !== keybindingRule.key
-              ? { ...keybindingRule, replace: previousTarget }
-              : keybindingRule;
-          for (const environmentId of environmentIds) {
-            const result = mapAtomCommandResult(
-              await upsertKeybinding({ environmentId, input }),
-              () => undefined,
-            );
-            if (result._tag === "Failure") {
-              reportFailure("Failed to save keybinding", result);
-              return result;
-            }
-          }
-        } else if (previousTarget) {
-          for (const environmentId of environmentIds) {
-            const result = mapAtomCommandResult(
-              await removeKeybinding({ environmentId, input: previousTarget }),
-              () => undefined,
-            );
-            if (result._tag === "Failure") {
-              reportFailure("Failed to remove keybinding", result);
-              return result;
-            }
-          }
-        }
-        return updateResult;
-      } finally {
-        savingScriptsRef.current = false;
-        setIsSavingScripts(false);
-      }
-    },
-    [
-      keybindings,
-      removeKeybinding,
-      reportFailure,
-      selectedCheckout.environmentId,
-      selectedCheckout.id,
-      updateProject,
-      upsertKeybinding,
-    ],
-  );
-
-  const submitScript = useCallback(
-    async (
-      scriptId: string | null,
-      input: NewProjectScriptInput,
-    ): Promise<AtomCommandResult<void, unknown>> => {
-      if (scriptId === null) {
-        const nextId = nextProjectScriptId(
-          input.name,
-          scripts.map((script) => script.id),
-        );
-        const nextScript = buildProjectScript(nextId, input);
-        const nextScripts = input.runOnWorktreeCreate
-          ? [
-              ...scripts.map((script) =>
-                script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-              ),
-              nextScript,
-            ]
-          : [...scripts, nextScript];
-        return persistScripts(nextScripts, input.keybinding, commandForProjectScript(nextId));
-      }
-
-      const updatedScript = buildProjectScript(scriptId, input);
-      const nextScripts = scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
-      );
-      return persistScripts(nextScripts, input.keybinding, commandForProjectScript(scriptId));
-    },
-    [persistScripts, scripts],
-  );
-
-  const deleteScript = useCallback(
-    (scriptId: string) => {
-      const nextScripts = scripts.filter((script) => script.id !== scriptId);
-      void persistScripts(nextScripts, null, commandForProjectScript(scriptId));
-    },
-    [persistScripts, scripts],
-  );
+  const deleteScript = (scriptId: string) =>
+    void persistScripts(
+      (current) => current.filter((script) => script.id !== scriptId),
+      scriptId,
+      null,
+    );
 
   const importFileScript = useCallback(
     async (fileScript: T3ProjectFileScript) => {
@@ -717,10 +691,6 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
 
       const draftStore = useComposerDraftStore.getState();
       for (const member of members) {
-        const memberThreads = projectThreads.filter(
-          (thread) =>
-            thread.environmentId === member.environmentId && thread.projectId === member.id,
-        );
         const result = mapAtomCommandResult(
           await deleteProject({
             environmentId: member.environmentId,
@@ -796,12 +766,18 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           />
           <SettingsRow
             title="Project icon"
-            description={faviconPath ?? "Automatic"}
+            description={
+              projectIcon?.kind === "emoji"
+                ? projectIcon.emoji
+                : projectIcon?.kind === "lucide"
+                  ? `${projectIcon.name} · ${projectIcon.color}`
+                  : (faviconPath ?? "Automatic")
+            }
             resetAction={
-              faviconPath !== null ? (
+              faviconPath !== null || projectIcon !== null ? (
                 <SettingResetButton
                   label="project icon"
-                  disabled={isSavingFavicon}
+                  disabled={isSavingFavicon || (projectIcon !== null && !supportsProjectIcons)}
                   onClick={() => void setFaviconPath(null)}
                 />
               ) : null
@@ -809,11 +785,23 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             control={
               <div className="flex items-center gap-2">
                 <ProjectFavicon
+                  project={representative}
                   environmentId={representative.environmentId}
                   cwd={representative.workspaceRoot}
                   faviconPath={faviconPath}
                   className="size-6"
                 />
+                {supportsProjectIcons && (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    type="button"
+                    disabled={isSavingFavicon}
+                    onClick={() => setIconPickerOpen(true)}
+                  >
+                    Choose icon
+                  </Button>
+                )}
                 <Button
                   size="xs"
                   variant="outline"
@@ -845,6 +833,17 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               resolvedSelection && activeEntry ? (
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
                   <ProviderModelPicker
+                    {...(allServerConfigs.get(representative.environmentId)?.environment
+                      .capabilities.providerTerminalEnvironment === true
+                      ? {
+                          onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
+                            void navigate({
+                              to: "/settings/providers",
+                              search: { environmentId: representative.environmentId, instanceId },
+                            });
+                          },
+                        }
+                      : {})}
                     activeInstanceId={resolvedSelection.instanceId}
                     model={resolvedSelection.model}
                     lockedProvider={null}
@@ -883,6 +882,8 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               )
             }
           />
+          <ProjectAutoPullSettings projects={group.memberProjects} />
+          <ProjectBrowserAccessSettings projects={group.memberProjects} />
           <SettingsRow
             title="Workspace"
             description="Where new threads in this project start. Overrides t3.json and the global default; applies to every checkout in this group."
@@ -1044,10 +1045,23 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             <div className="min-w-0">
               <h3 className="text-base font-semibold text-foreground">Actions</h3>
               <p className="text-pretty text-sm text-muted-foreground">
-                Saved and run only in {selectedCheckoutLabel}.
+                {scriptsInherited
+                  ? "Inherits this machine’s default actions."
+                  : `Saved for ${selectedCheckoutLabel}.`}{" "}
+                Commands run in this checkout or its worktree.
               </p>
             </div>
             <div className="flex w-full flex-wrap gap-1.5 sm:w-auto sm:shrink-0 sm:justify-end">
+              {supportsActionDefaults && !scriptsInherited ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={isSavingScripts}
+                  onClick={() => void persistScripts(() => null)}
+                >
+                  Use machine defaults
+                </Button>
+              ) : null}
               {importableScripts.length > 0 ? (
                 <Menu>
                   <MenuTrigger
@@ -1194,6 +1208,14 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         onDelete={deleteScript}
         onClose={() => setEditorRequest(null)}
       />
+      {supportsProjectIcons && (
+        <ProjectIconPickerDialog
+          current={projectIcon}
+          open={iconPickerOpen}
+          onOpenChange={setIconPickerOpen}
+          onSelect={(icon) => void setFaviconPath(null, icon)}
+        />
+      )}
       <ProjectFaviconPickerDialog
         key={`${representative.environmentId}:${representative.workspaceRoot}:${faviconPickerOpen}`}
         cwd={representative.workspaceRoot}

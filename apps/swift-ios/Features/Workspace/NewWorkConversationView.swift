@@ -72,6 +72,7 @@ public struct NewWorkConversationView: View {
                 attachments: $attachments,
                 interactionMode: $interactionMode,
                 providers: targetProviders,
+                providerSetup: ProviderSetupContext(client: model.client, environmentID: activeTarget?.environmentID),
                 threadSelection: defaultSelection,
                 materializesDefaultSelection: false,
                 isSending: isSubmitting,
@@ -144,7 +145,7 @@ public struct NewWorkConversationView: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "server.rack")
+                Image(systemName: model.snapshot.environments.first { $0.id == activeTarget?.environmentID }?.machineSymbol ?? "server.rack")
                     .font(.system(size: 11, weight: .medium))
                 Text("on \(activeTarget.map { environmentName($0.environmentID) } ?? "…")")
                 if availableTargets.count > 1 {

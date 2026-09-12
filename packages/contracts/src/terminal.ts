@@ -1,3 +1,4 @@
+import { ProviderInstanceId } from "./providerInstance.ts";
 import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
@@ -38,16 +39,18 @@ export type TerminalSessionInput = Schema.Codec.Encoded<typeof TerminalSessionIn
 
 export const TerminalOpenInput = Schema.Struct({
   ...TerminalSessionInput.fields,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: TrimmedNonEmptyStringSchema,
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),
 });
-export type TerminalOpenInput = Schema.Codec.Encoded<typeof TerminalOpenInput>;
+export type TerminalOpenInput = typeof TerminalOpenInput.Type;
 
 export const TerminalAttachInput = Schema.Struct({
   ...TerminalSessionInput.fields,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyStringSchema),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   cols: Schema.optional(TerminalColsSchema),
@@ -55,7 +58,7 @@ export const TerminalAttachInput = Schema.Struct({
   env: Schema.optional(TerminalEnvSchema),
   restartIfNotRunning: Schema.optional(Schema.Boolean),
 });
-export type TerminalAttachInput = Schema.Codec.Encoded<typeof TerminalAttachInput>;
+export type TerminalAttachInput = typeof TerminalAttachInput.Type;
 
 export const TerminalWriteInput = Schema.Struct({
   ...TerminalSessionInput.fields,
@@ -81,13 +84,14 @@ export type TerminalClearInput = Schema.Codec.Encoded<typeof TerminalClearInput>
 
 export const TerminalRestartInput = Schema.Struct({
   ...TerminalSessionInput.fields,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: TrimmedNonEmptyStringSchema,
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   cols: TerminalColsSchema,
   rows: TerminalRowsSchema,
   env: Schema.optional(TerminalEnvSchema),
 });
-export type TerminalRestartInput = Schema.Codec.Encoded<typeof TerminalRestartInput>;
+export type TerminalRestartInput = typeof TerminalRestartInput.Type;
 
 export const TerminalCloseInput = Schema.Struct({
   ...TerminalThreadInput.fields,
@@ -347,6 +351,29 @@ export class TerminalSessionLookupError extends Schema.TaggedErrorClass<Terminal
   }
 }
 
+export class TerminalProviderInstanceNotFoundError extends Schema.TaggedErrorClass<TerminalProviderInstanceNotFoundError>()(
+  "TerminalProviderInstanceNotFoundError",
+  {
+    providerInstanceId: ProviderInstanceId,
+  },
+) {
+  override get message() {
+    return `Provider instance is not available: ${this.providerInstanceId}`;
+  }
+}
+
+export class TerminalProviderEnvironmentError extends Schema.TaggedErrorClass<TerminalProviderEnvironmentError>()(
+  "TerminalProviderEnvironmentError",
+  {
+    providerInstanceId: ProviderInstanceId,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return `Could not prepare the terminal environment for provider instance: ${this.providerInstanceId}`;
+  }
+}
+
 export class TerminalNotRunningError extends Schema.TaggedErrorClass<TerminalNotRunningError>()(
   "TerminalNotRunningError",
   {
@@ -390,6 +417,8 @@ export class TerminalResizeError extends Schema.TaggedErrorClass<TerminalResizeE
 }
 
 export const TerminalError = Schema.Union([
+  TerminalProviderInstanceNotFoundError,
+  TerminalProviderEnvironmentError,
   TerminalCwdError,
   TerminalWorktreeReprovisionError,
   TerminalHistoryError,

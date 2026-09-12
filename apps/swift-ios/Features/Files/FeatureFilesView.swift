@@ -2,9 +2,29 @@ import ImageIO
 import SwiftUI
 import UIKit
 
+private struct WorkspaceMutationRevisionKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+extension EnvironmentValues {
+    var workspaceMutationRevision: String? {
+        get { self[WorkspaceMutationRevisionKey.self] }
+        set { self[WorkspaceMutationRevisionKey.self] = newValue }
+    }
+}
+
+private struct FileRefreshIdentity: Equatable {
+    let threadID: String
+    let path: String?
+    let mutation: String?
+    var document = false
+    var attempt = 0
+}
+
 public struct FeatureFilesView: View {
     let client: any FeatureClient
     let threadID: String
+    let workspaceMutationID: String?
     /// A workspace-relative file the browser should open straight away, handed
     /// over by a file link in the thread feed.
     let initialPath: String?
@@ -24,10 +44,12 @@ public struct FeatureFilesView: View {
         client: any FeatureClient,
         threadID: String,
         initialPath: String? = nil,
-        initialLine: Int? = nil
+        initialLine: Int? = nil,
+        workspaceMutationID: String? = nil
     ) {
         self.client = client
         self.threadID = threadID
+        self.workspaceMutationID = workspaceMutationID
         self.initialPath = initialPath
         self.initialLine = initialLine
     }
@@ -40,9 +62,19 @@ public struct FeatureFilesView: View {
     /// again; a route with no segments names no file and opens the tree root.
     static func destination(for route: ThreadActivityFileRoute) -> (path: String?, line: Int?) {
         (
-            path: route.path.isEmpty ? nil : route.path.joined(separator: "/"),
+            path: route.absolutePath ?? (route.path.isEmpty ? nil : route.path.joined(separator: "/")),
             line: route.line.flatMap(Int.init)
         )
+    }
+
+    /// Workspace ancestors in root-to-parent order; the current file is excluded.
+    static func containingDirectories(path: String) -> [FeatureFileEntry] {
+        let parts = path.split(separator: "/").map(String.init)
+        return [FeatureFileEntry(path: "", name: "Workspace", kind: .directory)] +
+            parts.dropLast().indices.map { index in
+                FeatureFileEntry(path: parts.prefix(index + 1).joined(separator: "/"),
+                    name: parts[index], kind: .directory)
+            }
     }
 
     public var body: some View {
@@ -61,6 +93,7 @@ public struct FeatureFilesView: View {
                 didFollowDeepLink = true
                 deepLinkedFile = Self.deepLinkedEntry(path: initialPath)
             }
+            .environment(\.workspaceMutationRevision, workspaceMutationID)
     }
 
     /// The entry a deep link opens, built from the path alone.
@@ -71,10 +104,10 @@ public struct FeatureFilesView: View {
     /// names no file and opens the tree root instead.
     static func deepLinkedEntry(path: String?) -> FeatureFileEntry? {
         guard let path else { return nil }
-        let segments = path.split(separator: "/").map(String.init)
+        let segments = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).map(String.init)
         guard let name = segments.last else { return nil }
         return FeatureFileEntry(
-            path: segments.joined(separator: "/"),
+            path: FeatureFilePreviewPath.isAbsolute(path) ? path : segments.joined(separator: "/"),
             name: name,
             kind: .file
         )
@@ -82,6 +115,9 @@ public struct FeatureFilesView: View {
 }
 
 private struct FeatureFileDirectoryView: View {
+    @SwiftUI.Environment(\.workspaceMutationRevision) private var mutationRevision
+    @State private var loadGeneration = UUID()
+    @State private var reloadAttempt = 0
     let client: any FeatureClient
     let threadID: String
     let path: String?
@@ -132,7 +168,7 @@ private struct FeatureFileDirectoryView: View {
                 Menu {
                     Toggle("Show hidden files", isOn: $includesHidden)
                     Button {
-                        Task { await load() }
+                        reloadAttempt += 1
                     } label: {
                         Label("Reload", systemImage: "arrow.clockwise")
                     }
@@ -142,7 +178,13 @@ private struct FeatureFileDirectoryView: View {
                 .accessibilityLabel("File browser options")
             }
         }
-        .task(id: path) { await load() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let errorMessage, !entries.isEmpty {
+                Text("Couldn’t refresh: " + errorMessage).font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary).padding(12)
+            }
+        }
+        .task(id: FileRefreshIdentity(threadID: threadID, path: path, mutation: mutationRevision, attempt: reloadAttempt)) { await load() }
     }
 
     @ViewBuilder
@@ -164,12 +206,17 @@ private struct FeatureFileDirectoryView: View {
     }
 
     private func load() async {
+        let generation = UUID()
+        loadGeneration = generation
         isLoading = true
-        defer { isLoading = false }
+        defer { if loadGeneration == generation { isLoading = false } }
         do {
-            entries = try await client.listFiles(threadID: threadID, path: path)
+            let loaded = try await client.listFiles(threadID: threadID, path: path)
+            guard !Task.isCancelled, loadGeneration == generation else { return }
+            entries = loaded
             errorMessage = nil
         } catch {
+            guard !Task.isCancelled, loadGeneration == generation else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -204,6 +251,8 @@ private struct FeatureFileRow: View {
         case .symbolicLink: "link"
         case .file:
             switch FeatureFilePreviewKind.infer(path: entry.path) {
+            case .video: "film"
+            case .browserDocument: "doc.richtext"
             case .image: "photo"
             case .markdown: "doc.richtext"
             case .source: entry.name.hasSuffix(".swift") ? "swift" : "chevron.left.forwardslash.chevron.right"
@@ -214,6 +263,9 @@ private struct FeatureFileRow: View {
 }
 
 private struct FeatureFilePreviewView: View {
+    @SwiftUI.Environment(\.workspaceMutationRevision) private var mutationRevision
+    @State private var loadGeneration = UUID()
+    @State private var reloadAttempt = 0
     let client: any FeatureClient
     let threadID: String
     let entry: FeatureFileEntry
@@ -222,6 +274,8 @@ private struct FeatureFilePreviewView: View {
     var focusedLine: Int?
 
     @State private var content: FeatureFileContent?
+    @AppStorage("t3.files.renderHTML") private var renderHTML = true
+    @State private var revealDismissed = false
     @State private var sourceLines: [FeatureSourceLine] = []
     @State private var image: UIImage?
     @State private var assetURL: URL?
@@ -232,11 +286,22 @@ private struct FeatureFilePreviewView: View {
         FeatureFilePreviewKind.infer(path: entry.path, language: content?.language)
     }
 
+    private var isHTML: Bool { ["html", "htm"].contains(URL(fileURLWithPath: entry.path).pathExtension.lowercased()) }
+    private var showDocument: Bool { previewKind == .browserDocument && (!isHTML || (renderHTML && (focusedLine == nil || revealDismissed))) }
+
     var body: some View {
         Group {
-            if isLoading, content == nil, image == nil {
+            if isLoading, content == nil, image == nil, assetURL == nil {
                 ProgressView("Loading file…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let assetURL, previewKind == .video {
+                FeatureInlineVideoView(url: assetURL, title: entry.name)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black)
+            } else if let assetURL, showDocument {
+                FeatureBrowserDocumentView(url: assetURL, refreshURL: {
+                    guard let resolver = client as? any FeatureWorkspaceAssetResolving else { throw FeatureCapabilityUnavailable("File previews") }
+                    return WorkspaceMutationRevision.assetURL(try await resolver.workspaceAssetURL(threadID: threadID, path: entry.path), revision: mutationRevision)
+                })
             } else if let image {
                 FeatureZoomableImageView(image: image)
                     .background(Color.black)
@@ -255,15 +320,16 @@ private struct FeatureFilePreviewView: View {
                     case .markdown:
                         ScrollView {
                             MarkdownMessageView(content.text)
+                                .environment(\.markdownMediaContext, MarkdownMediaContext(threadID: threadID, client: client, baseDirectory: FeatureFilePreviewPath.parent(entry.path)))
                                 .frame(maxWidth: T3Metrics.readingWidth, alignment: .leading)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 18)
                                 .padding(.vertical, 16)
                         }
                         .scrollDismissesKeyboard(.interactively)
-                    case .source, .plainText:
+                    case .source, .plainText, .browserDocument:
                         FeatureSourceTextView(lines: sourceLines, focusedLine: focusedLine)
-                    case .image:
+                    case .image, .video:
                         EmptyView()
                     }
                 }
@@ -279,12 +345,43 @@ private struct FeatureFilePreviewView: View {
         .navigationTitle(entry.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if isHTML {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(showDocument ? "Show HTML source" : "Show rendered page", systemImage: showDocument ? "chevron.left.forwardslash.chevron.right" : "eye") {
+                        renderHTML = !showDocument
+                        revealDismissed = true
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Reload file", systemImage: "arrow.clockwise") { reloadAttempt += 1 }.disabled(isLoading)
+            }
+            if !FeatureFilePreviewPath.isAbsolute(entry.path) {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    ForEach(FeatureFilesView.containingDirectories(path: entry.path)) { directory in
+                        NavigationLink {
+                            FeatureFileDirectoryView(client: client, threadID: threadID,
+                                path: directory.path.isEmpty ? nil : directory.path, title: directory.name)
+                        } label: {
+                            Label(directory.path.isEmpty ? "Workspace" : directory.path, systemImage: "folder")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "folder")
+                        .frame(minWidth: T3Metrics.minimumTapTarget, minHeight: T3Metrics.minimumTapTarget)
+                }
+                .accessibilityLabel("Browse containing folder")
+                .accessibilityIdentifier("file-preview-folders")
+            }
+            }
+
             if let assetURL {
                 ToolbarItem(placement: .topBarTrailing) {
                     ShareLink(item: assetURL) {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .accessibilityLabel("Share image")
+                    .accessibilityLabel("Share file")
                 }
             } else if let content {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -295,14 +392,27 @@ private struct FeatureFilePreviewView: View {
                 }
             }
         }
-        .task { await load() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let errorMessage, content != nil || image != nil || assetURL != nil {
+                Text("Showing the previous preview. Couldn’t refresh: " + errorMessage)
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(12)
+            }
+        }
+        .task(id: FileRefreshIdentity(threadID: threadID, path: entry.path, mutation: mutationRevision, document: showDocument, attempt: reloadAttempt)) { await load() }
     }
 
     private func load() async {
+        let generation = UUID()
+        loadGeneration = generation
         isLoading = true
-        defer { isLoading = false }
+        defer { if loadGeneration == generation { isLoading = false } }
         do {
-            if previewKind == .image {
+            if previewKind == .video || showDocument {
+                guard let resolver = client as? any FeatureWorkspaceAssetResolving else { throw FeatureCapabilityUnavailable("File previews") }
+                let url = try await resolver.workspaceAssetURL(threadID: threadID, path: entry.path)
+                guard !Task.isCancelled, loadGeneration == generation else { return }
+                assetURL = WorkspaceMutationRevision.assetURL(url, revision: mutationRevision); content = nil; image = nil; sourceLines = []
+            } else if previewKind == .image {
                 guard let resolver = client as? any FeatureWorkspaceAssetResolving else {
                     throw FeatureCapabilityUnavailable("Signed image previews")
                 }
@@ -310,7 +420,8 @@ private struct FeatureFilePreviewView: View {
                     threadID: threadID,
                     path: entry.path
                 )
-                let (data, response) = try await URLSession.shared.data(from: resolvedURL)
+                let request = URLRequest(url: resolvedURL, cachePolicy: .reloadIgnoringLocalCacheData)
+                let (data, response) = try await URLSession.shared.data(for: request)
                 if let response = response as? HTTPURLResponse,
                    !(200 ... 299).contains(response.statusCode) {
                     throw FeatureImagePreviewError.httpStatus(response.statusCode)
@@ -323,7 +434,7 @@ private struct FeatureFilePreviewView: View {
                 }).value else {
                     throw FeatureImagePreviewError.invalidImage
                 }
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, loadGeneration == generation else { return }
                 assetURL = resolvedURL
                 image = decoded
                 content = nil
@@ -336,7 +447,7 @@ private struct FeatureFilePreviewView: View {
                 )
                 let lines: [FeatureSourceLine]
                 switch loadedKind {
-                case .source:
+                case .source, .browserDocument:
                     lines = await Task.detached(priority: .userInitiated) {
                         FeatureSourceHighlighter.lines(
                             text: loaded.text,
@@ -352,10 +463,10 @@ private struct FeatureFilePreviewView: View {
                         for: MarkdownContentRevision(loaded.text)
                     )
                     lines = []
-                case .image:
+                case .image, .video:
                     lines = []
                 }
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, loadGeneration == generation else { return }
                 content = loaded
                 sourceLines = lines
                 image = nil
@@ -363,7 +474,7 @@ private struct FeatureFilePreviewView: View {
             }
             errorMessage = nil
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadGeneration == generation else { return }
             errorMessage = error.localizedDescription
         }
     }

@@ -501,6 +501,9 @@ public struct OrchestrationV2CommandLiveness: Codable, Equatable, Sendable {
 public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiable {
     public let base: OrchestrationV2TurnItemBase
     public let payload: Payload
+    public var toolSurface: String? = nil
+    public var toolIcon: ToolActivityIcon? = nil
+    public var toolSource: ToolActivitySource? = nil
 
     public init(type: String, base: OrchestrationV2TurnItemBase, payload: Payload) {
         self.type = type
@@ -523,7 +526,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case commandExecution(input: String, output: String?, exitCode: Int?, liveness: OrchestrationV2CommandLiveness)
         case fileSearch(pattern: String?, results: [OrchestrationV2FileSearchResult]?)
         case webSearch(patterns: [String]?, results: [OrchestrationV2WebSearchResult]?)
-        case approvalRequest(requestID: String, requestKind: String, prompt: String?)
+        case approvalRequest(requestID: String, requestKind: String, prompt: String?, options: [ProviderApprovalOption]?)
         case checkpoint(checkpointID: String, scopeID: String, files: [OrchestrationV2CheckpointFileSummary])
         case checkpointRollback(checkpointID: String, scopeID: String, restoredFileCount: Int, rolledBackRunCount: Int)
         case runInterruptRequest(message: String)
@@ -548,7 +551,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case type
         case messageId, inputIntent, text, attachments
         case streaming, planId, markdown, steps, explanation
-        case requestId, questions, requestKind, prompt
+        case requestId, questions, requestKind, prompt, options
         case fileName, additions, deletions, diffStr, oldStr, newStr
         case input, output, exitCode
         case pattern, results, patterns
@@ -560,7 +563,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case source, targetThreadId, providerThreadId
         case targetRunId, targetProviderInstanceId, targetModel
         case subagentId, origin, providerInstanceId, childThreadId, progress, result
-        case toolName
+        case toolName, toolSurface, toolIcon, toolSource
     }
 
     public init(from decoder: any Decoder) throws {
@@ -568,6 +571,11 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         self.type = type
+        if type == "dynamic_tool" {
+            toolSurface = try container.decodeIfPresent(String.self, forKey: .toolSurface)
+            toolIcon = try container.decodeIfPresent(ToolActivityIcon.self, forKey: .toolIcon)
+            toolSource = try container.decodeIfPresent(ToolActivitySource.self, forKey: .toolSource)
+        }
 
         switch type {
         case "user_message":
@@ -635,7 +643,8 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             payload = .approvalRequest(
                 requestID: try container.decode(String.self, forKey: .requestId),
                 requestKind: try container.decode(String.self, forKey: .requestKind),
-                prompt: try container.decodeIfPresent(String.self, forKey: .prompt)
+                prompt: try container.decodeIfPresent(String.self, forKey: .prompt),
+                options: try container.decodeIfPresent([ProviderApprovalOption].self, forKey: .options)
             )
         case "checkpoint":
             payload = .checkpoint(
@@ -720,6 +729,11 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         try base.encode(to: encoder)
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
+        if type == "dynamic_tool" {
+            try container.encodeIfPresent(toolSurface, forKey: .toolSurface)
+            try container.encodeIfPresent(toolIcon, forKey: .toolIcon)
+            try container.encodeIfPresent(toolSource, forKey: .toolSource)
+        }
 
         switch payload {
         case let .userMessage(messageID, intent, text, attachments):
@@ -763,10 +777,11 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case let .webSearch(patterns, results):
             try container.encodeIfPresent(patterns, forKey: .patterns)
             try container.encodeIfPresent(results, forKey: .results)
-        case let .approvalRequest(requestID, requestKind, prompt):
+        case let .approvalRequest(requestID, requestKind, prompt, options):
             try container.encode(requestID, forKey: .requestId)
             try container.encode(requestKind, forKey: .requestKind)
             try container.encodeIfPresent(prompt, forKey: .prompt)
+            try container.encodeIfPresent(options, forKey: .options)
         case let .checkpoint(checkpointID, scopeID, files):
             try container.encode(checkpointID, forKey: .checkpointId)
             try container.encode(scopeID, forKey: .scopeId)
@@ -880,6 +895,9 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public let worktreePath: String?
     /// See `OrchestrationV2ThreadShell.linkedPullRequest`.
     public let linkedPullRequest: OrchestrationV2ThreadLinkedPullRequest?
+    public var linkedPullRequests: [OrchestrationV2ThreadLinkedPullRequest]? = nil
+    public var pullRequests: [OrchestrationV2ThreadPullRequestLink]? = nil
+    public var branchPullRequest: OrchestrationV2ThreadLinkedPullRequest? = nil
     public let activeProviderThreadId: String?
     public let historyOrigin: String?
     public let lineage: OrchestrationV2AppThreadLineage
@@ -1027,7 +1045,14 @@ public struct OrchestrationV2ContextTransfer: Codable, Equatable, Sendable, Iden
 /// A run, narrowed to what drives the thread header and the queue control. The
 /// projection carries far more per run; the rest is modeled when a feature
 /// needs it.
+public struct OrchestrationV2RestartContinuation: Codable, Equatable, Sendable {
+    public let messageId: String
+    public let reason: String
+    public let status: String
+}
+
 public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
+    public var restartContinuation: OrchestrationV2RestartContinuation? = nil
     public let id: String
     public let ordinal: Int
     public let status: String
@@ -1061,6 +1086,7 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
 /// table, which is what a queued run's `userMessageId` resolves against and
 /// what survives a timeline clear.
 public struct OrchestrationV2ConversationMessage: Codable, Equatable, Sendable, Identifiable {
+    public var restartContinuation: Bool? = nil
     public let id: String
     public let threadId: String
     public let runId: String?
@@ -1077,12 +1103,14 @@ public struct OrchestrationV2ConversationMessage: Codable, Equatable, Sendable, 
     public let updatedAt: OrchestrationV2Timestamp
 
     private enum CodingKeys: String, CodingKey {
+        case restartContinuation
         case id, threadId, runId, nodeId, role, text, attachments, streaming
         case createdBy, creationSource, createdAt, updatedAt
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        restartContinuation = try container.decodeIfPresent(Bool.self, forKey: .restartContinuation)
         id = try container.decode(String.self, forKey: .id)
         threadId = try container.decode(String.self, forKey: .threadId)
         runId = try container.decodeIfPresent(String.self, forKey: .runId)
@@ -1247,6 +1275,7 @@ public struct OrchestrationV2ThreadDetailSnapshot: Codable, Equatable, Sendable 
 // MARK: - Shell
 
 public struct OrchestrationV2PendingRuntimeRequestSummary: Codable, Equatable, Sendable {
+    public var responseMode: String? = nil
     public let id: String
     public let kind: String
     public let createdAt: OrchestrationV2Timestamp
@@ -1299,6 +1328,9 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     /// Absent on servers that predate pull-request linking, and on threads with
     /// nothing linked. Nil means "resolve the pull request from the branch".
     public var linkedPullRequest: OrchestrationV2ThreadLinkedPullRequest?
+    public var linkedPullRequests: [OrchestrationV2ThreadLinkedPullRequest]? = nil
+    public var pullRequests: [OrchestrationV2ThreadPullRequestLink]? = nil
+    public var branchPullRequest: OrchestrationV2ThreadLinkedPullRequest? = nil
     public var lineage: OrchestrationV2AppThreadLineage
     public var forkedFrom: OrchestrationV2ForkSource?
     public var activeProviderThreadId: String?
@@ -1512,4 +1544,9 @@ public extension OrchestrationV2ThreadProjection {
             return false
         }
     }
+}
+
+public struct ProviderApprovalOption: Codable, Equatable, Hashable, Sendable {
+    public let decision: String
+    public let label: String
 }

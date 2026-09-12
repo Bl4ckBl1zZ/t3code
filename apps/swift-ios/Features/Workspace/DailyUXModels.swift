@@ -188,8 +188,8 @@ enum DailyUXCreationContext {
         in snapshot: FeatureSnapshot
     ) -> FeatureSelection? {
         let providers = providers(for: project, in: snapshot)
-        return DailyUXModelOptions.validated(snapshot.settings.defaultSelection, in: providers)
-            ?? DailyUXModelOptions.validated(project?.defaultSelection, in: providers)
+        return DailyUXModelOptions.validated(project?.defaultSelection, in: providers)
+            ?? DailyUXModelOptions.validated(snapshot.settings.defaultSelection, in: providers)
             ?? DailyUXModelOptions.preferredSelection(in: providers)
     }
 
@@ -344,12 +344,13 @@ struct DailyUXSidebarIndex {
         }
         return candidates.filter { thread in
             let project = projectByID[thread.projectID]
-            return [
+            return ([
                 thread.title,
                 thread.preview ?? "",
                 project?.name ?? "",
                 project?.path ?? "",
-            ].contains { $0.localizedCaseInsensitiveContains(normalizedQuery) }
+            ] + thread.allLinkedPullRequests.flatMap { ["#\($0.number)", "\($0.repository)#\($0.number)", $0.url] })
+            .contains { $0.localizedCaseInsensitiveContains(normalizedQuery) }
         }
     }
 }
@@ -402,6 +403,7 @@ enum DailyUXSidebarRefresh {
               // ordinary inactivity clock.
               !thread.changeRequestAutoSettles(changeRequest),
               changeRequest?.state != "open",
+              !thread.hasUnresolvedLinkedPullRequests(changeRequest),
               let autoSettleAfterDays = thread.autoSettleAfterDays,
               let lastActivityAt = thread.lastActivityAt else {
             return nil
@@ -602,6 +604,11 @@ extension FeatureThread {
         return max(createdAt, latestUserActivityAt)
     }
 
+    /// A missing aggregate must not let the inactivity timer hide unresolved linked work.
+    func hasUnresolvedLinkedPullRequests(_ changeRequest: FeaturePullRequest?) -> Bool {
+        allLinkedPullRequests.count > 1 && !["open", "closed", "merged"].contains(changeRequest?.state ?? "unknown")
+    }
+
     /// Swift port of `changeRequestAutoSettles` in
     /// `packages/client-runtime/src/state/threadSettled.ts`.
     ///
@@ -638,9 +645,10 @@ extension FeatureThread {
         if isSettled {
             return true
         }
-        if keepsActive {
+        if keepsActive || serverAutoSettlement == true {
             return false
         }
+        if hasUnresolvedLinkedPullRequests(changeRequest) { return false }
         if changeRequestAutoSettles(changeRequest) {
             return true
         }

@@ -136,3 +136,8 @@ export function ContextWindowMeter(props: {
     </Popover>
   );
 }
+
+/** The same footprint as the real meter, without announcing imaginary usage. */
+export function ContextWindowMeterPlaceholder() {
+  return <span aria-hidden="true" className="size-7 shrink-0" />;
+}

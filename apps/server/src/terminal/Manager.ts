@@ -8,6 +8,11 @@
  */
 import {
   DEFAULT_TERMINAL_ID,
+  ClaudeSettings,
+  CodexSettings,
+  ProviderInstanceId,
+  TerminalProviderInstanceNotFoundError,
+  TerminalProviderEnvironmentError,
   TerminalCwdError,
   TerminalCwdNotDirectoryError,
   TerminalCwdNotFoundError,
@@ -55,6 +60,11 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
+import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
+import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerConfig from "../config.ts";
 import {
   increment,
@@ -1333,6 +1343,9 @@ function normalizedRuntimeEnv(
   return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
+const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
+const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+
 interface TerminalManagerOptions {
   logsDir: string;
   historyLineLimit?: number;
@@ -1353,17 +1366,79 @@ interface TerminalManagerOptions {
     readonly threadId: string;
     readonly terminalId: string;
   }) => Effect.Effect<void>;
+  resolveProviderInstanceEnvironment?: (
+    providerInstanceId: string,
+    env: Record<string, string> | undefined,
+  ) => Effect.Effect<
+    Record<string, string>,
+    TerminalProviderInstanceNotFoundError | TerminalProviderEnvironmentError
+  >;
 }
+
+export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
+  "terminal.resolveProviderInstanceTerminalEnvironment",
+)(function* (input: {
+  readonly serverSettings: ServerSettings.ServerSettingsService["Service"];
+  readonly path: Path.Path;
+  readonly rawProviderInstanceId: string;
+  readonly env: Record<string, string> | undefined;
+}) {
+  const providerInstanceId = ProviderInstanceId.make(input.rawProviderInstanceId);
+  const settings = yield* input.serverSettings.getSettings.pipe(
+    Effect.mapError((cause) => new TerminalProviderEnvironmentError({ providerInstanceId, cause })),
+  );
+  const instance = deriveProviderInstanceConfigMap(settings)[providerInstanceId];
+  if (instance === undefined) {
+    return yield* new TerminalProviderInstanceNotFoundError({ providerInstanceId });
+  }
+
+  let resolved = mergeProviderInstanceEnvironment(instance.environment, input.env ?? {});
+  if (instance.driver === "codex") {
+    const config = decodeCodexSettings(instance.config ?? {});
+    if (Option.isSome(config)) {
+      const layout = yield* resolveCodexHomeLayout(config.value).pipe(
+        Effect.provideService(Path.Path, input.path),
+      );
+      if (layout.effectiveHomePath)
+        resolved = { ...resolved, CODEX_HOME: layout.effectiveHomePath };
+    }
+  } else if (instance.driver === "claudeAgent") {
+    const config = decodeClaudeSettings(instance.config ?? {});
+    if (Option.isSome(config)) {
+      resolved = yield* makeClaudeEnvironment(config.value, resolved).pipe(
+        Effect.provideService(Path.Path, input.path),
+      );
+    }
+  }
+
+  return Object.fromEntries(
+    Object.entries(resolved).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+});
 
 export const make = Effect.fn("TerminalManager.make")(function* () {
   const { terminalLogsDir } = yield* ServerConfig.ServerConfig;
   const ptyAdapter = yield* PtyAdapter.PtyAdapter;
   const portDiscovery = yield* PortScanner.PortDiscovery;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const path = yield* Path.Path;
+  const resolveProviderInstanceEnvironment = Effect.fn(
+    "terminal.resolveProviderInstanceEnvironment",
+  )((rawProviderInstanceId: string, env: Record<string, string> | undefined) =>
+    resolveProviderInstanceTerminalEnvironment({
+      serverSettings,
+      path,
+      rawProviderInstanceId,
+      env,
+    }),
+  );
+
   return yield* makeWithOptions({
     logsDir: terminalLogsDir,
     ptyAdapter,
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
+    resolveProviderInstanceEnvironment,
   });
 });
 
@@ -1375,6 +1450,24 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
 
+  const resolveLaunchInputEnvironment = Effect.fn("terminal.resolveLaunchInputEnvironment")(
+    function* <Input extends TerminalOpenInput | TerminalAttachInput | TerminalRestartInput>(
+      input: Input,
+    ): Effect.fn.Return<
+      Input,
+      TerminalProviderInstanceNotFoundError | TerminalProviderEnvironmentError
+    > {
+      if (input.providerInstanceId === undefined) return input;
+      const resolver = options.resolveProviderInstanceEnvironment;
+      if (resolver === undefined) {
+        return yield* new TerminalProviderInstanceNotFoundError({
+          providerInstanceId: ProviderInstanceId.make(input.providerInstanceId),
+        });
+      }
+      const env = yield* resolver(input.providerInstanceId, input.env);
+      return { ...input, env };
+    },
+  );
   const logsDir = options.logsDir;
   const historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
   const historyByteLimit = options.historyByteLimit ?? DEFAULT_HISTORY_BYTE_LIMIT;
@@ -2562,7 +2655,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const open: TerminalManager["Service"]["open"] = (input) =>
-    withThreadLock(input.threadId, openLocked(input));
+    withThreadLock(
+      input.threadId,
+      resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked)),
+    );
 
   const openOrAttachForStream = (input: TerminalAttachInput) =>
     withThreadLock(
@@ -2579,11 +2675,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             });
           }
 
-          return yield* openLocked({
+          const resolvedInput = yield* resolveLaunchInputEnvironment({
             ...input,
             terminalId,
             cwd: input.cwd,
           });
+          return yield* openLocked(resolvedInput);
         }
 
         const session = existing.value;
@@ -2591,11 +2688,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const targetRows = input.rows ?? session.rows;
 
         if (!session.process && input.cwd && input.restartIfNotRunning === true) {
-          return yield* openLocked({
+          const resolvedInput = yield* resolveLaunchInputEnvironment({
             ...input,
             terminalId,
             cwd: input.cwd,
           });
+          return yield* openLocked(resolvedInput);
         }
 
         if (
@@ -2868,10 +2966,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }),
     );
 
-  const restart: TerminalManager["Service"]["restart"] = (input) =>
+  const restart: TerminalManager["Service"]["restart"] = (rawInput) =>
     withThreadLock(
-      input.threadId,
+      rawInput.threadId,
       Effect.gen(function* () {
+        const input = yield* resolveLaunchInputEnvironment(rawInput);
         yield* increment(terminalRestartsTotal, { scope: "thread" });
         const terminalId = input.terminalId;
         yield* assertValidCwd(input.cwd);

@@ -2,6 +2,7 @@ import { isElectron } from "~/env";
 import { isWindowsPlatform } from "~/lib/utils";
 
 export type SettingsPath =
+  | "/settings/projects"
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
@@ -17,6 +18,7 @@ export interface SettingsSearchItem {
   readonly title: string;
   readonly to: SettingsPath;
   readonly targetId?: string;
+  readonly searchTerms?: readonly string[];
   // Its row only renders in the desktop app, so a browser result would land on
   // an anchor that isn't there.
   readonly desktopOnly?: boolean;
@@ -31,6 +33,7 @@ export interface SettingsSearchItem {
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
+  "/settings/projects": "Projects",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
@@ -48,6 +51,30 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "continue-threads-after-server-update",
+    title: "Continue threads after restarts",
+    to: "/settings/general",
+    searchTerms: ["resume interrupted crash reboot update machine server recovery"],
+  },
+  {
+    id: "project-defaults",
+    title: "Project defaults",
+    to: "/settings/projects",
+    searchTerms: ["model", "workspace", "machine", "browser", "checkout"],
+  },
+  {
+    id: "automatic-project-pull",
+    title: "Automatically pull",
+    to: "/settings/general",
+    searchTerms: ["git", "clean", "default branch", "project", "fast forward"],
+  },
+  {
+    id: "diff-color-scheme",
+    title: "Diff colors",
+    to: "/settings/appearance",
+    searchTerms: ["red green blue orange additions deletions changes counts palette colorblind"],
+  },
   {
     id: "color-scheme",
     title: "Color scheme",
@@ -155,6 +182,22 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "provider-update-checks",
     title: "Provider update checks",
+    to: "/settings/general",
+  },
+  {
+    id: "panel-animations",
+    title: "Panel animations",
+    to: "/settings/appearance",
+  },
+
+  {
+    id: "composer-collapse-on-scroll",
+    title: "Collapse composer while scrolling",
+    to: "/settings/general",
+  },
+  {
+    id: "proactive-panels",
+    title: "Proactive panels",
     to: "/settings/general",
   },
   {
@@ -298,6 +341,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     windowsOnly: true,
   },
   {
+    id: "load-balancing",
+    title: "Load balancing",
+    to: "/settings/connections",
+    searchTerms: [
+      "automatic machine environment resources cpu memory capacity preference weight shared projects",
+    ],
+  },
+  {
     id: "archive",
     title: "Archived threads",
     to: "/settings/archived",
@@ -344,6 +395,8 @@ export function searchSettings(
       (isElectron || item.desktopOnly !== true) &&
       (!item.windowsOnly ||
         isWindowsPlatform(typeof navigator === "undefined" ? "" : navigator.platform)) &&
-      normalizeSearchText(item.title).includes(normalizedQuery),
+      normalizeSearchText([item.title, ...(item.searchTerms ?? [])].join(" ")).includes(
+        normalizedQuery,
+      ),
   );
 }

@@ -268,7 +268,7 @@ public struct FeatureReviewView: View {
     }
 }
 
-private struct FeatureReviewFileRow: View {
+struct FeatureReviewFileRow: View {
     let file: FeatureReviewFile
 
     var body: some View {
@@ -316,8 +316,8 @@ private struct FeatureReviewFileRow: View {
 
     private var changeColor: Color {
         switch file.change {
-        case .added: .green
-        case .deleted: .red
+        case .added: T3Colors.diffAddition
+        case .deleted: T3Colors.diffDeletion
         case .renamed: .blue
         case .modified, .binary: .orange
         }
@@ -331,10 +331,10 @@ struct FeatureDiffStatsLabel: View {
     var body: some View {
         HStack(spacing: 5) {
             if additions > 0 {
-                Text("+\(additions)").foregroundStyle(.green)
+                Text("+\(additions)").foregroundStyle(T3Colors.diffAddition)
             }
             if deletions > 0 {
-                Text("−\(deletions)").foregroundStyle(.red)
+                Text("−\(deletions)").foregroundStyle(T3Colors.diffDeletion)
             }
         }
         .font(T3Typography.tool.monospacedDigit().weight(.medium))
@@ -578,11 +578,11 @@ private struct FeatureDiffView: View {
     }
 }
 
-private struct FeatureDiffLineRow: View {
+struct FeatureDiffLineRow: View {
     let line: FeatureDiffLine
     let isSelected: Bool
     let minimumWidth: CGFloat
-    let select: () -> Void
+    var select: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -619,8 +619,7 @@ private struct FeatureDiffLineRow: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: select)
-        .accessibilityAction(named: "Add review comment", select)
+        .modifier(FeatureDiffLineInteraction(select: select))
     }
 
     private func lineNumber(_ value: Int?) -> some View {
@@ -641,8 +640,8 @@ private struct FeatureDiffLineRow: View {
 
     private var prefixColor: Color {
         switch line.kind {
-        case .addition: .green
-        case .deletion: .red
+        case .addition: T3Colors.diffAddition
+        case .deletion: T3Colors.diffDeletion
         case .context, .hunk: .secondary
         }
     }
@@ -667,18 +666,27 @@ private struct FeatureDiffLineRow: View {
 
     private var changedSpanBackground: Color {
         switch line.kind {
-        case .addition: Color.green.opacity(0.28)
-        case .deletion: Color.red.opacity(0.28)
+        case .addition: T3Colors.diffAddition.opacity(0.28)
+        case .deletion: T3Colors.diffDeletion.opacity(0.28)
         case .context, .hunk: Color.clear
         }
     }
 
     private var background: Color {
         switch line.kind {
-        case .addition: Color.green.opacity(0.11)
-        case .deletion: Color.red.opacity(0.11)
+        case .addition: T3Colors.diffAddition.opacity(0.11)
+        case .deletion: T3Colors.diffDeletion.opacity(0.11)
         case .hunk: Color.blue.opacity(0.08)
         case .context: Color.clear
         }
+    }
+}
+
+private struct FeatureDiffLineInteraction: ViewModifier {
+    let select: (() -> Void)?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let select {
+            content.onTapGesture(perform: select).accessibilityAction(named: "Add review comment", select)
+        } else { content }
     }
 }

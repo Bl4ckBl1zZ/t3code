@@ -1606,6 +1606,333 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("consumes a restart marker atomically and never dispatches it twice", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const sink = yield* EventSinkV2;
+      const threadId = ThreadId.make("restart-continuation-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("restart-create"),
+        threadId,
+        projectId: ProjectId.make("restart-project"),
+        title: "Restart",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/restart-test",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("restart-original"),
+        threadId,
+        messageId: MessageId.make("restart-original"),
+        createdBy: "user",
+        creationSource: "web",
+        text: "Work",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const run = projection.runs[0]!;
+      const providerThread = projection.providerThreads.find(
+        (candidate) => candidate.id === run.providerThreadId,
+      )!;
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        commandId: CommandId.make("restart-started"),
+        events: [
+          {
+            id: EventId.make("restart-run-started"),
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "running", startedAt: now },
+          },
+          {
+            id: EventId.make("restart-native-reference"),
+            type: "provider-thread.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...providerThread,
+              nativeThreadRef: { driver, nativeId: "saved-provider-thread", strength: "strong" },
+            },
+          },
+        ],
+      });
+      const messageId = MessageId.make("restart-recovery-message");
+      yield* orchestrator.dispatch({
+        type: "run.restart-continuation.prepare",
+        commandId: CommandId.make("restart-prepare"),
+        threadId,
+        runId: run.id,
+        messageId,
+        reason: "restart",
+      });
+      const marked = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      assert.equal(marked.restartContinuation?.status, "pending");
+      yield* sink.write({
+        commandId: CommandId.make("restart-process-loss"),
+        events: [
+          {
+            id: EventId.make("restart-run-cancelled"),
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...marked, status: "cancelled", completedAt: now },
+          },
+        ],
+      });
+      const command = {
+        type: "message.dispatch" as const,
+        commandId: CommandId.make("restart-recovery"),
+        threadId,
+        messageId,
+        text: "Continue",
+        attachments: [],
+        createdBy: "agent" as const,
+        creationSource: "server" as const,
+        restartContinuation: { sourceRunId: run.id },
+        dispatchMode: { type: "start_immediately" as const },
+      };
+      yield* orchestrator.dispatch(command);
+      yield* orchestrator.dispatch(command);
+      const resumed = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(resumed.runs.length, 2);
+      assert.equal(resumed.runs[0]?.restartContinuation?.status, "consumed");
+      assert.equal(
+        resumed.messages.find((message) => message.id === messageId)?.restartContinuation,
+        true,
+      );
+      assert.equal(resumed.runs[1]?.providerThreadId, providerThread.id);
+      const rejected = yield* orchestrator
+        .dispatch({
+          ...command,
+          commandId: CommandId.make("restart-duplicate"),
+          messageId: MessageId.make("restart-other-message"),
+        })
+        .pipe(Effect.flip);
+      assert.equal(rejected._tag, "OrchestratorDispatchError");
+      const nextRun = resumed.runs[1]!;
+      yield* sink.write({
+        commandId: CommandId.make("restart-next-running"),
+        events: [
+          {
+            id: EventId.make("restart-next-running-event"),
+            type: "run.updated",
+            threadId,
+            runId: nextRun.id,
+            occurredAt: now,
+            payload: { ...nextRun, status: "running" },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "run.restart-continuation.prepare",
+        commandId: CommandId.make("restart-next-prepare"),
+        threadId,
+        runId: nextRun.id,
+        messageId: MessageId.make("restart-next-message"),
+        reason: "restart",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("restart-archive"),
+        threadId,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("restart-unarchive"),
+        threadId,
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[1]?.restartContinuation?.status,
+        "cancelled",
+      );
+      yield* orchestrator.dispatch({
+        type: "run.restart-continuation.prepare",
+        commandId: CommandId.make("restart-branch-prepare"),
+        threadId,
+        runId: nextRun.id,
+        messageId: MessageId.make("restart-branch-message"),
+        reason: "restart",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("restart-change-branch"),
+        threadId,
+        branch: "different",
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[1]?.restartContinuation?.status,
+        "cancelled",
+      );
+      yield* orchestrator.dispatch({
+        type: "run.restart-continuation.prepare",
+        commandId: CommandId.make("restart-stop-prepare"),
+        threadId,
+        runId: nextRun.id,
+        messageId: MessageId.make("restart-stop-message"),
+        reason: "restart",
+      });
+      yield* orchestrator.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("restart-explicit-stop"),
+        threadId,
+        runId: nextRun.id,
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[1]?.restartContinuation?.status,
+        "cancelled",
+      );
+    }),
+  );
+
+  it.effect("rejects stale automatic settlement and preserves its activity timestamp", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-auto-settle-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-auto-settle-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-auto-settle-project"),
+        title: "Auto settle",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const sink = yield* EventSinkV2;
+      const now = yield* DateTime.now;
+      const nodeId = NodeId.make("auto-settle-question-node");
+      const blocking = {
+        id: RuntimeRequestId.make("auto-settle-blocking"),
+        nodeId,
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "user_input" as const,
+        status: "pending" as const,
+        responseMode: "callback" as const,
+        responseCapability: {
+          type: "live" as const,
+          providerSessionId: ProviderSessionId.make("auto-settle-session"),
+        },
+        createdAt: now,
+        resolvedAt: null,
+      };
+      yield* sink.write({
+        commandId: CommandId.make("auto-settle-request-seed"),
+        events: [
+          {
+            id: EventId.make("auto-settle-blocking-event"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: blocking,
+          },
+          {
+            id: EventId.make("auto-settle-message-event"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              ...blocking,
+              id: RuntimeRequestId.make("auto-settle-message"),
+              responseMode: "message",
+              createdAt: DateTime.add(now, { seconds: 1 }),
+            },
+          },
+        ],
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pendingRuntimeRequest?.id,
+        blocking.id,
+      );
+      yield* sink.write({
+        commandId: CommandId.make("auto-settle-request-resolve"),
+        events: [
+          {
+            id: EventId.make("auto-settle-resolved-event"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: { ...blocking, status: "resolved", resolvedAt: now },
+          },
+        ],
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pendingRuntimeRequest?.responseMode,
+        "message",
+      );
+      const sequence = yield* orchestrator.getThreadEventSequence(threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-auto-settle-edit"),
+        threadId,
+        title: "Changed",
+      });
+      const stale = yield* orchestrator
+        .dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("runtime-layer-auto-settle-stale"),
+          threadId,
+          automatic: { expectedSequence: sequence },
+        })
+        .pipe(Effect.flip);
+      assert.equal(stale._tag, "OrchestratorDispatchError");
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-auto-settle-pin"),
+        threadId,
+        pinned: true,
+      });
+      const settledAt = DateTime.formatIso(
+        (yield* orchestrator.getThreadProjection(threadId)).thread.createdAt,
+      );
+      yield* TestClock.adjust("1 minute");
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("runtime-layer-auto-settle-fresh"),
+        threadId,
+        automatic: { expectedSequence: yield* orchestrator.getThreadEventSequence(threadId) },
+        settledAt,
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(projection.thread.settledOverride, "settled");
+      assert.isNotNull(projection.thread.pinnedAt);
+      assert.equal(DateTime.formatIso(projection.thread.settledAt!), settledAt);
+      assert.equal(DateTime.formatIso(projection.thread.updatedAt), settledAt);
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("runtime-layer-auto-settle-resume"),
+        threadId,
+        reason: "user",
+      });
+      const pinned = yield* orchestrator
+        .dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("runtime-layer-auto-settle-active"),
+          threadId,
+          automatic: { expectedSequence: yield* orchestrator.getThreadEventSequence(threadId) },
+        })
+        .pipe(Effect.flip);
+      assert.equal(pinned._tag, "OrchestratorDispatchError");
+    }),
+  );
+
   it.effect("rejects settling a thread while a run is active", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
@@ -2419,5 +2746,103 @@ it.layer(SharedApplicationDataPlaneTestLayer)("shared application data plane", (
       `;
       assert.equal(retiredWrites[0]?.count, 0);
     }),
+  );
+});
+
+it.layer(TestLayer)("V2 pull request metadata", (it) => {
+  it.effect(
+    "persists host snapshots without creating activity and rejects stale stack anchors",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* OrchestratorV2;
+        const threadId = ThreadId.make("runtime-pr-sync");
+        const projectId = ProjectId.make("runtime-pr-project");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("runtime-pr-create"),
+          threadId,
+          projectId,
+          title: "PR metadata",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "feature/pr",
+          worktreePath: null,
+        });
+        const reference = {
+          projectId,
+          repository: "org/repo",
+          number: 1,
+          url: "https://github.com/org/repo/pull/1",
+        };
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-pr-link"),
+          threadId,
+          linkPullRequest: reference,
+          linkPullRequestSource: "agent",
+        });
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        const anchor = before.thread.pullRequests![0]!;
+        yield* TestClock.adjust("1 minute");
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-pr-sync"),
+          threadId,
+          syncPullRequest: {
+            reference: anchor,
+            stack: null,
+            snapshot: {
+              state: "open",
+              title: "Live title",
+              headBranch: "feature/pr",
+              baseBranch: "main",
+              isDraft: true,
+              updatedAt: "2026-09-11T00:00:00.000Z",
+              syncedAt: "2026-09-11T00:00:00.000Z",
+            },
+          },
+        });
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(after.thread.updatedAt, before.thread.updatedAt);
+        assert.equal(after.thread.pullRequests?.[0]?.snapshot?.title, "Live title");
+        assert.equal(
+          (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.snapshot?.isDraft,
+          true,
+        );
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-pr-unlink"),
+          threadId,
+          unlinkPullRequest: reference,
+        });
+        const error = yield* orchestrator
+          .dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("runtime-pr-stale-stack"),
+            threadId,
+            linkPullRequest: { ...reference, number: 2, url: "https://github.com/org/repo/pull/2" },
+            linkPullRequestSource: "stack",
+            expectedPullRequestLink: anchor,
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(error, OrchestratorDispatchError);
+        assert.deepEqual(
+          (yield* orchestrator.getThreadProjection(threadId)).thread.linkedPullRequests,
+          [],
+        );
+        const staleBranch = yield* orchestrator
+          .dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("runtime-pr-stale-branch"),
+            threadId,
+            branchPullRequest: reference,
+            expectedBranch: "different-branch",
+          })
+          .pipe(Effect.flip);
+        assert.instanceOf(staleBranch, OrchestratorDispatchError);
+      }),
   );
 });

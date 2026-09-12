@@ -146,6 +146,7 @@ export function DraftHeroHeadline({
                 className="[&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
               >
                 <ProjectFavicon
+                  project={group}
                   environmentId={group.environmentId}
                   cwd={group.workspaceRoot}
                   className="size-4.5 shrink-0 sm:size-4"

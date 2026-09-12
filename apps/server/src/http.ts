@@ -49,9 +49,12 @@ import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManag
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
+import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
+
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
+const HTML_CONTENT_SECURITY_POLICY = "sandbox allow-scripts allow-forms allow-popups allow-modals";
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 // Types a browser may render as a document if a proxy strips the disposition
@@ -62,6 +65,9 @@ const isSafeDownloadMimeType = (mimeType: string): boolean =>
   !/(?:^text\/html$|\/xml(?:$|-)|\+xml$)/i.test(mimeType.trim().toLowerCase());
 const isSafeInlineVideoMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) && mimeType.toLowerCase().startsWith("video/");
+
+const isSafeInlineDocumentMimeType = (mimeType: string): boolean =>
+  mimeType.toLowerCase() === "application/pdf" || mimeType.toLowerCase() === "text/html";
 
 /** RFC 6266 disposition with an ASCII fallback name plus a UTF-8 `filename*`. */
 export function downloadContentDisposition(fileName?: string): string {
@@ -91,7 +97,7 @@ export function assetResponseHeaders(
   },
 ): Record<string, string> {
   const lowerPath = filePath.toLowerCase();
-  const inlineVideoMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
+  const inlineMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
   return {
     "Cache-Control": "private, max-age=3600",
     "X-Content-Type-Options": "nosniff",
@@ -104,11 +110,24 @@ export function assetResponseHeaders(
               ? options.mimeType
               : "application/octet-stream",
         }
-      : inlineVideoMimeType !== undefined && isSafeInlineVideoMimeType(inlineVideoMimeType)
-        ? { "Content-Type": inlineVideoMimeType }
-        : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
-          ? { "Content-Type": "text/html; charset=utf-8" }
-          : {}),
+      : inlineMimeType !== undefined && isSafeInlineVideoMimeType(inlineMimeType)
+        ? { "Content-Type": inlineMimeType }
+        : inlineMimeType !== undefined && isSafeInlineDocumentMimeType(inlineMimeType)
+          ? {
+              "Content-Type":
+                inlineMimeType.toLowerCase() === "text/html"
+                  ? "text/html; charset=utf-8"
+                  : "application/pdf",
+              ...(inlineMimeType.toLowerCase() === "text/html"
+                ? { "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY }
+                : {}),
+            }
+          : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
+            ? {
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY,
+              }
+            : {}),
     ...(!options?.download && lowerPath.endsWith(".svg")
       ? { "Content-Security-Policy": SVG_CONTENT_SECURITY_POLICY }
       : {}),
@@ -141,17 +160,30 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     readonly download?: boolean;
     readonly fileName?: string;
     readonly mimeType?: string;
+    readonly file?: OpenMediaFile;
   },
   rangeHeader?: string,
   ifRangeHeader?: string,
+  method: "GET" | "HEAD" = "GET",
 ) {
   const headers = assetResponseHeaders(asset.path, asset);
-  if (headers["Content-Type"]?.toLowerCase().startsWith("video/")) {
+  const mediaFile = asset.file;
+  const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
+  const isVideo = headers["Content-Type"]?.toLowerCase().startsWith("video/") === true;
+  if (mediaFile && isVideo) {
+    // Host videos can change in place. Do not invite conditional range requests
+    // with validators that cannot establish byte-for-byte identity.
+    headers["Cache-Control"] = "private, no-store";
+  }
+  let status = 200;
+  let offset = 0n;
+  let bytesToRead: bigint | undefined;
+  if (isVideo) {
     headers["Accept-Ranges"] = "bytes";
     // If-Range requires a matching validator. A full response is safe when we cannot validate it.
-    if (rangeHeader && !ifRangeHeader) {
+    if (method === "GET" && rangeHeader && ifRangeHeader === undefined) {
       const fs = yield* FileSystem.FileSystem;
-      const info = yield* fs.stat(asset.path);
+      const info = mediaInfo ?? (yield* fs.stat(asset.path));
       const range = assetByteRange(rangeHeader, info.size);
       if (range?._tag === "Unsatisfiable") {
         return HttpServerResponse.empty({
@@ -160,16 +192,34 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
         });
       }
       if (range?._tag === "Range") {
-        return yield* HttpServerResponse.file(asset.path, {
-          status: 206,
-          offset: range.offset,
-          bytesToRead: range.bytesToRead,
-          headers: { ...headers, "Content-Range": range.contentRange },
-        });
+        status = 206;
+        offset = range.offset;
+        bytesToRead = range.bytesToRead;
+        headers["Content-Range"] = range.contentRange;
       }
     }
   }
-  return yield* HttpServerResponse.file(asset.path, { status: 200, headers });
+  if (mediaFile && mediaInfo) {
+    const size = bytesToRead ?? mediaInfo.size;
+    headers["Content-Type"] ??= Mime.getType(asset.path) ?? "application/octet-stream";
+    headers["Content-Length"] = String(size);
+    if (!isVideo) {
+      headers["Last-Modified"] = mediaInfo.mtime.toUTCString();
+      headers.ETag = `W/"${mediaInfo.size.toString(16)}-${mediaInfo.mtimeMs.toString(16)}"`;
+    }
+    if (method === "HEAD" || size === 0n) {
+      return HttpServerResponse.empty({ status, headers });
+    }
+    const body = streamMediaFile(mediaFile, offset, size);
+    if (!body) {
+      return HttpServerResponse.text("File is too large to preview.", { status: 413 });
+    }
+    return HttpServerResponse.stream(body, {
+      status,
+      headers,
+    });
+  }
+  return yield* HttpServerResponse.file(asset.path, { status, offset, bytesToRead, headers });
 });
 
 export const httpCompressionLayer = HttpRouter.middleware(HttpMiddleware.compression(), {
@@ -412,6 +462,7 @@ export const assetRouteLayer = HttpRouter.add(
       asset,
       request.method === "GET" ? request.headers.range : undefined,
       request.headers["if-range"],
+      request.method === "HEAD" ? "HEAD" : "GET",
     ).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );

@@ -1,0 +1,15 @@
+{
+  "citation": {
+    "version": 1,
+    "environmentId": "environment/remote",
+    "threadId": "thread:one",
+    "messageId": "assistant?one",
+    "text": "Use `cache[key]` 🚀",
+    "comment": "Why?",
+    "start": 0,
+    "end": 19,
+    "prefix": "",
+    "suffix": ""
+  },
+  "href": "t3-citation://v1/environment%2Fremote/thread%3Aone/assistant%3Fone?text=Use+%60cache%5Bkey%5D%60+%F0%9F%9A%80&start=0&end=19&prefix=&suffix=&comment=Why%3F"
+}

@@ -1,0 +1,134 @@
+{
+  "input": {
+    "state": "open",
+    "involvement": "authored",
+    "filters": {
+      "draft": "hide",
+      "checks": "passing",
+      "labels": [
+        [
+          "bug",
+          "docs"
+        ]
+      ],
+      "excludedLabels": [
+        "wontfix"
+      ],
+      "author": "me"
+    },
+    "projectIds": [
+      "project-pr"
+    ],
+    "host": "github.com",
+    "limit": 50,
+    "cursors": {
+      "github.com owner/repo": "opaque-next"
+    },
+    "query": "compiler"
+  },
+  "result": {
+    "viewers": {
+      "github.com": "me"
+    },
+    "providers": [
+      {
+        "host": "github.com",
+        "kind": "github",
+        "searchesOnHost": true,
+        "projectCount": 1,
+        "configured": true,
+        "detail": null
+      }
+    ],
+    "entries": [
+      {
+        "provider": "github",
+        "host": "github.com",
+        "projectId": "project-pr",
+        "projectTitle": "Compiler",
+        "repository": "owner/repo",
+        "number": 42,
+        "title": "Fix compiler",
+        "url": "https://github.com/owner/repo/pull/42",
+        "author": {
+          "login": "me",
+          "name": null,
+          "avatarUrl": null
+        },
+        "headBranch": "fix-compiler",
+        "baseBranch": "main",
+        "state": "open",
+        "isDraft": false,
+        "mergeability": "mergeable",
+        "additions": 0,
+        "deletions": 0,
+        "createdAt": "2026-09-10T12:00:00.000Z",
+        "updatedAt": "2026-09-10T12:01:00.000Z",
+        "viewerReviewRequested": false,
+        "labels": [
+          {
+            "name": "bug",
+            "color": "ff0000"
+          }
+        ],
+        "reviewDecision": "approved",
+        "checksState": "passing"
+      },
+      {
+        "provider": "github",
+        "host": "enterprise.example",
+        "projectId": "project-pr",
+        "projectTitle": "Compiler",
+        "repository": "owner/repo",
+        "number": 42,
+        "title": "Fix compiler",
+        "url": "https://enterprise.example/owner/repo/pull/42",
+        "author": {
+          "login": "me",
+          "name": null,
+          "avatarUrl": null
+        },
+        "headBranch": "fix-compiler",
+        "baseBranch": "main",
+        "state": "open",
+        "isDraft": false,
+        "mergeability": "mergeable",
+        "additions": 0,
+        "deletions": 0,
+        "createdAt": "2026-09-10T12:00:00.000Z",
+        "updatedAt": "2026-09-10T12:01:00.000Z",
+        "viewerReviewRequested": false,
+        "labels": [
+          {
+            "name": "bug",
+            "color": "ff0000"
+          }
+        ],
+        "reviewDecision": "approved",
+        "checksState": "passing"
+      }
+    ],
+    "errors": [
+      {
+        "projectId": "unavailable",
+        "projectTitle": "Offline project",
+        "message": "Host unavailable"
+      }
+    ],
+    "truncated": true,
+    "nextCursors": {
+      "github.com owner/repo": "opaque-next"
+    }
+  },
+  "stats": {
+    "stats": [
+      {
+        "projectId": "project-pr",
+        "repository": "owner/repo",
+        "number": 42,
+        "additions": 0,
+        "deletions": 0
+      }
+    ]
+  }
+}

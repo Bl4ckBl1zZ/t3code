@@ -2,6 +2,9 @@ import SwiftUI
 
 public struct FeatureRootView: View {
     @State private var model: FeatureRootModel
+    @State private var startedFresh = false
+    @State private var showingSetup = false
+    @AppStorage("t3.native.onboarding.completed") private var setupCompleted = false
     private let navigationRequest: FeatureWorkspaceNavigationRequest?
     private let onNavigationRequestConsumed: @MainActor (UUID) -> Void
 
@@ -39,16 +42,26 @@ public struct FeatureRootView: View {
                 )
             } else {
                 ConnectionOnboardingView(model: model)
+                    .onAppear { if model.snapshot.environments.isEmpty { startedFresh = true } }
             }
         }
         .preferredColorScheme(preferredColorScheme)
         .tint(T3Colors.accent)
         .background(T3Colors.background.ignoresSafeArea())
         .task { await model.start() }
+        .onChange(of: shouldShowWorkspace) { _, ready in
+            if ready && startedFresh && !setupCompleted { showingSetup = true; startedFresh = false }
+        }
+        .sheet(isPresented: $showingSetup) {
+            AgentSetupView(model: model, onFinished: { setupCompleted = true; showingSetup = false })
+        }
         // The palette lives in a store rather than the environment so every
         // T3Colors reader picks it up; this is the one place settings feed it.
         // `apply` no-ops unless the selection actually moved, so the frequent
         // non-theme settings updates cost nothing.
+        .onChange(of: model.snapshot.settings.diffColorScheme, initial: true) { _, value in
+            T3ThemeStore.shared.diffColorScheme = value
+        }
         .onChange(of: themeSelection, initial: true) { _, selection in
             T3ThemeStore.shared.apply(
                 lightPaletteID: selection.light,

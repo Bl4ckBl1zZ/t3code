@@ -156,3 +156,22 @@ Control settings**.
 - [GitHub CLI](https://cli.github.com/)
 - [GitLab CLI](https://gitlab.com/gitlab-org/cli)
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/)
+
+## Finding a thread by its linked pull request
+
+On web and desktop, sidebar search and the command palette match the linked PR number
+(such as **#287**), repository plus number, or URL. This searches links already attached to
+threads; it does not query the source-control host.
+
+Remote **Open in editor** also supports Zed over SSH when the environment advertises an
+SSH target and Zed is installed on the client machine.
+
+Enable **Proactive panels** in Settings → General to open linked pull requests and completed-run
+changes automatically on desktop-sized layouts. Changes open only when a ready checkpoint contains
+modified files. Closing a panel or choosing another surface takes precedence over pending automatic
+opens. A linked PR already shown in the panel follows its replacement; unrelated reviews stay put.
+Compact layouts and the native iOS app keep explicit navigation.
+
+When right-panel tabs overflow, use the left and right arrows or the mouse wheel over the
+tab strip to reach hidden tabs. Selecting a tab brings it into view. Arrow scrolling respects
+your system's reduced-motion preference.

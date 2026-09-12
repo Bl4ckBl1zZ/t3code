@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -57,3 +58,7 @@ describe("AnnotatableCodeView", () => {
     expect(testState.codeViewOptions).not.toHaveProperty("onLineSelectionEnd");
   });
 });
+
+vi.mock("../DiffWorkerPoolProvider", () => ({
+  DiffWorkerPoolProvider: ({ children }: { children?: ReactNode }) => children,
+}));

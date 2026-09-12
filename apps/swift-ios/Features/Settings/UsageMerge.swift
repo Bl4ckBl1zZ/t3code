@@ -69,6 +69,7 @@ public struct FeatureMergedUsage: Sendable, Equatable {
     public var providers: [FeatureUsageProviderTotals] = []
     public var models: [FeatureUsageModelTotals] = []
     public var daily: [FeatureUsageDailyTotals] = []
+    public var hourly: [FeatureUsageDailyTotals] = []
     /// Environments whose transcript directories were dropped as duplicates
     /// of another environment's (label: path).
     public var duplicateSources: [String] = []
@@ -103,7 +104,7 @@ public enum FeatureUsageMerge {
 
         var current: [FeatureEnvironmentUsage] = []
         for environment in environments {
-            if environment.summary.contractVersion == expectedContractVersion {
+            if environment.summary.contractVersion >= usageMergeCompatibleSince && environment.summary.contractVersion <= expectedContractVersion {
                 current.append(environment)
             } else {
                 merged.staleEnvironments.append(environment.environmentID)
@@ -131,6 +132,7 @@ public enum FeatureUsageMerge {
         var modelTotals: [String: (provider: String, model: String, costUsd: Double, tokens: Int)] =
             [:]
         var dailyTotals: [String: [String: FeatureUsageDailySlice]] = [:]
+        var hourlyTotals: [String: [String: FeatureUsageDailySlice]] = [:]
 
         for environment in current {
             var ownedProviders: Set<String> = []
@@ -185,6 +187,14 @@ public enum FeatureUsageMerge {
                 slice.totalTokens += tokens
                 day[bucket.provider] = slice
                 dailyTotals[bucket.day] = day
+                if let hour = bucket.hourStart {
+                    var providers = hourlyTotals[hour] ?? [:]
+                    var hourlySlice = providers[bucket.provider] ?? FeatureUsageDailySlice(costUsd: 0, totalTokens: 0)
+                    hourlySlice.costUsd += bucket.costUsd
+                    hourlySlice.totalTokens += tokens
+                    providers[bucket.provider] = hourlySlice
+                    hourlyTotals[hour] = providers
+                }
             }
         }
 
@@ -215,6 +225,10 @@ public enum FeatureUsageMerge {
                 )
             }
             .sorted { $0.day < $1.day }
+        merged.hourly = hourlyTotals.map { hour, providers in
+            FeatureUsageDailyTotals(day: hour, costUsd: providers.values.reduce(0) { $0 + $1.costUsd },
+                totalTokens: providers.values.reduce(0) { $0 + $1.totalTokens }, byProvider: providers)
+        }.sorted { $0.day < $1.day }
         return merged
     }
 }

@@ -1,11 +1,24 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { Spinner } from "~/components/ui/spinner";
+import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
+import { ProviderAccountSetup } from "./ProviderAccountSetup";
+import { ProjectAutoPullSettings } from "./ProjectBooleanSettings";
+import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
+import { type EnvironmentId } from "@t3tools/contracts";
+import { useEnvironments } from "../../state/environments";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { ConnectedEnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { useEnvironmentOperateAccess } from "./EnvironmentIconPicker";
+import {
+  buildProviderEnvironmentOptions,
+  resolveSelectedProviderEnvironmentId,
+} from "./ProviderSettingsPanel.logic";
 import {
   ArchiveIcon,
   ArchiveX,
   ChevronRightIcon,
   InfoIcon,
-  LoaderIcon,
   PlusIcon,
-  RefreshCwIcon,
   SettingsIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
@@ -38,6 +51,8 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   type EnvironmentIdentificationMode,
   MAX_APPEARANCE_CONTRAST,
+  MAX_PANEL_ANIMATION_DURATION_MS,
+  MIN_PANEL_ANIMATION_DURATION_MS,
   MAX_CODE_FONT_SIZE,
   MAX_GLASS_OPACITY,
   MAX_INTERFACE_FONT_SIZE,
@@ -105,6 +120,7 @@ import { isMacPlatform } from "../../lib/utils";
 import {
   primaryServerObservabilityAtom,
   primaryServerProvidersAtom,
+  EMPTY_SERVER_PROVIDERS,
   serverEnvironment,
 } from "../../state/server";
 import { usePrimaryEnvironment } from "../../state/environments";
@@ -682,8 +698,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(theme !== "system" ? ["Theme"] : []),
       ...(!followSystem ? ["Follow system"] : []),
       ...(themeHalves !== null ? ["Theme mix"] : []),
+      ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
+        ? ["Panel animations"]
+        : []),
       ...(settings.appearanceContrast !== DEFAULT_UNIFIED_SETTINGS.appearanceContrast
         ? ["Contrast"]
+        : []),
+      ...(settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme
+        ? ["Diff colors"]
         : []),
       ...(settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? ["Glass opacity"] : []),
       ...(settings.environmentIdentificationMode !==
@@ -704,6 +726,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
         : []),
+      ...(settings.continueThreadsAfterServerUpdate !==
+      DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
+        ? ["Continue threads after restarts"]
+        : []),
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
         : []),
@@ -711,6 +737,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
+        : []),
+      ...(settings.composerCollapseOnScroll !== DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll
+        ? ["Collapse composer while scrolling"]
+        : []),
+      ...(settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled
+        ? ["Proactive panels"]
         : []),
       ...(settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar
         ? ["Auto-open task panel"]
@@ -764,6 +796,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       isBackgroundActivityDirty,
       isWorktreeRetentionDirty,
       settings.autoOpenPlanSidebar,
+      settings.composerCollapseOnScroll,
+      settings.proactivePanelsEnabled,
       settings.alwaysExpandActivity,
       settings.browserDefaultViewport,
       settings.browserDefaultZoomFactor,
@@ -771,6 +805,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.browserRecordingFrameRate,
       settings.browserAutoShowFloatingPreview,
       settings.appearanceContrast,
+      settings.panelAnimationDurationMs,
+      settings.diffColorScheme,
       settings.enableAgentBrowserAccess,
       settings.confirmQuit,
       settings.confirmThreadArchive,
@@ -793,6 +829,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
       settings.sidebarAutoSettleAfterDays,
+      settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
@@ -871,6 +908,8 @@ export function useSettingsRestore(onRestored?: () => void) {
     }
     updateSettings({
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
+      panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
+      diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
@@ -881,8 +920,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
+      composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
+      proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       alwaysExpandActivity: DEFAULT_UNIFIED_SETTINGS.alwaysExpandActivity,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
+      continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
@@ -1226,6 +1268,14 @@ export function AppearanceSettingsPanel() {
     "--settings-slider-progress": `${glassOpacityRatio * 100}%`,
     "--settings-slider-fill-offset": `${0.5 - glassOpacityRatio}rem`,
   } as CSSProperties;
+  const panelAnimationDurationRatio =
+    (settings.panelAnimationDurationMs - MIN_PANEL_ANIMATION_DURATION_MS) /
+    (MAX_PANEL_ANIMATION_DURATION_MS - MIN_PANEL_ANIMATION_DURATION_MS);
+  const panelAnimationDurationSliderStyle = {
+    "--settings-slider-progress": `${panelAnimationDurationRatio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - panelAnimationDurationRatio}rem`,
+  } as CSSProperties;
+
   const appearanceContrastRatio =
     (settings.appearanceContrast - MIN_APPEARANCE_CONTRAST) /
     (MAX_APPEARANCE_CONTRAST - MIN_APPEARANCE_CONTRAST);
@@ -1301,6 +1351,52 @@ export function AppearanceSettingsPanel() {
           }
         />
 
+        <SettingsRow
+          {...searchableSetting("diff-color-scheme")}
+          description="Choose colors for additions and deletions, including change counts."
+          resetAction={
+            settings.diffColorScheme !== DEFAULT_UNIFIED_SETTINGS.diffColorScheme ? (
+              <SettingResetButton
+                label="diff colors"
+                onClick={() =>
+                  updateSettings({ diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="w-full sm:w-40">
+              <Select
+                value={settings.diffColorScheme}
+                onValueChange={(value) => {
+                  if (value === "red-green" || value === "blue-orange")
+                    updateSettings({ diffColorScheme: value });
+                }}
+              >
+                <SelectTrigger size="sm" className="w-full min-w-0" aria-label="Diff colors">
+                  <span
+                    aria-hidden="true"
+                    className={
+                      settings.diffColorScheme === "blue-orange"
+                        ? "flex shrink-0 flex-row-reverse gap-1"
+                        : "flex shrink-0 gap-1"
+                    }
+                  >
+                    <span className="size-2 rounded-full bg-[var(--diff-deletion)]" />
+                    <span className="size-2 rounded-full bg-[var(--diff-addition)]" />
+                  </span>
+                  <SelectValue>
+                    {settings.diffColorScheme === "blue-orange" ? "Blue & orange" : "Red & green"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="red-green">Red & green (default)</SelectItem>
+                  <SelectItem value="blue-orange">Blue & orange</SelectItem>
+                </SelectPopup>
+              </Select>
+            </div>
+          }
+        />
         <SettingsRow
           {...searchableSetting("setting-glass-opacity")}
           description="Control how transparent glass surfaces are. Higher values make menus, dialogs, and the composer more solid."
@@ -1388,6 +1484,60 @@ export function AppearanceSettingsPanel() {
             }
           />
         ) : null}
+      </SettingsSection>
+
+      <SettingsSection id="motion" title="Motion">
+        <SettingsRow
+          {...searchableSetting("panel-animations")}
+          description="Set how fast panels open and close."
+          control={
+            <div className="grid w-full grid-cols-[5rem_minmax(0,1fr)] items-center gap-3 sm:w-auto sm:grid-cols-[7rem_13rem] sm:gap-4">
+              <PanelAnimationsPreview durationMs={settings.panelAnimationDurationMs} />
+              <div className="flex w-full items-center gap-3">
+                <output
+                  className="min-w-16 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+                  htmlFor="panel-animation-duration"
+                >
+                  {settings.panelAnimationDurationMs} ms
+                </output>
+                <input
+                  aria-label="Panel animation duration"
+                  className="settings-slider min-w-0 flex-1"
+                  id="panel-animation-duration"
+                  max={MAX_PANEL_ANIMATION_DURATION_MS}
+                  min={MIN_PANEL_ANIMATION_DURATION_MS}
+                  onChange={(event) => {
+                    const panelAnimationDurationMs = Number(event.currentTarget.value);
+                    if (
+                      Number.isInteger(panelAnimationDurationMs) &&
+                      panelAnimationDurationMs >= MIN_PANEL_ANIMATION_DURATION_MS &&
+                      panelAnimationDurationMs <= MAX_PANEL_ANIMATION_DURATION_MS
+                    ) {
+                      updateSettings({ panelAnimationDurationMs });
+                    }
+                  }}
+                  step={25}
+                  style={panelAnimationDurationSliderStyle}
+                  type="range"
+                  value={settings.panelAnimationDurationMs}
+                />
+              </div>
+            </div>
+          }
+          resetAction={
+            settings.panelAnimationDurationMs !==
+            DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs ? (
+              <SettingResetButton
+                label="panel animations"
+                onClick={() =>
+                  updateSettings({
+                    panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,
+                  })
+                }
+              />
+            ) : null
+          }
+        />
       </SettingsSection>
 
       <TypographySection />
@@ -2070,6 +2220,7 @@ function LegacyFeaturesSection() {
               }
             />
             <SettingsRow
+              serverScoped
               {...searchableSetting("legacy-token-streaming")}
               description="Paints assistant output token by token instead of in complete chunks. Not recommended: it is significantly slower, and long responses become harder to follow. Kept only for compatibility with the old behavior."
               control={
@@ -2116,6 +2267,9 @@ function LegacyFeaturesSection() {
 }
 
 export function GeneralSettingsPanel() {
+  const primaryEnvironment = usePrimaryEnvironment();
+  const supportsRestartContinuation =
+    primaryEnvironment?.serverConfig?.environment.capabilities.threadRestartContinuation === true;
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
@@ -2170,7 +2324,44 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SharedSettingsMismatchAlert />
       <SettingsSection title="General">
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("continue-threads-after-server-update")}
+          resetAction={
+            supportsRestartContinuation && settings.continueThreadsAfterServerUpdate ? (
+              <SettingResetButton
+                label="restart continuation"
+                onClick={() => updateSettings({ continueThreadsAfterServerUpdate: false })}
+              />
+            ) : null
+          }
+          description={
+            supportsRestartContinuation
+              ? "Resume interrupted threads after restarts or updates. Shared across connected, supported machines. Saved provider sessions are required; terminal commands may still be interrupted."
+              : "Connect an updated server to configure restart continuation."
+          }
+          control={
+            <Switch
+              disabled={!supportsRestartContinuation}
+              checked={settings.continueThreadsAfterServerUpdate}
+              onCheckedChange={(checked) =>
+                updateSettings({ continueThreadsAfterServerUpdate: Boolean(checked) })
+              }
+              aria-label="Continue threads after restarts"
+            />
+          }
+        />
+        <SettingsRow
+          title="Set up T3 Code"
+          description="Connect computers, configure agents, and import CLI projects and conversations."
+          control={
+            <Button variant="outline" size="sm" render={<Link to="/welcome" />}>
+              Open setup
+            </Button>
+          }
+        />
         <SettingsRow
           {...searchableSetting("project-grouping")}
           description="Combine matching repositories across environments."
@@ -2396,6 +2587,7 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          serverScoped
           {...searchableSetting("provider-update-checks")}
           description="Check installed provider CLIs for newer available versions."
           resetAction={
@@ -2423,6 +2615,7 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          serverScoped
           title={
             <span className="inline-flex items-center gap-1.5">
               Background activity
@@ -2505,6 +2698,57 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          {...searchableSetting("composer-collapse-on-scroll")}
+          description="Make a single-line desktop composer smaller while you scroll the conversation. Click or type in it to expand again."
+          resetAction={
+            settings.composerCollapseOnScroll !==
+            DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll ? (
+              <SettingResetButton
+                label="collapse composer while scrolling"
+                onClick={() =>
+                  updateSettings({
+                    composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.composerCollapseOnScroll}
+              onCheckedChange={(checked) =>
+                updateSettings({ composerCollapseOnScroll: Boolean(checked) })
+              }
+              aria-label="Collapse composer while scrolling"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("proactive-panels")}
+          description="Open linked pull requests and completed-run diffs when work changes files. Applies to inline desktop panels."
+          resetAction={
+            settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled ? (
+              <SettingResetButton
+                label="proactive panels"
+                onClick={() =>
+                  updateSettings({
+                    proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.proactivePanelsEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ proactivePanelsEnabled: Boolean(checked) })
+              }
+              aria-label="Proactive panels"
+            />
+          }
+        />
+        <SettingsRow
           {...searchableSetting("auto-open-task-panel")}
           description="Open the right-side plan and task panel automatically when steps appear."
           resetAction={
@@ -2530,7 +2774,10 @@ export function GeneralSettingsPanel() {
           }
         />
 
+        <ProjectAutoPullSettings />
+
         <SettingsRow
+          serverScoped
           {...searchableSetting("new-threads")}
           description="Pick the default workspace mode for newly created draft threads."
           resetAction={
@@ -2576,6 +2823,7 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          serverScoped
           className="bg-muted/20 sm:pl-9"
           title={searchableSetting("start-from-origin").title}
           description="Creates the worktree from the latest matching branch on origin instead of your local branch."
@@ -2607,6 +2855,7 @@ export function GeneralSettingsPanel() {
         <WorktreeRetentionSettingsSection />
 
         <SettingsRow
+          serverScoped
           {...searchableSetting("add-project-starts-in")}
           description='Leave empty to use "~/" when the Add Project browser opens.'
           resetAction={
@@ -2737,6 +2986,7 @@ export function GeneralSettingsPanel() {
         ) : null}
 
         <SettingsRow
+          serverScoped
           {...searchableSetting("text-generation-model")}
           description="Default model for generated text like thread titles and source control content. Source control settings can override it with a dedicated source control writer model."
           resetAction={
@@ -2839,17 +3089,79 @@ export function GeneralSettingsPanel() {
   );
 }
 
-export function ProviderSettingsPanel(
-  props: {
-    readonly includeDriver?: (driver: ProviderDriverKind) => boolean;
-    readonly title?: string;
-    readonly allowAddInstance?: boolean;
-  } = {},
+interface ProviderSettingsPanelProps {
+  readonly initialEnvironmentId?: EnvironmentId;
+  readonly initialInstanceId?: ProviderInstanceId;
+  readonly includeDriver?: (driver: ProviderDriverKind) => boolean;
+  readonly title?: string;
+  readonly allowAddInstance?: boolean;
+}
+
+export function ProviderSettingsPanel(props: ProviderSettingsPanelProps = {}) {
+  const { environments } = useEnvironments();
+  const primary = usePrimaryEnvironment();
+  const [selectedId, setSelectedId] = useState<EnvironmentId | null>(
+    props.initialEnvironmentId ?? null,
+  );
+  useEffect(() => setSelectedId(props.initialEnvironmentId ?? null), [props.initialEnvironmentId]);
+  const options = buildProviderEnvironmentOptions(environments, primary?.environmentId ?? null);
+  const environmentId =
+    selectedId ??
+    resolveSelectedProviderEnvironmentId(options, null, primary?.environmentId ?? null);
+  const selected = options.find((environment) => environment.environmentId === environmentId);
+  return (
+    <SettingsPageContainer width="wide">
+      <div className="flex flex-wrap items-center gap-2" aria-label="Provider settings environment">
+        {options.map((environment) => (
+          <Button
+            key={environment.environmentId}
+            variant={environment.environmentId === environmentId ? "secondary" : "ghost"}
+            onClick={() => setSelectedId(environment.environmentId)}
+            aria-pressed={environment.environmentId === environmentId}
+          >
+            <ConnectedEnvironmentMachineIcon
+              environmentId={environment.environmentId}
+              className="size-4"
+            />
+            {environment.label}
+          </Button>
+        ))}
+      </div>
+      {selected?.serverConfig && selected.connection.phase === "connected" ? (
+        <EnvironmentProviderSettings
+          key={selected.environmentId}
+          {...props}
+          environmentId={selected.environmentId}
+          environmentLabel={selected.label}
+        />
+      ) : (
+        <SettingsSection title={props.title ?? "Providers"}>
+          <SettingsRow
+            title="Environment unavailable"
+            description="Connect this environment to read and change its provider settings."
+          />
+        </SettingsSection>
+      )}
+    </SettingsPageContainer>
+  );
+}
+
+function EnvironmentProviderSettings(
+  props: ProviderSettingsPanelProps & { environmentId: EnvironmentId; environmentLabel: string },
 ) {
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
-  const serverProviders = useAtomValue(primaryServerProvidersAtom);
-  const primaryEnvironment = usePrimaryEnvironment();
+  const settings = useEnvironmentSettings(props.environmentId);
+  const persistSettings = useUpdateEnvironmentSettings(props.environmentId);
+  const operateAccess = useEnvironmentOperateAccess(props.environmentId);
+  const readOnly = operateAccess !== "granted";
+  const updateSettings: typeof persistSettings = (patch) => {
+    if (!readOnly) persistSettings(patch);
+  };
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const serverProviders = serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
+  const targetEnvironment = useMemo(
+    () => ({ environmentId: props.environmentId }),
+    [props.environmentId],
+  );
   const refreshServerProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -2861,7 +3173,13 @@ export function ProviderSettingsPanel(
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
     ReadonlySet<ProviderDriverKind>
   >(() => new Set());
-  const [openInstanceDetails, setOpenInstanceDetails] = useState<Record<string, boolean>>({});
+  const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
+    props.initialInstanceId ?? null,
+  );
+  useEffect(
+    () => setSelectedInstanceId(props.initialInstanceId ?? null),
+    [props.initialInstanceId],
+  );
   const refreshingRef = useRef(false);
 
   const providerUpdateCandidates = useMemo(
@@ -2900,17 +3218,17 @@ export function ProviderSettingsPanel(
       : null;
 
   const refreshProviders = useCallback(() => {
-    if (refreshingRef.current) return;
+    if (readOnly || refreshingRef.current) return;
     refreshingRef.current = true;
     setIsRefreshingProviders(true);
-    if (!primaryEnvironment) {
+    if (!targetEnvironment) {
       refreshingRef.current = false;
       setIsRefreshingProviders(false);
       return;
     }
     void (async () => {
       const result = await refreshServerProviders({
-        environmentId: primaryEnvironment.environmentId,
+        environmentId: targetEnvironment.environmentId,
         input: {},
       });
       refreshingRef.current = false;
@@ -2918,16 +3236,16 @@ export function ProviderSettingsPanel(
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         console.warn("Failed to refresh providers", {
           operation: "refresh-providers",
-          environmentId: primaryEnvironment.environmentId,
+          environmentId: targetEnvironment.environmentId,
           ...safeErrorLogAttributes(squashAtomCommandFailure(result)),
         });
       }
     })();
-  }, [primaryEnvironment, refreshServerProviders]);
+  }, [targetEnvironment, refreshServerProviders, readOnly]);
 
   const runProviderUpdate = useCallback(
     async (candidate: ProviderUpdateCandidate) => {
-      if (!primaryEnvironment) return;
+      if (readOnly || !targetEnvironment) return;
       let started = false;
       setUpdatingProviderDrivers((previous) => {
         if (previous.has(candidate.driver)) {
@@ -2943,7 +3261,7 @@ export function ProviderSettingsPanel(
       }
 
       const result = await updateProvider({
-        environmentId: primaryEnvironment.environmentId,
+        environmentId: targetEnvironment.environmentId,
         input: {
           provider: candidate.driver,
           instanceId: candidate.instanceId,
@@ -2971,7 +3289,7 @@ export function ProviderSettingsPanel(
         return next;
       });
     },
-    [primaryEnvironment, updateProvider],
+    [targetEnvironment, updateProvider, readOnly],
   );
 
   interface InstanceRow {
@@ -3187,15 +3505,124 @@ export function ProviderSettingsPanel(
     });
   };
 
+  const selectedRow =
+    selectedInstanceId === null
+      ? rows[0]
+      : rows.find((row) => row.instanceId === selectedInstanceId);
+  const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
+    const driverOption = getDriverOption(row.driver);
+    const liveProvider = serverProviders.find(
+      (candidate) => candidate.instanceId === row.instanceId,
+    );
+    const updateCandidate = liveProvider
+      ? providerUpdateCandidateByInstanceId.get(liveProvider.instanceId)
+      : undefined;
+    const isDriverUpdateRunning =
+      updateCandidate !== undefined &&
+      (updatingProviderDrivers.has(updateCandidate.driver) ||
+        serverProviders.some(
+          (provider) =>
+            provider.driver === updateCandidate.driver && isProviderUpdateActive(provider),
+        ));
+    const showInlineUpdateButton =
+      updateCandidate !== undefined &&
+      hasOneClickUpdateProviderCandidate(updateCandidate, serverProviders);
+    const canRunInlineUpdate =
+      updateCandidate !== undefined &&
+      canOneClickUpdateProviderCandidate(updateCandidate, serverProviders) &&
+      !updatingProviderDrivers.has(updateCandidate.driver);
+    const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
+      hiddenModels: [],
+      modelOrder: [],
+    };
+    const favoriteModels = Arr.filterMap(settings.favorites ?? [], (favorite) =>
+      favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
+    );
+    const resetLabel = driverOption?.label ?? String(row.driver);
+    const headerAction =
+      row.isDefault && row.isDirty ? (
+        <SettingResetButton
+          label={`${resetLabel} provider settings`}
+          onClick={() => resetDefaultInstance(row.driver)}
+        />
+      ) : null;
+    return (
+      <ProviderInstanceCard
+        key={row.instanceId}
+        instanceId={row.instanceId}
+        instance={row.instance}
+        driverOption={driverOption}
+        liveProvider={liveProvider}
+        effectiveEnabled={
+          row.driver === "hermes"
+            ? settings.enableHermes && row.instance.enabled === true
+            : undefined
+        }
+        mode={mode}
+        supportsCustomModelDefinitions={
+          serverConfig?.environment.capabilities.customModelDefinitions === true
+        }
+        selected={selectedRow?.instanceId === row.instanceId}
+        onSelect={() => setSelectedInstanceId(row.instanceId)}
+        readOnly={readOnly}
+        isExpanded={mode === "editor"}
+        onExpandedChange={() => {}}
+        onUpdate={(next) => {
+          const wasEnabled = resolveProviderInstanceEnabled(row.instance);
+          const isDisabling = next.enabled === false && wasEnabled;
+          const shouldClearTextGen = isDisabling && textGenInstanceId === row.instanceId;
+          if (shouldClearTextGen) {
+            updateProviderInstance(row, next, {
+              textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+            });
+          } else {
+            updateProviderInstance(row, next);
+          }
+        }}
+        onDelete={row.isDefault ? undefined : () => deleteProviderInstance(row.instanceId)}
+        headerAction={headerAction}
+        hiddenModels={modelPreferences.hiddenModels}
+        favoriteModels={favoriteModels}
+        modelOrder={modelPreferences.modelOrder}
+        onHiddenModelsChange={(hiddenModels) =>
+          updateProviderModelPreferences(row.instanceId, {
+            ...modelPreferences,
+            hiddenModels,
+          })
+        }
+        onFavoriteModelsChange={(favoriteModels) =>
+          updateProviderFavoriteModels(row.instanceId, favoriteModels)
+        }
+        onModelOrderChange={(modelOrder) =>
+          updateProviderModelPreferences(row.instanceId, {
+            ...modelPreferences,
+            modelOrder,
+          })
+        }
+        onRunUpdate={
+          showInlineUpdateButton && updateCandidate
+            ? () => {
+                if (!canRunInlineUpdate) {
+                  return;
+                }
+                void runProviderUpdate(updateCandidate);
+              }
+            : undefined
+        }
+        isUpdating={showInlineUpdateButton ? isDriverUpdateRunning : undefined}
+      />
+    );
+  };
+
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection
         {...searchableSetting("providers")}
         title={props.title ?? "Providers"}
         headerAction={
           <div className="flex items-center gap-1.5">
             <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
-            {props.allowAddInstance !== false ? (
+            {!readOnly && props.allowAddInstance !== false ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -3220,15 +3647,11 @@ export function ProviderSettingsPanel(
                     size="icon-xs"
                     variant="ghost"
                     className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                    disabled={isRefreshingProviders}
+                    disabled={readOnly || isRefreshingProviders}
                     onClick={() => void refreshProviders()}
                     aria-label="Refresh provider status"
                   >
-                    {isRefreshingProviders ? (
-                      <LoaderIcon className="size-3 animate-spin" />
-                    ) : (
-                      <RefreshCwIcon className="size-3" />
-                    )}
+                    <RefreshIcon className="size-3" refreshing={isRefreshingProviders} />
                   </Button>
                 }
               />
@@ -3237,178 +3660,113 @@ export function ProviderSettingsPanel(
           </div>
         }
       >
-        <SettingsRow
-          title={
-            <span className="inline-flex items-center gap-1.5">
-              Health check interval
-              <PolicyTooltip>
-                This interval is configured here, then the shared Background activity policy decides
-                whether provider probes may run when the timer fires. Custom intervals appear as
-                Advanced in General settings.
-              </PolicyTooltip>
-            </span>
-          }
-          description="Refresh provider availability, versions, auth state, and model metadata in the background. Set this to 0 seconds to rely on manual refreshes."
-          resetAction={
-            providerHealthRefreshIntervalSeconds !== defaultProviderHealthRefreshIntervalSeconds ? (
-              <SettingResetButton
-                label="provider health check interval"
-                onClick={() =>
-                  updateSettings(
-                    backgroundActivityOverrideSettings(
-                      settings.backgroundActivity,
-                      resolvedBackgroundActivity,
-                      {
-                        providerHealthRefreshInterval: undefined,
-                      },
-                    ),
-                  )
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex shrink-0 items-center gap-2">
-              <NumberField
-                value={providerHealthRefreshIntervalSeconds}
-                min={0}
-                step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
-                size="sm"
-                className="w-32"
-                onValueChange={(value) =>
-                  updateSettings(
-                    backgroundActivityOverrideSettings(
-                      settings.backgroundActivity,
-                      resolvedBackgroundActivity,
-                      {
-                        providerHealthRefreshInterval: Duration.seconds(
-                          normalizeIntervalSeconds(value),
-                        ),
-                      },
-                    ),
-                  )
-                }
-              >
-                <NumberFieldGroup>
-                  <NumberFieldDecrement aria-label="Decrease provider health check interval" />
-                  <NumberFieldInput aria-label="Provider health check interval in seconds" />
-                  <NumberFieldIncrement aria-label="Increase provider health check interval" />
-                </NumberFieldGroup>
-              </NumberField>
-              <span className="text-xs text-muted-foreground">seconds</span>
-            </div>
-          }
-        />
-
-        {rows.map((row) => {
-          const driverOption = getDriverOption(row.driver);
-          const liveProvider = serverProviders.find(
-            (candidate) => candidate.instanceId === row.instanceId,
-          );
-          const updateCandidate = liveProvider
-            ? providerUpdateCandidateByInstanceId.get(liveProvider.instanceId)
-            : undefined;
-          const isDriverUpdateRunning =
-            updateCandidate !== undefined &&
-            (updatingProviderDrivers.has(updateCandidate.driver) ||
-              serverProviders.some(
-                (provider) =>
-                  provider.driver === updateCandidate.driver && isProviderUpdateActive(provider),
-              ));
-          const showInlineUpdateButton =
-            updateCandidate !== undefined &&
-            hasOneClickUpdateProviderCandidate(updateCandidate, serverProviders);
-          const canRunInlineUpdate =
-            updateCandidate !== undefined &&
-            canOneClickUpdateProviderCandidate(updateCandidate, serverProviders) &&
-            !updatingProviderDrivers.has(updateCandidate.driver);
-          const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
-            hiddenModels: [],
-            modelOrder: [],
-          };
-          const favoriteModels = Arr.filterMap(settings.favorites ?? [], (favorite) =>
-            favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
-          );
-          const resetLabel = driverOption?.label ?? String(row.driver);
-          const headerAction =
-            row.isDefault && row.isDirty ? (
-              <SettingResetButton
-                label={`${resetLabel} provider settings`}
-                onClick={() => resetDefaultInstance(row.driver)}
-              />
-            ) : null;
-          return (
-            <ProviderInstanceCard
-              key={row.instanceId}
-              instanceId={row.instanceId}
-              instance={row.instance}
-              driverOption={driverOption}
-              liveProvider={liveProvider}
-              effectiveEnabled={
-                row.driver === "hermes"
-                  ? settings.enableHermes && row.instance.enabled === true
-                  : undefined
-              }
-              isExpanded={openInstanceDetails[row.instanceId] ?? false}
-              onExpandedChange={(open) =>
-                setOpenInstanceDetails((existing) => ({
-                  ...existing,
-                  [row.instanceId]: open,
-                }))
-              }
-              onUpdate={(next) => {
-                const wasEnabled = resolveProviderInstanceEnabled(row.instance);
-                const isDisabling = next.enabled === false && wasEnabled;
-                const shouldClearTextGen = isDisabling && textGenInstanceId === row.instanceId;
-                if (shouldClearTextGen) {
-                  updateProviderInstance(row, next, {
-                    textGenerationModelSelection:
-                      DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                  });
-                } else {
-                  updateProviderInstance(row, next);
-                }
-              }}
-              onDelete={row.isDefault ? undefined : () => deleteProviderInstance(row.instanceId)}
-              headerAction={headerAction}
-              hiddenModels={modelPreferences.hiddenModels}
-              favoriteModels={favoriteModels}
-              modelOrder={modelPreferences.modelOrder}
-              onHiddenModelsChange={(hiddenModels) =>
-                updateProviderModelPreferences(row.instanceId, {
-                  ...modelPreferences,
-                  hiddenModels,
-                })
-              }
-              onFavoriteModelsChange={(favoriteModels) =>
-                updateProviderFavoriteModels(row.instanceId, favoriteModels)
-              }
-              onModelOrderChange={(modelOrder) =>
-                updateProviderModelPreferences(row.instanceId, {
-                  ...modelPreferences,
-                  modelOrder,
-                })
-              }
-              onRunUpdate={
-                showInlineUpdateButton && updateCandidate
-                  ? () => {
-                      if (!canRunInlineUpdate) {
-                        return;
-                      }
-                      void runProviderUpdate(updateCandidate);
-                    }
-                  : undefined
-              }
-              isUpdating={showInlineUpdateButton ? isDriverUpdateRunning : undefined}
-            />
-          );
-        })}
+        {readOnly ? (
+          <SettingsRow
+            title={operateAccess === "pending" ? "Checking permissions" : "Limited permissions"}
+            description={`You can view ${props.environmentLabel}'s providers. Changing them requires permission to operate this environment.`}
+          />
+        ) : null}
+        <div className="overflow-hidden rounded-xl border border-border/60 lg:grid lg:grid-cols-[17rem_minmax(0,1fr)]">
+          <div className="divide-y divide-border/50 border-b border-border/60 bg-muted/10 lg:max-h-[42rem] lg:overflow-y-auto lg:border-r lg:border-b-0">
+            {rows.map((row) => renderProviderInstance(row, "list"))}
+          </div>
+          <div className="min-w-0 p-2 lg:max-h-[42rem] lg:overflow-y-auto">
+            {selectedRow ? (
+              <>
+                {renderProviderInstance(selectedRow, "editor")}
+                {serverConfig ? (
+                  <ProviderAccountSetup
+                    key={selectedRow.instanceId}
+                    config={serverConfig}
+                    instanceId={selectedRow.instanceId}
+                    disabled={readOnly}
+                    onRefresh={() => void refreshProviders()}
+                  />
+                ) : null}
+              </>
+            ) : (
+              <p className="p-4 text-sm text-muted-foreground">No providers configured.</p>
+            )}
+          </div>
+        </div>
+      </SettingsSection>
+      <SettingsSection title="Advanced">
+        <fieldset disabled={readOnly} className="min-w-0">
+          {" "}
+          <SettingsRow
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                Health check interval
+                <PolicyTooltip>
+                  This interval is configured here, then the shared Background activity policy
+                  decides whether provider probes may run when the timer fires. Custom intervals
+                  appear as Advanced in General settings.
+                </PolicyTooltip>
+              </span>
+            }
+            description="Refresh provider availability, versions, auth state, and model metadata in the background. Set this to 0 seconds to rely on manual refreshes."
+            resetAction={
+              providerHealthRefreshIntervalSeconds !==
+              defaultProviderHealthRefreshIntervalSeconds ? (
+                <SettingResetButton
+                  label="provider health check interval"
+                  onClick={() =>
+                    updateSettings(
+                      backgroundActivityOverrideSettings(
+                        settings.backgroundActivity,
+                        resolvedBackgroundActivity,
+                        {
+                          providerHealthRefreshInterval: undefined,
+                        },
+                      ),
+                    )
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex shrink-0 items-center gap-2">
+                <NumberField
+                  value={providerHealthRefreshIntervalSeconds}
+                  min={0}
+                  step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
+                  size="sm"
+                  className="w-32"
+                  onValueChange={(value) =>
+                    updateSettings(
+                      backgroundActivityOverrideSettings(
+                        settings.backgroundActivity,
+                        resolvedBackgroundActivity,
+                        {
+                          providerHealthRefreshInterval: Duration.seconds(
+                            normalizeIntervalSeconds(value),
+                          ),
+                        },
+                      ),
+                    )
+                  }
+                >
+                  <NumberFieldGroup>
+                    <NumberFieldDecrement aria-label="Decrease provider health check interval" />
+                    <NumberFieldInput aria-label="Provider health check interval in seconds" />
+                    <NumberFieldIncrement aria-label="Increase provider health check interval" />
+                  </NumberFieldGroup>
+                </NumberField>
+                <span className="text-xs text-muted-foreground">seconds</span>
+              </div>
+            }
+          />
+        </fieldset>
       </SettingsSection>
 
-      {isAddInstanceDialogOpen ? (
-        <AddProviderInstanceDialog open onOpenChange={setIsAddInstanceDialogOpen} />
+      {isAddInstanceDialogOpen && !readOnly ? (
+        <AddProviderInstanceDialog
+          open
+          environmentId={props.environmentId}
+          onOpenChange={setIsAddInstanceDialogOpen}
+        />
       ) : null}
-    </SettingsPageContainer>
+    </>
   );
 }
 
@@ -3439,6 +3797,9 @@ export function ArchivedThreadsPanel() {
                 name: project.title,
                 cwd: project.workspaceRoot,
                 faviconPath: project.faviconPath,
+                projectIcon: project.projectIcon,
+                title: project.title,
+                workspaceRoot: project.workspaceRoot,
               },
             ] as const,
         ),
@@ -3533,7 +3894,7 @@ export function ArchivedThreadsPanel() {
             title={
               <span className="inline-flex items-center gap-2">
                 {isLoadingArchive ? (
-                  <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
+                  <Spinner className="size-3.5 text-muted-foreground" />
                 ) : (
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
@@ -3559,6 +3920,7 @@ export function ArchivedThreadsPanel() {
             title={project.name}
             icon={
               <ProjectFavicon
+                project={project}
                 environmentId={project.environmentId}
                 cwd={project.cwd}
                 faviconPath={project.faviconPath}

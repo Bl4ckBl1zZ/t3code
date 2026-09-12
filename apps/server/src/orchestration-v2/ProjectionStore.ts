@@ -936,6 +936,7 @@ export function threadShellFromProjection(
       .filter((request) => request.status === "pending")
       .toSorted(
         (left, right) =>
+          Number(left.responseMode === "message") - Number(right.responseMode === "message") ||
           DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
       )[0] ?? null;
   const latestVisibleMessage =
@@ -974,7 +975,16 @@ export function threadShellFromProjection(
     ...(projection.thread.worktreeStatus === undefined
       ? {}
       : { worktreeStatus: projection.thread.worktreeStatus }),
+    ...(projection.thread.pullRequests === undefined
+      ? {}
+      : { pullRequests: projection.thread.pullRequests }),
+    ...(projection.thread.branchPullRequest === undefined
+      ? {}
+      : { branchPullRequest: projection.thread.branchPullRequest }),
     linkedPullRequest: projection.thread.linkedPullRequest ?? null,
+    ...(projection.thread.linkedPullRequests === undefined
+      ? {}
+      : { linkedPullRequests: projection.thread.linkedPullRequests }),
     lineage: projection.thread.lineage,
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
@@ -994,6 +1004,9 @@ export function threadShellFromProjection(
         : {
             id: pendingRuntimeRequest.id,
             kind: pendingRuntimeRequest.kind,
+            ...(pendingRuntimeRequest.responseMode === undefined
+              ? {}
+              : { responseMode: pendingRuntimeRequest.responseMode }),
             createdAt: pendingRuntimeRequest.createdAt,
           },
     latestVisibleMessage:
@@ -1161,7 +1174,16 @@ function shellFromState(input: {
     ...(input.state.thread.worktreeStatus === undefined
       ? {}
       : { worktreeStatus: input.state.thread.worktreeStatus }),
+    ...(input.state.thread.pullRequests === undefined
+      ? {}
+      : { pullRequests: input.state.thread.pullRequests }),
+    ...(input.state.thread.branchPullRequest === undefined
+      ? {}
+      : { branchPullRequest: input.state.thread.branchPullRequest }),
     linkedPullRequest: input.state.thread.linkedPullRequest ?? null,
+    ...(input.state.thread.linkedPullRequests === undefined
+      ? {}
+      : { linkedPullRequests: input.state.thread.linkedPullRequests }),
     lineage: input.state.thread.lineage,
     forkedFrom: input.state.thread.forkedFrom,
     activeProviderThreadId: input.state.thread.activeProviderThreadId,
@@ -1181,6 +1203,9 @@ function shellFromState(input: {
         : {
             id: input.state.pendingRuntimeRequest.id,
             kind: input.state.pendingRuntimeRequest.kind,
+            ...(input.state.pendingRuntimeRequest.responseMode === undefined
+              ? {}
+              : { responseMode: input.state.pendingRuntimeRequest.responseMode }),
             createdAt: input.state.pendingRuntimeRequest.createdAt,
           },
     latestVisibleMessage:
@@ -2425,7 +2450,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 FROM orchestration_v2_projection_runtime_requests request
                 WHERE request.thread_id = t.thread_id
                   AND request.status = 'pending'
-                ORDER BY request.created_at DESC, request.runtime_request_id DESC
+                ORDER BY CASE WHEN json_extract(request.payload_json, '$.responseMode') = 'message' THEN 1 ELSE 0 END,
+                  request.created_at DESC, request.runtime_request_id DESC
                 LIMIT 1
               ) AS pending_request_payload_json,
               (

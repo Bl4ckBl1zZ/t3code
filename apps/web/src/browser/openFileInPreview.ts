@@ -1,3 +1,4 @@
+import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import type {
   AssetCreateUrlResult,
   AssetResource,
@@ -55,6 +56,7 @@ export async function openUrlInPreview<E>(input: {
 export async function openFileInPreview<AssetError, PreviewError>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly filePath: string;
+  readonly workspaceRoot?: string;
   readonly httpBaseUrl: string;
   readonly createAssetUrl: (input: {
     readonly environmentId: EnvironmentId;
@@ -75,7 +77,11 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
     environmentId: input.threadRef.environmentId,
     input: {
       resource: {
-        _tag: "workspace-file",
+        _tag:
+          input.workspaceRoot !== undefined &&
+          mediaFileReference(input.filePath, input.workspaceRoot).relativePath === undefined
+            ? "media-file"
+            : "workspace-file",
         threadId: input.threadRef.threadId,
         path: input.filePath,
       },

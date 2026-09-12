@@ -13,8 +13,15 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
+  onboardingCompletedAt: null,
+  composerCollapseOnScroll: true,
+  panelAnimationDurationMs: 0,
+  loadBalancingEnabled: false,
+  loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
+  diffColorScheme: "red-green",
   alwaysExpandActivity: false,
   autoOpenPlanSidebar: false,
+  proactivePanelsEnabled: false,
   appearanceContrast: 100,
   browserDefaultViewport: { _tag: "preset", width: 1024, height: 600, presetId: "nest-hub" },
   browserDefaultZoomFactor: 1.25,

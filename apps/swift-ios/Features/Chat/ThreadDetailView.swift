@@ -14,11 +14,16 @@ public struct ThreadDetailView: View {
     /// only reports which thread was asked for. `isArchived` routes to the
     /// archive, which is the only place an archived thread can be shown.
     let onOpenRelatedThread: (_ threadID: String, _ isArchived: Bool) -> Void
+    @State private var nativeToolIcons = NativeAppToolIconStore()
     @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
 
     @SwiftUI.Environment(\.openURL) private var openURL
 
+    @State private var lastPullRequestPrompt: String?
+    @State private var pullRequestCheckoutWarning: String?
+    @State private var citationPreview: AssistantCitation?
+    @State private var citationError: String?
     @State private var draft = ""
     @State private var attachments: [FeatureDraftAttachment] = []
     @State private var bannerHeight: CGFloat = 0
@@ -62,7 +67,23 @@ public struct ThreadDetailView: View {
         self.draftStore = draftStore
     }
 
+    private var nativeToolIconContext: NativeAppToolIconContext? {
+        guard let environmentID = threadEnvironment?.id ?? currentThread.environmentID,
+            let client = model.client as? any FeatureNativeAppIconResolving else { return nil }
+        return NativeAppToolIconContext(environmentID: environmentID, store: nativeToolIcons, client: client)
+    }
+
     public var body: some View {
+        threadContent
+        .onChange(of: model.pendingPullRequestPrompts[thread.id]?.id) { consumePullRequestPrompt() }
+        .alert("Pull request checkout", isPresented: Binding(get: { pullRequestCheckoutWarning != nil }, set: { if !$0 { pullRequestCheckoutWarning = nil } })) {
+            Button("OK") { pullRequestCheckoutWarning = nil }
+        } message: { Text(pullRequestCheckoutWarning ?? "") }
+        .onChange(of: isSending) { if !isSending { consumePullRequestPrompt() } }
+        .onChange(of: isSwappingDraft) { if !isSwappingDraft { consumePullRequestPrompt() } }
+    }
+
+    private var threadContent: some View {
         Group {
             if isLoading {
                 FeatureThreadOpeningView(isRefreshing: detail != nil)
@@ -77,6 +98,7 @@ public struct ThreadDetailView: View {
             }
         }
         .background(T3Colors.background)
+        .environment(\.nativeAppToolIconContext, nativeToolIconContext)
         .safeAreaInset(edge: .top, spacing: 0) {
             if let submission = model.outboxSubmissions.first(where: { $0.threadID == thread.id }) {
                 Label(model.outboxStatus(submission), systemImage: "tray.and.arrow.up")
@@ -130,6 +152,12 @@ public struct ThreadDetailView: View {
             model.releaseThread(thread.id)
             persistDraftBeforeLeaving()
         }
+        .sheet(item: $citationPreview) { citation in
+            AssistantCitationPreview(citation: citation) { openCitationSource(citation) }
+        }
+        .alert("Quoted response", isPresented: Binding(get: { citationError != nil }, set: { if !$0 { citationError = nil } })) {
+            Button("OK") { citationError = nil }
+        } message: { Text(citationError ?? "") }
         .sheet(item: $restoreRequest) { request in
             CheckpointRestoreSheet(
                 request: request,
@@ -202,7 +230,11 @@ public struct ThreadDetailView: View {
                         client: model.client,
                         threadID: thread.id,
                         initialPath: path,
-                        initialLine: line
+                        initialLine: line,
+                        workspaceMutationID: WorkspaceMutationRevision.latest((model.details[thread.id]?.timelineItems ?? []).lazy.map {
+                            WorkspaceMutationItem(sourceThreadID: $0.sourceThreadId, itemID: $0.item.id,
+                                type: $0.item.type, status: $0.item.status.rawValue, updatedAt: $0.item.base.updatedAt)
+                        })
                     )
                 case let .review(filePath):
                     FeatureReviewView(
@@ -294,7 +326,8 @@ public struct ThreadDetailView: View {
             state: detail.thread.state,
             workingStartedAt: detail.thread.workingStartedAt,
             timelineItems: detail.timelineItems,
-            activeRunID: queueState.activeRun?.id
+            activeRunID: queueState.activeRun?.id,
+            isPreparingWorkspace: queueState.activeRun?.status == "preparing"
         )
     }
 
@@ -464,6 +497,29 @@ public struct ThreadDetailView: View {
                     onOpenFile: openFile,
                     onOpenURL: { openURL($0) },
                     onOpenDiff: openDiff,
+                    citationNavigation: model.pendingAssistantCitation.flatMap { request in
+                        request.citation.threadId == (thread.wireID ?? thread.id) && request.citation.environmentId == threadEnvironment?.id ? request : nil
+                    },
+                    onCitationComplete: { request, error in
+                        guard model.pendingAssistantCitation?.id == request.id else { return }
+                        model.pendingAssistantCitation = nil
+                        citationError = error
+                    },
+                    onOpenCitation: { citationPreview = $0 },
+                    citationContext: threadEnvironment?.supportsAssistantCitations == true ? AssistantCitationContext(
+                        environmentId: threadEnvironment?.id ?? "", threadId: thread.wireID ?? thread.id,
+                        onCite: { citation in
+                            guard !isSending else { return }
+                            draft += (draft.isEmpty || draft.last?.isWhitespace == true ? "" : " ") + citation.marker
+                        }) : nil,
+                    onUseTemplate: { template in
+                        guard !isSending else { return }
+                        let prompt = template.prompt
+                        if !draft.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(prompt) {
+                            draft += (draft.isEmpty || draft.last?.isWhitespace == true ? "" : " ") + prompt
+                        }
+                        composerFocused = true
+                    },
                     navigationRequest: turnNavigationRequest
                 )
                 // Container only: the transcript runs on under the glass
@@ -501,6 +557,7 @@ public struct ThreadDetailView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 queueSurfaces
+                ComposerTasksView(detail: detail)
                 composer(detail)
             }
             .background {
@@ -641,6 +698,7 @@ public struct ThreadDetailView: View {
             attachments: $attachments,
             interactionMode: composerInteractionMode,
             providers: threadProviders,
+            providerSetup: ProviderSetupContext(client: model.client, environmentID: thread.environmentID),
             threadSelection: currentSelection,
             materializesDefaultSelection: false,
             isSending: isSending,
@@ -665,6 +723,10 @@ public struct ThreadDetailView: View {
                 await pending?.value
             },
             onDidStash: { isSwappingDraft = false },
+            externalFileDrop: didRestoreDraft && !isSwappingDraft ? model.pendingThreadFileDrops[thread.id] : nil,
+            onExternalFileDropConsumed: { id in
+                if model.pendingThreadFileDrops[thread.id]?.id == id { model.pendingThreadFileDrops[thread.id] = nil }
+            },
             onApprovalDecision: { id, decision in
                 Task { await model.resolveApproval(id, decision: decision) }
             },
@@ -673,6 +735,10 @@ public struct ThreadDetailView: View {
             }
         )
         .simultaneousGesture(composerKeyboardDismissGesture)
+        .environment(\.openURL, OpenURLAction { url in
+            if let citation = AssistantCitation.parse(url.absoluteString) { citationPreview = citation; return .handled }
+            return .systemAction
+        })
     }
 
     private var composerKeyboardDismissGesture: some Gesture {
@@ -936,6 +1002,17 @@ public struct ThreadDetailView: View {
     /// Routes a thread id from a timeline row. Whether the target is archived
     /// decides which stack the navigator pushes onto, and the snapshot is the
     /// only place this view can learn that.
+    private func openCitationSource(_ citation: AssistantCitation) {
+        guard let target = model.snapshot.threads.first(where: {
+            ($0.wireID ?? $0.id) == citation.threadId && $0.environmentID == citation.environmentId
+        }) else {
+            citationError = "The source thread is not available in your connected environments. The saved quote is unchanged."
+            return
+        }
+        model.pendingAssistantCitation = AssistantCitationNavigationRequest(citation: citation)
+        if target.id != thread.id { openRelatedThread(target.id) }
+    }
+
     private func openRelatedThread(_ threadID: String) {
         let isArchived = model.snapshot.threads.first { $0.id == threadID }?.isArchived ?? false
         onOpenRelatedThread(threadID, isArchived)
@@ -1120,6 +1197,17 @@ public struct ThreadDetailView: View {
         }
     }
 
+    private func consumePullRequestPrompt() {
+        guard didRestoreDraft, !isSending, !isSwappingDraft, let request = model.pendingPullRequestPrompts[thread.id] else { return }
+        draft = PullRequestHandoffPrompt.merge(existing: draft, last: lastPullRequestPrompt, incoming: request.text)
+        lastPullRequestPrompt = request.text
+        pullRequestCheckoutWarning = request.warning
+        model.pendingPullRequestPrompts[thread.id] = nil
+        toolSurface = nil
+        composerFocused = true
+        scheduleDraftSave()
+    }
+
     private var draftKey: String {
         FeatureComposerDraftStore.threadKey(currentThread)
     }
@@ -1141,6 +1229,7 @@ public struct ThreadDetailView: View {
         draft = restored.text
         attachments = restored.attachments
         didRestoreDraft = true
+        consumePullRequestPrompt()
 
         // Changes made while the file read or thread refresh was in flight did
         // not pass the didRestoreDraft gate, so enqueue their first save now.
@@ -1262,7 +1351,8 @@ enum FeatureComposerDraftRestoration {
                 saved: saved?.workspace ?? fallbackWorkspace,
                 baseline: baseline.workspace,
                 current: current.workspace
-            )
+            ),
+            routing: current.routing == baseline.routing ? saved?.routing : current.routing
         )
     }
 
@@ -1302,6 +1392,7 @@ enum FeatureComposerDraftRestoration {
 /// entries and nothing else.
 enum ThreadTimelineEntry: Identifiable, Equatable {
     case message(FeatureMessage)
+    case turnFold(ThreadTurnFold)
     case lifecycle(Lifecycle)
     case workLog(WorkLog)
     case dayDivider(id: String, date: Date)
@@ -1321,6 +1412,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     }
 
     struct WorkLog: Equatable {
+        var liveEntryID: String? = nil
         let id: String
         let rows: [ThreadWorkLogRow]
         /// Relational support keyed by projected-item id, read by the inspector
@@ -1332,6 +1424,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     var id: String {
         switch self {
         case let .message(message): "message:\(message.id)"
+        case let .turnFold(fold): fold.id
         case let .lifecycle(lifecycle): lifecycle.id
         case let .workLog(workLog): workLog.id
         case let .dayDivider(id, _): id
@@ -1343,6 +1436,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     var date: Date? {
         switch self {
         case let .message(message): message.createdAt
+        case let .turnFold(fold): fold.date
         case let .lifecycle(lifecycle): lifecycle.date
         case let .workLog(workLog): workLog.date
         case let .dayDivider(_, date): date
@@ -1361,7 +1455,7 @@ enum ThreadTimelineFeed {
         for detail: FeatureThreadDetail,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
-        entries(
+        var result = entries(
             timelineItems: detail.timelineItems,
             messages: detail.messages,
             runs: detail.timelineRuns,
@@ -1369,6 +1463,11 @@ enum ThreadTimelineFeed {
             subagentChildThreadIDs: detail.subagentChildThreadIDs,
             calendar: calendar
         )
+        if detail.thread.state == .working, case var .workLog(work)? = result.last {
+            work.liveEntryID = ThreadLiveWorkFocus.selection(items: work.rows.map(\.liveFocusItem), activeRunID: detail.workflow.queueState.activeRun?.id)
+            result[result.count - 1] = .workLog(work)
+        }
+        return result
     }
 
     static func entries(
@@ -1543,8 +1642,27 @@ private struct ThreadTimelineEntryView: View {
     let onOpenURL: (URL) -> Void
     let onOpenDiff: (String, String?) -> Void
 
+    var onToggleFold: (String) -> Void = { _ in }
+
     var body: some View {
         switch entry {
+        case let .turnFold(fold):
+            Button { onToggleFold(fold.runID) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: fold.isExpanded ? "chevron.up" : "chevron.down")
+                    Text(fold.label).font(T3Typography.supportingStrong)
+                    Text("\(fold.hiddenIDs.count)").font(T3Typography.supporting).foregroundStyle(T3Colors.textTertiary)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(T3Colors.textSecondary)
+                .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(fold.isExpanded ? "Hide" : "Show") earlier work. \(fold.label)")
+            .accessibilityIdentifier(fold.id)
+            .padding(.bottom, ChatTimelineStyle.entrySpacing)
+
         case let .message(message):
             FeatureMessageView(message: message)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1570,6 +1688,7 @@ private struct ThreadTimelineEntryView: View {
         case let .workLog(workLog):
             ThreadWorkLog(
                 rows: workLog.rows,
+                liveEntryID: workLog.liveEntryID,
                 currentThreadID: currentThreadID,
                 currentWireThreadID: currentWireThreadID,
                 workspaceRoot: workspaceRoot,
@@ -1594,6 +1713,7 @@ private struct ThreadTimelineEntryView: View {
 /// A recycled transcript surface. SwiftUI still owns each entry's rendering,
 /// while UIKit keeps offscreen entries out of the active view hierarchy.
 private struct FeatureTranscriptCollectionView: UIViewRepresentable {
+    @SwiftUI.Environment(\.nativeAppToolIconContext) private var nativeAppIcons
     private static let loadEarlierID = "__t3-load-earlier__"
 
     private enum Section: Hashable {
@@ -1630,6 +1750,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
     let onOpenURL: (URL) -> Void
     let onOpenDiff: (String, String?) -> Void
+    var citationNavigation: AssistantCitationNavigationRequest? = nil
+    var onCitationComplete: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
+    var onOpenCitation: (AssistantCitation) -> Void = { _ in }
+    var citationContext: AssistantCitationContext? = nil
+    var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
     var navigationRequest: Int = 0
 
     func makeCoordinator() -> Coordinator {
@@ -1684,19 +1809,24 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 currentWireThreadID: wireThreadID,
                 markdownMedia: markdownMedia,
                 pullRequests: pullRequests,
+                nativeAppIcons: nativeAppIcons,
                 onRollback: onRollback,
                 workspaceRoot: workspaceRoot,
                 alwaysExpandActivity: alwaysExpandActivity,
                 onOpenThread: onOpenThread,
                 onOpenFile: onOpenFile,
                 onOpenURL: onOpenURL,
-                onOpenDiff: onOpenDiff
+                onOpenDiff: onOpenDiff,
+                onOpenCitation: onOpenCitation,
+                citationContext: citationContext,
+                onUseTemplate: onUseTemplate
             ),
             onLoadEarlier: onLoadEarlier,
             onDismissKeyboard: onDismissKeyboard,
             in: collectionView
         )
         context.coordinator.navigate(request: navigationRequest, in: collectionView)
+        context.coordinator.navigateCitation(citationNavigation, completion: onCitationComplete, in: collectionView)
     }
 
     private static func makeLayout() -> UICollectionViewLayout {
@@ -1747,6 +1877,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             /// puts there reaches these cells.
             var markdownMedia: MarkdownMediaContext?
             var pullRequests: MarkdownPullRequestContext?
+            var nativeAppIcons: NativeAppToolIconContext?
             var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
             var workspaceRoot: String?
             var alwaysExpandActivity = false
@@ -1754,11 +1885,79 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
             var onOpenURL: (URL) -> Void = { _ in }
             var onOpenDiff: (String, String?) -> Void = { _, _ in }
+            var onOpenCitation: (AssistantCitation) -> Void = { _ in }
+            var citationContext: AssistantCitationContext?
+            var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
         }
 
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
         private var entriesByID: [String: ThreadTimelineEntry] = [:]
         private var orderedIDs: [String] = []
+        private var expandedRunIDs = Set<String>()
+        private var foldChoiceRevision = 0
+        private var renderedFoldChoiceRevision = 0
+        private var rebuildForFold: (() -> Void)?
+        private var hiddenCitationRunIDs: [String: String] = [:]
+
+        private func toggleFold(_ runID: String) {
+            if !expandedRunIDs.insert(runID).inserted { expandedRunIDs.remove(runID) }
+            foldChoiceRevision += 1
+            rebuildForFold?()
+        }
+        private let citationHighlight = AssistantCitationHighlight()
+        private let workLogHistory = ThreadWorkLogHistoryStore()
+        private var citationRequest: AssistantCitationNavigationRequest?
+        private var citationCompletion: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
+        private var citationPages = Set<String>()
+        private var citationSawLoading = false
+        private var applyingSnapshot = false
+
+        func navigateCitation(_ request: AssistantCitationNavigationRequest?, completion: @escaping (AssistantCitationNavigationRequest, String?) -> Void, in collectionView: UICollectionView) {
+            if citationRequest?.id != request?.id { citationPages = []; citationSawLoading = false }
+            citationRequest = request
+            citationCompletion = completion
+            DispatchQueue.main.async { [weak self, weak collectionView] in
+                guard let self, let collectionView else { return }
+                self.revealCitation(in: collectionView)
+            }
+        }
+
+        private func revealCitation(in collectionView: UICollectionView) {
+            guard let request = citationRequest, !applyingSnapshot, let dataSource else { return }
+            let citation = request.citation
+            if let entryID = orderedIDs.first(where: {
+                guard case let .message(message) = entriesByID[$0] else { return false }
+                return (message.wireMessageID ?? message.id) == citation.messageId && message.role == .assistant
+            }), let path = dataSource.indexPath(for: entryID) {
+                (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
+                collectionView.layoutIfNeeded()
+                collectionView.scrollToItem(at: path, at: .top, animated: !UIAccessibility.isReduceMotionEnabled)
+                var sourceMatches = false
+                if case let .message(message) = entriesByID[entryID] {
+                    let document = MarkdownRenderCache.shared.documentImmediately(for: MarkdownContentRevision(message.text))
+                    sourceMatches = AssistantCitationTextRange.resolve(in: document?.citationText ?? message.text, quote: citation.text,
+                        start: citation.start, end: citation.end, prefix: citation.prefix, suffix: citation.suffix) != nil
+                }
+                if sourceMatches { citationHighlight.show(citation) }
+                UIAccessibility.post(notification: .announcement, argument: "Quoted response: \(citation.text)")
+                citationRequest = nil
+                citationCompletion(request, sourceMatches ? nil : "The source response is visible, but the saved quote no longer matches unambiguously. Your saved quote is unchanged.")
+                return
+            }
+            if let runID = hiddenCitationRunIDs[citation.messageId], !expandedRunIDs.contains(runID) {
+                toggleFold(runID)
+                return
+            }
+            if currentIsLoadingEarlier { citationSawLoading = true; return }
+            let page = orderedIDs.first ?? "empty"
+            if currentCanLoadEarlier && citationPages.count < 20 {
+                if citationPages.insert(page).inserted { citationSawLoading = false; onLoadEarlier?(); return }
+                if !citationSawLoading { return }
+            }
+            citationRequest = nil
+            citationCompletion(request, "The source response could not be loaded. Load earlier turns and try again. Your saved quote is unchanged.")
+        }
+
         private var lastNavigationRequest = 0
         private var pendingPreviousTurn = false
 
@@ -1828,6 +2027,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 }
 
                 let context = rowContext
+                let highlight = citationHighlight
+                let toolHistory = workLogHistory
                 cell.contentConfiguration = UIHostingConfiguration {
                     ThreadTimelineEntryView(
                         entry: entry,
@@ -1839,7 +2040,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                         onOpenThread: context.onOpenThread,
                         onOpenFile: context.onOpenFile,
                         onOpenURL: context.onOpenURL,
-                        onOpenDiff: context.onOpenDiff
+                        onOpenDiff: context.onOpenDiff,
+                        onToggleFold: { [weak self] in self?.toggleFold($0) }
                     )
                     // A recycled cell keeps the SwiftUI state of whatever it
                     // rendered last. Keying on the entry drops an expansion
@@ -1848,6 +2050,22 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .id(entryID)
                     .environment(\.markdownMediaContext, context.markdownMedia)
                     .environment(\.markdownPullRequestContext, context.pullRequests)
+                    .environment(\.assistantCitationContext, context.citationContext)
+                    .environment(\.assistantCitationHighlight, highlight)
+                    .environment(\.threadWorkLogHistory, toolHistory)
+                    .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
+                    .environment(\.markdownTemplateAction, context.onUseTemplate)
+                    .environment(\.openURL, OpenURLAction { url in
+                        if let citation = AssistantCitation.parse(url.absoluteString) {
+                            context.onOpenCitation(citation)
+                            return .handled
+                        }
+                        guard let target = CodexMarkdownDirectives.fileTarget(url) else { return .systemAction }
+                        let root = context.workspaceRoot.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+                        let path = root.map { target.path.hasPrefix($0) ? String(target.path.dropFirst($0.count)) : target.path } ?? target.path
+                        context.onOpenFile(ThreadActivityFileOpenRequest(relativePath: path, line: target.line))
+                        return .handled
+                    })
                 }
                 .margins(.all, 0)
                 cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
@@ -1881,12 +2099,22 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             in collectionView: UICollectionView
         ) {
             guard let dataSource else { return }
+            let iconEnvironmentChanged = self.rowContext.nativeAppIcons?.environmentID != rowContext.nativeAppIcons?.environmentID
             self.rowContext = rowContext
             self.onLoadEarlier = onLoadEarlier
             self.onDismissKeyboard = onDismissKeyboard
 
+            rebuildForFold = { [weak self, weak collectionView] in
+                guard let self, let collectionView else { return }
+                self.update(threadID: threadID, detail: detail, renderUpdate: renderUpdate,
+                    dynamicTypeSize: dynamicTypeSize, canLoadEarlier: canLoadEarlier,
+                    isLoadingEarlier: isLoadingEarlier, alwaysExpandActivity: alwaysExpandActivity,
+                    rowContext: rowContext, onLoadEarlier: onLoadEarlier,
+                    onDismissKeyboard: onDismissKeyboard, in: collectionView)
+            }
+            let foldChoiceChanged = renderedFoldChoiceRevision != foldChoiceRevision
             let threadChanged = currentThreadID != threadID
-            let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
+            let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize || iconEnvironmentChanged
             // Same treatment as the type size: it changes how every row renders
             // rather than what any row contains, so nothing else in this update
             // would report it.
@@ -1896,14 +2124,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
             guard threadChanged || typeSizeChanged || expansionPreferenceChanged
-                || revisionChanged || loadEarlierChanged else { return }
+                || revisionChanged || loadEarlierChanged || foldChoiceChanged else { return }
 
             // Always the whole feed. An item's shape depends on its neighbours —
             // a new tool call joins the work group above it, a subagent card
             // merges into the run beside it — so a delta that only names changed
             // messages cannot say which rows moved, and applying it would leave
             // stale groups on screen instead of failing loudly.
-            let state = entryState(ThreadTimelineFeed.entries(for: detail))
+            if threadChanged { expandedRunIDs = []; hiddenCitationRunIDs = [:] }
+            let fullEntries = ThreadTimelineFeed.entries(for: detail)
+            let folded = ThreadTimelineFoldPresentation.apply(entries: fullEntries, detail: detail,
+                expandedRunIDs: expandedRunIDs, alwaysExpand: alwaysExpandActivity)
+            hiddenCitationRunIDs = folded.hiddenCitationRunIDs
+            let state = entryState(folded.entries)
+            renderedFoldChoiceRevision = foldChoiceRevision
             let newIDs = state.ids
             let idsChanged = state.idsChanged
             let changedIDs = typeSizeChanged || expansionPreferenceChanged
@@ -1935,9 +2169,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let prependedMessages = !threadChanged
                 && newIDs.count > previousIDs.count
                 && Array(newIDs.suffix(previousIDs.count)) == previousIDs
-            let shouldFollowBottom = isInitialLoad || wasNearBottom
+            let shouldFollowBottom = isInitialLoad || (wasNearBottom && !foldChoiceChanged)
             let prependAnchor = !shouldFollowBottom
-                && (prependedMessages || (loadEarlierChanged && !canLoadEarlier))
+                && (foldChoiceChanged || prependedMessages || (loadEarlierChanged && !canLoadEarlier))
                 ? visibleAnchor(in: collectionView, dataSource: dataSource)
                 : nil
 
@@ -1984,9 +2218,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 snapshot.reconfigureItems(reconfiguredIDs)
             }
 
+            applyingSnapshot = true
             dataSource.apply(snapshot, animatingDifferences: false) {
                 [weak self, weak collectionView] in
                 guard let self, let collectionView else { return }
+                self.applyingSnapshot = false
                 DispatchQueue.main.async {
                     if shouldFollowBottom {
                         self.scrollToBottom(
@@ -1996,6 +2232,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     } else if let prependAnchor {
                         self.restore(prependAnchor, in: collectionView, dataSource: dataSource)
                     }
+                    self.revealCitation(in: collectionView)
                     if self.pendingPreviousTurn && !self.currentIsLoadingEarlier {
                         self.pendingPreviousTurn = false
                         self.navigateTurn(forward: false, in: collectionView, allowLoad: false)
@@ -2178,6 +2415,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            if let request = citationRequest {
+                citationRequest = nil
+                citationCompletion(request, nil)
+            }
             (scrollView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
             scrollView.window?.endEditing(false)
             onDismissKeyboard?()
@@ -2570,8 +2811,8 @@ struct FeatureMessageView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
                         if !message.text.isEmpty {
-                            MarkdownMessageView(
-                                message.text,
+                            ReviewContextMessageText(
+                                source: message.text,
                                 isStreaming: message.state == .streaming
                             )
                         }
@@ -2598,8 +2839,8 @@ struct FeatureMessageView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     FeatureMessageAttachmentsView(attachments: message.attachments)
                     if !message.text.isEmpty {
-                        MarkdownMessageView(
-                            message.text,
+                        ReviewContextMessageText(
+                            source: message.text,
                             isStreaming: message.state == .streaming
                         )
                     }
@@ -2634,7 +2875,8 @@ struct FeatureMessageView: View {
                 if !message.text.isEmpty {
                     MarkdownMessageView(
                         message.text,
-                        isStreaming: message.state == .streaming
+                        isStreaming: message.state == .streaming,
+                        citationMessageID: message.wireMessageID
                     )
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -2678,6 +2920,8 @@ struct FeatureMessageView: View {
 }
 
 private struct FeatureMessageAttachmentsView: View {
+    @SwiftUI.Environment(\.markdownMediaContext) private var mediaContext
+    @State private var previewedDocument: FeatureMessageAttachment?
     let attachments: [FeatureMessageAttachment]
     @State private var previewedAttachment: FeatureMessageAttachment?
 
@@ -2715,6 +2959,12 @@ private struct FeatureMessageAttachmentsView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
 
+                        if FeatureFilePreviewPath.isDocument(attachment.name), mediaContext?.resolveDocumentURL != nil {
+                            Button { previewedDocument = attachment } label: {
+                                Label("Preview document", systemImage: "doc.richtext").font(T3Typography.supportingStrong)
+                                    .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
+                            }.buttonStyle(.plain).accessibilityLabel("Preview \(attachment.name)")
+                        }
                         HStack(spacing: 9) {
                             Image(
                                 systemName: FeatureAttachmentGlyph.systemImage(
@@ -2783,6 +3033,11 @@ private struct FeatureMessageAttachmentsView: View {
                             previewedAttachment = attachment
                         }
                     }
+                }
+            }
+            .sheet(item: $previewedDocument) { attachment in
+                if let resolve = mediaContext?.resolveDocumentURL {
+                    FeatureDocumentAttachmentPreview(attachment: attachment, resolve: resolve)
                 }
             }
             .fullScreenCover(item: $previewedAttachment) { attachment in

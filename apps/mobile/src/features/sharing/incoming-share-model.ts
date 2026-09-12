@@ -1,8 +1,8 @@
+import { validateInlineComposerAttachment } from "../../lib/composerAttachmentKinds";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import {
   inferExtensionFromMimeType,
   inferMimeTypeFromFileName,
-  validateComposerAttachment,
 } from "@t3tools/shared/composerAttachments";
 import * as Schema from "effect/Schema";
 import type { ResolvedSharePayload, SharePayload } from "expo-sharing";
@@ -183,7 +183,11 @@ export async function buildIncomingShareDraft(input: {
     }
     const declaredSize = resolved?.contentSize ?? null;
     if (declaredSize !== null) {
-      const preflight = validateComposerAttachment({ name, sizeBytes: declaredSize, mimeType });
+      const preflight = validateInlineComposerAttachment({
+        name,
+        sizeBytes: declaredSize,
+        mimeType,
+      });
       if (!preflight.accepted) {
         // Reject before reading: no reason to pull 30 MB into memory first.
         warnings.push(preflight.message);
@@ -195,7 +199,7 @@ export async function buildIncomingShareDraft(input: {
     try {
       const base64 = await input.fileReader.readBase64(uri);
       const sizeBytes = declaredSize ?? estimateBase64ByteSize(base64);
-      const validation = validateComposerAttachment({ name, sizeBytes, mimeType });
+      const validation = validateInlineComposerAttachment({ name, sizeBytes, mimeType });
       if (!validation.accepted) {
         warnings.push(validation.message);
         continue;

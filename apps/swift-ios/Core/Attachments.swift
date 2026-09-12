@@ -22,9 +22,8 @@ public enum ImageAttachmentError: LocalizedError, Equatable, Sendable {
 
 /// Inline upload shape accepted by `thread.turn.start`.
 ///
-/// There is intentionally no standalone attachment-upload endpoint in the T3
-/// contract. New image bytes travel as a base64 data URL on the turn command;
-/// the server normalizes them into a persisted `ChatAttachment`.
+/// Local draft representation. T3Client uses signed HTTP uploads when the
+/// environment supports them, with inline persistence for older servers.
 public struct UploadChatImageAttachment: Codable, Equatable, Sendable {
     public static let maximumBytes = 10 * 1024 * 1024
 
@@ -69,7 +68,10 @@ public struct UploadChatImageAttachment: Codable, Equatable, Sendable {
 }
 
 public enum AssetResource: Equatable, Sendable {
+    case nativeAppIcon(ToolActivityNativeAppReference)
     case workspaceFile(threadID: String, path: String)
+    case mediaFile(threadID: String, path: String)
+    case documentAttachment(id: String, name: String, mimeType: String)
     case attachment(id: String)
     /// A file in the server's browser-artifacts directory: Hermes screenshots
     /// and recordings. Without this, an assistant message referencing one has
@@ -82,12 +84,19 @@ public enum AssetResource: Equatable, Sendable {
 
     var jsonValue: JSONValue {
         switch self {
+        case let .nativeAppIcon(app):
+            .object(["_tag": .string("native-app-icon"), "app": .object(["_tag": .string(app._tag)].merging(app.appId.map { ["appId": JSONValue.string($0)] } ?? [:]) { current, _ in current }.merging(app.displayName.map { ["displayName": JSONValue.string($0)] } ?? [:]) { current, _ in current })])
         case let .workspaceFile(threadID, path):
             .object([
                 "_tag": .string("workspace-file"),
                 "threadId": .string(threadID),
                 "path": .string(path),
             ])
+        case let .mediaFile(threadID, path):
+            .object(["_tag": .string("media-file"), "threadId": .string(threadID), "path": .string(path)])
+        case let .documentAttachment(id, name, mimeType):
+            .object(["_tag": .string("attachment"), "attachmentId": .string(id),
+                     "fileName": .string(name), "mimeType": .string(mimeType), "disposition": .string("inline")])
         case let .attachment(id):
             .object([
                 "_tag": .string("attachment"),
@@ -111,15 +120,22 @@ public enum AssetResource: Equatable, Sendable {
     }
 }
 
+public struct AssetImageDimensions: Codable, Equatable, Sendable {
+    public let width: Int
+    public let height: Int
+}
+
 public struct AssetCreateURLResult: Codable, Equatable, Sendable {
     public let relativeUrl: String
     /// Unix epoch milliseconds from the server contract.
     public let expiresAt: Double
+    public var imageDimensions: AssetImageDimensions? = nil
 }
 
 public struct ResolvedAssetURL: Equatable, Sendable {
     public let url: URL
     public let expiresAt: Date
+    public var imageDimensions: AssetImageDimensions? = nil
 }
 
 /// A composer attachment of any kind.
@@ -187,4 +203,10 @@ public struct UploadChatAttachment: Codable, Equatable, Sendable {
             "dataUrl": .string(dataUrl),
         ])
     }
+}
+
+public struct AttachmentUploadURLResult: Codable, Equatable, Sendable {
+    public let attachmentId: String
+    public let relativeUrl: String
+    public let expiresAt: Double
 }

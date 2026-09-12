@@ -51,6 +51,8 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
+vi.mock("../state/entities", () => ({ useProjects: () => [] }));
+
 vi.mock("react/compiler-runtime", () => ({ c: hooks.useMemoCache }));
 vi.mock("../assets/assetUrls", () => ({
   useAssetUrlState: (_environmentId: unknown, resource: unknown) => {

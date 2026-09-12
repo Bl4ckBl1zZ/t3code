@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { faviconUrlForOrigin } from "./favicon.ts";
+import { faviconUrlForOrigin, toolActivityFaviconUrl } from "./favicon.ts";
 
 describe("faviconUrlForOrigin", () => {
   it.each([
@@ -38,4 +38,28 @@ describe("faviconUrlForOrigin", () => {
       expect(faviconUrlForOrigin(origin)).toBeNull();
     },
   );
+});
+
+describe("tool activity favicons", () => {
+  it("selects explicit themed icons and readable GitHub defaults", () => {
+    const icon = {
+      pageUrl: "https://github.com/o/r",
+      faviconUrl: "https://icons.test/light.png",
+      faviconUrlDark: "https://icons.test/dark.png",
+    };
+    expect(toolActivityFaviconUrl(icon, "dark")).toBe(icon.faviconUrlDark);
+    expect(toolActivityFaviconUrl(icon, "light")).toBe(icon.faviconUrl);
+    expect(toolActivityFaviconUrl({ pageUrl: icon.pageUrl }, "dark")).toBe(
+      "https://github.githubassets.com/favicons/favicon-dark.svg",
+    );
+  });
+  it("uses the page origin without sending private hostnames to a public lookup", () => {
+    expect(
+      toolActivityFaviconUrl(
+        { pageUrl: "http://localhost:8000/private", faviconUrl: "javascript:alert(1)" },
+        "light",
+      ),
+    ).toBe("http://localhost:8000/favicon.ico");
+    expect(toolActivityFaviconUrl({ pageUrl: "file:///private" }, "light")).toBeNull();
+  });
 });

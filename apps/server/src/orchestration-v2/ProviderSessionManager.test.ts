@@ -1,6 +1,11 @@
+import { agentBrowserAccessEnabled } from "./AgentBrowserAccessPolicy.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  DEFAULT_SERVER_SETTINGS,
+  ServerSettingsError,
+  ProjectId,
   EnvironmentId,
   type ModelSelection,
   type OrchestrationV2AppThread,
@@ -345,7 +350,7 @@ function makeTestLayer(input: {
   readonly failReleaseEventWrites?: boolean;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
-  readonly agentBrowserAccessEnabled?: Effect.Effect<boolean>;
+  readonly agentBrowserAccessEnabled?: (threadId: ThreadId) => Effect.Effect<boolean>;
 }) {
   const configuredEventSinkLayer = input.failReleaseEventWrites
     ? FailingReleaseEventSinkLayer
@@ -777,7 +782,10 @@ it.effect(
         assert.isDefined(token);
         const resolved = yield* registry.resolve(token!, registry.audience);
         assert.equal(resolved?.threadId, threadId);
-        assert.deepEqual(resolved?.capabilities, new Set(["preview", "orchestration", "worktree"]));
+        assert.deepEqual(
+          resolved?.capabilities,
+          new Set(["preview", "orchestration", "pull-requests", "worktree"]),
+        );
 
         yield* manager.close(providerSessionId);
         assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId));
@@ -830,10 +838,16 @@ it.effect(
         // cost the thread its orchestration and worktree tools.
         const captured = (yield* Ref.get(mcpConfigs))[0];
         assert.isDefined(captured);
-        assert.deepEqual([...(captured?.capabilities ?? [])], ["orchestration", "worktree"]);
+        assert.deepEqual(
+          [...(captured?.capabilities ?? [])],
+          ["orchestration", "pull-requests", "worktree"],
+        );
         const token = captured?.authorizationHeader.replace(/^Bearer\s+/, "");
         const resolved = yield* registry.resolve(token!, registry.audience);
-        assert.deepEqual(resolved?.capabilities, new Set(["orchestration", "worktree"]));
+        assert.deepEqual(
+          resolved?.capabilities,
+          new Set(["orchestration", "pull-requests", "worktree"]),
+        );
 
         yield* manager.close(providerSessionId);
       });
@@ -844,7 +858,11 @@ it.effect(
             state,
             idleTimeoutMs: 1_000,
             mcpConfigs,
-            agentBrowserAccessEnabled: Effect.succeed(false),
+            agentBrowserAccessEnabled: (threadId) =>
+              Effect.sync(() => {
+                assert.equal(threadId, "thread-provider-session-manager-no-browser");
+                return false;
+              }),
           }),
         ),
       );
@@ -929,12 +947,12 @@ it.effect(
         });
 
         const config = (yield* Ref.get(mcpConfigs))[0];
-        assert.deepEqual(config?.capabilities, ["orchestration", "preview"]);
+        assert.deepEqual(config?.capabilities, ["orchestration", "preview", "pull-requests"]);
         const token = config?.authorizationHeader.replace(/^Bearer\s+/, "");
         assert.isDefined(token);
         assert.deepEqual(
           (yield* registry.resolve(token!, registry.audience))?.capabilities,
-          new Set(["preview", "orchestration"]),
+          new Set(["preview", "orchestration", "pull-requests"]),
         );
         yield* manager.close(providerSessionId);
       });
@@ -2462,4 +2480,130 @@ it.effect(
         ),
       );
     }),
+);
+
+it.effect(
+  "V2 browser policy resolves the durable project, defaults, reset and unknown threads",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      yield* Effect.gen(function* () {
+        const sink = yield* EventSinkV2;
+        const ids = yield* IdAllocatorV2;
+        const threadId = ThreadId.make("browser-policy-thread");
+        const event = yield* makeThreadCreatedEvent({
+          idAllocator: ids,
+          threadId,
+          now: yield* DateTime.now,
+        });
+        yield* sink.write({ events: [event] });
+        const projectId = event.payload.projectId;
+        for (const [defaultEnabled, override, expected] of [
+          [true, false, false],
+          [false, true, true],
+          [true, undefined, true],
+          [false, undefined, false],
+        ] as const) {
+          const settings = {
+            ...DEFAULT_SERVER_SETTINGS,
+            enableAgentBrowserAccess: defaultEnabled,
+            projectAgentBrowserAccessOverrides: {
+              [ProjectId.make("other")]: false,
+              ...(override === undefined ? {} : { [projectId]: override }),
+            },
+          };
+          const policyLayer = Layer.mock(ServerSettingsService)({
+            getSettings: Effect.succeed(settings),
+          });
+          assert.equal(
+            yield* agentBrowserAccessEnabled(threadId).pipe(Effect.provide(policyLayer)),
+            expected,
+          );
+          assert.isFalse(
+            yield* agentBrowserAccessEnabled(ThreadId.make("unknown")).pipe(
+              Effect.provide(policyLayer),
+            ),
+          );
+        }
+        const noOverrides = Layer.mock(ServerSettingsService)({
+          getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+        });
+        assert.isTrue(
+          yield* agentBrowserAccessEnabled(ThreadId.make("unknown")).pipe(
+            Effect.provide(noOverrides),
+          ),
+        );
+        assert.isFalse(
+          yield* agentBrowserAccessEnabled(threadId).pipe(
+            Effect.provide(
+              Layer.mock(ServerSettingsService)({
+                getSettings: Effect.fail(
+                  new ServerSettingsError({
+                    settingsPath: "/fixture/settings.json",
+                    operation: "read-file",
+                    cause: "unreadable",
+                  }),
+                ),
+              }),
+            ),
+          ),
+        );
+      }).pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1_000 })));
+    }),
+);
+
+it.effect("changing project browser access rotates credentials when the thread reattaches", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const allowed = yield* Ref.make(true);
+    yield* Effect.gen(function* () {
+      const sink = yield* EventSinkV2;
+      const ids = yield* IdAllocatorV2;
+      const manager = yield* ProviderSessionManagerV2;
+      const registry = yield* McpSessionRegistry.McpSessionRegistry;
+      const threadId = ThreadId.make("browser-override-rotation");
+      const providerSessionId = yield* ids.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* sink.write({
+        events: [
+          yield* makeThreadCreatedEvent({ idAllocator: ids, threadId, now: yield* DateTime.now }),
+        ],
+      });
+      const open = manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      yield* open;
+      let previous = McpProviderSession.readMcpProviderSession(threadId)!;
+      for (const enabled of [false, true]) {
+        yield* manager.detach({ providerSessionId, threadId, detail: "Settings changed." });
+        yield* Ref.set(allowed, enabled);
+        yield* open;
+        const next = McpProviderSession.readMcpProviderSession(threadId)!;
+        assert.notEqual(next.providerSessionId, previous.providerSessionId);
+        assert.isUndefined(
+          yield* registry.resolve(
+            previous.authorizationHeader.replace(/^Bearer\s+/, ""),
+            registry.audience,
+          ),
+        );
+        const credential = yield* registry.resolve(
+          next.authorizationHeader.replace(/^Bearer\s+/, ""),
+          registry.audience,
+        );
+        assert.equal(credential?.capabilities.has("preview"), enabled);
+        assert.isTrue(credential?.capabilities.has("orchestration"));
+        assert.isTrue(credential?.capabilities.has("worktree"));
+        previous = next;
+      }
+      yield* manager.close(providerSessionId);
+    }).pipe(
+      Effect.provide(
+        makeTestLayer({
+          state,
+          idleTimeoutMs: 1_000,
+          agentBrowserAccessEnabled: () => Ref.get(allowed),
+        }),
+      ),
+    );
+  }),
 );

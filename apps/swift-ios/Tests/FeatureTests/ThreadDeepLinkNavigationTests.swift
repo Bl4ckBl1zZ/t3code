@@ -9,6 +9,13 @@ import XCTest
 final class ThreadDeepLinkNavigationTests: XCTestCase {
     // MARK: - File links
 
+    func testContainingDirectoriesKeepWorkspaceAndExcludeCurrentFile() {
+        XCTAssertEqual(FeatureFilesView.containingDirectories(path: "src/lib/app.swift").map(\.path), ["", "src", "src/lib"])
+        XCTAssertEqual(FeatureFilesView.containingDirectories(path: "README.md").map(\.path), [""])
+        XCTAssertEqual(FeatureFilesView.containingDirectories(path: "/src//app.swift").map(\.path), ["", "src"])
+        XCTAssertEqual(FeatureFilesView.containingDirectories(path: "").map(\.path), [""])
+    }
+
     func testAFileLinkOpensTheFileItNamedRatherThanTheTreeRoot() {
         let entry = FeatureFilesView.deepLinkedEntry(path: "apps/swift-ios/Core/HTTP.swift")
 

@@ -1,0 +1,21 @@
+{
+  "input": {
+    "cwd": "/repo",
+    "reference": "https://github.com/acme/app/pull/3",
+    "mode": "worktree",
+    "threadId": "checkout-thread"
+  },
+  "result": {
+    "pullRequest": {
+      "number": 3,
+      "title": "Review checkout",
+      "url": "https://github.com/acme/app/pull/3",
+      "baseBranch": "main",
+      "headBranch": "topic",
+      "state": "open"
+    },
+    "branch": "topic",
+    "worktreePath": "/repo.worktrees/pr-3",
+    "isOnPullRequestHead": false
+  }
+}

@@ -24,6 +24,8 @@ describe("gitHubViewerPermissions", () => {
       resolve: true,
       verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
+      labels: true,
+      stackRebase: true,
     });
   });
 
@@ -39,6 +41,7 @@ describe("gitHubViewerPermissions", () => {
       verdicts: ["comment", "approve", "request-changes"],
       // Asking somebody else to review is the one thing read access never stretches to.
       requestReviewers: false,
+      labels: false,
     });
   });
 
@@ -51,6 +54,7 @@ describe("gitHubViewerPermissions", () => {
       // GitHub refuses an author's approval of their own change, so the page does not offer one.
       verdicts: ["comment"],
       requestReviewers: false,
+      labels: false,
     });
   });
 
@@ -70,6 +74,7 @@ describe("gitHubViewerPermissions", () => {
         resolve: false,
         verdicts: ["comment", "approve", "request-changes"],
         requestReviewers: false,
+        labels: false,
       });
     }).pipe(
       Effect.provide(

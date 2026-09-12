@@ -99,13 +99,16 @@ export function resolveDraftHeroState(input: {
 
 export function resolveDraftPromotionNavigationTarget(input: {
   serverThreadRef: ScopedThreadRef | null;
-  serverThreadStarted: boolean;
+  serverThread: Pick<Thread, "latestRun" | "runtime"> | null | undefined;
   backgroundSubmissionPending: boolean;
 }): ScopedThreadRef | null {
   if (input.backgroundSubmissionPending) {
     return null;
   }
-  return input.serverThreadStarted ? input.serverThreadRef : null;
+  const run = input.serverThread?.latestRun;
+  const status = run?.status ?? input.serverThread?.runtime?.status;
+  const startupStopped = status === "failed" || status === "interrupted" || status === "cancelled";
+  return run?.startedAt != null || startupStopped ? input.serverThreadRef : null;
 }
 
 export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
@@ -714,6 +717,17 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.latestRunStartedAt !== (latestRun?.startedAt ?? null) ||
     input.localDispatch.latestRunCompletedAt !== (latestRun?.completedAt ?? null);
 
+  if (
+    input.localDispatch.preparingWorktree &&
+    latestRun?.startedAt == null &&
+    !(
+      latestRun?.completedAt ||
+      ["failed", "interrupted", "cancelled"].includes(runtime?.status ?? "")
+    )
+  ) {
+    return false;
+  }
+
   if (input.phase === "running") {
     if (latestUserMessageChanged) {
       return true;
@@ -739,4 +753,53 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.runtimeStatus !== (runtime?.status ?? null) ||
     input.localDispatch.runtimeUpdatedAt !== (runtime?.updatedAt ?? null)
   );
+}
+
+// Returning to the window should land the caret in the composer, so the reader can type right
+// away. The exceptions are places where focus is deliberate: another text field, a terminal in
+// the drawer or the right panel, or an open dialog or popup. A focused button outside those is
+// not one of them, so it yields to the composer.
+export function shouldRefocusComposerOnWindowFocus(
+  activeElement:
+    | (Pick<Element, "tagName" | "closest" | "getAttribute"> & { isContentEditable?: boolean })
+    | null,
+): boolean {
+  if (activeElement === null || activeElement.tagName === "BODY") return true;
+  if (
+    activeElement.tagName === "INPUT" ||
+    activeElement.tagName === "TEXTAREA" ||
+    activeElement.tagName === "SELECT" ||
+    activeElement.isContentEditable === true ||
+    activeElement.getAttribute("role") === "textbox"
+  ) {
+    return false;
+  }
+  return (
+    activeElement.closest(
+      '[role="dialog"], [role="alertdialog"], [data-slot$="-popup"], [data-terminal-owner]',
+    ) === null
+  );
+}
+
+// A checkout's Git identity arrives asynchronously. Remember known non-repos
+// so revisiting them does not briefly mount and remove the branch strip.
+const sessionCheckoutIsRepo = new Map<string, boolean>();
+export function rememberCheckoutIsRepo(
+  environmentId: EnvironmentId,
+  cwd: string,
+  isRepo: boolean,
+): void {
+  const key = JSON.stringify([environmentId, cwd]);
+  sessionCheckoutIsRepo.delete(key);
+  sessionCheckoutIsRepo.set(key, isRepo);
+  if (sessionCheckoutIsRepo.size > 256) {
+    const oldest = sessionCheckoutIsRepo.keys().next().value;
+    if (oldest !== undefined) sessionCheckoutIsRepo.delete(oldest);
+  }
+}
+export function recallCheckoutIsRepo(
+  environmentId: EnvironmentId,
+  cwd: string | null,
+): boolean | undefined {
+  return cwd === null ? undefined : sessionCheckoutIsRepo.get(JSON.stringify([environmentId, cwd]));
 }

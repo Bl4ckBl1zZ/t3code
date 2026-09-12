@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2ThreadProjection,
   ProviderRequestKind,
+  ProviderApprovalOption,
   RuntimeRequestId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -10,6 +11,8 @@ export interface ThreadPendingApproval {
   readonly requestKind: ProviderRequestKind;
   readonly createdAt: string;
   readonly detail?: string;
+  readonly title?: string;
+  readonly options?: ReadonlyArray<ProviderApprovalOption>;
   readonly responseCapability: "live" | "not_resumable";
 }
 
@@ -70,6 +73,8 @@ export function derivePendingThreadRequests(
       requestKind: request.kind,
       createdAt: DateTime.formatIso(request.createdAt),
       ...(item?.type === "approval_request" && item.prompt ? { detail: item.prompt } : {}),
+      ...(item?.type === "approval_request" && item.title ? { title: item.title } : {}),
+      ...(item?.type === "approval_request" && item.options ? { options: item.options } : {}),
       responseCapability,
     });
   }

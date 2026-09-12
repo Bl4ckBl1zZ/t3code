@@ -1,3 +1,4 @@
+import { environmentServerConfigsAtom } from "./server";
 import { useAtomValue } from "@effect/atom-react";
 import {
   createEnvironmentThreadDetailAtoms,
@@ -23,6 +24,13 @@ export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: environmentSnapshotAtom,
+  autoSettlementAtom: Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get) =>
+        get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+          .threadAutoSettlement === true,
+    ),
+  ),
 });
 
 const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE)).pipe(

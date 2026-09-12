@@ -357,6 +357,7 @@ export type PullRequestReviewerCapabilities = typeof PullRequestReviewerCapabili
  * buttons.
  */
 export const PullRequestCapabilities = Schema.Struct({
+  labels: Schema.optionalKey(Schema.Boolean),
   /** A unified patch can be fetched for the change request. */
   diff: Schema.Boolean,
   /** A comment can be posted, and the conversation read back. */
@@ -406,6 +407,9 @@ export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
  * offering one they may not use ends in the host's own refusal — which at least says why.
  */
 export const PullRequestViewerPermissions = Schema.Struct({
+  labels: Schema.optionalKey(Schema.Boolean),
+  /** Stack rebases need write access even when the selected branch is not behind its base. */
+  stackRebase: Schema.optionalKey(Schema.Boolean),
   /** Which of the actions this viewer may take; anything absent is theirs to look at only. */
   actions: Schema.Array(PullRequestAction),
   /** This viewer may write a remark: a comment, a reply, or a note against a line. */
@@ -801,7 +805,33 @@ export const PullRequestDiffFileContentsResult = Schema.Struct({
 });
 export type PullRequestDiffFileContentsResult = typeof PullRequestDiffFileContentsResult.Type;
 
+export const PullRequestStack = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  number: PositiveInt,
+  url: TrimmedNonEmptyString,
+  base: TrimmedNonEmptyString,
+  layers: Schema.Array(
+    Schema.Struct({
+      number: PositiveInt,
+      title: Schema.optional(Schema.String),
+      isDraft: Schema.optional(Schema.Boolean),
+      headSha: Schema.optional(TrimmedNonEmptyString),
+      headBranch: TrimmedNonEmptyString,
+      state: PullRequestState,
+    }),
+  ),
+});
+export type PullRequestStack = typeof PullRequestStack.Type;
+
+export const PullRequestStackHead = Schema.Struct({
+  number: PositiveInt,
+  headSha: TrimmedNonEmptyString,
+});
+export type PullRequestStackHead = typeof PullRequestStackHead.Type;
+
 export const PullRequestActionInput = Schema.Struct({
+  stackNumber: Schema.optional(PositiveInt),
+  expectedStackHeads: Schema.optional(Schema.Array(PullRequestStackHead)),
   ...PullRequestRef.fields,
   action: PullRequestAction,
   /**
@@ -1118,3 +1148,54 @@ export class PullRequestOperationError extends Schema.TaggedErrorClass<PullReque
     return `Pull request operation ${this.operation} failed: ${this.detail}`;
   }
 }
+
+/** A label the repository defines, with whether this change request already wears it. */
+export const PullRequestLabelCandidate = Schema.Struct({
+  ...PullRequestLabel.fields,
+  description: Schema.NullOr(Schema.String),
+  isApplied: Schema.Boolean,
+});
+export type PullRequestLabelCandidate = typeof PullRequestLabelCandidate.Type;
+
+export const PullRequestLabelCandidateList = Schema.Struct({
+  candidates: Schema.Array(PullRequestLabelCandidate),
+  /** The repository defines more labels than the read asked for; the list is not all of them. */
+  truncated: Schema.Boolean,
+});
+export type PullRequestLabelCandidateList = typeof PullRequestLabelCandidateList.Type;
+
+export const PullRequestLabelChangeInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  labels: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1), Schema.isMaxLength(25)),
+  applied: Schema.Boolean,
+});
+export type PullRequestLabelChangeInput = typeof PullRequestLabelChangeInput.Type;
+
+/**
+ * The small live shape a linked thread needs. Keeping it separate from detail means a sidebar
+ * status check never loads permissions, repository settings, checks, or base comparison data.
+ */
+export const PullRequestSummary = Schema.Struct({
+  provider: SourceControlProviderKind,
+  projectId: ProjectId,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  state: PullRequestState,
+  /** Present when the host says the open pull request is still a draft. */
+  isDraft: Schema.optional(Schema.Boolean),
+  headBranch: TrimmedNonEmptyString,
+  baseBranch: TrimmedNonEmptyString,
+  closedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  updatedAt: IsoDateTime,
+  author: Schema.optional(Schema.NullOr(PullRequestActor)),
+  additions: Schema.optional(NonNegativeInt),
+  deletions: Schema.optional(NonNegativeInt),
+  changedFiles: Schema.optional(NonNegativeInt),
+  reviewDecision: Schema.optional(Schema.NullOr(PullRequestReviewDecision)),
+  checksState: Schema.optional(Schema.NullOr(PullRequestChecksState)),
+  mergeability: Schema.optional(PullRequestMergeability),
+});
+export type PullRequestSummary = typeof PullRequestSummary.Type;

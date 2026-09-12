@@ -1,0 +1,46 @@
+{
+  "run": {
+    "restartContinuation": {
+      "messageId": "restart-message",
+      "reason": "restart",
+      "status": "pending"
+    },
+    "id": "run-1",
+    "threadId": "thread-v2",
+    "ordinal": 1,
+    "providerInstanceId": "codex",
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "gpt-5.4"
+    },
+    "providerThreadId": "provider-thread-1",
+    "userMessageId": "original-message",
+    "rootNodeId": null,
+    "activeAttemptId": null,
+    "status": "cancelled",
+    "requestedAt": "2026-06-20T00:00:00.000Z",
+    "startedAt": "2026-06-20T00:00:00.000Z",
+    "completedAt": "2026-06-20T00:00:00.000Z",
+    "checkpointId": null,
+    "contextHandoffId": null
+  },
+  "message": {
+    "restartContinuation": true,
+    "createdBy": "agent",
+    "creationSource": "server",
+    "id": "restart-message",
+    "threadId": "thread-v2",
+    "runId": "run-1",
+    "nodeId": null,
+    "role": "user",
+    "text": "Continue after restart",
+    "attachments": [],
+    "streaming": false,
+    "createdAt": "2026-06-20T00:00:00.000Z",
+    "updatedAt": "2026-06-20T00:00:00.000Z"
+  },
+  "capabilities": {
+    "repositoryIdentity": false,
+    "threadRestartContinuation": true
+  }
+}

@@ -115,6 +115,11 @@ public actor T3Client {
         )
     }
 
+    /// Samples whole-host CPU and available memory for new-task routing.
+    public func hostResources() async throws -> HostResourcesSnapshot {
+        try await rpc.request(RPCMethod.serverGetHostResources.rawValue, payload: .object([:]), as: HostResourcesSnapshot.self)
+    }
+
     /// Writes one or more server-authoritative settings.
     ///
     /// The patch is deliberately sparse: `ServerSettingsPatch` is optional
@@ -227,6 +232,13 @@ public actor T3Client {
         )
     }
 
+    public func preparePullRequestCheckout(cwd: String, reference: String, mode: PullRequestCheckoutMode, threadID: String) async throws -> PullRequestCheckoutResult {
+        try await rpc.request("git.preparePullRequestThread", payload: .object([
+            "cwd": .string(cwd), "reference": .string(reference),
+            "mode": .string(mode.rawValue), "threadId": .string(threadID),
+        ]), as: PullRequestCheckoutResult.self)
+    }
+
     /// Sends an orchestration V2 command.
     ///
     /// WebSocket only. This fork's `EnvironmentOrchestrationHttpApi` serves the
@@ -287,6 +299,14 @@ public actor T3Client {
         attachments: [UploadChatAttachment]
     ) async throws -> [JSONValue] {
         guard !attachments.isEmpty else { return [] }
+        let capabilities = environment.descriptor?.capabilities
+        if capabilities?.attachmentUploads == true, let fileLimit = capabilities?.fileAttachments?.maxUploadBytes {
+            return try await persistSignedAttachments(attachments, fileLimit: fileLimit)
+        }
+        for attachment in attachments where attachment.type != .image && attachment.sizeBytes > 20 * 1024 * 1024 {
+            throw ImageAttachmentError.tooLarge(actualBytes: attachment.sizeBytes, maximumBytes: 20 * 1024 * 1024)
+        }
+
         let result = try await rpc.request(
             RPCMethod.assetsPersistChatAttachments.rawValue,
             payload: .object([
@@ -302,6 +322,49 @@ public actor T3Client {
             )
         }
         return persisted
+    }
+
+    private func persistSignedAttachments(_ attachments: [UploadChatAttachment], fileLimit: Int) async throws -> [JSONValue] {
+        var minted: [String] = []
+        do {
+            var persisted: [JSONValue] = []
+            // Bound memory and transfers: a phone sends one file at a time.
+            for attachment in attachments {
+                try Task.checkCancellation()
+                let limit = attachment.type == .image ? ComposerAttachments.maximumImageBytes : min(fileLimit, ComposerAttachments.maximumFileBytes)
+                guard attachment.sizeBytes <= limit else {
+                    throw ImageAttachmentError.tooLarge(actualBytes: attachment.sizeBytes, maximumBytes: limit)
+                }
+                guard let comma = attachment.dataUrl.firstIndex(of: ","),
+                      let bytes = Data(base64Encoded: String(attachment.dataUrl[attachment.dataUrl.index(after: comma)...])),
+                      bytes.count == attachment.sizeBytes else {
+                    throw RPCError.protocolViolation("The attachment data is invalid.")
+                }
+                let result = try await rpc.request(
+                    "attachments.createUploadUrl",
+                    payload: .object([
+                        "type": .string(attachment.type == .image ? "image" : "file"),
+                        "name": .string(attachment.name), "mimeType": .string(attachment.mimeType),
+                        "sizeBytes": .number(Double(attachment.sizeBytes)),
+                    ]), as: AttachmentUploadURLResult.self
+                )
+                minted.append(result.attachmentId)
+                try await api.uploadAttachment(for: environment, relativeURL: result.relativeUrl, data: bytes, mimeType: attachment.mimeType)
+                persisted.append(.object([
+                    "type": .string(attachment.type.rawValue), "id": .string(result.attachmentId),
+                    "name": .string(attachment.name), "mimeType": .string(attachment.mimeType),
+                    "sizeBytes": .number(Double(attachment.sizeBytes)),
+                ]))
+            }
+            return persisted
+        } catch {
+            // Only pending uploads from this attempt are eligible for deletion.
+            // The server also expires abandoned uploads if the connection failed.
+            for id in minted {
+                _ = try? await rpc.request("attachments.delete", payload: .object(["attachmentId": .string(id)]), as: JSONValue.self)
+            }
+            throw error
+        }
     }
 
     /// Hands the thread to the provider as feedback and returns the identifier
@@ -434,6 +497,11 @@ public actor T3Client {
             ),
             as: JSONValue.self
         )
+    }
+
+    public func setProjectIcon(projectID: String, icon: ProjectIconOverride?) async throws {
+        let payload = try OrchestrationCommands.setProjectIcon(projectID: projectID, icon: icon)
+        let _: JSONValue = try await rpc.request(RPCMethod.projectsMutate.rawValue, payload: payload, as: JSONValue.self)
     }
 
     @discardableResult
@@ -726,6 +794,18 @@ public actor T3Client {
     // (`packages/contracts/src/pullRequest.ts`): the server project id, the
     // repository's display name, and the change request's number on the host.
 
+    public func listPullRequests(_ input: PullRequestListInput) async throws -> PullRequestListResult {
+        try await rpc.request("pullRequests.list", payload: try JSONValue.encode(input), as: PullRequestListResult.self)
+    }
+
+    public func pullRequestStats(_ entries: [PullRequestListEntry]) async throws -> PullRequestListStatsResult {
+        try await rpc.request("pullRequests.listStats", payload: .object([
+            "refs": .array(entries.map { .object([
+                "projectId": .string($0.projectId), "repository": .string($0.repository), "number": .number(Double($0.number)),
+            ]) }),
+        ]), as: PullRequestListStatsResult.self)
+    }
+
     public func pullRequestDetail(
         projectID: String,
         repository: String,
@@ -740,6 +820,139 @@ public actor T3Client {
             ]),
             as: PullRequestDetail.self
         )
+    }
+
+    public func pullRequestThreadComments(projectID: String, repository: String, number: Int, threadID: String, cursor: String) async throws -> PullRequestThreadCommentsResult {
+        try await rpc.request("pullRequests.threadComments", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "threadId": .string(threadID), "cursor": .string(cursor),
+        ]), as: PullRequestThreadCommentsResult.self)
+    }
+
+    public func replyToPullRequestThread(projectID: String, repository: String, number: Int, threadID: String, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.replyToThread", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "threadId": .string(threadID), "body": .string(body),
+        ]), as: JSONValue.self)
+    }
+
+    public func setPullRequestThreadResolution(projectID: String, repository: String, number: Int, threadID: String, resolved: Bool) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.setThreadResolution", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "threadId": .string(threadID), "resolved": .bool(resolved),
+        ]), as: JSONValue.self)
+    }
+
+    public func invalidatePullRequest(projectID: String, repository: String, number: Int) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object(["reference": .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ])]), as: JSONValue.self)
+    }
+
+    public func invalidatePullRequestListings() async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.invalidate", payload: .object([:]), as: JSONValue.self)
+    }
+
+    public func pullRequestReviewerCandidates(projectID: String, repository: String, number: Int) async throws -> PullRequestReviewerCandidateList {
+        try await rpc.request("pullRequests.reviewerCandidates", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ]), as: PullRequestReviewerCandidateList.self)
+    }
+
+    public func requestPullRequestReviewers(projectID: String, repository: String, number: Int, request: PullRequestReviewerRequest) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.requestReviewers", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "reviewers": .array(request.reviewers.map { .object(["id": .string($0.id), "kind": .string($0.kind)]) }), "requested": .bool(request.requested),
+        ]), as: JSONValue.self)
+    }
+
+    public func setPullRequestReaction(projectID: String, repository: String, number: Int, request: PullRequestReactionRequest) async throws {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "content": .string(request.content), "reacted": .bool(request.reacted)]
+        if let subjectId = request.subjectId { payload["subjectId"] = .string(subjectId) }
+        let _: JSONValue = try await rpc.request("pullRequests.setReaction", payload: .object(payload), as: JSONValue.self)
+    }
+
+    public func updatePullRequestText(projectID: String, repository: String, number: Int, update: PullRequestTextUpdate) async throws {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
+        if let title = update.title { payload["title"] = .string(title) }
+        if let body = update.body { payload["body"] = .string(body) }
+        let _: JSONValue = try await rpc.request("pullRequests.update", payload: .object(payload), as: JSONValue.self)
+    }
+
+    public func updatePullRequestComment(projectID: String, repository: String, number: Int, commentID: String, kind: String, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.updateComment", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "commentId": .string(commentID), "kind": .string(kind), "body": .string(body),
+        ]), as: JSONValue.self)
+    }
+
+    public func commentOnPullRequest(projectID: String, repository: String, number: Int, body: String) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.comment", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "body": .string(body),
+        ]), as: JSONValue.self)
+    }
+
+    public func runPullRequestAction(projectID: String, repository: String, number: Int, request: PullRequestActionRequest) async throws {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)), "action": .string(request.action)]
+        if let method = request.mergeMethod { payload["mergeMethod"] = .string(method) }
+        if let method = request.updateMethod { payload["updateMethod"] = .string(method) }
+        let _: JSONValue = try await rpc.request("pullRequests.runAction", payload: .object(payload), as: JSONValue.self)
+    }
+
+    public func submitPullRequestReview(projectID: String, repository: String, number: Int, submission: PullRequestReviewSubmission) async throws {
+        let encoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(submission))
+        guard case var .object(payload) = encoded else { throw CocoaError(.coderInvalidValue) }
+        payload["projectId"] = .string(projectID); payload["repository"] = .string(repository); payload["number"] = .number(Double(number))
+        let _: JSONValue = try await rpc.request("pullRequests.submitReview", payload: .object(payload), as: JSONValue.self)
+    }
+
+    public func pullRequestDiffFileContents(projectID: String, repository: String, number: Int, input: PullRequestDiffFileInput) async throws -> PullRequestDiffFileContents {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "changeType": .string(input.changeType), "oldPath": .string(input.oldPath), "newPath": .string(input.newPath)]
+        if let commit = input.commit { payload["commit"] = .string(commit) }
+        return try await rpc.request("pullRequests.diffFileContents", payload: .object(payload), as: PullRequestDiffFileContents.self)
+    }
+
+    public func pullRequestDiff(projectID: String, repository: String, number: Int, cursor: String?, commit: String?) async throws -> PullRequestDiffResult {
+        var payload: [String: JSONValue] = ["projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number))]
+        if let cursor { payload["cursor"] = .string(cursor) }
+        if let commit { payload["commit"] = .string(commit) }
+        return try await rpc.request("pullRequests.diff", payload: .object(payload), as: PullRequestDiffResult.self)
+    }
+
+    public func pullRequestLabelCandidates(projectID: String, repository: String, number: Int) async throws -> PullRequestLabelCandidateList {
+        try await rpc.request("pullRequests.labelCandidates", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ]), as: PullRequestLabelCandidateList.self)
+    }
+
+    public func setPullRequestLabels(projectID: String, repository: String, number: Int, labels: [String], applied: Bool) async throws {
+        let _: JSONValue = try await rpc.request("pullRequests.setLabels", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "labels": .array(labels.map { .string($0) }), "applied": .bool(applied),
+        ]), as: JSONValue.self)
+    }
+
+    public func pullRequestStack(projectID: String, repository: String, number: Int) async throws -> PullRequestStack? {
+        try await rpc.request("pullRequests.stack", payload: .object([
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+        ]), as: Optional<PullRequestStack>.self)
+    }
+
+    public func runPullRequestStackAction(projectID: String, repository: String, number: Int,
+        stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
+        let heads = stack.affectedLayers(number: number, action: action)
+        guard !heads.isEmpty, heads.allSatisfy({ $0.headSha != nil }) else {
+            throw RPCError.remote("Refresh the stack before performing this action.")
+        }
+        var fields: [String: JSONValue] = [
+            "projectId": .string(projectID), "repository": .string(repository), "number": .number(Double(number)),
+            "stackNumber": .number(Double(stack.number)), "action": .string(action),
+            "expectedStackHeads": .array(heads.map { .object(["number": .number(Double($0.number)), "headSha": .string($0.headSha!)]) }),
+        ]
+        if let mergeMethod { fields["mergeMethod"] = .string(mergeMethod) }
+        if action == "update-branch" { fields["updateMethod"] = .string("rebase") }
+        let _: JSONValue = try await rpc.request("pullRequests.runAction", payload: .object(fields), as: JSONValue.self)
     }
 
     public func pullRequestActivity(
@@ -894,6 +1107,16 @@ public actor T3Client {
         )
     }
 
+    public func scanAgentSessions() async throws -> AgentSessionScanResult {
+        try await rpc.request(RPCMethod.agentSessionsScan.rawValue, payload: .object([:]), as: AgentSessionScanResult.self)
+    }
+
+    public func importAgentSessions(projectID: String, expectedWorkspaceRoot: String) async throws -> AgentSessionImportResult {
+        try await rpc.request(RPCMethod.agentSessionsImport.rawValue, payload: .object([
+            "projectId": .string(projectID), "expectedWorkspaceRoot": .string(expectedWorkspaceRoot),
+        ]), as: AgentSessionImportResult.self)
+    }
+
     public func browseFilesystem(
         partialPath: String,
         cwd: String? = nil
@@ -907,24 +1130,31 @@ public actor T3Client {
         )
     }
 
-    /// Scans provider transcript directories on this server and returns the
-    /// usage summary for an inclusive `[sinceDay, untilDay]` window of
-    /// `YYYY-MM-DD` days bucketed in `timeZone` (IANA — an offset would be
-    /// wrong across a DST boundary).
-    public func getUsageSummary(
-        sinceDay: String,
-        untilDay: String,
-        timeZone: String
-    ) async throws -> UsageSummary {
-        try await rpc.request(
-            RPCMethod.serverGetUsageSummary.rawValue,
-            payload: .object([
-                "sinceDay": .string(sinceDay),
-                "untilDay": .string(untilDay),
-                "timeZone": .string(timeZone),
-            ]),
-            as: UsageSummary.self
-        )
+    /// Refreshes model pricing, retaining the server's cached rates on network failure.
+    public func consumeResetCredit(instanceID: String) async throws -> ProviderConsumeResetCreditResult {
+        try await rpc.request(RPCMethod.providerConsumeResetCredit.rawValue,
+            payload: .object(["instanceId": .string(instanceID)]), as: ProviderConsumeResetCreditResult.self)
+    }
+
+    public func refreshUsageRates() async throws -> UsagePricing {
+        try await rpc.request(RPCMethod.serverRefreshUsageRates.rawValue,
+                              payload: .object([:]), as: UsagePricing.self)
+    }
+
+    /// Scans provider transcripts, preserving an exact hourly window when requested.
+    public func getUsageSummary(input: UsageSummaryInput) async throws -> UsageSummary {
+        var payload: [String: JSONValue] = ["sinceDay": .string(input.sinceDay),
+            "untilDay": .string(input.untilDay), "timeZone": .string(input.timeZone),
+            "resolution": .string(input.resolution)]
+        if let since = input.sinceTime { payload["sinceTime"] = .string(since) }
+        if let until = input.untilTime { payload["untilTime"] = .string(until) }
+        return try await rpc.request(RPCMethod.serverGetUsageSummary.rawValue,
+                                    payload: .object(payload), as: UsageSummary.self)
+    }
+
+    public func getUsageSummary(sinceDay: String, untilDay: String, timeZone: String) async throws -> UsageSummary {
+        try await getUsageSummary(input: UsageSummaryInput(sinceDay: sinceDay, untilDay: untilDay,
+            timeZone: timeZone, resolution: "day", sinceTime: nil, untilTime: nil))
     }
 
     /// Issues a short-lived authenticated URL for a persisted attachment,
@@ -951,7 +1181,8 @@ public actor T3Client {
         }
         return ResolvedAssetURL(
             url: url,
-            expiresAt: Date(timeIntervalSince1970: result.expiresAt / 1_000)
+            expiresAt: Date(timeIntervalSince1970: result.expiresAt / 1_000),
+            imageDimensions: result.imageDimensions
         )
     }
 
@@ -1073,6 +1304,7 @@ public actor T3Client {
 
     public func runGitAction(
         cwd: String,
+        threadID: String? = nil,
         action: GitStackedAction,
         commitMessage: String? = nil,
         featureBranch: Bool? = nil,
@@ -1084,6 +1316,7 @@ public actor T3Client {
             "cwd": .string(cwd),
             "action": .string(action.rawValue),
         ]
+        if let threadID { payload["threadId"] = .string(threadID) }
         if let commitMessage { payload["commitMessage"] = .string(commitMessage) }
         if let featureBranch { payload["featureBranch"] = .bool(featureBranch) }
         if let filePaths { payload["filePaths"] = .array(filePaths.map(JSONValue.string)) }
@@ -1266,9 +1499,10 @@ public actor T3Client {
         worktreePath: String? = nil,
         columns: Int? = nil,
         rows: Int? = nil,
-        environmentVariables: [String: String]? = nil
+        environmentVariables: [String: String]? = nil,
+        providerInstanceID: String? = nil
     ) async throws -> TerminalSessionSnapshot {
-        let payload = try terminalPayload(
+        var payload = try terminalPayloadObject(
             threadID: threadID,
             terminalID: terminalID,
             cwd: cwd,
@@ -1277,9 +1511,10 @@ public actor T3Client {
             rows: rows,
             environmentVariables: environmentVariables
         )
+        if let providerInstanceID { payload["providerInstanceId"] = .string(providerInstanceID) }
         return try await rpc.request(
             RPCMethod.terminalOpen.rawValue,
-            payload: payload,
+            payload: .object(payload),
             as: TerminalSessionSnapshot.self
         )
     }
@@ -1746,6 +1981,7 @@ public actor EnvironmentRuntime {
 public enum RPCMethod: String, Sendable {
     case serverProbe = "server.probe"
     case serverGetConfig = "server.getConfig"
+    case serverGetHostResources = "server.getHostResources"
     case serverUpdateSettings = "server.updateSettings"
     case dispatchCommand = "orchestration.dispatchCommand"
     case launchThread = "orchestration.launchThread"
@@ -1761,8 +1997,12 @@ public enum RPCMethod: String, Sendable {
     case projectsReadFile = "projects.readFile"
     case projectsWriteFile = "projects.writeFile"
     case filesystemBrowse = "filesystem.browse"
+    case agentSessionsScan = "agentSessions.scan"
+    case agentSessionsImport = "agentSessions.import"
     case assetsCreateURL = "assets.createUrl"
     case serverGetUsageSummary = "server.getUsageSummary"
+    case providerConsumeResetCredit = "provider.consumeResetCredit"
+    case serverRefreshUsageRates = "server.refreshUsageRates"
     case assetsPersistChatAttachments = "assets.persistChatAttachments"
     case providerUploadFeedback = "provider.uploadFeedback"
     case subscribeServerConfig
@@ -2145,6 +2385,14 @@ public enum OrchestrationCommands {
             "branch": trimmedOrNull(branch),
             "worktreePath": trimmedOrNull(worktreePath),
             "createdAt": .string(createdAt),
+        ])
+    }
+
+    public static func setProjectIcon(projectID: String, icon: ProjectIconOverride?, commandID: String = UUID().uuidString) throws -> JSONValue {
+        .object([
+            "type": .string("project.update"), "commandId": .string(commandID),
+            "projectId": .string(projectID), "faviconPath": .null,
+            "projectIcon": try icon.map { try JSONValue.encode($0) } ?? .null,
         ])
     }
 

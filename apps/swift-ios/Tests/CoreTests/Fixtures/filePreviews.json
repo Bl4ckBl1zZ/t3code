@@ -1,0 +1,18 @@
+{
+  "host": {
+    "_tag": "media-file",
+    "threadId": "thread-1",
+    "path": "/tmp/report.html"
+  },
+  "attachment": {
+    "_tag": "attachment",
+    "attachmentId": "upload-pdf",
+    "fileName": "report.pdf",
+    "mimeType": "application/pdf",
+    "disposition": "inline"
+  },
+  "capabilities": {
+    "fileDocumentPreviews": true,
+    "repositoryIdentity": true
+  }
+}

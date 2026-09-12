@@ -53,6 +53,7 @@ export function pullRequestDetailToVcsStatus(
     baseRef: detail.baseBranch,
     headRef: detail.headBranch,
     state: detail.state,
+    ...(detail.isDraft === true ? { isDraft: true } : {}),
     updatedAt: detail.updatedAt,
   };
 }
@@ -98,6 +99,17 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       staleTimeMs: 15_000,
     }),
     activity,
+    stack: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:stack",
+      tag: WS_METHODS.pullRequestsStack,
+      staleTimeMs: 15_000,
+    }),
+    readDetail: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:read-detail",
+      tag: WS_METHODS.pullRequestsDetail,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     threadComments: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:thread-comments",
       tag: WS_METHODS.pullRequestsThreadComments,
@@ -189,6 +201,17 @@ export function createPullRequestEnvironmentAtoms<R, E>(
      * for a minute, because who has access to a repository changes far more slowly than the
      * change request it is being read for.
      */
+    labelCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:label-candidates",
+      tag: WS_METHODS.pullRequestsLabelCandidates,
+      staleTimeMs: 15_000,
+    }),
+    setLabels: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:set-labels",
+      tag: WS_METHODS.pullRequestsSetLabels,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     reviewerCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:reviewer-candidates",
       tag: WS_METHODS.pullRequestsReviewerCandidates,

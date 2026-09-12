@@ -439,6 +439,11 @@ export function isTerminalSelectAllShortcut(
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
+/** Linux/BSD middle-click uses the terminal selection, never the clipboard. */
+function isMiddleClickPastePlatform(): boolean {
+  return /linux|bsd/i.test(navigator.platform);
+}
+
 export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
   return (
     event.inputType === "" ||
@@ -579,6 +584,7 @@ export interface GhosttySelectionPosition {
 }
 
 export interface GhosttyTerminalSurfaceOptions {
+  readonly visible?: boolean;
   readonly theme: GhosttyTheme;
   readonly font?: GhosttyTerminalFont;
   readonly onData: (data: string) => void;
@@ -627,6 +633,8 @@ export class GhosttyTerminalSurface {
   private scrollbarPointerId: number | null = null;
   private scrollbarPointerOffset = 0;
   private disposed = false;
+  private visible = true;
+  private hasSize = false;
   private resizeNotifyTimer: number | null = null;
   private originY = CONTENT_PADDING;
   private mountHeight = 0;
@@ -694,6 +702,7 @@ export class GhosttyTerminalSurface {
     this.metrics = metrics;
     this.options = options;
     this.theme = options.theme;
+    this.visible = options.visible ?? true;
     this.fontFamily = fontFamily;
     this.requestedFontFamily = options.font?.family;
     this.fontSize = terminalFontSize(options.font?.size);
@@ -778,6 +787,21 @@ export class GhosttyTerminalSurface {
     surface.fit();
     surface.requestRender();
     return surface;
+  }
+
+  /** Keep parsing and answering VT requests while a retained drawer is hidden. */
+  setVisible(visible: boolean): void {
+    if (this.disposed || this.visible === visible) return;
+    this.visible = visible;
+    this.cursorOn = true;
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    if (!visible) {
+      this.cancelRender();
+      this.setSelectionAutoscroll(0);
+      return;
+    }
+    this.fit();
   }
 
   write(data: string): void {
@@ -876,10 +900,16 @@ export class GhosttyTerminalSurface {
   };
 
   fit(): boolean {
-    if (this.disposed) return false;
+    if (this.disposed || !this.visible) return false;
     const width = this.mount.clientWidth;
     const height = this.mount.clientHeight;
-    if (width <= 0 || height <= 0) return false;
+    if (width <= 0 || height <= 0) {
+      this.hasSize = false;
+      this.cancelRender();
+      return false;
+    }
+    const wasSized = this.hasSize;
+    this.hasSize = true;
     const fitted = fittedTerminalFontSize(
       (size) => measureGhosttyCell(this.context, size, this.fontFamily).width,
       this.requestedFontSize,
@@ -899,7 +929,7 @@ export class GhosttyTerminalSurface {
     const ratio = window.devicePixelRatio || 1;
     const pixelWidth = Math.max(1, Math.round(width * ratio));
     const pixelHeight = Math.max(1, Math.round(height * ratio));
-    let shouldRender = false;
+    let shouldRender = !wasSized || this.forceFullRender;
     // The DPR transform must be installed even when the target size happens to
     // equal the canvas default 300x150 backing store, so the first fit always
     // schedules a canvas configuration.
@@ -951,6 +981,7 @@ export class GhosttyTerminalSurface {
   }
 
   focus(): void {
+    if (this.disposed || !this.visible) return;
     this.input.focus({ preventScroll: true });
   }
 
@@ -1362,6 +1393,14 @@ export class GhosttyTerminalSurface {
       this.canvas.setPointerCapture(event.pointerId);
       return;
     }
+    if (event.button === 1 && isMiddleClickPastePlatform()) {
+      // Keep mousedown bubbling so the containing split pane is activated.
+      const selection = this.getSelection();
+      if (selection.length > 0) {
+        void this.pasteFromClipboard(() => Promise.resolve(selection));
+      }
+      return;
+    }
     if (event.button !== 0) return;
     if (isTerminalLinkPointerGesture(event)) {
       event.preventDefault();
@@ -1574,6 +1613,10 @@ export class GhosttyTerminalSurface {
     if (this.canvas.hasPointerCapture(event.pointerId)) {
       this.canvas.releasePointerCapture(event.pointerId);
     }
+    if (event.button === 1 && isMiddleClickPastePlatform()) {
+      event.preventDefault();
+      return;
+    }
     if (event.button !== 0) return;
     if (!this.selectionMoved && this.selectionMode === "cell") {
       this.clearSelection();
@@ -1610,8 +1653,15 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onMouseDown = (event: MouseEvent) => {
-    if (event.button === 0) event.preventDefault();
+    if (event.button === 0 || (event.button === 1 && isMiddleClickPastePlatform())) {
+      event.preventDefault();
+    }
     this.focus();
+  };
+
+  // Suppress Chromium’s native PRIMARY paste into the focused hidden textarea.
+  private readonly onMouseUp = (event: MouseEvent) => {
+    if (event.button === 1 && isMiddleClickPastePlatform()) event.preventDefault();
   };
 
   private readonly onContextMenu = (event: MouseEvent) => {
@@ -1703,6 +1753,7 @@ export class GhosttyTerminalSurface {
     this.canvas.addEventListener("pointercancel", this.onPointerUp);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
     this.canvas.addEventListener("mousedown", this.onMouseDown);
+    this.canvas.addEventListener("mouseup", this.onMouseUp);
     this.canvas.addEventListener("contextmenu", this.onContextMenu);
     this.scrollbar.addEventListener("pointerdown", this.onScrollbarPointerDown);
     this.scrollbar.addEventListener("pointermove", this.onScrollbarPointerMove);
@@ -1728,6 +1779,7 @@ export class GhosttyTerminalSurface {
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
     this.canvas.removeEventListener("wheel", this.onWheel);
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
+    this.canvas.removeEventListener("mouseup", this.onMouseUp);
     this.canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.scrollbar.removeEventListener("pointerdown", this.onScrollbarPointerDown);
     this.scrollbar.removeEventListener("pointermove", this.onScrollbarPointerMove);
@@ -1792,18 +1844,35 @@ export class GhosttyTerminalSurface {
   }
 
   private requestRender(): void {
-    if (this.disposed || this.frame !== 0) return;
+    if (this.disposed || !this.visible || !this.hasSize || this.frame !== 0) return;
     this.frame = window.requestAnimationFrame(() => {
       this.frame = 0;
       this.renderFrame();
     });
   }
 
-  private renderFrame(): void {
-    if (this.disposed) return;
+  private cancelRender(): void {
     if (this.frame !== 0) {
       window.cancelAnimationFrame(this.frame);
       this.frame = 0;
+    }
+    if (this.cursorTimer !== null) {
+      window.clearTimeout(this.cursorTimer);
+      this.cursorTimer = null;
+    }
+  }
+
+  private renderFrame(): void {
+    if (this.disposed || !this.visible) return;
+    if (this.frame !== 0) {
+      window.cancelAnimationFrame(this.frame);
+      this.frame = 0;
+    }
+    if (this.mount.clientWidth === 0 || this.mount.clientHeight === 0) {
+      this.hasSize = false;
+      this.forceFullRender = true;
+      this.cancelRender();
+      return;
     }
     this.snapshot = this.core.snapshot();
     // A cursor that is not blinking right now must be drawn, never caught in an
@@ -1870,7 +1939,7 @@ export class GhosttyTerminalSurface {
 
   private blinkEnabled(): boolean {
     const snapshot = this.snapshot;
-    if (!snapshot) return false;
+    if (!snapshot || !this.visible || !this.hasSize) return false;
     return shouldBlinkTerminalCursor({
       focused: this.focused,
       cursorBlinking: snapshot.cursorBlinking,

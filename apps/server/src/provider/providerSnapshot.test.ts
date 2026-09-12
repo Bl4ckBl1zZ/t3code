@@ -10,6 +10,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  buildServerProvider,
   isCommandMissingCause,
   providerModelsFromSettings,
   spawnAndCollect,
@@ -35,6 +36,30 @@ const OPENCODE_CUSTOM_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabil
 });
 
 describe("providerModelsFromSettings", () => {
+  it("publishes custom names and replaces options without overriding built-in models", () => {
+    const defaults = createModelCapabilities({ optionDescriptors: [] });
+    const builtIn = { slug: "built-in", name: "Official", isCustom: false, capabilities: defaults };
+    const models = providerModelsFromSettings(
+      [builtIn],
+      [
+        { slug: "built-in", name: "Override", capabilities: OPENCODE_CUSTOM_MODEL_CAPABILITIES },
+        { slug: "private", name: "My model", capabilities: OPENCODE_CUSTOM_MODEL_CAPABILITIES },
+        "legacy",
+      ],
+      defaults,
+    );
+    expect(models).toEqual([
+      builtIn,
+      {
+        slug: "private",
+        name: "My model",
+        isCustom: true,
+        capabilities: OPENCODE_CUSTOM_MODEL_CAPABILITIES,
+      },
+      { slug: "legacy", name: "legacy", isCustom: true, capabilities: defaults },
+    ]);
+  });
+
   it("applies the provided capabilities to custom models", () => {
     const models = providerModelsFromSettings(
       [],
@@ -132,5 +157,29 @@ describe("ProviderCommandNotFoundError", () => {
       expect(error).not.toHaveProperty("stderr");
       expect(error.message).not.toContain("secret-token-value");
     });
+  });
+});
+
+describe("provider context reporting metadata", () => {
+  it("preserves true, false and unknown without inventing a runtime capability", () => {
+    for (const value of [true, false, undefined]) {
+      const snapshot = buildServerProvider({
+        presentation: {
+          displayName: "Test",
+          ...(value === undefined ? {} : { reportsContextWindow: value }),
+        },
+        enabled: true,
+        checkedAt: "2026-09-10T00:00:00Z",
+        models: [],
+        probe: {
+          installed: true,
+          version: null,
+          status: "ready",
+          auth: { status: "authenticated" },
+        },
+      });
+      expect(snapshot.reportsContextWindow).toBe(value);
+      expect("reportsContextWindow" in snapshot).toBe(value !== undefined);
+    }
   });
 });

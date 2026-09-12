@@ -1,8 +1,10 @@
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { assert, it, vi } from "@effect/vitest";
 import {
   CheckpointScopeId,
   CommandId,
   EventId,
+  EnvironmentId,
   MessageId,
   NodeId,
   type OrchestrationV2AppThread,
@@ -376,6 +378,97 @@ it.effect("refreshes MCP credential liveness before calling the provider", () =>
       .pipe(Effect.ensuring(Effect.sync(() => touchActiveMcpThread.mockRestore())));
 
     assert.deepEqual(yield* Ref.get(order), [`touch:${threadId}`, "start-turn"]);
+  }).pipe(Effect.provide(RunExecutionTestLayer)),
+);
+
+it.effect("expands citations on the V2 start path while preserving the stored source", () =>
+  Effect.gen(function* () {
+    const runExecution = yield* RunExecutionServiceV2;
+    const order = yield* Ref.make<ReadonlyArray<string>>([]);
+    const source = serializeAssistantCitation({
+      version: 1,
+      environmentId: EnvironmentId.make("environment"),
+      threadId: ThreadId.make("source-thread"),
+      messageId: MessageId.make("assistant"),
+      text: "Selected answer",
+      comment: "Explain this",
+      start: 0,
+      end: 15,
+      prefix: "",
+      suffix: "",
+    });
+    let received = "";
+    const threadId = ThreadId.make("thread:run-execution-mcp-liveness");
+    const touchActiveMcpThread = vi
+      .spyOn(McpSessionRegistry, "touchActiveMcpThread")
+      .mockImplementation((touchedThreadId) =>
+        Ref.update(order, (entries) => [...entries, `touch:${touchedThreadId}`]),
+      );
+
+    yield* runExecution
+      .startRootRun({
+        commandId: CommandId.make("command:run-execution-mcp-liveness"),
+        appThread: { id: threadId } as OrchestrationV2AppThread,
+        providerSessionId: ProviderSessionId.make("session:run-execution-mcp-liveness"),
+        session: {
+          events: Stream.never,
+          startTurn: (input: { message: { text: string } }) =>
+            Effect.sync(() => {
+              received = input.message.text;
+            }),
+        } as unknown as ProviderAdapterV2SessionRuntime,
+        run: {
+          id: RunId.make("run:run-execution-mcp-liveness"),
+          threadId,
+          ordinal: 1,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        } as OrchestrationV2Run,
+        rootNode: {
+          id: NodeId.make("node:run-execution-mcp-liveness"),
+        } as OrchestrationV2ExecutionNode,
+        checkpointScope: {
+          id: CheckpointScopeId.make("checkpoint-scope:run-execution-mcp-liveness"),
+        } as OrchestrationV2CheckpointScope,
+        providerThread: {
+          id: ProviderThreadId.make("provider-thread:run-execution-mcp-liveness"),
+          driver,
+        } as OrchestrationV2ProviderThread,
+        attempt: {
+          id: RunAttemptId.make("attempt:run-execution-mcp-liveness"),
+          providerTurnId: null,
+        } as OrchestrationV2RunAttempt,
+        attemptId: RunAttemptId.make("attempt:run-execution-mcp-liveness"),
+        providerTurnOrdinal: 1,
+        message: {
+          messageId: MessageId.make("message:run-execution-mcp-liveness"),
+          text: source,
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+          approvalPolicy: "never",
+          sandboxPolicy: {
+            type: "readOnly",
+            access: { type: "fullAccess" },
+            networkAccess: false,
+          },
+        },
+      })
+      .pipe(Effect.ensuring(Effect.sync(() => touchActiveMcpThread.mockRestore())));
+
+    assert.include(received, "[assistant-quote-1]");
+    assert.include(received, '"text": "Selected answer"');
+    assert.include(received, '"comment": "Explain this"');
+    assert.notInclude(received, "t3-citation://");
+    assert.include(source, "t3-citation://");
   }).pipe(Effect.provide(RunExecutionTestLayer)),
 );
 

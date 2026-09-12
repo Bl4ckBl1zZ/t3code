@@ -1,3 +1,5 @@
+export * from "./agentSessions.ts";
+export * from "./assistantCitations.ts";
 export * from "./baseSchemas.ts";
 export * from "./background.ts";
 export * from "./auth.ts";
@@ -32,6 +34,7 @@ export * from "./orchestration.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";
 export * from "./project.ts";
+export * from "./projectIcon.ts";
 export * from "./filesystem.ts";
 export * from "./assets.ts";
 export * from "./review.ts";
@@ -49,3 +52,9 @@ export * from "./hermesSkills.ts";
 export * from "./hermesSessions.ts";
 
 export * from "./providerUsageLimits.ts";
+
+export * from "./toolActivity.ts";
+
+export * from "./threadPullRequestLinks.ts";
+
+export * from "./pullRequestMcp.ts";

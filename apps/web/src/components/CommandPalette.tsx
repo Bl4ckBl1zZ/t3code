@@ -1,4 +1,7 @@
-"use client";
+import { ConnectedEnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+("use client");
+
+import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
@@ -44,7 +47,6 @@ import {
   MessageSquareIcon,
   MessagesSquareIcon,
   PaletteIcon,
-  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -295,6 +297,7 @@ function remoteProjectSourceIcon(source: AddProjectRemoteSource, className: stri
 function projectActionItemIcon(project: Project): ReactNode {
   return (
     <ProjectFavicon
+      project={project}
       environmentId={project.environmentId}
       cwd={project.workspaceRoot}
       faviconPath={project.faviconPath}
@@ -1090,7 +1093,11 @@ function OpenCommandPaletteDialog(props: {
               <span className="flex min-w-0 items-center gap-1">
                 <span className="inline-flex min-w-0 items-center gap-1">
                   {location.kind === "remote" ? (
-                    <ServerIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
+                    <ConnectedEnvironmentMachineIcon
+                      environmentId={project.environmentId}
+                      aria-hidden
+                      className={COMMAND_PALETTE_META_ICON_CLASS}
+                    />
                   ) : null}
                   <span className="truncate">{location.label}</span>
                 </span>
@@ -1528,6 +1535,22 @@ function OpenCommandPaletteDialog(props: {
   ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+
+  if (
+    activeThread &&
+    serverConfigs.get(activeThread.environmentId)?.environment.capabilities.threadPullRequestsV2 ===
+      true
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:link-pull-request",
+      title: "Link pull request",
+      searchTerms: ["link", "pull request", "merge request", "pr", "thread"],
+      icon: <LinkIcon className={ITEM_ICON_CLASS} />,
+      run: async () =>
+        openLinkPullRequestDialog(scopeThreadRef(activeThread.environmentId, activeThread.id)),
+    });
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

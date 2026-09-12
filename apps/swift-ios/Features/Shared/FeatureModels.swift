@@ -39,6 +39,12 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     /// older cached descriptor that never reported the capability, which reads
     /// as unsupported: the sheet has nothing to ask such a server for.
     public var supportsPullRequests: Bool?
+    public var machineKind: String?
+    public var supportsEnvironmentIcon: Bool?
+    public var supportsAssistantCitations: Bool? = nil
+    public var supportsCustomModelDefinitions: Bool? = nil
+    public var supportsProjectIcons: Bool? = nil
+    public var machineSymbol: String { EnvironmentMachineKind(rawValue: machineKind ?? "")?.symbol ?? "server.rack" }
 
     public init(
         id: String,
@@ -47,7 +53,12 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         isActive: Bool = false,
         connectionState: FeatureConnection.State? = nil,
         connectionDetail: String? = nil,
-        supportsPullRequests: Bool? = nil
+        supportsPullRequests: Bool? = nil,
+        machineKind: String? = nil,
+        supportsEnvironmentIcon: Bool? = nil,
+        supportsAssistantCitations: Bool? = nil,
+        supportsCustomModelDefinitions: Bool? = nil,
+        supportsProjectIcons: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -56,6 +67,11 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.connectionState = connectionState
         self.connectionDetail = connectionDetail
         self.supportsPullRequests = supportsPullRequests
+        self.machineKind = machineKind
+        self.supportsEnvironmentIcon = supportsEnvironmentIcon
+        self.supportsAssistantCitations = supportsAssistantCitations
+        self.supportsCustomModelDefinitions = supportsCustomModelDefinitions
+        self.supportsProjectIcons = supportsProjectIcons
     }
 }
 
@@ -82,9 +98,10 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     public var path: String
     public var threadCount: Int
     public var defaultSelection: FeatureSelection?
-    /// The project's configured scripts, verbatim from `OrchestrationProject`.
+    /// Effective project actions, including machine defaults and project overrides.
     /// The details sheet lists them as run rows and names ports after the script
     /// that opened them, so a port row without these degrades to "Port 5173".
+    public var scriptsInheritDefaults: Bool?
     public var scripts: [ProjectScript]
     /// `previewUrl` from the project's checked-in `t3.json`.
     ///
@@ -96,6 +113,8 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     /// The project's manually chosen icon (workspace-relative), from
     /// `OrchestrationProject.faviconPath`. Nil keeps favicon auto-discovery.
     public var faviconPath: String?
+    public var projectIcon: ProjectIconOverride?
+    public var repositoryCanonicalKey: String?
 
     public init(
         id: String,
@@ -106,8 +125,11 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         threadCount: Int = 0,
         defaultSelection: FeatureSelection? = nil,
         scripts: [ProjectScript] = [],
+        scriptsInheritDefaults: Bool? = nil,
         previewUrl: String? = nil,
-        faviconPath: String? = nil
+        faviconPath: String? = nil,
+        projectIcon: ProjectIconOverride? = nil,
+        repositoryCanonicalKey: String? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -116,9 +138,12 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.path = path
         self.threadCount = threadCount
         self.defaultSelection = defaultSelection
+        self.scriptsInheritDefaults = scriptsInheritDefaults
         self.scripts = scripts
         self.previewUrl = previewUrl
         self.faviconPath = faviconPath
+        self.projectIcon = projectIcon
+        self.repositoryCanonicalKey = repositoryCanonicalKey
     }
 
     /// `ProjectScript` is a Core wire type and is deliberately not `Hashable`,
@@ -134,6 +159,8 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         hasher.combine(defaultSelection)
         hasher.combine(previewUrl)
         hasher.combine(faviconPath)
+        hasher.combine(projectIcon)
+        hasher.combine(repositoryCanonicalKey)
         for script in scripts { hasher.combine(script.id) }
     }
 }
@@ -172,23 +199,6 @@ public enum FeatureInteractionMode: String, CaseIterable, Sendable, Codable {
     public static let allCases: [FeatureInteractionMode] = [.standard, .plan]
 
     public var mobileNormalized: FeatureInteractionMode { self }
-}
-
-/// The pull request a user pinned to a thread, in the shape the client needs to
-/// read it back: `pullRequests.detail` is addressed by project, repository and
-/// number, and the URL is what recognises the same request in a chat link.
-public struct FeatureLinkedPullRequest: Sendable, Equatable, Hashable, Codable {
-    public var projectID: String
-    public var repository: String
-    public var number: Int
-    public var url: String
-
-    public init(projectID: String, repository: String, number: Int, url: String) {
-        self.projectID = projectID
-        self.repository = repository
-        self.number = number
-        self.url = url
-    }
 }
 
 public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codable {
@@ -251,6 +261,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// Unlike ``supportsPinning``, absence is treated as "no": see
     /// ``canShelveSettled``.
     public var supportsSettlement: Bool?
+    public var serverAutoSettlement: Bool? = nil
     public var supportsSnooze: Bool?
     /// `main` marks the thread the T3 Work inbox pins to the top as the current
     /// main line of work. Absent means an ordinary thread. The inbox's Main
@@ -270,6 +281,18 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// branch-derived one: the row shows it, and it is what the merge settle
     /// rule watches.
     public var linkedPullRequest: FeatureLinkedPullRequest?
+    public var linkedPullRequests: [FeatureLinkedPullRequest]? = nil
+    public var branchPullRequest: FeatureLinkedPullRequest? = nil
+    public var supportsMultiplePullRequests: Bool? = nil
+    public var supportsPullRequestStackActions: Bool? = nil
+
+    public var allLinkedPullRequests: [FeatureLinkedPullRequest] {
+        linkedPullRequests ?? linkedPullRequest.map { [$0] } ?? []
+    }
+    /// Candidates are observed without becoming explicit links or appearing in unlink controls.
+    public var observedPullRequests: [FeatureLinkedPullRequest] {
+        allLinkedPullRequests.isEmpty ? branchPullRequest.map { [$0] } ?? [] : allLinkedPullRequests
+    }
     /// Whether this thread's server persists a pull-request link. Resolved from
     /// the environment's capabilities at map time, so the action is hidden
     /// rather than offered and refused.
@@ -319,12 +342,17 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         activeOrderKey: String? = nil,
         supportsActiveOrder: Bool? = nil,
         supportsSettlement: Bool? = nil,
+        serverAutoSettlement: Bool? = nil,
         supportsSnooze: Bool? = nil,
         workInboxRole: String? = nil,
         relationshipToParent: String? = nil,
         isRegeneratingTitle: Bool = false,
         supportsTitleRegeneration: Bool? = nil,
         linkedPullRequest: FeatureLinkedPullRequest? = nil,
+        linkedPullRequests: [FeatureLinkedPullRequest]? = nil,
+        branchPullRequest: FeatureLinkedPullRequest? = nil,
+        supportsMultiplePullRequests: Bool? = nil,
+        supportsPullRequestStackActions: Bool? = nil,
         supportsPullRequestLinking: Bool? = nil,
         attentionAt: Date? = nil,
         workingStartedAt: Date? = nil,
@@ -366,12 +394,17 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.activeOrderKey = activeOrderKey
         self.supportsActiveOrder = supportsActiveOrder
         self.supportsSettlement = supportsSettlement
+        self.serverAutoSettlement = serverAutoSettlement
         self.supportsSnooze = supportsSnooze
         self.workInboxRole = workInboxRole
         self.relationshipToParent = relationshipToParent
         self.isRegeneratingTitle = isRegeneratingTitle
         self.supportsTitleRegeneration = supportsTitleRegeneration
         self.linkedPullRequest = linkedPullRequest
+        self.linkedPullRequests = linkedPullRequests
+        self.branchPullRequest = branchPullRequest
+        self.supportsMultiplePullRequests = supportsMultiplePullRequests
+        self.supportsPullRequestStackActions = supportsPullRequestStackActions
         self.supportsPullRequestLinking = supportsPullRequestLinking
         self.attentionAt = attentionAt
         self.workingStartedAt = workingStartedAt
@@ -471,6 +504,8 @@ public struct FeatureUploadAttachment: Sendable, Equatable {
 
 public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
+    /// Citation links use the durable message ID, while recycled rows use the turn-item ID.
+    public var wireMessageID: String? = nil
     public var role: FeatureMessageRole
     public var text: String
     public var createdAt: Date
@@ -490,9 +525,11 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
         state: FeatureMessageState = .complete,
         toolName: String? = nil,
         attachments: [FeatureMessageAttachment] = [],
-        createdBy: String? = nil
+        createdBy: String? = nil,
+        wireMessageID: String? = nil
     ) {
         self.id = id
+        self.wireMessageID = wireMessageID
         self.role = role
         self.text = text
         self.createdAt = createdAt
@@ -525,6 +562,7 @@ public struct FeatureApproval: Identifiable, Sendable, Equatable, Hashable, Coda
     public var kind: FeatureApprovalKind
     public var title: String
     public var detail: String
+    public var options: [FeatureApprovalOption]?
 
     public init(
         id: String,
@@ -532,7 +570,8 @@ public struct FeatureApproval: Identifiable, Sendable, Equatable, Hashable, Coda
         threadID: String,
         kind: FeatureApprovalKind,
         title: String,
-        detail: String
+        detail: String,
+        options: [FeatureApprovalOption]? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -540,6 +579,7 @@ public struct FeatureApproval: Identifiable, Sendable, Equatable, Hashable, Coda
         self.kind = kind
         self.title = title
         self.detail = detail
+        self.options = options
     }
 }
 
@@ -922,6 +962,7 @@ public struct FeatureModel: Identifiable, Sendable, Equatable, Hashable, Codable
     public var supportsImages: Bool
     public var supportsReasoning: Bool
     public var isDefault: Bool
+    public var badge: String?
     public var isLegacy: Bool?
     public var options: [FeatureModelOptionDescriptor]
 
@@ -933,6 +974,7 @@ public struct FeatureModel: Identifiable, Sendable, Equatable, Hashable, Codable
         supportsReasoning: Bool = false,
         isDefault: Bool = false,
         isLegacy: Bool? = nil,
+        badge: String? = nil,
         options: [FeatureModelOptionDescriptor] = []
     ) {
         self.id = id
@@ -942,6 +984,7 @@ public struct FeatureModel: Identifiable, Sendable, Equatable, Hashable, Codable
         self.supportsReasoning = supportsReasoning
         self.isDefault = isDefault
         self.isLegacy = isLegacy
+        self.badge = badge
         self.options = options
     }
 }
@@ -1102,7 +1145,13 @@ public enum FeatureAppearance: String, CaseIterable, Sendable, Codable {
     case dark
 }
 
+public enum FeatureDiffColorScheme: String, Sendable, Codable {
+    case redGreen = "red-green"
+    case blueOrange = "blue-orange"
+}
+
 public struct FeatureSettings: Sendable, Equatable, Codable {
+    public var diffColorScheme: FeatureDiffColorScheme
     public var appearance: FeatureAppearance
     public var hapticsEnabled: Bool
     public var notificationsEnabled: Bool
@@ -1127,6 +1176,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     public var defaultSelection: FeatureSelection?
 
     public init(
+        diffColorScheme: FeatureDiffColorScheme = .redGreen,
         appearance: FeatureAppearance = .system,
         hapticsEnabled: Bool = true,
         notificationsEnabled: Bool = true,
@@ -1138,6 +1188,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         darkThemeID: String = T3ThemeDefaults.paletteID,
         defaultSelection: FeatureSelection? = nil
     ) {
+        self.diffColorScheme = diffColorScheme
         self.appearance = appearance
         self.hapticsEnabled = hapticsEnabled
         self.notificationsEnabled = notificationsEnabled
@@ -1151,6 +1202,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case diffColorScheme
         case appearance
         case hapticsEnabled
         case notificationsEnabled
@@ -1165,6 +1217,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        diffColorScheme = (try? container.decodeIfPresent(FeatureDiffColorScheme.self, forKey: .diffColorScheme)) ?? .redGreen
         appearance = try container.decodeIfPresent(
             FeatureAppearance.self,
             forKey: .appearance
@@ -1211,6 +1264,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(diffColorScheme, forKey: .diffColorScheme)
         try container.encode(appearance, forKey: .appearance)
         try container.encode(hapticsEnabled, forKey: .hapticsEnabled)
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
@@ -1293,7 +1347,25 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
 public enum FeatureApprovalDecision: String, Sendable, Codable {
     case allowOnce
     case allowForSession
+    case allowAlways
+    case cancel
     case deny
+
+    public init?(providerDecision: String) {
+        switch providerDecision {
+        case "accept": self = .allowOnce
+        case "acceptForSession": self = .allowForSession
+        case "acceptAlways": self = .allowAlways
+        case "decline": self = .deny
+        case "cancel": self = .cancel
+        default: return nil
+        }
+    }
+}
+
+public struct FeatureApprovalOption: Codable, Equatable, Hashable, Sendable {
+    public let decision: FeatureApprovalDecision
+    public let label: String
 }
 
 public enum FeatureEvent: Sendable {
@@ -1304,4 +1376,16 @@ public enum FeatureEvent: Sendable {
     case detail(FeatureThreadDetail)
     case detailDelta(FeatureThreadDetail, FeatureDetailDelta)
     case failure(String)
+}
+
+public enum EnvironmentMachineKind: String, CaseIterable, Sendable {
+    case server, cloud, linux, desktop, laptop
+    case macMini = "mac-mini"
+    case macStudio = "mac-studio"
+    public var label: String {
+        switch self { case .server: "Server"; case .cloud: "Cloud VM"; case .linux: "Linux/WSL"; case .desktop: "Desktop"; case .laptop: "Laptop"; case .macMini: "Mini PC"; case .macStudio: "Workstation" }
+    }
+    public var symbol: String {
+        switch self { case .server, .linux: "server.rack"; case .cloud: "cloud"; case .desktop: "desktopcomputer"; case .laptop: "laptopcomputer"; case .macMini: "macmini"; case .macStudio: "macstudio" }
+    }
 }

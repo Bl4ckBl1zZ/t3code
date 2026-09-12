@@ -55,6 +55,61 @@ history does not remove worktree files from the environment.
 
 On supporting environments, choose **Arrange threads** above the Code or Work task list. Drag
 the handles, or use VoiceOver's **Move up** and **Move down** actions. The order is saved to the
-environment, so other native iOS devices see it too. Project filters leave other threads alone.
+environment, so other connected devices see it too. Project filters leave other threads alone.
 New and reopened threads appear above arranged threads. **Reset to newest first** removes the
 manual order for the displayed active threads. Pinned threads retain their separate order.
+
+On web and desktop, drop files onto a thread row or search result to open that thread and attach
+the files to its draft. This works in either sidebar layout. Files use the same validation and
+upload controls as files dropped onto the conversation; dropping never sends a message.
+
+The chat header also offers thread actions from its title menu. Double-click the title to rename it; Enter saves and Escape cancels. The menu includes the supported pin, settle, snooze, copy, archive, and delete actions. Click the project breadcrumb to open project settings.
+
+## Arrange active threads on web and desktop
+
+Drag an active thread within its section to choose its position. On current servers, the order
+is saved to the environment and shared with native iOS. New and reopened threads appear above
+arranged active threads. Choose **Reset thread position** from a thread’s menu to return it to
+automatic ordering. Pinned threads have their own order, and Work’s main thread stays fixed.
+
+Older servers keep local-only drag ordering. If a section mixes older servers with threads that
+already have synced positions, update those servers before reordering the section.
+
+## Drop files onto a native thread
+
+On iPad, drag files from another app onto a thread row to open its composer with those files.
+Existing text and attachments stay in place, and the message remains unsent. Preparation uses
+the same file-size and eight-attachment limits as the composer. If you leave while files are
+being prepared, return to that thread to finish adding the pending files during this app session.
+Archived rows and batch-selection mode do not accept drops.
+
+## Automatic organization
+
+Current servers move finished or inactive threads into **Settled** even when no client is open.
+These settings belong to the selected environment and apply to every connected device. On native
+iOS, open **Settings → Thread organization**, choose the machine, and configure merge settlement
+or an inactivity period from 1 to 90 days. Turn off inactivity settlement to keep quiet threads
+active indefinitely. Older servers keep their existing device-local behavior.
+
+Running or queued work, blocking approvals and unanswered blocking questions stay visible.
+Asynchronous questions do not block the thread. Open linked pull requests keep their thread active;
+a stack is not finished until every visible linked request is terminal. A merge or close from before
+your latest engagement does not settle resumed work again. Manually reopen any settled thread to
+bring it back to the active list. Automatic settlement retains its pin and ordering metadata.
+
+Pull requests created or opened through a thread’s Git actions are automatically linked to that
+thread. They appear in its pull-request collection, including requests targeting an upstream
+repository. Existing manual links keep their labels. Actions from an unsent draft have no saved
+thread to attach to.
+
+Open **Linked pull requests** from a thread’s link or stack badge to review its full collection
+beside the conversation. The panel shows checks, reviews, conflicts and stack order from the
+latest saved host state. Open individual requests in separate tabs, copy their links, or unlink
+them from the row menu. The right-panel launcher opens this collection even before a request
+has been linked.
+
+Thread and source-control preferences are shared across connected machines. On native iOS,
+open **Settings → Shared preferences**; on web or desktop, use **General** and **Source Control**.
+If a machine was offline during an edit, a mismatch notice lets you apply the selected machine’s
+preferences to the others. Provider accounts, project overrides and machine configuration remain
+specific to each machine. A generated-text model only propagates to compatible enabled accounts.

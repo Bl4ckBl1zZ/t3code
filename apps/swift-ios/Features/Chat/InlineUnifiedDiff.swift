@@ -195,16 +195,16 @@ struct InlineUnifiedDiff: View {
 
     private func markerColor(_ kind: UnifiedDiffRow.Kind) -> Color {
         switch kind {
-        case .addition: T3Colors.success
-        case .deletion: T3Colors.danger
+        case .addition: T3Colors.diffAddition
+        case .deletion: T3Colors.diffDeletion
         case .context, .hunk: T3Colors.textTertiary
         }
     }
 
     private func background(_ kind: UnifiedDiffRow.Kind) -> Color {
         switch kind {
-        case .addition: T3Colors.success.opacity(0.12)
-        case .deletion: T3Colors.danger.opacity(0.12)
+        case .addition: T3Colors.diffAddition.opacity(0.12)
+        case .deletion: T3Colors.diffDeletion.opacity(0.12)
         case .context, .hunk: .clear
         }
     }

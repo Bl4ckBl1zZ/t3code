@@ -1,3 +1,4 @@
+import { Spinner } from "~/components/ui/spinner";
 import type {
   EnvironmentId,
   ProjectId,
@@ -16,7 +17,6 @@ import {
   GitPullRequestDraftIcon,
   LayersIcon,
   ListFilterIcon,
-  LoaderIcon,
   SearchIcon,
   TagIcon,
   UserRoundIcon,
@@ -36,6 +36,7 @@ import {
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
+  MenuRadioItemIndicator,
   MenuSeparator,
   MenuSub,
   MenuSubPopup,
@@ -114,7 +115,7 @@ export function PullRequestSearchInput({
   return (
     <InputGroup className="min-w-0 flex-1 **:[input]:h-9 sm:**:[input]:h-8">
       <InputGroupAddon>
-        {busy ? <LoaderIcon aria-hidden className="animate-spin" /> : <SearchIcon aria-hidden />}
+        {busy ? <Spinner aria-hidden /> : <SearchIcon aria-hidden />}
       </InputGroupAddon>
       <InputGroupInput
         type="search"
@@ -200,6 +201,7 @@ function PullRequestFilterRadioGroup<Value extends string>({
               <PullRequestFilterOptionIcon option={option} />
               <span className="min-w-0 flex-1 truncate">{option.label}</span>
               {option.unavailable ? <span className="shrink-0">· Unavailable</span> : null}
+              <MenuRadioItemIndicator />
             </span>
           </MenuRadioItem>
         );
@@ -524,7 +526,7 @@ export function PullRequestFiltersMenu({
         <ListFilterIcon className="size-4" />
         <span>Filters</span>
         {filterCount > 0 ? (
-          <span className="rounded-full bg-primary/10 px-1.5 text-xs text-primary tabular-nums">
+          <span className="rounded-full bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">
             {filterCount}
           </span>
         ) : null}

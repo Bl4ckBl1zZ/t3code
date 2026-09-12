@@ -44,6 +44,17 @@ On mobile, the model picker shows each OpenCode model's upstream provider, such 
 GitHub Copilot, or OpenCode Zen, beneath its name. Search by that provider name to narrow the list
 when starting a thread or changing an existing thread's model.
 
+## Reading with a compact composer
+
+On desktop-sized web and desktop windows, scrolling through a conversation compacts a
+single-line composer. The editor keeps your draft and caret. Model and mode controls move
+into the context strip, while attachment, voice, and send controls remain available.
+Click or type in the editor, return to the conversation's end, or start voice input to
+expand it again. Multiline drafts, open questions, approvals, and errors stay expanded.
+
+Turn this off with **Settings → General → Collapse composer while scrolling**. This
+preference does not change the native iOS composer's touch and voice gestures.
+
 ## Changing projects
 
 On web and desktop, changing the project from a new thread keeps the current environment when that
@@ -153,3 +164,63 @@ the gallery offers **Share original** and **Save image**.
 
 Native iOS remembers **Fast** on or off separately for each environment and provider account.
 The choice follows new tasks when the selected model supports that option.
+
+If an inline video fails to load, choose **Retry video**. Videos pause when the app
+moves into the background. Web and desktop media menus offer save actions; image
+menus also offer **Copy image** when the browser supports it. These actions may need
+the environment to be connected or the remote host to allow browser downloads.
+
+While an agent works through a task list, the composer shows the current task and
+completion count. Expand the row to see the full list. Other notices stay accessible
+above it; on web, use the notice peek or keyboard focus to reveal them and Escape to
+collapse the stack.
+
+On web and desktop, the timeline minimap includes **Previous turn** and **Next turn**
+buttons. They follow the turn at your reading position; keyboard focus on the rail
+starts there too. iPhone and iPad offer the same navigation in the thread menu.
+
+Codex app-access requests show the choices supplied by the app, including session or
+permanent permission when offered. The label states how long access lasts. Canceling
+an app-access request answers that request; **Cancel turn** on ordinary approvals
+still stops the turn.
+
+While a new workspace is being prepared, setup feedback remains visible until the
+agent starts or a startup failure can be shown. The iOS composer distinguishes
+Preparing workspace from Starting agent. Ordinary failed commands use a muted
+alert icon in the work log; failures that stop the runtime retain their stronger
+error treatment. Open a failed row to inspect its output.
+
+On web and desktop, task progress and stashed prompts appear as tabs attached above the composer.
+Expand Tasks to inspect the current plan. Approval requests and questions open in the same
+attached area, with their actions beside the request. Notices keep their own stack.
+
+On native iOS, use **Prompt history → Stash draft** to save up to 20 drafts for the current
+thread. The Stash tab opens the saved list. Restoring moves any unsent text and attachments
+into the stash first. Removing a saved draft asks for confirmation. Existing single-slot
+stashes remain available after updating.
+
+Completed web conversations keep the final response visible. Expand **Worked for…** to read
+interim responses and completed tools. Resource cards remain visible outside that fold.
+
+On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same eight-attachment limit applies to the picker and dropped files.
+
+If you choose another panel while a turn is working, its arriving plan will not replace your choice. A later turn can open its plan again when automatic plan opening is enabled.
+
+In the web file viewer, click a folder in the path to browse its contents without returning to the file tree. On iOS, the folder button in a file preview opens its containing folders or the workspace root.
+
+Completed responses on iOS collapse earlier commentary and work under a “Worked for” row. Tap it to show or hide that work. The final response, attachments, and live work stay visible. Opening a quote from collapsed work expands its response first. The always-expand activity preference keeps the full transcript open.
+
+When you return to the desktop app or a desktop-sized browser window, the composer regains
+focus so you can type immediately. An active text field, terminal, dialog, or popup keeps its
+focus. Returning on a phone does not automatically open the keyboard.
+
+While an agent is using tools, the timeline focuses its current foreground operation. Open that
+row to browse its tool-call history. A successful operation remains visible while the agent moves
+to its next action; a failure stays in the history and returns the activity indicator to working.
+Running background commands remain visible when the group is collapsed. On iOS, running tool rows
+remain available before their first result, and background processes do not take over the composer's
+foreground status.
+
+Multiline drafts stay expanded in the mobile browser, including text that wraps without explicit
+line breaks. While a previously started thread loads, the composer reserves room for its context
+meter. Returning to a known non-Git project keeps the branch toolbar hidden while status refreshes.

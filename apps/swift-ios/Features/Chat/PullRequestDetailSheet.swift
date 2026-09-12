@@ -1,16 +1,44 @@
+import UIKit
 import SwiftUI
 
-// A read-only, native view of one change request: the summary the host's page
-// leads with, and the conversation-plus-commits chronology under it. Opened
-// from the thread details sheet's Version Control section; anything beyond
-// reading — reviews, merges, comments — stays in the browser, one tap away.
-//
-// Every rule lives in PullRequestDetailSections.swift; this file is the view.
+// Native PR details and reviewed, remote-only GitHub stack actions.
 
 struct PullRequestDetailSheet: View {
-    let client: any FeatureClient
-    let threadID: String
+    let access: FeaturePullRequestAccess
     let number: Int
+
+    init(client: any FeatureClient, threadID: String, number: Int) {
+        self.access = FeaturePullRequestAccess(client: client, threadID: threadID)
+        self.number = number
+    }
+
+    init(access: FeaturePullRequestAccess, number: Int) {
+        self.access = access
+        self.number = number
+    }
+
+    @SwiftUI.Environment(\.pullRequestHandoff) private var handoff
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+    @State private var handoffSelection: PullRequestHandoffSelection?
+    @State private var handoffKind: PullRequestHandoffKind?
+    @State private var handoffMode = PullRequestCheckoutMode.worktree
+    @State private var handoffPending = false
+    @State private var handoffError: String?
+    @State private var editingLabels = false
+    @State private var reviewing = false
+    @State private var choosingReviewers = false
+    @State private var textEdit: PullRequestTextEdit?
+    @State private var selectedAction: NativePullRequestAction?
+    @State private var actionPending = false
+    @State private var hostRefreshRevision = 0
+    @State private var refreshingHost = false
+    @State private var actionError: String?
+    @State private var reviewDraft: PullRequestReviewDraftModel?
+    @State private var selectedNumber: Int?
+    @State private var stack: PullRequestStack?
+    @State private var stackError: String?
+    @State private var pendingStackAction: NativeStackAction?
+    private var displayedNumber: Int { selectedNumber ?? number }
 
     @State private var overview: FeaturePullRequestOverview?
     @State private var loadError: String?
@@ -28,10 +56,17 @@ struct PullRequestDetailSheet: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .environment(\.pullRequestSelectionHandoff, handoff == nil ? nil : PullRequestSelectionHandoff { kind, selection in
+            handoffMode = .worktree; handoffError = nil; handoffSelection = selection; handoffKind = kind
+        })
         .background(T3Colors.background)
-        .navigationTitle("Pull Request #\(number)")
+        .navigationTitle("Pull Request #\(displayedNumber)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Refresh from host", systemImage: "arrow.clockwise") { Task { await refreshFromHost() } }
+                    .disabled(refreshingHost || actionPending)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 if let address = overview?.detail.url, let url = URL(string: address) {
                     Button {
@@ -43,17 +78,123 @@ struct PullRequestDetailSheet: View {
                 }
             }
         }
-        .task { await load() }
+        .task(id: displayedNumber) { await load() }
+        .sheet(item: $handoffKind) { kind in
+            NavigationStack {
+                Form {
+                    Section { Text(overview?.detail.title ?? "") }
+                    Section {
+                        Text(handoffSelection == nil ? kind.label : "Selected \(handoffSelection?.kind.rawValue ?? "context")")
+                        if let selection = handoffSelection { Text(selection.context).font(T3Typography.supporting.monospaced()).lineLimit(12).textSelection(.enabled) }
+                        Text("The task will be staged in the composer for you to review and send.").foregroundStyle(T3Colors.textSecondary)
+                        if kind.needsCheckout, case .project = access.scope {
+                            Picker("Checkout", selection: $handoffMode) {
+                                Text("Separate worktree").tag(PullRequestCheckoutMode.worktree)
+                                Text("Local repository").tag(PullRequestCheckoutMode.local)
+                            }.disabled(handoffPending)
+                            Text(handoffMode == .local ? "This switches the branch in the project repository, affecting other threads using it." : "Prepare or reuse a worktree for this pull request.").font(T3Typography.supporting)
+                        }
+                        if let handoffError { Text(handoffError).foregroundStyle(T3Colors.warning) }
+                    }
+                    Button(handoffPending ? "Preparing…" : "Continue") {
+                        guard let overview, let handoff, !handoffPending else { return }
+                        handoffPending = true; handoffError = nil
+                        Task {
+                            defer { handoffPending = false }
+                            do {
+                                try await handoff.perform(access.scope, overview, kind, handoffMode, handoffSelection)
+                                handoffKind = nil
+                                dismiss()
+                            } catch { handoffError = error.localizedDescription }
+                        }
+                    }.disabled(handoffPending)
+                }.navigationTitle("Open in agent").navigationBarTitleDisplayMode(.inline).t3NavigationChrome()
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { handoffKind = nil }.disabled(handoffPending) } }
+                    .interactiveDismissDisabled(handoffPending)
+            }
+        }
+        .sheet(item: $pendingStackAction, onDismiss: { Task { await load() } }) { request in
+            PullRequestStackActionSheet(request: request, access: access) {
+                pendingStackAction = nil
+            }
+        }
+        .sheet(isPresented: $editingLabels, onDismiss: { Task { await load() } }) {
+            PullRequestLabelPickerSheet(access: access, number: displayedNumber)
+        }
+        .sheet(isPresented: $reviewing) {
+            if let draft = reviewDraft, let submit = access.submitReview, let detail = overview?.detail {
+                PullRequestReviewSheet(draft: draft, verdicts: PullRequestReviewDraftModel.verdicts(capabilities: detail.capabilities, viewer: detail.viewerPermissions), submit: { try await submit(displayedNumber, detail.url, $0) }) {
+                    Task { await load() }
+                }
+            }
+        }
+        .sheet(isPresented: $choosingReviewers) {
+            if let detail = overview?.detail, let reviewers = access.reviewers?(displayedNumber, detail.url) {
+                PullRequestReviewerPicker(access: reviewers, allowed: detail.capabilities?.reviewers?.request == true && detail.viewerPermissions?.requestReviewers == true) {
+                    await load(preserveContent: true)
+                }
+            }
+        }
+        .sheet(item: $textEdit) { edit in
+            if let detail = overview?.detail, let editing = access.editing?(displayedNumber, detail.url) {
+                PullRequestTextEditor(edit: edit, access: editing) { await load(preserveContent: true) }
+            }
+        }
+        .sheet(item: $selectedAction) { action in
+            if let detail = overview?.detail, let run = access.runAction {
+                PullRequestActionSheet(action: action, detail: detail, perform: { try await run(detail.number, detail.url, $0) }) {
+                    Task { await load() }
+                }
+            }
+        }
         .accessibilityIdentifier("pull-request-detail-sheet")
     }
 
-    private func load() async {
+    private func load(preserveContent: Bool = false, force: Bool = false) async {
+        let requestedNumber = displayedNumber
         loadError = nil
+        if !preserveContent { overview = nil; stack = nil; stackError = nil; actionError = nil }
         do {
-            overview = try await client.pullRequestOverview(threadID: threadID, number: number)
+            if force { try await access.invalidate?(requestedNumber) }
+            let result = try await access.overview(requestedNumber)
+            guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
+            let draftKey = "\(access.draftKey):\(result.detail.url)"
+            if reviewDraft?.key != "swift-ios.pullRequests.reviewDraft.\(draftKey)" {
+                reviewDraft = PullRequestReviewDraftModel(key: draftKey)
+            }
+            if tab == .code, result.detail.capabilities?.diff != true { tab = .summary }
+            overview = result
+            if force { hostRefreshRevision += 1 }
+            do {
+                let loadedStack = try await access.stack(requestedNumber)
+                guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
+                stack = loadedStack
+                stackError = nil
+            } catch {
+                guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
+                stackError = error.localizedDescription
+            }
         } catch {
+            guard !Task.isCancelled, displayedNumber == requestedNumber else { return }
             loadError = error.localizedDescription
         }
+    }
+
+    private func refreshFromHost() async {
+        guard !refreshingHost, !actionPending else { return }
+        refreshingHost = true
+        defer { refreshingHost = false }
+        await load(preserveContent: true, force: true)
+    }
+
+    private func perform(_ action: NativePullRequestAction, detail: PullRequestDetail) async {
+        guard !actionPending, let run = access.runAction else { return }
+        actionPending = true; actionError = nil
+        defer { actionPending = false }
+        do {
+            try await run(detail.number, detail.url, .init(action: action.rawValue, mergeMethod: nil, updateMethod: nil))
+            if displayedNumber == detail.number { await load(preserveContent: true) }
+        } catch { if displayedNumber == detail.number { actionError = error.localizedDescription } }
     }
 
     private func errorView(_ message: String) -> some View {
@@ -77,19 +218,107 @@ struct PullRequestDetailSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(overview.detail)
+                if handoff != nil {
+                    Menu("Open in agent", systemImage: "text.bubble") {
+                        ForEach(PullRequestHandoffKind.allCases) { kind in
+                            if kind != .conflicts || overview.detail.mergeability == .conflicting {
+                                Button(kind.label) { handoffSelection = nil; handoffMode = .worktree; handoffError = nil; handoffKind = kind }
+                            }
+                        }
+                    }.frame(minHeight: 44)
+                }
+                if let command = PullRequestCheckoutCommand.build(provider: overview.detail.provider, number: overview.detail.number,
+                    headBranch: overview.detail.headBranch, headRepository: overview.detail.headRepositoryNameWithOwner) {
+                    Button("Copy checkout command", systemImage: "document.on.document") { UIPasteboard.general.string = command }.frame(minHeight: 44)
+                }
+                if access.editing != nil, PullRequestEditingLogic.canEditChangeRequest(overview.detail) {
+                    Menu("Edit pull request", systemImage: "pencil") {
+                        Button("Edit title") { textEdit = .title(overview.detail.title) }
+                        Button("Edit description") { textEdit = .description(overview.detail.body) }
+                    }.frame(minHeight: 44)
+                }
+                if access.runAction != nil, !PullRequestActionLogic.offered(overview.detail).isEmpty {
+                    Menu {
+                        ForEach(PullRequestActionLogic.offered(overview.detail)) { action in
+                            Button(action.label, role: action == .close ? .destructive : nil) {
+                                if action.needsReview { selectedAction = action }
+                                else { Task { await perform(action, detail: overview.detail) } }
+                            }
+                        }
+                    } label: {
+                        Label(actionPending ? "Updating…" : "Actions", systemImage: "ellipsis.circle")
+                            .frame(minHeight: 44)
+                    }.disabled(actionPending)
+                }
+                if let actionError { Text(actionError).font(T3Typography.supporting).foregroundStyle(T3Colors.warning) }
+                if let loadError {
+                    Text("Refresh failed: \(loadError)").font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
+                    Button("Retry refresh") { Task { await load(preserveContent: true) } }
+                }
+                if let stack { stackSection(stack, detail: overview.detail) }
+                if let stackError {
+                    Text("Could not load stack: \(stackError)").font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
+                    Button("Retry stack") { Task { await load() } }
+                }
 
                 Picker("Section", selection: $tab) {
                     ForEach(PullRequestDetailTab.allCases, id: \.self) { tab in
-                        Text(tab.rawValue).tag(tab)
+                        if tab != .code || (overview.detail.capabilities?.diff == true && access.diff != nil) {
+                            Text(tab.rawValue).tag(tab)
+                        }
                     }
                 }
                 .pickerStyle(.segmented)
+
+                if access.submitReview != nil,
+                   !PullRequestReviewDraftModel.verdicts(capabilities: overview.detail.capabilities, viewer: overview.detail.viewerPermissions).isEmpty {
+                    Button("Review · \(reviewDraft?.comments.count ?? 0) pending comments", systemImage: "text.bubble") { reviewing = true }
+                        .frame(minHeight: 44)
+                }
 
                 switch tab {
                 case .summary:
                     summary(overview.detail, activity: overview.activity)
                 case .timeline:
+                    if access.editing != nil, overview.detail.capabilities?.comment == true, overview.detail.viewerPermissions?.comment == true {
+                        Button("Add comment", systemImage: "text.bubble") { textEdit = .newComment }.frame(minHeight: 44)
+                    }
                     timeline(overview.activity)
+                    if let activity = overview.activity, !activity.reviewThreads.isEmpty {
+                        section("Review conversations") {
+                            LazyVStack(spacing: 12) {
+                                ForEach(activity.reviewThreads) { thread in
+                                    PullRequestThreadCard(thread: thread,
+                                        access: access.threads?(displayedNumber, overview.detail.url),
+                                        canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,
+                                        canResolve: overview.detail.capabilities?.review?.resolve == true && overview.detail.viewerPermissions?.resolve == true,
+                                        editing: access.editing?(displayedNumber, overview.detail.url),
+                                        reactions: reactionContext(overview.detail),
+                                        canEditComment: { PullRequestEditingLogic.canEditComment(detail: overview.detail, author: $0.author, kind: "review-comment") },
+                                        onReplied: { await load(preserveContent: true) })
+                                }
+                            }
+                        }
+                    }
+                case .code:
+                    if overview.detail.capabilities?.diff == true, let diff = access.diff {
+                        PullRequestCodeView(number: displayedNumber, updatedAt: overview.detail.updatedAt, refreshRevision: hostRefreshRevision,
+                            refreshHost: { await refreshFromHost() }, commits: overview.activity?.commits ?? [], load: diff,
+                            fileContents: access.fileContents.map { read in { input in try await read(displayedNumber, overview.detail.url, input) } },
+                            reviewDraft: reviewDraft,
+                            conversations: PullRequestConversationContext(threads: overview.activity?.reviewThreads ?? [],
+                                access: access.threads?(displayedNumber, overview.detail.url),
+                                canReply: overview.detail.capabilities?.review?.reply == true && overview.detail.viewerPermissions?.comment == true,
+                                canResolve: overview.detail.capabilities?.review?.resolve == true && overview.detail.viewerPermissions?.resolve == true,
+                                editing: access.editing?(displayedNumber, overview.detail.url),
+                                reactions: reactionContext(overview.detail),
+                                canEditComment: { PullRequestEditingLogic.canEditComment(detail: overview.detail, author: $0.author, kind: "review-comment") },
+                                refresh: { await load(preserveContent: true) }),
+                            canComment: access.submitReview != nil && overview.detail.capabilities?.review?.inlineComment == true && overview.detail.viewerPermissions?.comment == true && !PullRequestReviewDraftModel.verdicts(capabilities: overview.detail.capabilities, viewer: overview.detail.viewerPermissions).isEmpty)
+                            .id(displayedNumber)
+                    } else {
+                        Text("This host does not provide code diffs.").foregroundStyle(T3Colors.textSecondary)
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -97,6 +326,28 @@ struct PullRequestDetailSheet: View {
             .padding(.bottom, 36)
         }
         .scrollIndicators(.hidden)
+    }
+
+    private func stackSection(_ stack: PullRequestStack, detail: PullRequestDetail) -> some View {
+        ThreadDetailsSection(title: "Stack · \(stack.layers.count) layers", footer: "Layers run from base to top. Actions update GitHub without changing your checkout.") {
+            ForEach(stack.layers) { layer in
+                ThreadDetailsRow(systemImage: layer.number == displayedNumber ? "checkmark.circle.fill" : "arrow.triangle.pull",
+                    title: "#\(layer.number) \(layer.title ?? layer.headBranch)", subtitle: layer.state.rawValue.capitalized,
+                    showsChevron: layer.number != displayedNumber, action: { selectedNumber = layer.number })
+            }
+            if detail.state == .open, let capabilities = detail.capabilities, let viewer = detail.viewerPermissions {
+                if capabilities.actions.contains("merge"), viewer.actions.contains("merge"), !PullRequestActionLogic.mergeMethods(detail).isEmpty {
+                    ThreadDetailsRow(systemImage: "arrow.triangle.merge", title: "Review merge through #\(displayedNumber)…",
+                        action: { pendingStackAction = NativeStackAction(stack: stack, number: displayedNumber, action: "merge", mergeMethods: PullRequestActionLogic.mergeMethods(detail)) })
+                }
+                if stack.layers.last?.number == displayedNumber,
+                   capabilities.actions.contains("update-branch"), viewer.stackRebase == true,
+                   capabilities.updateMethods?.contains("rebase") == true {
+                    ThreadDetailsRow(systemImage: "arrow.triangle.branch", title: "Review stack rebase…",
+                        action: { pendingStackAction = NativeStackAction(stack: stack, number: displayedNumber, action: "update-branch", mergeMethods: []) })
+                }
+            }
+        }
     }
 
     private func header(_ detail: PullRequestDetail) -> some View {
@@ -115,6 +366,17 @@ struct PullRequestDetailSheet: View {
                     .truncationMode(.middle)
             }
 
+            if detail.state == .open, detail.mergeability == .conflicting {
+                Label("Conflicts with \(detail.baseBranch)", systemImage: "exclamationmark.triangle")
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
+            } else if detail.state == .open, detail.baseComparison == "behind" {
+                Label(detail.behindBy.map { "\($0) commits behind \(detail.baseBranch)" } ?? "Behind \(detail.baseBranch)", systemImage: "arrow.triangle.branch")
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+            }
+            if detail.state == .open, detail.autoMergeEnabled == true {
+                Label("Auto-merge enabled", systemImage: "arrow.triangle.merge")
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.accent)
+            }
             Text(PullRequestDetailSections.statsLine(detail))
                 .font(T3Typography.supporting)
                 .monospacedDigit()
@@ -149,11 +411,32 @@ struct PullRequestDetailSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if !detail.labels.isEmpty {
+        if let activity { reactionBar(activity.reactions ?? [], subjectID: nil, detail: detail) }
+
+        if !detail.labels.isEmpty || detail.capabilities?.labels == true {
             section("Labels") {
                 Text(detail.labels.map(\.name).joined(separator: " · "))
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
+                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                if detail.capabilities?.labels == true {
+                    Button("Change labels", systemImage: "tag") { editingLabels = true }
+                        .disabled(detail.viewerPermissions?.labels != true)
+                    if detail.viewerPermissions?.labels != true {
+                        Text("Changing labels needs triage access on this repository.")
+                            .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                    }
+                }
+            }
+        }
+
+        if detail.capabilities?.reviewers?.request == true, access.reviewers != nil {
+            if detail.capabilities?.reviewers?.listCandidates == true {
+                Button("Request reviewers", systemImage: "person.badge.plus") { choosingReviewers = true }
+                    .frame(minHeight: 44).disabled(detail.viewerPermissions?.requestReviewers != true)
+                if detail.viewerPermissions?.requestReviewers != true {
+                    Text("Requesting reviewers needs write access on this repository.").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                }
+            } else {
+                Text("Manage reviewers on the host; it does not provide a candidate list.").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
             }
         }
 
@@ -196,6 +479,18 @@ struct PullRequestDetailSheet: View {
                     }
                 }
             }
+        }
+    }
+
+    private func reactionContext(_ detail: PullRequestDetail) -> PullRequestReactionContext {
+        PullRequestReactionContext(canReact: detail.capabilities?.reactions == true,
+            set: access.react.map { react in { request in try await react(detail.number, detail.url, request) } },
+            refresh: { await load(preserveContent: true) })
+    }
+
+    @ViewBuilder private func reactionBar(_ reactions: [PullRequestReaction], subjectID: String?, detail: PullRequestDetail) -> some View {
+        if detail.capabilities?.reactions == true || !reactions.isEmpty {
+            PullRequestReactionBar(reactions: reactions, subjectID: subjectID, context: reactionContext(detail))
         }
     }
 
@@ -262,6 +557,7 @@ struct PullRequestDetailSheet: View {
                 }
             }
             Spacer(minLength: 0)
+            PullRequestSelectionMenu(selection: .check(check))
         }
     }
 
@@ -335,10 +631,18 @@ struct PullRequestDetailSheet: View {
                             .font(T3Typography.supporting)
                             .foregroundStyle(T3Colors.textTertiary)
                     }
+                    Spacer(minLength: 0)
+                    PullRequestSelectionMenu(selection: .comment(comment))
                 }
                 if !comment.body.isEmpty {
                     MarkdownMessageView(comment.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let detail = overview?.detail { reactionBar(comment.reactions ?? [], subjectID: comment.id, detail: detail) }
+                if let detail = overview?.detail, access.editing != nil,
+                   PullRequestEditingLogic.canEditComment(detail: detail, author: comment.author, kind: comment.kind.rawValue) {
+                    Button("Edit comment", systemImage: "pencil") { textEdit = .comment(id: comment.id, kind: comment.kind.rawValue, body: comment.body) }
+                        .font(T3Typography.supporting).frame(minHeight: 44)
                 }
             }
             .padding(12)

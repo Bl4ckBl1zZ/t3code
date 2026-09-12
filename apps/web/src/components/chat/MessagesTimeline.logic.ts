@@ -1,6 +1,11 @@
+import type { ToolActivitySource } from "@t3tools/contracts";
+import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import * as Equal from "effect/Equal";
 import {
   formatDuration,
+  workLogEntryIsVisible,
+  workEntryIndicatesToolSuccess,
+  workEntryIndicatesToolFailure,
   timelineEntryIsPersistentResourceCard,
   type TimelineEntry,
   type WorkLogEntry,
@@ -82,6 +87,139 @@ export function collapseWorkEntriesKeepingLiveBackground<
   return entries.filter((entry) => kept.has(entry));
 }
 
+/** V2 already coalesces provider lifecycle updates into one projected item.
+ * Focus the latest foreground operation; a background process retains its own
+ * row and cannot stand in for what the agent is currently doing.
+ */
+export function resolveLiveWorkEntry(
+  entries: ReadonlyArray<WorkLogEntry>,
+  runId: RunId,
+): WorkLogEntry | null {
+  if (
+    entries.some(
+      (entry) =>
+        entry.runId !== runId || entry.tone === "error" || entry.sourceItemType === "compaction",
+    )
+  )
+    return null;
+  const foreground = entries.filter((entry) => {
+    const item = entry.projectedItem?.item;
+    return (
+      workLogEntryIsVisible(entry) &&
+      !(item && orchestrationV2CommandExecutionIsLiveInBackground(item))
+    );
+  });
+  const running = foreground.findLast((entry) => entry.toolLifecycleStatus === "inProgress");
+  if (running) return running;
+  const latest = foreground.at(-1);
+  return latest && workEntryIndicatesToolSuccess(latest) ? latest : null;
+}
+
+/** V2 projects each tool call once. Only successful, settled tool groups
+ * earn a past-tense summary; errors and live resources keep their own rows. */
+export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry>): string | null {
+  if (
+    entries.length < 2 ||
+    entries.some(
+      (entry) =>
+        !workEntryIndicatesToolSuccess(entry) ||
+        entry.tone === "error" ||
+        entry.sourceItemType === "compaction",
+    )
+  )
+    return null;
+  const counts = new Map<string, number>();
+  const sources = new Map<string, ToolActivitySource>();
+  const files = new Set<string>();
+  const add = (action: string, count = 1) => counts.set(action, (counts.get(action) ?? 0) + count);
+  for (const entry of entries) {
+    const item = entry.projectedItem?.item;
+    if (item && orchestrationV2CommandExecutionIsLiveInBackground(item)) return null;
+    const presentation = resolveT3McpToolPresentation(
+      item?.type === "dynamic_tool" ? item.toolName : (entry.toolTitle ?? entry.label),
+      entry.toolLifecycleStatus,
+      item?.type === "dynamic_tool" ? item.input : undefined,
+    );
+    if (presentation?.action) {
+      add(presentation.action);
+      continue;
+    }
+    if (entry.toolSource) {
+      sources.set(entry.toolSource.key, entry.toolSource);
+      continue;
+    }
+    if (presentation?.logo === "browser") {
+      add("browser");
+      continue;
+    }
+    if (entry.itemType === "file_change" || (entry.changedFiles?.length ?? 0) > 0) {
+      if (entry.changedFiles?.length) {
+        for (const path of entry.changedFiles)
+          if (!files.has(path)) {
+            files.add(path);
+            add("edit");
+          }
+      } else add("edit");
+    } else if (entry.itemType === "command_execution" || entry.command) add("command");
+    else if (entry.itemType === "file_search") add("code-search");
+    else if (entry.itemType === "web_search") add("search");
+    else if (
+      entry.requestKind === "file-read" ||
+      (item?.type === "dynamic_tool" && dynamicToolInputPreview(item.input)?.kind === "path")
+    )
+      add("read");
+    else add("tool");
+  }
+  const labels = [...counts].map(([action, count]) => {
+    switch (action) {
+      case "link-pr":
+        return `Linked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
+      case "unlink-pr":
+        return `Unlinked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
+      case "list-prs":
+        return count === 1
+          ? "Checked linked pull requests"
+          : `Checked linked pull requests ${count} times`;
+      case "browser":
+        return `Used browser ${count} ${count === 1 ? "time" : "times"}`;
+      case "edit":
+        return `Changed ${count} ${count === 1 ? "file" : "files"}`;
+      case "command":
+        return `Ran ${count} ${count === 1 ? "command" : "commands"}`;
+      case "code-search":
+        return `Searched code ${count} ${count === 1 ? "time" : "times"}`;
+      case "search":
+        return `Searched the web ${count} ${count === 1 ? "time" : "times"}`;
+      case "read":
+        return `Read ${count} ${count === 1 ? "file" : "files"}`;
+      default:
+        return `Used ${count} ${count === 1 ? "tool" : "tools"}`;
+    }
+  });
+  if (sources.size > 0) {
+    const values = [...sources.values()];
+    const names = values.map((source) => source.name);
+    const joined =
+      names.length < 3
+        ? names.join(" and ")
+        : `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
+    const suffix = values.every((source) => source.kind === "integration")
+      ? values.length === 1
+        ? " integration"
+        : " integrations"
+      : "";
+    labels.unshift(`Used ${joined}${suffix}`);
+  }
+  const sentenceLabels = labels.map((label, index) =>
+    index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1),
+  );
+  return sentenceLabels.length < 2
+    ? (sentenceLabels[0] ?? null)
+    : sentenceLabels.length === 2
+      ? sentenceLabels.join(" and ")
+      : `${sentenceLabels.slice(0, -1).join(", ")}, and ${sentenceLabels.at(-1)}`;
+}
+
 export function shouldPreserveAssistantLineBreaks(text: string): boolean {
   return /^★ Insight(?:\s|─)/mu.test(text);
 }
@@ -113,6 +251,34 @@ export function resolveTimelineMinimapIndexFromPointer(input: {
 
   const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
   return Math.max(0, Math.min(input.itemCount - 1, Math.round(progress * (input.itemCount - 1))));
+}
+
+export function resolveTimelineMinimapCurrentIndex(input: {
+  readonly scrollTop: number;
+  readonly scrollBottom: number;
+  readonly itemBounds: ReadonlyArray<{
+    readonly top: number | null;
+    readonly height: number | null;
+  }>;
+}): number | null {
+  let precedingIndex: number | null = null;
+
+  for (const [index, item] of input.itemBounds.entries()) {
+    if (item.top === null) {
+      continue;
+    }
+    const inView =
+      item.top < input.scrollBottom && item.top + Math.max(1, item.height ?? 1) > input.scrollTop;
+    if (inView) {
+      // The first visible marker is the turn at the reader's current position.
+      return index;
+    }
+    if (item.top <= input.scrollTop) {
+      precedingIndex = index;
+    }
+  }
+
+  return precedingIndex;
 }
 
 export function resolveTimelineMinimapHasPersistentGutter(viewportWidth: number): boolean {
@@ -210,6 +376,8 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       groupedEntries: WorkLogEntry[];
+      liveEntry?: WorkLogEntry;
+      liveStartedAt?: string | null;
     }
   | {
       kind: "turn-fold";
@@ -427,10 +595,9 @@ function timelineEntryFoldRunId(entry: TimelineEntry): RunId | null {
 }
 
 /**
- * Settled turns keep their first and terminal assistant messages visible.
- * Everything between them folds behind a "Worked for ..." row anchored at
- * the first hidden entry. Keeping both ends prevents a short follow-up from
- * hiding a substantive opening response while still bounding noisy turns.
+ * Settled V2 runs keep their terminal assistant message visible. Interim
+ * responses and completed work fold behind the duration row; live resources
+ * and interruption evidence keep their existing visibility rules.
  */
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
@@ -507,16 +674,9 @@ function deriveTurnFolds(input: {
     if (group.hasStreamingMessage) {
       continue;
     }
-    const firstAssistantEntry = group.entries.find(
-      (entry): entry is Extract<TimelineEntry, { kind: "message" }> => entry.kind === "message",
-    );
     const hiddenEntryIds = new Set<string>();
     for (const entry of group.entries) {
-      if (
-        entry.id !== firstAssistantEntry?.id &&
-        entry.id !== group.terminalEntry?.id &&
-        !timelineEntryIsPersistentResourceCard(entry)
-      ) {
+      if (entry.id !== group.terminalEntry?.id && !timelineEntryIsPersistentResourceCard(entry)) {
         hiddenEntryIds.add(entry.id);
       }
     }
@@ -682,7 +842,14 @@ export function deriveMessagesTimelineRows(input: {
           collapsedSupersededEntryIds.has(nextEntry.id) ||
           foldsByAnchorEntryId.has(nextEntry.id) ||
           supersededFoldsByAnchorEntryId.has(nextEntry.id) ||
-          nextEntry.attempt?.id !== timelineEntry.attempt?.id
+          nextEntry.attempt?.id !== timelineEntry.attempt?.id ||
+          nextEntry.entry.runId !== timelineEntry.entry.runId ||
+          workEntryIndicatesToolFailure(timelineEntry.entry) ||
+          workEntryIndicatesToolFailure(nextEntry.entry) ||
+          timelineEntry.entry.sourceItemType === "compaction" ||
+          nextEntry.entry.sourceItemType === "compaction" ||
+          timelineEntryIsPersistentResourceCard(timelineEntry) ||
+          timelineEntryIsPersistentResourceCard(nextEntry)
         ) {
           break;
         }
@@ -758,9 +925,18 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
+  const lastRow = nextRows.at(-1);
+  const liveEntry =
+    input.isWorking && unsettledRunId !== null && lastRow?.kind === "work"
+      ? resolveLiveWorkEntry(lastRow.groupedEntries, unsettledRunId)
+      : null;
+  if (lastRow?.kind === "work" && liveEntry) {
+    lastRow.liveEntry = liveEntry;
+    lastRow.liveStartedAt = input.activeTurnStartedAt;
+  }
   const mergedRows = insertDayDividers(mergeRelatedThreadCardRuns(mergeAgentUpdateRuns(nextRows)));
 
-  if (input.isWorking) {
+  if (input.isWorking && liveEntry === null) {
     mergedRows.push({
       kind: "working",
       id: "working-indicator-row",
@@ -928,8 +1104,14 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "event":
       return a.projectedItem === (b as typeof a).projectedItem;
-    case "work":
-      return Equal.equals(a.groupedEntries, (b as typeof a).groupedEntries);
+    case "work": {
+      const other = b as typeof a;
+      return (
+        a.liveStartedAt === other.liveStartedAt &&
+        Equal.equals(a.liveEntry, other.liveEntry) &&
+        Equal.equals(a.groupedEntries, other.groupedEntries)
+      );
+    }
 
     case "message": {
       const bm = b as typeof a;

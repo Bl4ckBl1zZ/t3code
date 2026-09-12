@@ -1,3 +1,6 @@
+import { applyClaudeRateLimitEvent, ClaudeUsageLimitListener } from "../providerUsageLimits.ts";
+import * as DateTime from "effect/DateTime";
+import { resolveClaudeModelCatalog, scopeClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
 /**
  * ClaudeDriver — `ProviderDriver` for the Claude Agent SDK runtime.
  *
@@ -147,25 +150,18 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         continuationGroupKey,
       });
 
-      const orchestrationAdapter = yield* ClaudeAdapterV2Driver.create({
-        instanceId,
-        displayName,
-        accentColor,
-        environment,
-        enabled,
-        config,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: "Failed to build Claude orchestration adapter.",
-              cause,
-            }),
+      const textGeneration = yield* makeClaudeTextGeneration(
+        effectiveConfig,
+        processEnv,
+        modelManifest.current.pipe(
+          Effect.map((manifest) =>
+            scopeClaudeModelCatalog(
+              resolveClaudeModelCatalog(manifest),
+              effectiveConfig.customModels,
+            ),
+          ),
         ),
       );
-      const textGeneration = yield* makeClaudeTextGeneration(effectiveConfig, processEnv);
 
       // Per-instance capabilities cache: keyed on binary + resolved HOME so
       // account-specific probes never share auth metadata across instances.
@@ -184,17 +180,18 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       // provider check. A refresh that lands mid-probe applies on the next one.
       const checkProvider = modelManifest.refreshInBackground.pipe(
         Effect.andThen(
-          Effect.zipWith(
+          Effect.flatMap(modelManifest.current, (manifest) =>
             checkClaudeProviderStatus(
               effectiveConfig,
               () => Cache.get(capabilitiesProbeCache, capabilitiesCacheKey),
               processEnv,
               cwd,
+              resolveClaudeModelCatalog(manifest),
+            ).pipe(
+              Effect.map((draft) =>
+                stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
+              ),
             ),
-            modelManifest.current,
-            (draft, manifest) =>
-              stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
-            { concurrent: true },
           ),
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -209,11 +206,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
-          Effect.zipWith(
-            makePendingClaudeProvider(settings.provider),
-            modelManifest.current,
-            (draft, manifest) =>
-              stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
+          Effect.flatMap(modelManifest.current, (manifest) =>
+            makePendingClaudeProvider(settings.provider, resolveClaudeModelCatalog(manifest)).pipe(
+              Effect.map((draft) =>
+                stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
+              ),
+            ),
           ),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
@@ -235,6 +233,33 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         ),
       );
 
+      const orchestrationAdapter = yield* ClaudeAdapterV2Driver.create({
+        instanceId,
+        displayName,
+        accentColor,
+        environment,
+        enabled,
+        config,
+      }).pipe(
+        Effect.provideService(ClaudeUsageLimitListener, {
+          publish: (info) =>
+            Effect.gen(function* () {
+              const checkedAt = DateTime.formatIso(yield* DateTime.now);
+              yield* snapshot.updateUsageLimits((previous) =>
+                applyClaudeRateLimitEvent(previous, info, checkedAt),
+              );
+            }),
+        }),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Failed to build Claude orchestration adapter.",
+              cause,
+            }),
+        ),
+      );
       return {
         instanceId,
         driverKind: DRIVER_KIND,

@@ -95,6 +95,8 @@ public enum HTTPError: LocalizedError, Sendable {
     }
 }
 
+private struct EmptyHTTPResponse: Decodable, Sendable {}
+
 private struct ErrorBody: Decodable {
     let message: String?
     let reason: String?
@@ -230,12 +232,33 @@ public actor EnvironmentAPI {
         )
     }
 
+    /// Uses the environment's authenticated transport so relay-bound sessions
+    /// retain their request proof and credential refresh behavior.
+    public func uploadAttachment(
+        for environment: Environment, relativeURL: String, data: Data, mimeType: String
+    ) async throws {
+        guard let url = URL(string: relativeURL, relativeTo: environment.httpBaseURL)?.absoluteURL,
+              url.scheme == environment.httpBaseURL.scheme,
+              url.host == environment.httpBaseURL.host,
+              url.port == environment.httpBaseURL.port,
+              url.path.hasPrefix("/api/attachments/upload/"),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw RPCError.protocolViolation("The server returned an invalid attachment upload URL.")
+        }
+        let _: EmptyHTTPResponse = try await authorized(
+            environment: environment, path: url.path, queryItems: components.queryItems ?? [],
+            method: "POST", body: data, contentType: mimeType, timeoutInterval: 300,
+            as: EmptyHTTPResponse.self
+        )
+    }
+
     private func authorized<Result: Decodable & Sendable>(
         environment: Environment,
         path: String,
         queryItems: [URLQueryItem] = [],
         method: String,
         body: Data? = nil,
+        contentType: String = "application/json",
         timeoutInterval: TimeInterval? = nil,
         as type: Result.Type
     ) async throws -> Result {
@@ -253,7 +276,8 @@ public actor EnvironmentAPI {
                 path: path,
                 queryItems: queryItems,
                 method: method,
-                body: body
+                body: body,
+                contentType: contentType
             )
             if let timeoutInterval {
                 request.timeoutInterval = timeoutInterval
@@ -290,7 +314,8 @@ public actor EnvironmentAPI {
                     path: path,
                     queryItems: queryItems,
                     method: method,
-                    body: body
+                    body: body,
+                    contentType: contentType
                 ),
                 environment: environment,
                 credential: current
@@ -320,7 +345,8 @@ public actor EnvironmentAPI {
                         path: path,
                         queryItems: queryItems,
                         method: method,
-                        body: body
+                        body: body,
+                    contentType: contentType
                     ),
                     environment: environment,
                     credential: current
@@ -338,7 +364,8 @@ public actor EnvironmentAPI {
         path: String,
         queryItems: [URLQueryItem],
         method: String,
-        body: Data?
+        body: Data?,
+        contentType: String = "application/json"
     ) -> URLRequest {
         var request = URLRequest(
             url: endpoint(environment.httpBaseURL, path: path, queryItems: queryItems)
@@ -346,7 +373,7 @@ public actor EnvironmentAPI {
         request.httpMethod = method
         request.httpBody = body
         if body != nil {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
         return request
     }
@@ -410,7 +437,7 @@ public actor EnvironmentAPI {
                 traceID: body?.traceId
             )
         }
-        return try JSONDecoder.t3.decode(type, from: data)
+        return try JSONDecoder.t3.decode(type, from: data.isEmpty && type == EmptyHTTPResponse.self ? Data("{}".utf8) : data)
     }
 }
 

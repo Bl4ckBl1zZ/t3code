@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct FeatureComposerView: View {
     /// True while the attachment picker has a camera, photo, or file source on
@@ -7,6 +8,8 @@ struct FeatureComposerView: View {
     /// resulting focus loss would collapse the footer, and the composer needs
     /// to know a presentation it just opened is the reason focus went away.
     @State private var isPickingAttachment = false
+    @State private var isFileDropTargeted = false
+    @State private var fileDropError: String?
     /// The in-pill attachment menu the plus morphs the composer into.
     @State private var isAttachMenuOpen = false
     /// The in-pill camera / photo-library window. Files stay on the native
@@ -30,7 +33,15 @@ struct FeatureComposerView: View {
     private let voice = VoiceComposerCoordinator.shared
     @State private var caret = VoiceComposerCaret()
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Binding private var text: String
+    @Binding private var storedText: String
+    private var text: String {
+        get { ReviewCommentContext.removingBlocks(from: AssistantCitation.removingMarkers(from: storedText)) }
+        nonmutating set {
+            storedText = ReviewCommentContext.replacingPlainText(in: storedText,
+                with: AssistantCitation.replacingPlainText(in: storedText, with: newValue))
+        }
+    }
+    private var textBinding: Binding<String> { Binding(get: { text }, set: { text = $0 }) }
     @Binding private var selection: FeatureSelection?
     @Binding private var attachments: [FeatureDraftAttachment]
     /// The thread's Plan/Build mode, or nil on a surface that has no mode to
@@ -40,6 +51,7 @@ struct FeatureComposerView: View {
     private let interactionMode: Binding<FeatureInteractionMode>?
 
     private let providers: [FeatureProvider]
+    private let providerSetup: ProviderSetupContext?
     private let threadSelection: FeatureSelection?
     private let materializesDefaultSelection: Bool
     private let isSending: Bool
@@ -59,9 +71,12 @@ struct FeatureComposerView: View {
     private let historyDraftStore: FeatureComposerDraftStore
     private let onWillStash: () async -> Void
     private let onDidStash: () -> Void
+    private let externalFileDrop: ThreadFileDropBatch?
+    private let onExternalFileDropConsumed: (UUID) -> Void
     @State private var historyGeneration = UUID()
     @State private var promptHistory = ComposerPromptHistory()
-    @State private var stashedDraft: FeatureComposerDraft?
+    @State private var stashedDrafts: [FeatureComposerStashEntry] = []
+    @State private var showsStash = false
     @State private var isStashing = false
     @State private var historyError: String?
     private let onSend: () -> Void
@@ -75,6 +90,7 @@ struct FeatureComposerView: View {
         attachments: Binding<[FeatureDraftAttachment]>,
         interactionMode: Binding<FeatureInteractionMode>? = nil,
         providers: [FeatureProvider],
+        providerSetup: ProviderSetupContext? = nil,
         threadSelection: FeatureSelection?,
         materializesDefaultSelection: Bool = true,
         isSending: Bool,
@@ -94,14 +110,17 @@ struct FeatureComposerView: View {
         historyDraftStore: FeatureComposerDraftStore = .shared,
         onWillStash: @escaping () async -> Void = {},
         onDidStash: @escaping () -> Void = {},
+        externalFileDrop: ThreadFileDropBatch? = nil,
+        onExternalFileDropConsumed: @escaping (UUID) -> Void = { _ in },
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
         onUserInputSubmit: ((String, [String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void)? = nil
     ) {
-        _text = text
+        _storedText = text
         _selection = selection
         _attachments = attachments
         self.interactionMode = interactionMode
         self.providers = providers
+        self.providerSetup = providerSetup
         self.threadSelection = threadSelection
         self.materializesDefaultSelection = materializesDefaultSelection
         self.isSending = isSending
@@ -121,24 +140,70 @@ struct FeatureComposerView: View {
         self.historyDraftStore = historyDraftStore
         self.onWillStash = onWillStash
         self.onDidStash = onDidStash
+        self.externalFileDrop = externalFileDrop
+        self.onExternalFileDropConsumed = onExternalFileDropConsumed
         self.onApprovalDecision = onApprovalDecision
         self.onUserInputSubmit = onUserInputSubmit
     }
 
     var body: some View {
-        composerSurface
+        VStack(spacing: 8) {
+            if !stashedDrafts.isEmpty {
+                HStack {
+                    Spacer()
+                    Button { showsStash = true } label: {
+                        Label("Stash \(stashedDrafts.count)", systemImage: "bookmark")
+                            .font(T3Typography.supportingStrong)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: T3Metrics.minimumTapTarget)
+                            .background(T3Colors.surfaceRaised, in: Capsule())
+                    }.buttonStyle(.plain).disabled(!historyAvailable)
+                    .accessibilityIdentifier("composer-stash")
+                }
+            }
+            if !AssistantCitation.matches(in: storedText).isEmpty {
+                AssistantCitationChips(text: $storedText).disabled(isSending || isStashing)
+            }
+            if !ReviewCommentContext.matches(in: storedText).isEmpty {
+                ReviewCommentContextChips(text: $storedText).disabled(isSending || isStashing)
+            }
+            composerSurface
+        }
+            .onDrop(of: [UTType.data], isTargeted: $isFileDropTargeted, perform: receiveDroppedFiles)
+            .overlay {
+                if isFileDropTargeted {
+                    RoundedRectangle(cornerRadius: 24)
+                        .strokeBorder(T3Colors.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .alert("Attach files", isPresented: Binding(get: { fileDropError != nil }, set: { if !$0 { fileDropError = nil } })) {
+                Button("OK") { fileDropError = nil }
+            } message: { Text(fileDropError ?? "") }
+            .task(id: readyExternalFileDropID) { await receiveExternalFileDrop() }
             .task(id: historyDraftKey) {
                 historyGeneration = UUID()
                 promptHistory = ComposerPromptHistory()
-                guard let historyDraftKey else { stashedDraft = nil; return }
+                stashedDrafts = []
+                showsStash = false
+                guard let historyDraftKey else { stashedDrafts = []; return }
                 do {
-                    let saved = try await historyDraftStore.stashedDraft(for: historyDraftKey)
+                    let saved = try await historyDraftStore.stashEntries(for: historyDraftKey)
                     guard !Task.isCancelled, self.historyDraftKey == historyDraftKey else { return }
-                    stashedDraft = saved
+                    stashedDrafts = saved
                 }
                 catch { historyError = error.localizedDescription }
             }
-            .alert("Prompt history", isPresented: Binding(get: { historyError != nil }, set: { if !$0 { historyError = nil } })) {
+            .sheet(isPresented: $showsStash) {
+                NavigationStack {
+                    ComposerStashSheet(entries: stashedDrafts, busy: isStashing, error: historyError,
+                        restore: { entry in mutateStash(restoring: entry.id) },
+                        remove: { entry in removeStash(entry.id) })
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsStash = false } } }
+                }
+            }
+            .alert("Prompt history", isPresented: Binding(get: { historyError != nil && !showsStash }, set: { if !$0 { historyError = nil } })) {
                 Button("OK") { historyError = nil }
             } message: { Text(historyError ?? "") }
             .overlay(alignment: .top) {
@@ -219,6 +284,7 @@ struct FeatureComposerView: View {
                 attachVoice()
             }
             .onDisappear {
+                historyGeneration = UUID()
                 caret.stopTracking()
                 voice.detach(identity: powerFeatures.voiceComposerIdentity)
             }
@@ -387,6 +453,86 @@ struct FeatureComposerView: View {
         }
     }
 
+    private var readyExternalFileDropID: UUID? {
+        guard !isSending, !isStashing, !voice.state.isBusy,
+            externalFileDrop?.draftKey == historyDraftKey else { return nil }
+        return externalFileDrop?.id
+    }
+
+    private func receiveExternalFileDrop() async {
+        guard readyExternalFileDropID != nil, let batch = externalFileDrop else { return }
+        let remaining = max(0, 8 - attachments.count - attachmentPreparation.pendingItemCount)
+        let accepted = min(remaining, batch.providers.count - batch.nextIndex)
+        let endIndex = batch.nextIndex + accepted
+        let operation = attachmentPreparation.begin(itemCount: accepted)
+        defer { attachmentPreparation.finish(operation) }
+        var failures: [String] = []
+        while batch.nextIndex < endIndex {
+            let index = batch.nextIndex
+            let provider = batch.providers[index]
+            do {
+                guard let type = ThreadFileDropBatch.supportedType(provider) else { throw CocoaError(.fileReadUnsupportedScheme) }
+                let attachment = try await FeatureDroppedAttachment.load(provider, typeIdentifier: type)
+                guard !Task.isCancelled, historyDraftKey == batch.draftKey else { return }
+                guard batch.nextIndex == index else { continue }
+                guard attachments.count < 8 else { break }
+                attachments.append(attachment)
+                batch.advance(expectedIndex: index)
+            } catch {
+                guard !Task.isCancelled, historyDraftKey == batch.draftKey else { return }
+                failures.append(error.localizedDescription)
+                batch.advance(expectedIndex: index)
+            }
+        }
+        guard !Task.isCancelled else { return }
+        if !batch.isComplete || batch.omittedCount > 0 {
+            failures.append("A message can contain up to 8 attachments. Extra files were not added.")
+        }
+        batch.finish()
+        onExternalFileDropConsumed(batch.id)
+        if !failures.isEmpty { fileDropError = failures.joined(separator: "\n") }
+        focused.wrappedValue = true
+    }
+
+    /// Resolve each provider while its temporary file is valid, then append only
+    /// to the composer that accepted the drop. The existing upload queue owns sending.
+    private func receiveDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
+        guard !isSending, !isStashing, !voice.state.isBusy else { return false }
+        let remaining = max(0, 8 - attachments.count - attachmentPreparation.pendingItemCount)
+        let accepted = providers.compactMap { provider -> (NSItemProvider, String)? in
+            guard let type = provider.registeredTypeIdentifiers.first(where: {
+                UTType($0)?.conforms(to: .data) == true
+            }) else { return nil }
+            return (provider, type)
+        }
+        guard !accepted.isEmpty else { return false }
+        guard remaining > 0 else {
+            fileDropError = "A message can contain up to 8 attachments."
+            return false
+        }
+        let destination = historyDraftKey
+        let generation = historyGeneration
+        let operation = attachmentPreparation.begin(itemCount: min(remaining, accepted.count))
+        Task { @MainActor in
+            defer { attachmentPreparation.finish(operation) }
+            for (provider, type) in accepted.prefix(remaining) {
+                do {
+                    let attachment = try await FeatureDroppedAttachment.load(provider, typeIdentifier: type)
+                    guard historyDraftKey == destination, historyGeneration == generation else { return }
+                    guard attachments.count < 8 else { break }
+                    attachments.append(attachment)
+                } catch {
+                    guard historyDraftKey == destination, historyGeneration == generation else { return }
+                    fileDropError = error.localizedDescription
+                }
+            }
+            if accepted.count > remaining {
+                fileDropError = "Only the first \(remaining) files were added. A message can contain up to 8 attachments."
+            }
+        }
+        return true
+    }
+
     private var editorContent: some View {
         VStack(spacing: 0) {
             if !attachments.isEmpty {
@@ -509,7 +655,7 @@ struct FeatureComposerView: View {
     private var inputRow: some View {
         TextField(
             isWorking ? "Message to queue…" : "Ask anything…",
-            text: $text,
+            text: textBinding,
             axis: .vertical
         )
         .disabled(isStashing)
@@ -517,9 +663,9 @@ struct FeatureComposerView: View {
             guard press.modifiers.isEmpty, historyAvailable,
                   caret.canRecallHistory(backward: press.key == .upArrow),
                   let recalled = promptHistory.step(backward: press.key == .upArrow,
-                    entries: ComposerPromptHistory.entries(historyMessages()), current: text) else { return .ignored }
-            text = recalled
-            caret.moveCaret(to: recalled.utf16.count)
+                    entries: ComposerPromptHistory.entries(historyMessages()), current: storedText) else { return .ignored }
+            storedText = recalled
+            caret.moveCaret(to: text.utf16.count)
             return .handled
         }
         .font(T3Typography.composer)
@@ -635,36 +781,65 @@ struct FeatureComposerView: View {
             && pendingApprovals.isEmpty && pendingUserInputs.isEmpty && !isAttachMenuOpen
     }
 
+    private func mutateStash(restoring id: String? = nil) {
+        guard let historyDraftKey, historyAvailable else { return }
+        let current = FeatureComposerDraft(text: storedText, attachments: attachments)
+        let generation = historyGeneration
+        isStashing = true
+        Task {
+            defer { isStashing = false; onDidStash() }
+            await onWillStash()
+            do {
+                let restored: FeatureComposerDraft
+                if let id { restored = try await historyDraftStore.restoreStash(id: id, replacing: current, for: historyDraftKey) }
+                else {
+                    _ = try await historyDraftStore.stashDraft(current, for: historyDraftKey)
+                    restored = FeatureComposerDraft()
+                }
+                let entries = try await historyDraftStore.stashEntries(for: historyDraftKey)
+                guard generation == historyGeneration else { return }
+                stashedDrafts = entries
+                storedText = restored.text
+                attachments = restored.attachments
+                promptHistory = ComposerPromptHistory()
+                showsStash = false
+            } catch { historyError = error.localizedDescription }
+        }
+    }
+
+    private func removeStash(_ id: String) {
+        guard let historyDraftKey, !isStashing else { return }
+        let generation = historyGeneration
+        isStashing = true
+        Task {
+            defer { isStashing = false }
+            do {
+                let entries = try await historyDraftStore.removeStash(id: id, for: historyDraftKey)
+                guard generation == historyGeneration else { return }
+                stashedDrafts = entries
+            } catch { historyError = error.localizedDescription }
+        }
+    }
+
     private var historyMenu: some View {
         Menu {
-            if let historyDraftKey {
-                Button(stashedDraft == nil ? "Stash draft" : (text.isEmpty && attachments.isEmpty ? "Restore stashed draft" : "Swap with stashed draft")) {
-                    let current = FeatureComposerDraft(text: text, attachments: attachments)
-                    let generation = historyGeneration
-                    isStashing = true
-                    Task {
-                        defer { isStashing = false; onDidStash() }
-                        await onWillStash()
-                        do {
-                            let restored = try await historyDraftStore.swapStash(current, for: historyDraftKey)
-                            guard generation == historyGeneration else { return }
-                            stashedDraft = current.text.isEmpty && current.attachments.isEmpty ? nil : current
-                            text = restored.text
-                            attachments = restored.attachments
-                            promptHistory = ComposerPromptHistory()
-                        } catch { historyError = error.localizedDescription }
-                    }
-                }.disabled(stashedDraft == nil && text.isEmpty && attachments.isEmpty)
+            if historyDraftKey != nil {
+                Button("Stash draft", systemImage: "bookmark") { mutateStash() }
+                    .disabled(storedText.isEmpty && attachments.isEmpty)
+                    .keyboardShortcut("s", modifiers: .command)
+                if !stashedDrafts.isEmpty {
+                    Button("Browse stash (\(stashedDrafts.count))", systemImage: "tray.full") { showsStash = true }
+                }
             }
             let entries = ComposerPromptHistory.entries(historyMessages())
             if !entries.isEmpty {
                 Section("Recent prompts") {
                     ForEach(entries.suffix(20).reversed()) { entry in
-                        Button(String(entry.prompt.prefix(100))) {
-                            text = promptHistory.select(entry)
+                        Button(String(AssistantCitation.plainText(entry.prompt).prefix(100))) {
+                            storedText = promptHistory.select(entry)
                             focused.wrappedValue = true
                             caret.moveCaret(to: text.utf16.count)
-                        }.disabled(!text.isEmpty && text != promptHistory.position?.prompt)
+                        }.disabled(!storedText.isEmpty && storedText != promptHistory.position?.prompt)
                     }
                 }
             } else { Text("No sent prompts in this thread") }
@@ -757,7 +932,8 @@ struct FeatureComposerView: View {
                 selection: $selection,
                 providers: providers,
                 threadSelection: threadSelection,
-                materializesDefaultSelection: materializesDefaultSelection
+                materializesDefaultSelection: materializesDefaultSelection,
+                setupContext: providerSetup
             )
         }
         // The picker used to own this: mounting it was what materialized a
@@ -875,13 +1051,13 @@ struct FeatureComposerView: View {
     }
 
     private var textIsEmpty: Bool {
-        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        storedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var canSend: Bool {
         guard composerTrigger?.kind != .model else { return false }
         return FeatureComposerSubmissionEligibility.canSend(
-            text: text,
+            text: storedText,
             attachmentCount: attachments.count,
             imagesAllowed: imagesAllowed,
             isSending: isSending,

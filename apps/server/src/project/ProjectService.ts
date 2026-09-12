@@ -4,6 +4,7 @@ import {
   ProjectId,
   type Project,
   type ProjectScript,
+  type ProjectIconOverride,
   type ProjectSnapshot,
   type ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -37,6 +38,7 @@ export interface ProjectUpdateInput {
   readonly defaultModelSelection?: ModelSelection | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
   readonly faviconPath?: string | null;
+  readonly projectIcon?: ProjectIconOverride | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
 }
 
@@ -132,6 +134,7 @@ export const make = Effect.gen(function* () {
     workspaceRoot: row.workspaceRoot,
     repositoryIdentity: enrichment?.repositoryIdentity ?? null,
     faviconPath: row.faviconPath ?? enrichment?.faviconPath ?? null,
+    projectIcon: row.projectIcon ?? null,
     defaultModelSelection: row.defaultModelSelection,
     scripts: row.scripts,
     createdAt: row.createdAt,
@@ -334,6 +337,7 @@ export const make = Effect.gen(function* () {
             ? {}
             : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
           ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
+          ...(input.projectIcon === undefined ? {} : { projectIcon: input.projectIcon }),
           ...(input.scripts === undefined ? {} : { scripts: [...input.scripts] }),
         },
         (workspaceRoot === existing.value.workspaceRoot

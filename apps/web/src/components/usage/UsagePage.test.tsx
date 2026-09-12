@@ -15,17 +15,19 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useState: vi.fn((initial: unknown) => [
       typeof initial === "function"
-        ? {
-            days: 1,
-            window: {
-              sinceDay: "2026-08-10",
-              untilDay: "2026-08-11",
-              timeZone: "UTC",
-              resolution: "hour",
-              sinceTime: "2026-08-10T12:37:00.000Z",
-              untilTime: "2026-08-11T12:37:00.000Z",
-            },
-          }
+        ? initial().metric !== undefined
+          ? { metric: testState.metric, windowDays: 1 }
+          : {
+              days: 1,
+              window: {
+                sinceDay: "2026-08-10",
+                untilDay: "2026-08-11",
+                timeZone: "UTC",
+                resolution: "hour",
+                sinceTime: "2026-08-10T12:37:00.000Z",
+                untilTime: "2026-08-11T12:37:00.000Z",
+              },
+            }
         : initial === "cost"
           ? testState.metric
           : initial === "model"
@@ -128,6 +130,9 @@ beforeEach(() => {
       ],
     },
     environments: [],
+    selectedEnvironments: [
+      { environmentId: "fixture", label: "Fixture", isPending: false, error: null, summary: null },
+    ],
     isPending: false,
     isPartial: false,
     refresh: vi.fn(),

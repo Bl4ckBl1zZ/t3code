@@ -9,6 +9,10 @@ struct MarkdownMessageView: View {
     }
 
     private let source: String
+    private let citationMessageID: String?
+    @State private var isCiting = false
+    @SwiftUI.Environment(\.assistantCitationContext) private var citationContext
+    @SwiftUI.Environment(\.assistantCitationHighlight) private var citationHighlight
     private let revision: MarkdownContentRevision
     private let isStreaming: Bool
     @State private var renderedDocument: MarkdownRenderedDocument?
@@ -17,8 +21,9 @@ struct MarkdownMessageView: View {
     @State private var previewTarget: PullRequestLinkTarget?
     @SwiftUI.Environment(\.markdownPullRequestContext) private var pullRequestContext
 
-    init(_ source: String, isStreaming: Bool = false) {
+    init(_ source: String, isStreaming: Bool = false, citationMessageID: String? = nil) {
         self.source = source
+        self.citationMessageID = citationMessageID
         self.isStreaming = isStreaming
         let revision = MarkdownContentRevision(source)
         self.revision = revision
@@ -35,12 +40,12 @@ struct MarkdownMessageView: View {
     var body: some View {
         Group {
             if let displayDocument {
-                MarkdownBlocksView(blocks: displayDocument.blocks)
+                MarkdownBlocksView(blocks: highlightedBlocks(displayDocument))
                     .environment(\.markdownGallery, MarkdownGallery.images(in: displayDocument.blocks))
             } else {
                 // Parsing waits briefly so token-by-token streaming cancels stale revisions
                 // instead of scheduling work for content the user will never see.
-                Text(verbatim: source)
+                highlightedSourceText
                     .font(T3Typography.threadBody)
                     .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
@@ -48,6 +53,9 @@ struct MarkdownMessageView: View {
         }
         .modifier(MarkdownTextSelectionModifier(isEnabled: isSelectingText))
         .contextMenu {
+            if citationMessageID != nil, citationContext != nil, !isStreaming {
+                Button("Cite text", systemImage: "quote.bubble") { isCiting = true }
+            }
             if pullRequestContext != nil {
                 ForEach(PullRequestLinkTarget.links(in: source)) { target in
                     Button("Preview pull request #\(String(target.number))", systemImage: "arrow.triangle.pull") {
@@ -67,6 +75,11 @@ struct MarkdownMessageView: View {
                 UIPasteboard.general.string = source
             } label: {
                 Label("Copy message", systemImage: "doc.on.doc")
+            }
+        }
+        .sheet(isPresented: $isCiting) {
+            if let citationContext, let citationMessageID {
+                AssistantCitationSelectionSheet(text: displayDocument?.citationText ?? source, messageId: citationMessageID, context: citationContext)
             }
         }
         .sheet(item: $previewTarget) { target in
@@ -103,6 +116,20 @@ struct MarkdownMessageView: View {
         .onDisappear {
             streamingRenderer.cancel()
         }
+    }
+
+    private var highlightedSourceText: Text {
+        guard let citation = citationHighlight?.citation, citation.messageId == citationMessageID,
+              let range = AssistantCitationTextRange.resolve(in: source, quote: citation.text,
+                  start: citation.start, end: citation.end, prefix: citation.prefix, suffix: citation.suffix) else { return Text(verbatim: source) }
+        return Text(MarkdownCitationHighlight.mark(AttributedString(source), range: range))
+    }
+
+    private func highlightedBlocks(_ document: MarkdownRenderedDocument) -> [MarkdownRenderedBlock] {
+        guard let citation = citationHighlight?.citation, citation.messageId == citationMessageID,
+              let range = AssistantCitationTextRange.resolve(in: document.citationText, quote: citation.text,
+                  start: citation.start, end: citation.end, prefix: citation.prefix, suffix: citation.suffix) else { return document.blocks }
+        return MarkdownCitationHighlight.blocks(document.blocks, range: range)
     }
 
     private var displayDocument: MarkdownRenderedDocument? {
@@ -260,11 +287,14 @@ private struct MarkdownBlockView: View, Equatable {
         case let .image(image):
             MarkdownMediaView(image: image)
 
-        case let .codeBlock(language, code):
-            MarkdownCodeBlockView(language: language, code: code)
+        case let .codeBlock(language, code, citationRange):
+            MarkdownCodeBlockView(language: language, code: code, citationRange: citationRange)
 
         case let .htmlEmbed(html):
             HtmlEmbedView(html: html)
+
+        case let .artifactTemplate(template):
+            NativeArtifactTemplateCard(template: template)
 
         case .thematicBreak:
             Rectangle()
@@ -454,6 +484,11 @@ private struct MarkdownListView: View {
 private struct MarkdownCodeBlockView: View {
     let language: String?
     let code: String
+    let citationRange: NSRange?
+    private var codeText: Text {
+        if let citationRange { Text(MarkdownCitationHighlight.mark(AttributedString(code), range: citationRange)) }
+        else { Text(verbatim: code) }
+    }
     @State private var wrapOverride: Bool?
 
     private var wrapsLines: Bool {
@@ -503,7 +538,7 @@ private struct MarkdownCodeBlockView: View {
                 .frame(height: 1)
 
             if wrapsLines {
-                Text(verbatim: code)
+                codeText
                     .font(T3Typography.code)
                     .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
                     .lineSpacing(3)
@@ -512,7 +547,7 @@ private struct MarkdownCodeBlockView: View {
                     .padding(13)
             } else {
                 ScrollView(.horizontal) {
-                    Text(verbatim: code)
+                    codeText
                         .font(T3Typography.code)
                         .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
                         .lineSpacing(3)
@@ -604,5 +639,35 @@ enum MarkdownGallery {
             default: []
             }
         }
+    }
+}
+
+private struct MarkdownTemplateActionKey: EnvironmentKey {
+    static let defaultValue: ((CodexArtifactTemplate) -> Void)? = nil
+}
+extension EnvironmentValues {
+    var markdownTemplateAction: ((CodexArtifactTemplate) -> Void)? {
+        get { self[MarkdownTemplateActionKey.self] }
+        set { self[MarkdownTemplateActionKey.self] = newValue }
+    }
+}
+
+private struct NativeArtifactTemplateCard: View {
+    let template: CodexArtifactTemplate
+    @SwiftUI.Environment(\.markdownTemplateAction) private var useTemplate
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "doc.badge.gearshape").font(.title2).foregroundStyle(T3Colors.accent)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(template.displayName).font(T3Typography.supportingStrong)
+                Text(template.label).font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            if let useTemplate {
+                Button("Use template") { useTemplate(template) }.buttonStyle(.bordered).font(T3Typography.supporting)
+            }
+        }
+        .padding(12).background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(T3Colors.border, lineWidth: 1))
+        .accessibilityElement(children: .contain)
     }
 }

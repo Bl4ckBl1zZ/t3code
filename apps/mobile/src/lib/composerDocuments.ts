@@ -1,12 +1,10 @@
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
-import {
-  inferExtensionFromMimeType,
-  validateComposerAttachment,
-} from "@t3tools/shared/composerAttachments";
+import { inferExtensionFromMimeType } from "@t3tools/shared/composerAttachments";
 
 import { estimateBase64ByteSize } from "./base64";
 import {
   documentAttachmentKind,
+  validateInlineComposerAttachment,
   type DraftComposerDocumentAttachment,
 } from "./composerAttachmentKinds";
 import { uuidv4 } from "./uuid";
@@ -79,7 +77,7 @@ export async function pickComposerDocuments(input: { readonly existingCount: num
     }
 
     const sizeBytes = asset.size ?? estimateBase64ByteSize(base64);
-    const validation = validateComposerAttachment({ name, sizeBytes, mimeType });
+    const validation = validateInlineComposerAttachment({ name, sizeBytes, mimeType });
     if (!validation.accepted) {
       error = validation.message;
       continue;

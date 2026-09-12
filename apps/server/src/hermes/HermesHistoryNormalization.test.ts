@@ -236,7 +236,7 @@ describe("Hermes imported history normalization", () => {
           NodeFS.writeFileSync(arbitraryTemp, PNG_BYTES);
           NodeFS.writeFileSync(unsupported, "not media");
           NodeFS.writeFileSync(oversized, PNG_BYTES);
-          NodeFS.truncateSync(oversized, 20 * 1024 * 1024 + 1);
+          NodeFS.truncateSync(oversized, 50 * 1024 * 1024 + 1);
           NodeFS.symlinkSync(outside, symlink);
 
           const persist = (sourcePath: string, expectedKind: "image" | "video" = "image") =>

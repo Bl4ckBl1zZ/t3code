@@ -4,6 +4,7 @@ import Foundation
 /// Implementations are main-actor isolated so UI state never depends on locking.
 @MainActor
 public protocol FeatureClient: AnyObject {
+    func hostResources(environmentID: String) async throws -> HostResourcesSnapshot
     func initialSnapshot() async throws -> FeatureSnapshot
     func events() -> AsyncStream<FeatureEvent>
 
@@ -72,6 +73,12 @@ public protocol FeatureClient: AnyObject {
         threadID: String,
         number: Int?
     ) async throws -> FeatureLinkedPullRequest?
+    func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest?
+    func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws
+    func pullRequestLabelCandidates(threadID: String, number: Int) async throws -> PullRequestLabelCandidateList
+    func setPullRequestLabels(threadID: String, number: Int, labels: [String], applied: Bool) async throws
+    func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack?
+    func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws
     /// Persists the model and its options (effort, context window) on the
@@ -256,6 +263,12 @@ public extension FeatureClient {
     ) async throws -> FeatureLinkedPullRequest? {
         throw FeatureCapabilityUnavailable("Pull request linking")
     }
+    func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest? { throw FeatureCapabilityUnavailable("Multiple pull requests") }
+    func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws { throw FeatureCapabilityUnavailable("Multiple pull requests") }
+    func pullRequestLabelCandidates(threadID: String, number: Int) async throws -> PullRequestLabelCandidateList { throw FeatureCapabilityUnavailable("Label editing") }
+    func setPullRequestLabels(threadID: String, number: Int, labels: [String], applied: Bool) async throws { throw FeatureCapabilityUnavailable("Label editing") }
+    func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack? { nil }
+    func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws { throw FeatureCapabilityUnavailable("Stack actions") }
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
     func setModelSelection(id: String, selection: FeatureSelection) async throws {}
@@ -546,4 +559,11 @@ public extension FeatureClient {
 
 extension FeatureClient {
     public func setActiveOrder(id: String, key: String?) async throws { throw FeatureCapabilityUnavailable("Active thread ordering") }
+}
+
+
+extension FeatureClient {
+    public func hostResources(environmentID: String) async throws -> HostResourcesSnapshot {
+        throw FeatureCapabilityUnavailable("Automatic machine selection")
+    }
 }

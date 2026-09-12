@@ -1,12 +1,19 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  CommandId,
+  type Project,
+  ProjectIconOverride,
+  ProjectId,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -59,6 +66,7 @@ const makeTestLayer = (
   );
 
 const TestLayer = makeTestLayer(metadataLayer);
+const decodeProjectIconJson = Schema.decodeEffect(Schema.fromJsonString(ProjectIconOverride));
 
 const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* (
   service: ProjectService.ProjectService["Service"],
@@ -74,6 +82,57 @@ const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* 
 });
 
 it.layer(TestLayer)("ProjectService", (it) => {
+  it.effect(
+    "persists project icons through updates and snapshots, preserving omitted values and clearing null",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* ProjectService.ProjectService;
+        const sql = yield* SqlClient.SqlClient;
+        const projectId = ProjectId.make("project:icons");
+        yield* service.create({
+          commandId: CommandId.make("icons:create"),
+          projectId,
+          title: "Icons",
+          workspaceRoot: "/work/icons",
+        });
+        const icon = { kind: "lucide", name: "folder-code", color: "violet" } as const;
+        const updated = yield* service.update({
+          commandId: CommandId.make("icons:set"),
+          projectId,
+          projectIcon: icon,
+        });
+        assert.deepEqual(updated.projectIcon, icon);
+        const stored = yield* sql<{
+          project_icon_json: string;
+        }>`SELECT project_icon_json FROM projection_projects WHERE project_id = ${projectId}`;
+        assert.deepEqual(yield* decodeProjectIconJson(stored[0]!.project_icon_json), icon);
+        yield* service.update({
+          commandId: CommandId.make("icons:rename"),
+          projectId,
+          title: "Renamed",
+        });
+        assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).projectIcon, icon);
+        const emoji = { kind: "emoji", emoji: "🚀" } as const;
+        yield* service.update({
+          commandId: CommandId.make("icons:emoji"),
+          projectId,
+          projectIcon: emoji,
+        });
+        assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).projectIcon, emoji);
+        yield* service.update({
+          commandId: CommandId.make("icons:clear"),
+          projectId,
+          projectIcon: null,
+        });
+        assert.isNull(Option.getOrThrow(yield* service.getById(projectId)).projectIcon);
+        const cleared = yield* sql<{
+          project_icon_json: string | null;
+        }>`SELECT project_icon_json FROM projection_projects WHERE project_id = ${projectId}`;
+        assert.isNull(cleared[0]!.project_icon_json);
+        yield* service.delete({ commandId: CommandId.make("icons:delete"), projectId });
+      }),
+  );
+
   it.effect("creates, updates, resolves, snapshots, and soft-deletes projects", () =>
     Effect.gen(function* () {
       const service = yield* ProjectService.ProjectService;

@@ -13,6 +13,7 @@ import {
   type OrchestrationV2CreationSource,
   type PlanId,
   type ProjectId,
+  type ProjectIconOverride,
   type ProjectScript,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -52,6 +53,7 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly defaultModelSelection?: ModelSelection | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
   readonly faviconPath?: string | null;
+  readonly projectIcon?: ProjectIconOverride | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
 }
 
@@ -119,10 +121,14 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   /** Kick off an async title regeneration for the thread. */
   readonly regenerateTitle?: boolean;
   readonly pinned?: boolean;
+  readonly pinOrderKey?: string;
+  readonly activeOrderKey?: string | null;
   readonly workInboxRole?: "main" | "chat" | null;
   readonly clearTimeline?: true;
   /** Absent leaves the link alone; null unlinks. */
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
+  readonly linkPullRequest?: ThreadLinkedPullRequest;
+  readonly unlinkPullRequest?: ThreadLinkedPullRequest;
 }
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
@@ -335,6 +341,7 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
       ? {}
       : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
     ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
+    ...(input.projectIcon === undefined ? {} : { projectIcon: input.projectIcon }),
     ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
   });
 });
@@ -523,9 +530,13 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.worktreePath !== undefined ||
       input.regenerateTitle !== undefined ||
       input.pinned !== undefined ||
+      input.pinOrderKey !== undefined ||
+      input.activeOrderKey !== undefined ||
       input.workInboxRole !== undefined ||
       input.clearTimeline !== undefined ||
-      input.linkedPullRequest !== undefined
+      input.linkedPullRequest !== undefined ||
+      input.linkPullRequest !== undefined ||
+      input.unlinkPullRequest !== undefined
     ) {
       result = yield* dispatch({
         type: "thread.metadata.update",
@@ -536,11 +547,17 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.worktreePath === undefined ? {} : { worktreePath: input.worktreePath }),
         ...(input.regenerateTitle === undefined ? {} : { regenerateTitle: input.regenerateTitle }),
         ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
+        ...(input.pinOrderKey === undefined ? {} : { pinOrderKey: input.pinOrderKey }),
+        ...(input.activeOrderKey === undefined ? {} : { activeOrderKey: input.activeOrderKey }),
         ...(input.workInboxRole === undefined ? {} : { workInboxRole: input.workInboxRole }),
         ...(input.clearTimeline === undefined ? {} : { clearTimeline: input.clearTimeline }),
         ...(input.linkedPullRequest === undefined
           ? {}
           : { linkedPullRequest: input.linkedPullRequest }),
+        ...(input.linkPullRequest === undefined ? {} : { linkPullRequest: input.linkPullRequest }),
+        ...(input.unlinkPullRequest === undefined
+          ? {}
+          : { unlinkPullRequest: input.unlinkPullRequest }),
       });
     }
     if (input.modelSelection !== undefined) {

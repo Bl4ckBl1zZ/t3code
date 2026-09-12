@@ -697,3 +697,63 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
   });
 });
+
+describe("ClientSettings diff colors", () => {
+  it("preserves the original colors for existing preferences", () => {
+    expect(decodeClientSettings({}).diffColorScheme).toBe("red-green");
+  });
+  it.each(["red-green", "blue-orange"])(
+    "accepts %s in persisted preferences and patches",
+    (diffColorScheme) => {
+      expect(decodeClientSettings({ diffColorScheme }).diffColorScheme).toBe(diffColorScheme);
+      expect(decodeClientSettingsPatch({ diffColorScheme }).diffColorScheme).toBe(diffColorScheme);
+    },
+  );
+  it("rejects unknown schemes at both boundaries", () => {
+    expect(() => decodeClientSettings({ diffColorScheme: "unknown" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ diffColorScheme: "unknown" })).toThrow();
+  });
+});
+
+describe("panel motion preferences", () => {
+  it("keeps motion opt-in for settings saved before the preference existed", () => {
+    expect(decodeClientSettings({}).panelAnimationDurationMs).toBe(0);
+    expect(decodeClientSettings({}).composerCollapseOnScroll).toBe(true);
+  });
+  it("accepts disabling motion and the maximum duration in sparse patches", () => {
+    expect(decodeClientSettingsPatch({ panelAnimationDurationMs: 0 })).toEqual({
+      panelAnimationDurationMs: 0,
+    });
+    expect(decodeClientSettingsPatch({ panelAnimationDurationMs: 400 })).toEqual({
+      panelAnimationDurationMs: 400,
+    });
+  });
+  it("rejects invalid persisted and patched animation durations", () => {
+    for (const duration of [-1, 401, 1.5, "200"]) {
+      expect(() => decodeClientSettings({ panelAnimationDurationMs: duration })).toThrow();
+      expect(() => decodeClientSettingsPatch({ panelAnimationDurationMs: duration })).toThrow();
+    }
+  });
+});
+
+describe("ClientSettings automatic machine selection", () => {
+  it("keeps older clients manual and preserves explicit machine exclusions", () => {
+    const defaults = decodeClientSettings({});
+    expect(defaults.loadBalancingEnabled).toBe(false);
+    expect(defaults.loadBalancingWeights).toEqual({});
+    expect(
+      decodeClientSettingsPatch({
+        loadBalancingEnabled: true,
+        loadBalancingWeights: { laptop: 0, workstation: 100 },
+      }),
+    ).toEqual({
+      loadBalancingEnabled: true,
+      loadBalancingWeights: { laptop: 0, workstation: 100 },
+    });
+  });
+  it.each([-1, 101, 0.5, Infinity])("rejects invalid preference %s", (weight) => {
+    expect(() =>
+      decodeClientSettingsPatch({ loadBalancingWeights: { machine: weight } }),
+    ).toThrow();
+  });
+});

@@ -62,6 +62,8 @@ export interface ThreadDetailsPanelProps {
   showOpenInPicker: boolean;
   gitCwd: string | null;
   isGitRepo: boolean;
+  autoEnvironmentLabel?: string | undefined;
+  onAutoEnvironment?: (() => void) | undefined;
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
@@ -142,6 +144,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       ? { onActiveThreadBranchOverrideChange: props.onActiveThreadBranchOverrideChange }
       : {}),
     envLocked: props.envLocked,
+    autoEnvironmentLabel: props.autoEnvironmentLabel,
+    onAutoEnvironment: props.onAutoEnvironment,
     onComposerFocusRequest: props.onComposerFocusRequest,
     ...(props.onCheckoutPullRequestRequest
       ? { onCheckoutPullRequestRequest: props.onCheckoutPullRequestRequest }
@@ -242,6 +246,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               {props.availableEnvironments.length > 1 ? (
                 <BranchToolbarEnvironmentSelector
                   displayMode="panel"
+                  autoEnvironmentLabel={props.autoEnvironmentLabel}
+                  onAutoEnvironment={props.onAutoEnvironment}
                   envLocked={props.envLocked}
                   environmentId={props.environmentId}
                   availableEnvironments={props.availableEnvironments}

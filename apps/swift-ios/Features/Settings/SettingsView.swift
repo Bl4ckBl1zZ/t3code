@@ -8,9 +8,14 @@ public struct SettingsView: View {
     @State private var showingDisconnect = false
     @State private var showingAddEnvironment = false
     @State private var showingDevices = false
+    @State private var showingEnvironmentIcons = false
     @State private var showingT3Connect = false
     @State private var showingIntegrations = false
     @State private var showingAgents = false
+    @State private var showingSetup = false
+    @State private var showingProjectDefaults = false
+    @State private var showingThreadOrganization = false
+    @State private var showingLoadBalancing = false
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
     @State private var showingHermesRuns = false
@@ -47,6 +52,7 @@ public struct SettingsView: View {
                             environmentThemes: activeEnvironmentThemes
                         )
                         ThreadAppearanceSection(
+                            diffColorScheme: $settings.diffColorScheme,
                             alwaysExpandActivity: $settings.alwaysExpandActivity,
                             showSkillsInSlashMenu: $settings.showSkillsInSlashMenu
                         )
@@ -115,6 +121,28 @@ public struct SettingsView: View {
                     }
                 )
             }
+            .sheet(isPresented: $showingLoadBalancing) {
+                NavigationStack { SettingsLoadBalancingView(model: model)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingLoadBalancing = false } } }
+                }
+            }
+            .sheet(isPresented: $showingThreadOrganization) {
+                NavigationStack { SettingsThreadOrganizationView(model: model)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingThreadOrganization = false } } }
+                }
+            }
+            .sheet(isPresented: $showingProjectDefaults) {
+                NavigationStack {
+                    SettingsProjectDefaultsView(model: model)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingProjectDefaults = false } } }
+                }
+            }
+            .sheet(isPresented: $showingEnvironmentIcons) {
+                NavigationStack {
+                    SettingsEnvironmentIconsView(model: model)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingEnvironmentIcons = false } } }
+                }
+            }
             .sheet(isPresented: $showingDevices) {
                 NavigationStack {
                     DevicesView(manager: deviceManager)
@@ -142,12 +170,14 @@ public struct SettingsView: View {
                 }
                 .presentationDragIndicator(.visible)
             }
+            .sheet(isPresented: $showingSetup) { AgentSetupView(model: model) }
             .sheet(isPresented: $showingAgents) {
                 NavigationStack {
                     SettingsAgentsView(
                         serverSettings: serverSettingsManager,
                         environmentID: activeEnvironmentID,
-                        preferences: activeEnvironmentPreferences
+                        preferences: activeEnvironmentPreferences,
+                        environments: model.snapshot.environments
                     )
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
@@ -312,6 +342,11 @@ public struct SettingsView: View {
 
                 settingsDivider
 
+                Button { showingEnvironmentIcons = true } label: {
+                    SettingsNavigationRow(title: "Environment icons", systemImage: "server.rack")
+                }.buttonStyle(.plain)
+                settingsDivider
+
                 Button {
                     showingDevices = true
                 } label: {
@@ -355,7 +390,8 @@ public struct SettingsView: View {
             VStack(spacing: 0) {
                 ProviderModelPicker(
                     providers: model.snapshot.providers,
-                    selection: $settings.defaultSelection
+                    selection: $settings.defaultSelection,
+                    setupContext: ProviderSetupContext(client: model.client, environmentID: model.snapshot.environments.first(where: \.isActive)?.id)
                 )
                 .padding(.horizontal, SettingsMetrics.rowPadding)
                 .frame(minHeight: 58)
@@ -444,6 +480,26 @@ public struct SettingsView: View {
     private var configurationSection: some View {
         SettingsSection(title: "Features") {
             VStack(spacing: 0) {
+                Button { showingThreadOrganization = true } label: {
+                    SettingsNavigationRow(title: "Shared preferences", systemImage: "tray.full")
+                }.buttonStyle(.plain)
+                settingsDivider
+
+                Button { showingLoadBalancing = true } label: {
+                    SettingsNavigationRow(title: "Load balancing", systemImage: "scalemass")
+                }.buttonStyle(.plain)
+                settingsDivider
+
+                Button { showingProjectDefaults = true } label: {
+                    SettingsNavigationRow(title: "Project defaults", systemImage: "arrow.down.circle")
+                }.buttonStyle(.plain)
+                settingsDivider
+
+                Button { showingSetup = true } label: {
+                    SettingsNavigationRow(title: "Set up T3 Code", systemImage: "checklist")
+                }.buttonStyle(.plain)
+                settingsDivider
+
                 Button {
                     showingAgents = true
                 } label: {
@@ -571,7 +627,7 @@ public struct SettingsView: View {
                 let activeIsConnected = environment.isActive
                     && model.snapshot.connection.state == .connected
                 SettingsRowIcon(
-                    systemName: activeIsConnected ? "checkmark.circle.fill" : "desktopcomputer",
+                    systemName: environment.machineSymbol,
                     color: activeIsConnected ? T3Colors.success : T3Colors.textTertiary
                 )
 

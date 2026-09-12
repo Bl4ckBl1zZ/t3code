@@ -1,3 +1,4 @@
+import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
@@ -1142,6 +1143,7 @@ function renderFeedEntry(
 
   if (entry.type === "message") {
     const { message } = entry;
+    const renderedText = renderAssistantCitationsAsText(message.text);
     const isUser = message.role === "user";
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
@@ -1184,7 +1186,7 @@ function renderFeedEntry(
           >
             {message.text.trim().length > 0 ? (
               <UserMessageContent
-                text={message.text}
+                text={renderedText}
                 markdownStyles={markdownStyles.assistant}
                 reviewCommentColors={props.reviewCommentColors}
                 skills={props.skills}
@@ -1210,7 +1212,7 @@ function renderFeedEntry(
             {message.text.trim().length > 0 ? (
               <CopyTextButton
                 accessibilityLabel="Copy message"
-                text={message.text}
+                text={renderedText}
                 tintColor={iconSubtleColor}
                 buttonSize={28}
                 iconSize={13}
@@ -1244,7 +1246,7 @@ function renderFeedEntry(
           >
             {message.text.trim().length > 0 ? (
               <UserMessageContent
-                text={message.text}
+                text={renderedText}
                 markdownStyles={styles}
                 reviewCommentColors={props.reviewCommentColors}
                 skills={props.skills}
@@ -1292,7 +1294,7 @@ function renderFeedEntry(
             {message.text.trim().length > 0 ? (
               <CopyTextButton
                 accessibilityLabel="Copy message"
-                text={message.text}
+                text={renderedText}
                 tintColor={iconSubtleColor}
                 buttonSize={28}
                 iconSize={13}
@@ -1357,7 +1359,7 @@ function renderFeedEntry(
             {message.text.trim().length > 0 ? (
               <CopyTextButton
                 accessibilityLabel="Copy message"
-                text={message.text}
+                text={renderedText}
                 tintColor={iconSubtleColor}
                 buttonSize={28}
                 iconSize={13}

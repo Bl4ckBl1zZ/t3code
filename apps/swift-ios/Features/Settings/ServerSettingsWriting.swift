@@ -14,6 +14,8 @@ import Foundation
 /// working, its rows just refuse the write instead of going missing.
 @MainActor
 public protocol FeatureServerSettingsManaging: AnyObject {
+    func sharedSettingsMismatches(environmentID: String) async throws -> [FeatureSharedSettingsMismatch]
+    func applySharedSettings(environmentID: String) async throws
     func providerModelConfiguration(environmentID: String) async throws -> ServerConfigSnapshot
     /// Applies a sparse patch and returns the settings the server settled on.
     ///
@@ -49,4 +51,14 @@ extension FeatureServerSettingsManaging {
     public func providerModelConfiguration(environmentID: String) async throws -> ServerConfigSnapshot {
         throw FeatureCapabilityUnavailable("Provider model settings")
     }
+}
+
+public struct FeatureSharedSettingsMismatch: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+}
+
+extension FeatureServerSettingsManaging {
+    public func sharedSettingsMismatches(environmentID: String) async throws -> [FeatureSharedSettingsMismatch] { [] }
+    public func applySharedSettings(environmentID: String) async throws { throw FeatureCapabilityUnavailable("Shared preferences") }
 }

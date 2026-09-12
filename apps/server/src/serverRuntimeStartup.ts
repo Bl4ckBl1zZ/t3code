@@ -1,3 +1,9 @@
+import * as RestartContinuationService from "./orchestration-v2/RestartContinuationService.ts";
+import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
+import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
+import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
+import { resolveProjectAutoPull } from "@t3tools/shared/serverSettings";
+import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -197,6 +203,8 @@ export const getAutoBootstrapDefaultModelSelection = (): ModelSelection => ({
 interface AutoBootstrapWelcomeTargets {
   readonly bootstrapProjectId?: ProjectId;
   readonly bootstrapThreadId?: ThreadId;
+  readonly bootstrapProjectCreated?: boolean;
+  readonly bootstrapThreadCreated?: boolean;
 }
 
 export const resolveWelcomeBase = Effect.gen(function* () {
@@ -221,16 +229,21 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
 
   let bootstrapProjectId: ProjectId | undefined;
   let bootstrapThreadId: ThreadId | undefined;
+  let bootstrapProjectCreated = false;
+  let bootstrapThreadCreated = false;
 
   if (serverConfig.autoBootstrapProjectFromCwd) {
-    const defaultModelSelection = getAutoBootstrapDefaultModelSelection();
-    const { project } = yield* projects.bootstrap({
+    const settings = yield* (yield* ServerSettings.ServerSettingsService).getSettings;
+    const defaultModelSelection =
+      settings.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
+    const { project, created } = yield* projects.bootstrap({
       commandId: CommandId.make(yield* randomUUID),
       projectId: ProjectId.make(yield* randomUUID),
       title: path.basename(serverConfig.cwd) || "project",
       workspaceRoot: serverConfig.cwd,
       defaultModelSelection,
     });
+    bootstrapProjectCreated = created;
     const shell = yield* threads.getShellSnapshot();
     const existingThread = shell.threads.find(
       (thread) =>
@@ -250,6 +263,7 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
       });
       bootstrapProjectId = project.id;
       bootstrapThreadId = launched.threadId;
+      bootstrapThreadCreated = true;
     } else {
       bootstrapProjectId = project.id;
       bootstrapThreadId = existingThread.id;
@@ -257,8 +271,8 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   }
 
   return {
-    ...(bootstrapProjectId ? { bootstrapProjectId } : {}),
-    ...(bootstrapThreadId ? { bootstrapThreadId } : {}),
+    ...(bootstrapProjectId ? { bootstrapProjectId, bootstrapProjectCreated } : {}),
+    ...(bootstrapThreadId ? { bootstrapThreadId, bootstrapThreadCreated } : {}),
   } satisfies AutoBootstrapWelcomeTargets;
 });
 
@@ -387,6 +401,38 @@ const awaitServerActivation = ServerActivation.pipe(
   Effect.flatMap((activation) => activation ?? Effect.void),
 );
 
+/** A one-time refresh after activation, before recovered provider effects can run. */
+export const autoPullProjects = Effect.gen(function* () {
+  const projects = yield* ProjectService.ProjectService;
+  const settingsService = yield* ServerSettings.ServerSettingsService;
+  const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const settings = yield* settingsService.getSettings;
+  if (!settings.defaultAutoPull && !Object.values(settings.projectAutoPullOverrides).some(Boolean))
+    return;
+  const snapshot = yield* projects.snapshot;
+  const roots = [
+    ...new Set(
+      snapshot.projects
+        .filter((project) => resolveProjectAutoPull(settings, project.id))
+        .map((project) => project.workspaceRoot),
+    ),
+  ];
+  yield* Effect.forEach(
+    roots,
+    (cwd) =>
+      broadcaster
+        .refreshStatus(cwd)
+        .pipe(
+          Effect.catch((cause) => Effect.logWarning("Startup project pull failed", { cwd, cause })),
+        ),
+    { concurrency: 4, discard: true },
+  );
+}).pipe(
+  Effect.catch((cause) =>
+    Effect.logWarning("Failed to load projects for automatic pull", { cause }),
+  ),
+);
+
 export const make = (options?: StartupOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
@@ -396,6 +442,10 @@ export const make = (options?: StartupOptions) =>
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+    const threadPullRequests = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
+    const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+    const threadSettlement = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+    const restartContinuation = yield* RestartContinuationService.RestartContinuationService;
     const hermesProactive = yield* HermesProactiveService.HermesProactiveService;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -418,6 +468,7 @@ export const make = (options?: StartupOptions) =>
             cause: "Server runtime is shutting down.",
           }),
         );
+        yield* restartContinuation.prepare("restart").pipe(Effect.ignore({ log: true }));
         const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
         if (workerFiber !== null) {
           yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
@@ -567,14 +618,22 @@ export const make = (options?: StartupOptions) =>
           "orchestration-v2.projections.rebuild",
           projectionMaintenance.rebuild,
         ),
-        recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
+        recover: runStartupPhase(
+          "orchestration-v2.recovery",
+          restartContinuation
+            .prepare("restart")
+            .pipe(Effect.ignore({ log: true }), Effect.andThen(providerRuntimeRecovery.recover)),
+        ),
         startEffectWorker: runStartupPhase(
           "orchestration-v2.effect-worker.start",
           startEffectWorkerWithRelay({
             // The worker drains the durable effect outbox, which is exactly what
             // an uncommitted trial must not do, so park it until activation. The
             // fiber still starts here so shutdown owns a handle to interrupt.
-            runWorker: awaitServerActivation.pipe(Effect.andThen(EffectWorker.runDaemon)),
+            runWorker: awaitServerActivation.pipe(
+              Effect.andThen(runStartupPhase("projects.auto-pull", autoPullProjects)),
+              Effect.andThen(EffectWorker.runDaemon),
+            ),
             startRelay: agentAwarenessRelay.start(),
             workerFiberRef: effectWorkerFiber,
           }),
@@ -674,6 +733,11 @@ export const make = (options?: StartupOptions) =>
         }),
       );
 
+      yield* threadPullRequests.start();
+      yield* pullRequestSync.start();
+      yield* threadSettlement.start({ beforeSweep: restartContinuation.awaitInitialResume });
+      yield* forkParked(restartContinuation.resume);
+
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
       yield* runStartupPhase(
@@ -700,6 +764,7 @@ export const make = (options?: StartupOptions) =>
             environment,
             ...welcomeBase,
             ...bootstrapTargets,
+            bootstrapStatus: "complete",
           },
         }),
       );

@@ -90,6 +90,23 @@ describe("settings search targets", () => {
     expect(add).not.toHaveBeenCalled();
   });
 
+  it("jumps to a marked settings block without pulsing when requested", () => {
+    const scrollIntoView = vi.fn();
+    const add = vi.fn();
+    const target = {
+      tagName: "SECTION",
+      querySelector: () => ({ scrollIntoView }),
+      focus: vi.fn(),
+      classList: { remove: vi.fn(), add },
+      offsetWidth: 100,
+    } as unknown as HTMLElement;
+    vi.stubGlobal("document", { getElementById: () => target });
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    expect(scrollToSettingsTarget("providers", { highlight: false })).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it("leaves not-yet-mounted destinations to their mount lifecycle", () => {
     vi.stubGlobal("document", {
       getElementById: vi.fn(() => null),

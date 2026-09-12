@@ -11,6 +11,8 @@ struct FeatureInlineVideoView: View {
 
     @State private var player: AVPlayer?
     @State private var failed = false
+    @State private var retryCount = 0
+    @SwiftUI.Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -27,6 +29,11 @@ struct FeatureInlineVideoView: View {
                         .font(T3Typography.supporting)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
+                    if failed {
+                        Button("Retry video", systemImage: "arrow.clockwise") { retryCount += 1 }
+                            .buttonStyle(.bordered)
+                        Link("Open in browser", destination: url).font(T3Typography.supporting)
+                    }
                 }
                 .foregroundStyle(T3Colors.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -35,7 +42,16 @@ struct FeatureInlineVideoView: View {
             }
         }
         .aspectRatio(16 / 9, contentMode: .fit)
-        .task(id: url) { await preparePlayer() }
+        .task(id: "\(url.absoluteString):\(retryCount)") { await preparePlayer() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { player?.pause() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime)) { notice in
+            guard let item = notice.object as? AVPlayerItem, item === player?.currentItem else { return }
+            player?.pause()
+            player = nil
+            failed = true
+        }
         .onDisappear {
             player?.pause()
             player = nil
@@ -59,7 +75,14 @@ struct FeatureInlineVideoView: View {
                 return
             }
             try Task.checkCancellation()
-            player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            let prepared = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            let duration = try await asset.load(.duration).seconds
+            try Task.checkCancellation()
+            if duration.isFinite && duration > 0 && url.fragment == nil {
+                await prepared.seek(to: CMTime(seconds: min(0.1, duration / 2), preferredTimescale: 600))
+            }
+            try Task.checkCancellation()
+            player = prepared
         } catch is CancellationError {
             return
         } catch {

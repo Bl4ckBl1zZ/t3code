@@ -47,3 +47,31 @@ it("rejects malformed known attachment types instead of tolerating them", () => 
     }),
   );
 });
+
+it("accepts 50 MB uploaded file references while keeping the 10 MB image cap", () => {
+  for (const [type, mimeType] of [
+    ["file", "application/zip"],
+    ["pdf", "application/pdf"],
+    ["video", "video/mp4"],
+  ]) {
+    assert.strictEqual(
+      Schema.decodeUnknownSync(ChatAttachment)({
+        type,
+        mimeType,
+        id: "pending-file",
+        name: "document",
+        sizeBytes: 50 * 1024 * 1024,
+      }).sizeBytes,
+      50 * 1024 * 1024,
+    );
+  }
+  assert.throws(() =>
+    Schema.decodeUnknownSync(ChatAttachment)({
+      type: "image",
+      mimeType: "image/png",
+      id: "pending-image",
+      name: "photo.png",
+      sizeBytes: 11 * 1024 * 1024,
+    }),
+  );
+});

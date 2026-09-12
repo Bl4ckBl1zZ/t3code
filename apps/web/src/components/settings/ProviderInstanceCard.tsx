@@ -1,11 +1,18 @@
 "use client";
 
+import { Spinner } from "~/components/ui/spinner";
+
+import {
+  type CustomModelDefinition,
+  readCustomModelEntries,
+  toCustomModelSetting,
+} from "@t3tools/shared/model";
+
 import {
   ArrowUpCircleIcon,
   ChevronDownIcon,
   CopyIcon,
   DownloadIcon,
-  LoaderIcon,
   PlusIcon,
   Trash2Icon,
   XIcon,
@@ -78,17 +85,11 @@ function makeEnvironmentDraftRow(
   };
 }
 
-/**
- * Read a string[] at `key` from the opaque config blob, filtering out
- * non-string entries. Used for `customModels`, which is always typed as
- * `string[]` by the concrete driver schemas but arrives here as
- * `Schema.Unknown`.
- */
-function readConfigStringArray(config: unknown, key: string): ReadonlyArray<string> {
-  if (config === null || typeof config !== "object") return [];
-  const value = (config as Record<string, unknown>)[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
+/** Read bare model IDs and structured definitions from opaque driver configuration. */
+function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefinition> {
+  return config !== null && typeof config === "object"
+    ? readCustomModelEntries((config as Record<string, unknown>).customModels)
+    : [];
 }
 
 /**
@@ -161,7 +162,7 @@ export function nextProviderEnvironmentWithFieldValue(
 
 export function deriveProviderModelsForDisplay(input: {
   readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
-  readonly customModels: ReadonlyArray<string>;
+  readonly customModels: ReadonlyArray<CustomModelDefinition>;
 }): ReadonlyArray<ServerProviderModel> {
   const liveCustomModelsBySlug = new Map(
     Arr.filterMap(input.liveModels ?? [], (model) =>
@@ -169,15 +170,13 @@ export function deriveProviderModelsForDisplay(input: {
     ),
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const customModels = input.customModels.map(
-    (slug) =>
-      liveCustomModelsBySlug.get(slug) ?? {
-        slug,
-        name: slug,
-        isCustom: true,
-        capabilities: null,
-      },
-  );
+  const customModels = input.customModels.map((entry) => ({
+    slug: entry.slug,
+    name: entry.name,
+    isCustom: true,
+    capabilities:
+      entry.capabilities ?? liveCustomModelsBySlug.get(entry.slug)?.capabilities ?? null,
+  }));
   return [...serverModels, ...customModels];
 }
 
@@ -422,6 +421,11 @@ interface ProviderInstanceCardProps {
   readonly liveProvider: ServerProvider | undefined;
   /** Effective enabled state after any driver-wide rollout gate is applied. */
   readonly effectiveEnabled?: boolean | undefined;
+  readonly supportsCustomModelDefinitions?: boolean;
+  readonly mode?: "list" | "editor";
+  readonly selected?: boolean;
+  readonly onSelect?: () => void;
+  readonly readOnly?: boolean;
   readonly isExpanded: boolean;
   readonly onExpandedChange: (open: boolean) => void;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
@@ -480,6 +484,11 @@ export function ProviderInstanceCard({
   effectiveEnabled,
   isExpanded,
   onExpandedChange,
+  mode,
+  supportsCustomModelDefinitions = false,
+  selected = false,
+  onSelect,
+  readOnly = false,
   onUpdate,
   onDelete,
   headerAction,
@@ -541,7 +550,7 @@ export function ProviderInstanceCard({
     ? instance.driver
     : null;
 
-  const customModels = readConfigStringArray(instance.config, "customModels");
+  const customModels = readConfigCustomModels(instance.config);
   const environmentFields = driverOption?.environmentFields ?? [];
   const environmentFieldNames = new Set(environmentFields.map((field) => field.name));
   const genericEnvironment = providerEnvironmentWithoutNames(
@@ -589,8 +598,12 @@ export function ProviderInstanceCard({
     );
   };
 
-  const updateCustomModels = (next: ReadonlyArray<string>) => {
-    const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
+  const updateCustomModels = (next: ReadonlyArray<CustomModelDefinition>) => {
+    const nextConfig = nextConfigBlobWithValue(
+      instance.config,
+      "customModels",
+      next.map(toCustomModelSetting),
+    );
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };
@@ -720,8 +733,57 @@ export function ProviderInstanceCard({
     <code className="text-xs text-muted-foreground">{versionLabel}</code>
   ) : null;
 
+  if (mode === "list") {
+    return (
+      <div
+        className={cn(
+          "group flex min-h-18 items-center gap-3 px-3 py-3 sm:px-4",
+          selected ? "bg-muted/45" : "hover:bg-muted/25",
+        )}
+      >
+        <button
+          type="button"
+          className={cn(
+            "flex min-w-0 flex-1 items-start gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            !enabled && !selected && "opacity-60",
+          )}
+          onClick={onSelect}
+          aria-label={`Select ${displayName}`}
+          aria-pressed={selected}
+        >
+          {titleIconNode}
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-medium">{displayName}</span>
+              {versionCodeNode}
+              {versionAdvisory ? (
+                <ArrowUpCircleIcon
+                  className="size-3 shrink-0 text-warning"
+                  aria-label="Update available"
+                />
+              ) : null}
+            </span>
+            <span className="block truncate text-xs text-muted-foreground">
+              {summary.headline}
+              {summary.detail ? ` · ${summary.detail}` : ""}
+            </span>
+            {String(instanceId) !== String(instance.driver) ? (
+              <code className="block truncate text-[10px] text-muted-foreground">{instanceId}</code>
+            ) : null}
+          </span>
+        </button>
+        <Switch
+          checked={enabled}
+          disabled={readOnly}
+          onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+          aria-label={`Enable ${displayName}`}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-xl transition-colors hover:bg-muted/20">
+    <fieldset disabled={readOnly} className="min-w-0 rounded-xl">
       <div className="px-3 py-3 sm:px-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 flex-1 space-y-1">
@@ -744,7 +806,7 @@ export function ProviderInstanceCard({
                         )}
                         aria-label="Update available — view details"
                       >
-                        <ArrowUpCircleIcon className="size-3.5 [animation:bounce_2.4s_ease-in-out_infinite] motion-reduce:animate-none" />
+                        <ArrowUpCircleIcon className="size-3.5" />
                       </Button>
                     }
                   />
@@ -778,7 +840,7 @@ export function ProviderInstanceCard({
                           disabled={isUpdating}
                           onClick={onRunUpdate}
                         >
-                          {isUpdating ? <LoaderIcon className="animate-spin" /> : <DownloadIcon />}
+                          {isUpdating ? <Spinner /> : <DownloadIcon />}
                           {isUpdating ? "Updating" : "Update now"}
                         </Button>
                       ) : null}
@@ -828,16 +890,18 @@ export function ProviderInstanceCard({
             {authRowNode}
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-            <Button
-              size="compact"
-              variant="ghost-muted"
-              onClick={() => onExpandedChange(!isExpanded)}
-              aria-label={`Toggle ${displayName} details`}
-            >
-              <ChevronDownIcon
-                className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
-              />
-            </Button>
+            {mode !== "editor" ? (
+              <Button
+                size="compact"
+                variant="ghost-muted"
+                onClick={() => onExpandedChange(!isExpanded)}
+                aria-label={`Toggle ${displayName} details`}
+              >
+                <ChevronDownIcon
+                  className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
+                />
+              </Button>
+            ) : null}
             <Switch
               checked={enabled}
               onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
@@ -847,7 +911,7 @@ export function ProviderInstanceCard({
         </div>
       </div>
 
-      <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+      <Collapsible open={mode === "editor" || isExpanded} onOpenChange={onExpandedChange}>
         <CollapsibleContent>
           <div className="space-y-5 px-3 pb-4 pt-2 sm:px-4">
             <div>
@@ -914,6 +978,7 @@ export function ProviderInstanceCard({
                 driverKind={driverKind}
                 models={modelsForDisplay}
                 customModels={customModels}
+                supportsCustomModelDefinitions={supportsCustomModelDefinitions}
                 hiddenModels={hiddenModels}
                 favoriteModels={favoriteModels}
                 modelOrder={modelOrder}
@@ -935,6 +1000,6 @@ export function ProviderInstanceCard({
           </div>
         </CollapsibleContent>
       </Collapsible>
-    </div>
+    </fieldset>
   );
 }

@@ -23,6 +23,7 @@
  */
 import type {
   ProviderDriverKind,
+  ProviderConsumeResetCreditResult,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -70,6 +71,11 @@ export interface ProviderInstance {
   readonly accentColor?: string | undefined;
   readonly enabled: boolean;
   readonly snapshot: ServerProviderShape;
+  /** Confirmed account action; a failed follow-up is a warning, not a second redemption. */
+  readonly consumeResetCredit?: () => Effect.Effect<
+    ProviderConsumeResetCreditResult,
+    ProviderDriverError
+  >;
   readonly orchestrationAdapter: ProviderAdapterV2Shape;
   readonly textGeneration: TextGenerationShape;
   /**

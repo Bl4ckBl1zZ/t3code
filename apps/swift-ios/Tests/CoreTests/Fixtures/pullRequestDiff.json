@@ -1,0 +1,34 @@
+{
+  "input": {
+    "projectId": "project-v2",
+    "repository": "owner/repo",
+    "number": 42,
+    "cursor": "opaque/next",
+    "commit": "abc123"
+  },
+  "result": {
+    "patch": "",
+    "truncated": true,
+    "nextCursor": "opaque/last",
+    "omittedFileStats": [
+      {
+        "path": "large.txt",
+        "additions": 1200,
+        "deletions": 87
+      }
+    ]
+  },
+  "fileInput": {
+    "projectId": "project-v2",
+    "repository": "owner/repo",
+    "number": 42,
+    "commit": "abc123",
+    "changeType": "rename-changed",
+    "oldPath": "old.swift",
+    "newPath": "new.swift"
+  },
+  "fileContents": {
+    "oldContents": "old\n",
+    "newContents": "new\n"
+  }
+}

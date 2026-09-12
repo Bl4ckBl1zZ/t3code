@@ -115,7 +115,7 @@ function PullRequestRowImpl({
         <span className="col-start-1 row-start-1 block truncate text-sm font-medium text-foreground">
           {entry.title}
         </span>
-        <span className="col-start-2 row-start-1 justify-self-end whitespace-nowrap text-xs text-muted-foreground/70 tabular-nums">
+        <span className="col-start-2 row-start-2 justify-self-end whitespace-nowrap text-xs text-muted-foreground/70 tabular-nums">
           {formatRelativeTimeLabel(entry.updatedAt)}
         </span>
         <PullRequestMetaLine className="@container/pr-row-meta col-start-1 row-start-2 overflow-hidden text-xs text-muted-foreground/70">
@@ -199,7 +199,7 @@ function PullRequestRowImpl({
         <PullRequestDiffStat
           additions={entry.additions}
           deletions={entry.deletions}
-          className="col-start-2 row-start-2 justify-self-end text-xs"
+          className="col-start-2 row-start-1 shrink-0 justify-self-end whitespace-nowrap text-xs"
         />
       </span>
     </button>

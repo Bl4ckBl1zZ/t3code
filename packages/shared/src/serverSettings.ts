@@ -3,6 +3,7 @@ import {
   isProviderAvailable,
   resolveProviderInstanceEnabled,
   type ModelSelection,
+  type ProjectId,
   type ProviderDriverKind,
   type ServerProvider,
   ServerSettings,
@@ -19,6 +20,23 @@ import {
   normalizeServerBackgroundActivitySettings,
   resolveBackgroundActivitySettings,
 } from "./backgroundActivitySettings.ts";
+
+export function resolveProjectAgentBrowserAccess(
+  settings: Pick<ServerSettings, "enableAgentBrowserAccess" | "projectAgentBrowserAccessOverrides">,
+  projectId: ProjectId,
+): boolean {
+  return (
+    settings.projectAgentBrowserAccessOverrides[projectId] ?? settings.enableAgentBrowserAccess
+  );
+}
+
+/** Explicit project choices override the environment default; null patches restore inheritance. */
+export function resolveProjectAutoPull(
+  settings: Pick<ServerSettings, "defaultAutoPull" | "projectAutoPullOverrides">,
+  projectId: ProjectId,
+): boolean {
+  return settings.projectAutoPullOverrides[projectId] ?? settings.defaultAutoPull;
+}
 
 const ServerSettingsJson = fromLenientJson(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
@@ -132,6 +150,11 @@ export function applyServerSettingsPatch(
     providerHealthRefreshInterval,
     backgroundActivityProfile,
     backgroundActivity,
+    usagePriceOverrides: pricePatch,
+    projectScriptOverrides: scriptOverridesPatch,
+    defaultProjectScripts: defaultScriptsPatch,
+    projectAutoPullOverrides: autoPullPatch,
+    projectAgentBrowserAccessOverrides: browserAccessPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -170,8 +193,28 @@ export function applyServerSettingsPatch(
           }
         : undefined;
   const next = deepMerge(current, patchForMerge);
+  const usagePriceOverrides = { ...current.usagePriceOverrides };
+  for (const [model, price] of Object.entries(pricePatch ?? {})) {
+    if (price === null) delete usagePriceOverrides[model];
+    else usagePriceOverrides[model] = price;
+  }
+  const projectAutoPullOverrides = { ...current.projectAutoPullOverrides };
+  for (const [projectId, enabled] of Object.entries(autoPullPatch ?? {})) {
+    if (enabled === null) delete projectAutoPullOverrides[projectId as ProjectId];
+    else projectAutoPullOverrides[projectId as ProjectId] = enabled;
+  }
+  const projectAgentBrowserAccessOverrides = { ...current.projectAgentBrowserAccessOverrides };
+  for (const [projectId, enabled] of Object.entries(browserAccessPatch ?? {})) {
+    if (enabled === null) delete projectAgentBrowserAccessOverrides[projectId as ProjectId];
+    else projectAgentBrowserAccessOverrides[projectId as ProjectId] = enabled;
+  }
   const nextWithReplacementsBase = {
     ...next,
+    usagePriceOverrides,
+    defaultProjectScripts: defaultScriptsPatch ?? current.defaultProjectScripts,
+    projectScriptOverrides: { ...current.projectScriptOverrides, ...scriptOverridesPatch },
+    projectAutoPullOverrides,
+    projectAgentBrowserAccessOverrides,
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {
@@ -194,6 +237,9 @@ export function applyServerSettingsPatch(
     // would never actually un-hide it.
     ...(patch.providerModelPreferences !== undefined
       ? { providerModelPreferences: patch.providerModelPreferences }
+      : {}),
+    ...(patch.defaultModelSelection !== undefined
+      ? { defaultModelSelection: patch.defaultModelSelection }
       : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }

@@ -11,6 +11,12 @@ public struct NewThreadView: View {
     private let initialProjectID: String?
     private let draftID: String?
 
+    @AppStorage(NativeLoadBalancingPreferences.enabledKey) private var loadBalancingEnabled = false
+    @AppStorage(NativeLoadBalancingPreferences.weightsKey) private var loadBalancingWeightsJSON = "{}"
+    @State private var routing: FeatureComposerRoutingDraft?
+    @State private var balancing = false
+    @State private var balancingMessage: String?
+    @State private var balancingAttempt = 0
     @State private var projectID = ""
     @State private var prompt = ""
     @State private var selection: FeatureSelection?
@@ -87,12 +93,18 @@ public struct NewThreadView: View {
                         workspaceControls
                     }
 
+                    if let balancingMessage {
+                        Text(balancingMessage).font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textSecondary).padding(.horizontal, 18).padding(.vertical, 8)
+                    }
+
                     FeatureComposerView(
                         text: $prompt,
                         selection: selectionBinding,
                         attachments: $attachments,
                         interactionMode: $interactionMode,
                         providers: creationProviders,
+                        providerSetup: ProviderSetupContext(client: model.client, environmentID: executionProject?.environmentID),
                         threadSelection: nil,
                         isSending: isSubmitting,
                         isWorking: false,
@@ -130,6 +142,7 @@ public struct NewThreadView: View {
         .onChange(of: projectID) { prepareProjectIfNeeded(projectID) }
         .onChange(of: creationProjectIDs) { _, ids in
             guard !ids.contains(projectID) else { return }
+            if routing?.projectID != nil, selectedProject != nil { return }
             persistCurrentDraftImmediately()
             selectInitialProject(
                 projectMemory.preferredProjectID(in: creationProjects) ?? ids.first ?? ""
@@ -141,6 +154,11 @@ public struct NewThreadView: View {
         .onChange(of: workspaceMode) { scheduleDraftSave() }
         .onChange(of: selectedBranch) { scheduleDraftSave() }
         .onChange(of: startFromOrigin) { scheduleDraftSave() }
+        .onChange(of: routing) { scheduleDraftSave() }
+        .task(id: balancingRequest) { await balanceEnvironment() }
+        .task(id: routing?.projectID) {
+            if restoredDraftProjectID == projectID, routing?.projectID != nil { await loadBranches() }
+        }
         .task(id: projectID) { await restoreDraftAndLoadBranches() }
         .onDisappear {
             guard !submittedSuccessfully else { return }
@@ -153,6 +171,7 @@ public struct NewThreadView: View {
                 isLoading: branchesLoading,
                 loadFailed: branchLoadFailed,
                 onSelect: { branch in
+                    makeRoutingManual()
                     workspaceSelectionIsExplicit = true
                     selectedBranch = branch
                     showingBranchPicker = false
@@ -231,11 +250,17 @@ public struct NewThreadView: View {
         .frame(maxWidth: .infinity)
         .overlay(alignment: .bottom) {
             Menu {
+                if loadBalancingEnabled {
+                    Button { retryAutomaticRouting() } label: {
+                        Label(automaticRouting ? "Retry automatic selection" : "Auto balance", systemImage: "scalemass")
+                    }.disabled(!attachments.isEmpty)
+                    Divider()
+                }
                 ForEach(creationEnvironments) { environment in
                     Button {
                         selectEnvironment(environment.id)
                     } label: {
-                        if environment.id == selectedProject?.environmentID {
+                        if environment.id == executionProject?.environmentID && !automaticRouting {
                             Label(environment.name, systemImage: "checkmark")
                         } else {
                             Text(environment.name)
@@ -244,9 +269,9 @@ public struct NewThreadView: View {
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "server.rack")
+                    Image(systemName: automaticRouting ? "scalemass" : model.snapshot.environments.first { $0.id == executionProject?.environmentID }?.machineSymbol ?? "server.rack")
                         .font(.system(size: 11, weight: .medium))
-                    Text("on \(environmentName)")
+                    Text(balancing ? "Checking machines…" : automaticRouting ? "Auto · \(environmentName)" : "on \(environmentName)")
                     if creationEnvironments.count > 1 {
                         Image(systemName: "chevron.down")
                             .font(.system(size: 8, weight: .bold))
@@ -257,7 +282,7 @@ public struct NewThreadView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(isSubmitting || creationEnvironments.count < 2)
+            .disabled(isSubmitting || (creationEnvironments.count < 2 && !loadBalancingEnabled))
             .accessibilityLabel("Computer")
             .accessibilityValue(environmentName)
             .offset(y: 31)
@@ -295,6 +320,106 @@ public struct NewThreadView: View {
 
     private var selectedProject: FeatureProject? {
         creationProjects.first { $0.id == projectID }
+            ?? (routing?.projectID != nil ? model.snapshot.projects.first { $0.id == projectID } : nil)
+    }
+
+    /// Storage stays anchored to selectedProject; execution can move once without replacing a draft.
+    private var executionProject: FeatureProject? {
+        guard let targetID = routing?.projectID else { return selectedProject }
+        return model.snapshot.projects.first { $0.id == targetID }
+    }
+
+    private var executionEnvironmentConnected: Bool {
+        guard let project = executionProject,
+              let environment = model.snapshot.environments.first(where: { $0.id == project.environmentID }) else { return false }
+        return (environment.isActive ? model.snapshot.connection.state : environment.connectionState) == .connected
+    }
+
+    private var automaticRouting: Bool {
+        loadBalancingEnabled && routing?.automatic != false && creationEnvironments.count > 1
+            && (!workspaceSelectionIsExplicit || routing?.automatic == true)
+            && (attachments.isEmpty || routing?.projectID != nil)
+    }
+
+    private var needsBalancing: Bool { automaticRouting && routing?.projectID == nil }
+
+    private struct BalancingRequest: Equatable {
+        let projectID: String
+        let restored: Bool
+        let needsBalancing: Bool
+        let selection: FeatureSelection?
+        let candidates: [FeatureProject]
+        let weights: String
+        let attempt: Int
+    }
+
+    private var balancingCandidates: [FeatureProject] {
+        guard needsBalancing, let anchor = selectedProject, let selection,
+              let provider = creationProviders.first(where: { $0.id == selection.providerID }) else { return [] }
+        return NewTaskLoadBalancing.candidates(
+            anchor: anchor, projects: creationProjects, environments: model.snapshot.environments,
+            activeConnection: model.snapshot.connection.state, configs: model.client.workspaceServerConfigs(),
+            selection: selection, driver: provider.driver,
+            weights: NativeLoadBalancingPreferences.weights(from: loadBalancingWeightsJSON)
+        )
+    }
+
+    private var balancingRequest: BalancingRequest {
+        .init(projectID: projectID, restored: restoredDraftProjectID == projectID,
+              needsBalancing: needsBalancing, selection: selection, candidates: balancingCandidates,
+              weights: loadBalancingWeightsJSON, attempt: balancingAttempt)
+    }
+
+    private func makeRoutingManual() {
+        routing = .init(automatic: false, projectID: routing?.projectID)
+        balancing = false
+        balancingMessage = nil
+    }
+
+    private func retryAutomaticRouting() {
+        guard !isSubmitting, attachments.isEmpty else { return }
+        routing = .init(automatic: true)
+        workspaceSelectionIsExplicit = false
+        branches = []
+        selectedBranch = nil
+        balancingAttempt += 1
+    }
+
+    @MainActor
+    private func balanceEnvironment() async {
+        let request = balancingRequest
+        guard request.restored, request.needsBalancing, !isSubmitting else {
+            balancing = false
+            return
+        }
+        balancing = true
+        balancingMessage = nil
+        let client = model.client
+        let weights = NativeLoadBalancingPreferences.weights(from: request.weights)
+        let samples = await withTaskGroup(of: LoadBalancingCandidate.self) { group in
+            for project in request.candidates {
+                group.addTask { @MainActor in
+                    let resources = try? await client.hostResources(environmentID: project.environmentID)
+                    return LoadBalancingCandidate(environmentID: project.environmentID, resources: resources,
+                        receivedAt: Date().timeIntervalSince1970 * 1000, weight: weights[project.environmentID] ?? 50)
+                }
+            }
+            var values: [String: LoadBalancingCandidate] = [:]
+            for await sample in group { values[sample.environmentID] = sample }
+            // Keep a deterministic tie break, independent of network response order.
+            return request.candidates.compactMap { values[$0.environmentID] }
+        }
+        guard !Task.isCancelled, balancingRequest == request, !isSubmitting else { return }
+        balancing = false
+        guard let environmentID = LoadBalancedEnvironment.choose(samples, now: Date().timeIntervalSince1970 * 1000),
+              let project = request.candidates.first(where: { $0.environmentID == environmentID }) else {
+            balancingMessage = "No eligible machine has available capacity. Choose a machine manually or retry Auto in the computer menu."
+            return
+        }
+        branches = []
+        selectedBranch = nil
+        branchesLoading = true
+        routing = .init(automatic: true, projectID: project.id)
     }
 
     private var workspaceControls: some View {
@@ -344,6 +469,7 @@ public struct NewThreadView: View {
                 .accessibilityValue(selectedBranch?.name ?? "Not selected")
 
                 Button {
+                    makeRoutingManual()
                     workspaceSelectionIsExplicit = true
                     startFromOrigin.toggle()
                 } label: {
@@ -414,7 +540,7 @@ public struct NewThreadView: View {
     }
 
     private var environmentName: String {
-        if let environmentID = selectedProject?.environmentID,
+        if let environmentID = executionProject?.environmentID,
            let environment = model.snapshot.environments.first(where: { $0.id == environmentID }) {
             return environment.name
         }
@@ -424,7 +550,7 @@ public struct NewThreadView: View {
     private var initialSelection: FeatureSelection? {
         ProviderModelSelectionResolver.materialized(
             DailyUXCreationContext.initialSelection(
-                for: selectedProject,
+                for: executionProject,
                 in: model.snapshot
             ),
             in: creationProviders
@@ -433,7 +559,7 @@ public struct NewThreadView: View {
 
     private var environmentPreferences: FeatureEnvironmentPreferences {
         DailyUXCreationContext.environmentPreferences(
-            for: selectedProject,
+            for: executionProject,
             in: model.snapshot
         )
     }
@@ -444,7 +570,7 @@ public struct NewThreadView: View {
             set: { value in
                 selectionIsExplicit = true
                 var next = value
-                if let project = selectedProject {
+                if let project = executionProject {
                     if selection?.providerID != value?.providerID || selection?.modelID != value?.modelID {
                         next = projectMemoryStore.applyingFastMode(to: value, environmentID: project.environmentID)
                     } else {
@@ -462,7 +588,7 @@ public struct NewThreadView: View {
     private var creationProviders: [FeatureProvider] {
         ProviderModelCatalogNormalizer.normalized(
             DailyUXCreationContext.providers(
-                for: selectedProject,
+                for: executionProject,
                 in: model.snapshot
             )
         )
@@ -472,7 +598,7 @@ public struct NewThreadView: View {
         let provider = creationProviders.first {
             $0.id == selection?.providerID
         }
-        guard let project = selectedProject else {
+        guard let project = executionProject else {
             return FeatureComposerPowerFeatures(
                 slashCommands: provider?.slashCommands ?? [],
                 skills: provider?.skills ?? [],
@@ -503,7 +629,11 @@ public struct NewThreadView: View {
 
     private var canSubmit: Bool {
         !isSubmitting
-            && selectedProject != nil
+            && executionProject != nil
+            && !needsBalancing
+            && !balancing
+            && !branchesLoading
+            && executionEnvironmentConnected
             && restoredDraftProjectID == projectID
             && concreteSelection != nil
             && (!trimmedPrompt.isEmpty || !attachments.isEmpty)
@@ -515,7 +645,7 @@ public struct NewThreadView: View {
     /// sitting on its configured `t3WorkDirectory`. Work conversations are
     /// directory-based, so every worktree affordance and parameter drops out.
     private var isWorkConversation: Bool {
-        guard let project = selectedProject else { return false }
+        guard let project = executionProject else { return false }
         return model.client.workspaceServerConfigs().contains { config in
             config.environmentID == project.environmentID
                 && config.t3WorkDirectory == project.path
@@ -548,7 +678,7 @@ public struct NewThreadView: View {
 
     private func startTask() {
         guard canSubmit,
-              let project = selectedProject,
+              let project = executionProject,
               let concreteSelection else {
             return
         }
@@ -606,14 +736,23 @@ public struct NewThreadView: View {
     }
 
     private func selectProject(_ id: String) {
-        guard id != projectID else { return }
+        if id == executionProject?.id { makeRoutingManual(); return }
+        guard id != projectID else {
+            routing = .init(automatic: false)
+            branches = []
+            selectedBranch = nil
+            branchesLoading = true
+            Task { await loadBranches() }
+            return
+        }
         persistCurrentDraftImmediately()
         projectID = id
         prepareProjectIfNeeded(id)
+        routing = .init(automatic: false)
     }
 
     private func selectEnvironment(_ id: String) {
-        guard selectedProject?.environmentID != id else { return }
+        if executionProject?.environmentID == id { makeRoutingManual(); return }
         let project = projectMemory.rememberedProjectID(forEnvironment: id).flatMap { recentID in
             creationProjects.first { $0.id == recentID && $0.environmentID == id }
         } ?? creationProjects.first { $0.environmentID == id }
@@ -633,6 +772,9 @@ public struct NewThreadView: View {
             preferredSelection = selection
         }
 
+        routing = nil
+        balancing = false
+        balancingMessage = nil
         restoredDraftProjectID = nil
         draftSaveTask?.cancel()
         draftSaveTask = nil
@@ -683,6 +825,7 @@ public struct NewThreadView: View {
     }
 
     private func setWorkspaceMode(_ mode: FeatureWorkspaceMode) {
+        makeRoutingManual()
         workspaceSelectionIsExplicit = true
         workspaceMode = mode
         selectedBranch = switch mode {
@@ -693,7 +836,7 @@ public struct NewThreadView: View {
 
     @MainActor
     private func loadBranches(refresh: Bool = false) async {
-        let requestedProjectID = projectID
+        let requestedProjectID = executionProject?.id ?? ""
         guard !requestedProjectID.isEmpty else { return }
 
         branchesLoading = true
@@ -703,7 +846,7 @@ public struct NewThreadView: View {
                 projectID: requestedProjectID,
                 refresh: refresh
             )
-            guard !Task.isCancelled, projectID == requestedProjectID else { return }
+            guard !Task.isCancelled, executionProject?.id == requestedProjectID else { return }
             branches = loaded.sorted(by: Self.branchSort)
 
             if let selectedBranch,
@@ -718,10 +861,10 @@ public struct NewThreadView: View {
         } catch is CancellationError {
             return
         } catch {
-            guard projectID == requestedProjectID else { return }
+            guard executionProject?.id == requestedProjectID else { return }
             branchLoadFailed = true
         }
-        guard projectID == requestedProjectID else { return }
+        guard executionProject?.id == requestedProjectID else { return }
         branchesLoading = false
     }
 
@@ -763,6 +906,8 @@ public struct NewThreadView: View {
                 startFromOrigin: environmentPreferences.newWorktreesStartFromOrigin
             )
         )
+        routing = restored.routing
+        if routing == nil, saved?.workspace != nil { routing = .init(automatic: false) }
         prompt = restored.text
         attachments = restored.attachments
         selection = DailyUXModelOptions.validated(restored.selection, in: creationProviders)
@@ -799,7 +944,7 @@ public struct NewThreadView: View {
         FeatureComposerDraft(
             text: prompt,
             attachments: attachments,
-            selection: selectionIsExplicit ? selection : nil,
+            selection: selectionIsExplicit || routing?.projectID != nil ? selection : nil,
             workspace: workspaceSelectionIsExplicit
                 ? FeatureComposerWorkspaceDraft(
                     mode: workspaceMode,
@@ -807,12 +952,13 @@ public struct NewThreadView: View {
                     worktreePath: workspaceMode == .local
                         ? NewTaskWorkspaceDefaults.normalizedWorktreePath(
                             for: selectedBranch,
-                            projectPath: selectedProject?.path ?? ""
+                            projectPath: executionProject?.path ?? ""
                         )
                         : nil,
                     startFromOrigin: startFromOrigin
                 )
-                : nil
+                : nil,
+            routing: routing
         )
     }
 

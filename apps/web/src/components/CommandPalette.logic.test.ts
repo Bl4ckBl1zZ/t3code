@@ -169,6 +169,32 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
 }
 
 describe("buildThreadActionItems", () => {
+  it("includes the V2 linked PR in thread search", () => {
+    const [item] = buildThreadActionItems({
+      threads: [
+        makeThread({
+          linkedPullRequest: {
+            projectId: PROJECT_ID,
+            repository: "Bl4ckBl1zZ/t3code",
+            number: 287,
+            url: "https://github.com/Bl4ckBl1zZ/t3code/pull/287",
+          },
+        }),
+      ],
+      projectTitleById: new Map([[PROJECT_ID, "T3 Code"]]),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async () => undefined,
+    });
+    expect(item?.searchTerms).toEqual(
+      expect.arrayContaining([
+        "#287",
+        "Bl4ckBl1zZ/t3code#287",
+        "https://github.com/Bl4ckBl1zZ/t3code/pull/287",
+      ]),
+    );
+  });
+
   it("orders threads by most recent activity and formats timestamps from updatedAt", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-25T12:00:00.000Z"));

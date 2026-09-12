@@ -1,3 +1,4 @@
+import type { PullRequestLabelCandidate, PullRequestLabelCandidateList } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
@@ -2124,6 +2125,7 @@ export function buildReviewerRequestJson(
  * only read access can still be told apart from a passer-by.
  */
 export interface GitHubViewerAccess {
+  readonly canTriage?: boolean;
   readonly canWrite: boolean;
   /** GitHub's own `viewerCanUpdate`, true for the author as well as for anyone with write. */
   readonly canUpdate: boolean;
@@ -2171,6 +2173,9 @@ export function decodeViewerPermissionsJson(
   const repository = decoded.success.data.repository;
   return Result.succeed({
     canWrite: toCanWrite(repository.viewerPermission),
+    canTriage:
+      repository.viewerPermission?.trim().toUpperCase() === "TRIAGE" ||
+      toCanWrite(repository.viewerPermission),
     ...toPullRequestViewerFields(repository.pullRequest),
   });
 }
@@ -2238,4 +2243,171 @@ export function decodePullRequestFilesJson(
     rawCount: decoded.success.length,
     omittedFileStats,
   });
+}
+
+/** One pull request as the stacks API lists it: a number, a head, and whether it is done. */
+const RawStackPullRequestSchema = Schema.Struct({
+  title: Schema.optional(Schema.String),
+  draft: Schema.optional(Schema.Boolean),
+  number: Schema.Int,
+  head: Schema.Struct({ ref: Schema.String, sha: Schema.optional(Schema.String) }),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  merged_at: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+/**
+ * A stack as `GET /repos/{owner}/{repo}/stacks` answers it, in a public preview whose shape may
+ * still move. Only what a stack is made of is required — where it lives, what it stands on, and
+ * its pull requests — and `base` is accepted both as the ref object the preview sends today and
+ * as the bare branch name it started out as.
+ */
+const RawStackSchema = Schema.Struct({
+  id: Schema.optional(Schema.NullOr(Schema.Union([Schema.Int, Schema.String]))),
+  number: Schema.Int,
+  node_id: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.String,
+  html_url: Schema.optional(Schema.NullOr(Schema.String)),
+  base: Schema.Union([Schema.String, Schema.Struct({ ref: Schema.String })]),
+  pull_requests: Schema.Array(RawStackPullRequestSchema),
+});
+
+const decodeStacks = decodeJsonResult(Schema.Array(RawStackSchema));
+
+export interface GitHubPullRequestStackLayer {
+  readonly title?: string;
+  readonly isDraft?: boolean;
+  readonly headSha?: string;
+  readonly number: number;
+  readonly headBranch: string;
+  readonly state: PullRequestState;
+}
+
+export interface GitHubPullRequestStack {
+  readonly id: string;
+  readonly number: number;
+  readonly url: string;
+  readonly base: string;
+  /** Bottom to top, which is the order GitHub lists them in. */
+  readonly layers: ReadonlyArray<GitHubPullRequestStackLayer>;
+}
+
+/**
+ * The first stack of a `?pull_request=` listing, or null for an empty one: a pull request is in
+ * at most one stack, so the array is GitHub's way of saying "none" rather than a page.
+ */
+export function decodePullRequestStacksJson(
+  raw: string,
+): Result.Result<GitHubPullRequestStack | null, DecodeFailure> {
+  const decoded = decodeStacks(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const stack = decoded.success[0];
+  if (stack === undefined) return Result.succeed(null);
+  return Result.succeed({
+    id: stack.id == null ? (trimmed(stack.node_id) ?? String(stack.number)) : String(stack.id),
+    number: stack.number,
+    // The page a person opens where the preview reports one; the API URL is what it always has.
+    url: trimmed(stack.html_url) ?? stack.url,
+    base: typeof stack.base === "string" ? stack.base : stack.base.ref,
+    layers: stack.pull_requests.map((pullRequest) => ({
+      ...(pullRequest.title === undefined ? {} : { title: pullRequest.title }),
+      ...(pullRequest.draft === undefined ? {} : { isDraft: pullRequest.draft }),
+      ...(pullRequest.head.sha === undefined ? {} : { headSha: pullRequest.head.sha }),
+      number: pullRequest.number,
+      headBranch: pullRequest.head.ref,
+      state: toState({ state: pullRequest.state, mergedAt: pullRequest.merged_at }),
+    })),
+  });
+}
+
+export const LABEL_CANDIDATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    labels(first: ${GRAPHQL_PAGE_SIZE}, orderBy: { field: NAME, direction: ASC }) {
+      pageInfo { hasNextPage }
+      nodes { name color description }
+    }
+    pullRequest(number: $number) {
+      labels(first: ${GRAPHQL_PAGE_SIZE}) { nodes { name } }
+    }
+  }
+}`;
+
+const RawLabelCandidatesSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      labels: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            pageInfo: Schema.optional(RawPageInfoSchema),
+            nodes: Schema.Array(
+              Schema.NullOr(
+                Schema.Struct({
+                  ...RawLabelSchema.fields,
+                  description: Schema.optional(Schema.NullOr(Schema.String)),
+                }),
+              ),
+            ),
+          }),
+        ),
+      ),
+      /** Null for a number that names no pull request the viewer can see. */
+      pullRequest: Schema.NullOr(
+        Schema.Struct({
+          labels: Schema.optional(
+            Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Schema.NullOr(RawLabelSchema)) })),
+          ),
+        }),
+      ),
+    }),
+  }),
+});
+
+const decodeLabelCandidates = decodeJsonResult(RawLabelCandidatesSchema);
+
+/**
+ * The repository's labels, with the ones already on this pull request marked. A label the pull
+ * request wears that the repository no longer defines — deleted since, or past the page — leads
+ * the list anyway, because a label that cannot be seen cannot be taken off.
+ */
+export function decodeLabelCandidatesJson(
+  raw: string,
+): Result.Result<PullRequestLabelCandidateList, DecodeFailure> {
+  const decoded = decodeLabelCandidates(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const repository = decoded.success.data.repository;
+  const applied = new Set(
+    (repository.pullRequest?.labels?.nodes ?? []).flatMap((label) => {
+      const name = trimmed(label?.name);
+      return name === null ? [] : [name];
+    }),
+  );
+  const candidates = new Map<string, PullRequestLabelCandidate>();
+  for (const node of repository.labels?.nodes ?? []) {
+    const name = trimmed(node?.name);
+    if (name === null) continue;
+    candidates.set(name, {
+      name,
+      color: trimmed(node?.color),
+      description: trimmed(node?.description),
+      isApplied: applied.has(name),
+    });
+  }
+  const missing = [...applied].filter((name) => !candidates.has(name));
+  return Result.succeed({
+    candidates: [
+      ...missing.map((name) => ({ name, color: null, description: null, isApplied: true })),
+      ...candidates.values(),
+    ],
+    truncated: repository.labels?.pageInfo?.hasNextPage === true,
+  });
+}
+
+/** The body of `POST /repos/{owner}/{repo}/issues/{number}/labels`, which adds to what is there. */
+const LabelRequestSchema = Schema.Struct({ labels: Schema.Array(Schema.String) });
+
+const encodeLabelRequest = Schema.encodeSync(Schema.fromJsonString(LabelRequestSchema));
+
+export function buildLabelRequestJson(labels: ReadonlyArray<string>): string {
+  return encodeLabelRequest({ labels });
 }

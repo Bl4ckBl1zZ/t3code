@@ -8,6 +8,17 @@ import Testing
 /// item belongs to an interrupted attempt says nothing about that item.
 @Suite("Thread working status")
 struct ThreadWorkingStatusTests {
+    @Test func workspacePreparationDoesNotStartTheAgentTimer() {
+        let status = ThreadWorkingStatus.resolve(state: .queued, workingStartedAt: .now, timelineItems: [], activeRunID: "run", isPreparingWorkspace: true)
+        #expect(status?.headline == "Preparing workspace")
+        #expect(status?.startedAt == nil)
+    }
+
+    @Test func aBackgroundProcessDoesNotClaimTheForegroundStatus() {
+        let background = projected(V2Fixture.turnItem(id: "background", type: "command_execution", status: "running", extra: ["runId": .string("run-1"), "input": .string("pnpm dev"), "background": .bool(true)]))
+        #expect(resolve(state: .working, items: [background])?.headline == "Thinking")
+    }
+
     private let startedAt = Date(timeIntervalSince1970: 10_000)
 
     private func projected(

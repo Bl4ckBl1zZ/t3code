@@ -20,7 +20,7 @@ public struct ThreadWorkLogDiffStat: Equatable, Sendable {
 /// One line of the work log: what a turn item did, in the terms a reader scans.
 public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public enum Icon: String, Equatable, Sendable {
-        case agent, alert, check, command, edit, eye, globe, hammer, message, warning, wrench, zap
+        case agent, alert, check, command, edit, eye, globe, hammer, message, warning, wrench, zap, pullRequest, computer
 
         var symbolName: String {
             switch self {
@@ -36,6 +36,8 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
             case .warning: "xmark"
             case .wrench: "wrench"
             case .zap: "bolt"
+            case .pullRequest: "arrow.triangle.pull"
+            case .computer: "desktopcomputer"
             }
         }
     }
@@ -61,6 +63,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public let projectedItem: OrchestrationV2ProjectedTurnItem
 
     public var item: OrchestrationV2TurnItem { projectedItem.item }
+    var activityIcon: ToolActivityIcon? { icon == .pullRequest ? nil : item.toolIcon ?? item.toolSource?.icon }
 
     /// A `file_change` row headlines its own diffstat.
     public var diffStat: ThreadWorkLogDiffStat? {
@@ -80,6 +83,26 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public var isLiveBackgroundCommand: Bool {
         guard case let .commandExecution(_, _, _, liveness) = item.payload else { return false }
         return liveness.background == true && !item.status.isTerminal
+    }
+
+    var liveFocusItem: ThreadLiveWorkItem {
+        ThreadLiveWorkItem(id: id, runID: runID, running: inProgress, successful: status == .success,
+            background: isLiveBackgroundCommand, boundary: prominent || status == .failure || item.type == "error" || item.type == "compaction")
+    }
+
+    var historicalSummaryItem: ThreadHistoricalWorkItem {
+        let action: ThreadHistoricalWorkItem.Action
+        var files: [String] = []
+        switch item.payload {
+        case .commandExecution: action = .command
+        case .fileChange(let file, _, _, _, _, _): action = .edit; files = [file]
+        case .fileSearch: action = .codeSearch
+        case .webSearch: action = .webSearch
+        case .dynamicTool(_, let input, _): action = T3McpToolPresentation.historicalAction(for: item) ?? (DynamicToolInputPreview.resolve(input)?.kind == .path ? .read : .tool)
+        default: action = .tool
+        }
+        return ThreadHistoricalWorkItem(action: action, files: files, successful: toolLike && status == .success,
+            running: inProgress, persistent: prominent || isLiveBackgroundCommand || item.type == "compaction", source: item.toolSource)
     }
 
     public static func make(_ row: OrchestrationV2ProjectedTurnItem) -> ThreadWorkLogRow {
@@ -111,9 +134,10 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// Tool-like activities with a neutral status carry no signal worth a row.
+    /// Running V2 items carry activity even before they have a result. Only
+    /// terminal neutral markers are omitted from the work log.
     public static func visible(_ rows: [ThreadWorkLogRow]) -> [ThreadWorkLogRow] {
-        rows.filter { !($0.toolLike && $0.status == .neutral) }
+        rows.filter { $0.inProgress || !($0.toolLike && $0.status == .neutral) }
     }
 
     /// Contiguous rows that fold as one unit. A group is the thing that folds,
@@ -126,13 +150,13 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         var openRunID: String?
         var openHasProminent = false
         for row in rows {
-            if !groups.isEmpty, openRunID == row.runID, !row.prominent, !openHasProminent {
+            if !groups.isEmpty, openRunID == row.runID, !row.liveFocusItem.boundary, !openHasProminent {
                 groups[groups.count - 1].append(row)
                 continue
             }
             groups.append([row])
             openRunID = row.runID
-            openHasProminent = row.prominent
+            openHasProminent = row.liveFocusItem.boundary
         }
         return groups
     }
@@ -190,7 +214,7 @@ public enum ThreadWorkLogPresentation {
         case .approvalRequest, .userInputRequest, .userMessage, .assistantMessage: .message
         // Read-style tool calls (a file/notebook path argument) present as reads.
         case let .dynamicTool(_, input, _):
-            DynamicToolInputPreview.resolve(input)?.kind == .path ? .eye : .wrench
+            T3McpToolPresentation.icon(for: item) ?? (item.toolSurface == "browser" ? .globe : item.toolSurface == "computer" ? .computer : DynamicToolInputPreview.resolve(input)?.kind == .path ? .eye : .wrench)
         case .subagent: .hammer
         case .runInterruptRequest, .runInterruptResult: .warning
         case .error: .alert
@@ -280,7 +304,7 @@ public enum ThreadWorkLogPresentation {
         case let .webSearch(patterns, _):
             guard let patterns, !patterns.isEmpty else { return nil }
             return patterns.joined(separator: ", ")
-        case let .approvalRequest(_, _, prompt):
+        case let .approvalRequest(_, _, prompt, _):
             return prompt
         case let .userInputRequest(_, questions):
             let joined = questions.map(\.question).joined(separator: " · ")
@@ -415,50 +439,114 @@ public enum DynamicToolInputPreview {
 public enum T3McpToolPresentation {
     private static let serverAliases: Set<String> = ["t3-code", "t3_code", "t3code"]
 
-    private static let displayNames: [String: String] = [
-        "orchestrator_capabilities": "Get orchestration capabilities",
-        "delegate_task": "Delegate a child task",
-        "task_status": "Get delegated task status",
-        "task_cancel": "Cancel delegated task",
-        "schedule_task": "Schedule a recurring task",
-        "list_scheduled_tasks": "List scheduled tasks",
-        "update_scheduled_task": "Update a scheduled task",
-        "delete_scheduled_task": "Delete a scheduled task",
-        "create_threads": "Create T3 threads",
-        "t3_thread_start": "Start a T3 thread",
-        "t3_thread_list": "List T3 threads",
-        "t3_thread_read": "Read a T3 thread",
-        "t3_thread_send": "Send to a T3 thread",
-        "t3_thread_wait": "Wait for a T3 thread",
-        "t3_thread_interrupt": "Interrupt a T3 thread",
-        "t3_worktree_handoff": "Hand off thread to a git worktree",
-        "t3_worktree_status": "Get thread worktree status",
-        "preview_status": "Get preview browser status",
-        "preview_open": "Open a page in the preview browser",
-        "preview_navigate": "Navigate the preview browser",
-        "preview_snapshot": "Snapshot the preview page",
-        "preview_click": "Click in the preview browser",
-        "preview_press": "Press a key in the preview browser",
-        "preview_type": "Type in the preview browser",
-        "preview_scroll": "Scroll the preview browser",
-        "preview_resize": "Resize the preview browser",
-        "preview_evaluate": "Evaluate script in the preview browser",
-        "preview_wait_for": "Wait for the preview page",
-        "preview_set_appearance": "Set preview browser appearance",
-        "preview_recording_start": "Start recording the preview browser",
-        "preview_recording_stop": "Stop recording the preview browser",
+    private static let labels: [String: (String, String, String, String)] = [
+        "link_pull_request": ("Link", "Linking", "Linked", "a pull request"),
+        "unlink_pull_request": ("Unlink", "Unlinking", "Unlinked", "a pull request"),
+        "list_thread_pull_requests": ("Check", "Checking", "Checked", "linked pull requests"),
+        "orchestrator_capabilities": ("Get", "Getting", "Got", "orchestration capabilities"),
+        "delegate_task": ("Delegate", "Delegating", "Delegated", "a child task"),
+        "task_status": ("Get", "Getting", "Got", "delegated task status"),
+        "task_cancel": ("Cancel", "Canceling", "Canceled", "delegated task"),
+        "schedule_task": ("Schedule", "Scheduling", "Scheduled", "a recurring task"),
+        "list_scheduled_tasks": ("List", "Listing", "Listed", "scheduled tasks"),
+        "update_scheduled_task": ("Update", "Updating", "Updated", "a scheduled task"),
+        "delete_scheduled_task": ("Delete", "Deleting", "Deleted", "a scheduled task"),
+        "create_threads": ("Create", "Creating", "Created", "T3 threads"),
+        "t3_thread_start": ("Start", "Starting", "Started", "a T3 thread"),
+        "t3_thread_list": ("List", "Listing", "Listed", "T3 threads"),
+        "t3_thread_read": ("Read", "Reading", "Read", "a T3 thread"),
+        "t3_thread_send": ("Send", "Sending", "Sent", "to a T3 thread"),
+        "t3_thread_wait": ("Wait", "Waiting", "Waited", "for a T3 thread"),
+        "t3_thread_interrupt": ("Interrupt", "Interrupting", "Interrupted", "a T3 thread"),
+        "t3_worktree_handoff": ("Hand off", "Handing off", "Handed off", "thread to a git worktree"),
+        "t3_worktree_status": ("Get", "Getting", "Got", "thread worktree status"),
+        "preview_status": ("Get", "Getting", "Got", "preview browser status"),
+        "preview_open": ("Open", "Opening", "Opened", "a page in the preview browser"),
+        "preview_navigate": ("Navigate", "Navigating", "Navigated", "the preview browser"),
+        "preview_snapshot": ("Take a snapshot of", "Taking a snapshot of", "Took a snapshot of", "the preview page"),
+        "preview_click": ("Click", "Clicking", "Clicked", "in the preview browser"),
+        "preview_press": ("Press", "Pressing", "Pressed", "a key in the preview browser"),
+        "preview_type": ("Type", "Typing", "Typed", "in the preview browser"),
+        "preview_scroll": ("Scroll", "Scrolling", "Scrolled", "the preview browser"),
+        "preview_resize": ("Resize", "Resizing", "Resized", "the preview browser"),
+        "preview_evaluate": ("Evaluate", "Evaluating", "Evaluated", "script in the preview browser"),
+        "preview_wait_for": ("Wait", "Waiting", "Waited", "for the preview page"),
+        "preview_set_appearance": ("Set", "Setting", "Set", "preview browser appearance"),
+        "preview_recording_start": ("Start", "Starting", "Started", "recording the preview browser"),
+        "preview_recording_stop": ("Stop", "Stopping", "Stopped", "recording the preview browser"),
     ]
 
-    /// Only dynamic tool rows carry an MCP tool name; every other item type
-    /// keeps its own title.
     public static func displayName(for item: OrchestrationV2TurnItem) -> String? {
-        guard case let .dynamicTool(toolName, _, _) = item.payload else { return nil }
-        return displayName(for: toolName) ?? displayName(for: item.base.title)
+        guard case let .dynamicTool(toolName, input, _) = item.payload else { return nil }
+        return displayName(for: toolName, status: item.status.rawValue, input: input)
+            ?? displayName(for: item.base.title, status: item.status.rawValue, input: input)
     }
 
-    public static func displayName(for toolName: String?) -> String? {
-        guard let toolName, let resolved = resolveToolName(toolName) else { return nil }
-        return displayNames[resolved]
+    public static func displayName(for toolName: String?, status: String? = nil, input: JSONValue? = nil) -> String? {
+        guard let toolName, let resolved = resolveToolName(toolName), let (action, running, completed, detail) = labels[resolved] else { return nil }
+        let verb: String
+        switch status {
+        case "running", "waiting", "pending", "inProgress": verb = running
+        case "completed": verb = completed
+        case "failed": verb = "Failed to \(action.lowercased())"
+        case "declined": verb = "Declined to \(action.lowercased())"
+        case "stopped", "cancelled", "interrupted": verb = "Stopped \(running.lowercased())"
+        default: verb = action
+        }
+        let target: String
+        if ["link_pull_request", "unlink_pull_request"].contains(resolved), let number = pullRequestNumber(input) {
+            target = "PR #\(number)"
+        } else { target = detail }
+        return "\(verb) \(target)"
+    }
+
+    static func historicalAction(for item: OrchestrationV2TurnItem) -> ThreadHistoricalWorkItem.Action? {
+        guard case let .dynamicTool(toolName, _, _) = item.payload,
+            let name = [toolName, item.base.title].compactMap({ $0 }).compactMap(resolveToolName).first(where: { labels[$0] != nil }),
+            labels[name] != nil else { return nil }
+        switch name {
+        case "link_pull_request": return .linkPR
+        case "unlink_pull_request": return .unlinkPR
+        case "list_thread_pull_requests": return .listPRs
+        default: return name.hasPrefix("preview_") ? .browser : nil
+        }
+    }
+
+    static func icon(for item: OrchestrationV2TurnItem) -> ThreadWorkLogRow.Icon? {
+        switch historicalAction(for: item) {
+        case .linkPR, .unlinkPR, .listPRs: .pullRequest
+        case .browser: .globe
+        default: nil
+        }
+    }
+
+    private static func pullRequestNumber(_ input: JSONValue?) -> Int64? {
+        if let text = input?["url"]?.stringValue, let number = changeRequestNumber(text) { return number }
+        switch input?["number"] {
+        case .integer(let number) where number > 0 && number <= 9_007_199_254_740_991: return number
+        case .unsignedInteger(let number) where number > 0 && number <= 9_007_199_254_740_991: return Int64(number)
+        case .number(let number) where number.isFinite && number > 0 && number <= 9_007_199_254_740_991 && number.rounded() == number: return Int64(number)
+        default: return nil
+        }
+    }
+
+    /// Match the shared change-request parser's host and route rules, including self-hosted GitLab.
+    private static func changeRequestNumber(_ text: String) -> Int64? {
+        guard let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host?.lowercased() else { return nil }
+        func isHost(_ apex: String, _ label: String? = nil) -> Bool {
+            host == apex || host.hasSuffix("." + apex) || (label.map { host.split(separator: ".").contains(Substring($0)) } ?? false)
+        }
+        let pattern: String
+        if isHost("github.com", "github") { pattern = #"^/[^/]+/[^/]+/pull/(\d+)(?:/|$)"# }
+        else if url.path.contains("/-/merge_requests/") { pattern = #"^/[^/]+(?:/[^/]+)+/-/merge_requests/(\d+)(?:/|$)"# }
+        else if isHost("bitbucket.org", "bitbucket") { pattern = #"^/[^/]+/[^/]+/pull-requests/(\d+)(?:/|$)"# }
+        else if isHost("dev.azure.com") || host.hasSuffix(".visualstudio.com") { pattern = #"^/(?:[^/]+/)*_git/[^/]+/pullrequest/(\d+)(?:/|$)"# }
+        else { return nil }
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(in: url.path, range: NSRange(url.path.startIndex..., in: url.path)),
+            let range = Range(match.range(at: 1), in: url.path),
+            let number = Int64(url.path[range]), number > 0, number <= 9_007_199_254_740_991 else { return nil }
+        return number
     }
 
     private static func resolveToolName(_ value: String) -> String? {
@@ -471,7 +559,7 @@ public enum T3McpToolPresentation {
             return serverAliases.contains(server) && !tool.isEmpty ? tool : nil
         }
         for alias in serverAliases {
-            for separator in [".", ":", "/"] {
+            for separator in [".", ":", "/", " · ", "·"] {
                 let prefix = alias + separator
                 if label.lowercased().hasPrefix(prefix) {
                     let tool = String(label.dropFirst(prefix.count))
@@ -479,7 +567,7 @@ public enum T3McpToolPresentation {
                 }
             }
         }
-        return displayNames[label] != nil ? label : nil
+        return labels[label] != nil ? label : nil
     }
 
     /// Providers append a completion word to the tool label once it settles.
@@ -718,31 +806,6 @@ public enum ChangedFilesPreview {
 /// *lock*. The preference only decides rows the reader has not touched; a row
 /// they closed stays closed while it is on, and a row they opened stays open
 /// after it is turned off.
-public struct ThreadWorkLogExpansion: Equatable, Sendable {
-    private var openedIDs: Set<String> = []
-    private var closedIDs: Set<String> = []
-
-    public init() {}
-
-    public func isExpanded(_ id: String, expandedByDefault: Bool) -> Bool {
-        if closedIDs.contains(id) { return false }
-        return expandedByDefault || openedIDs.contains(id)
-    }
-
-    /// Records what the reader asked for, against what they can currently see:
-    /// toggling a row the preference opened has to register as a close, not as
-    /// the absence of an open.
-    public mutating func toggle(_ id: String, expandedByDefault: Bool) {
-        if isExpanded(id, expandedByDefault: expandedByDefault) {
-            openedIDs.remove(id)
-            closedIDs.insert(id)
-        } else {
-            closedIDs.remove(id)
-            openedIDs.insert(id)
-        }
-    }
-}
-
 // MARK: - Views
 
 /// Additions and deletions, the first thing a reader looks for on a file row.
@@ -754,10 +817,10 @@ struct WorkRowDiffStat: View {
         if additions > 0 || deletions > 0 {
             HStack(spacing: 4) {
                 if additions > 0 {
-                    Text(verbatim: "+\(additions)").foregroundStyle(T3Colors.success)
+                    Text(verbatim: "+\(additions)").foregroundStyle(T3Colors.diffAddition)
                 }
                 if deletions > 0 {
-                    Text(verbatim: "−\(deletions)").foregroundStyle(T3Colors.danger)
+                    Text(verbatim: "−\(deletions)").foregroundStyle(T3Colors.diffDeletion)
                 }
             }
             .font(ChatTimelineStyle.smallMono)
@@ -772,6 +835,7 @@ struct WorkRowDiffStat: View {
 /// The work log under a turn: what the agent actually did, one line per step.
 struct ThreadWorkLog: View {
     let rows: [ThreadWorkLogRow]
+    var liveEntryID: String? = nil
     let currentThreadID: String
     let currentWireThreadID: String
     var workspaceRoot: String?
@@ -790,17 +854,23 @@ struct ThreadWorkLog: View {
     var alwaysExpandActivity: Bool = false
 
     /// `nil` until the reader touches the fold, so the preference decides it.
-    @State private var overflowExpanded: Bool?
-    @State private var expansion = ThreadWorkLogExpansion()
+    @SwiftUI.Environment(\.threadWorkLogHistory) private var sharedHistory
+    @State private var localHistory = ThreadWorkLogHistoryStore()
+    private var history: ThreadWorkLogHistory {
+        (sharedHistory ?? localHistory).entry("\(currentThreadID):\(rows.first?.id ?? "empty")")
+    }
+    private var historyKey: String { "\(currentThreadID):\(rows.first?.id ?? "empty")" }
     @State private var copiedRowID: String?
 
-    private var isExpanded: Bool { overflowExpanded ?? alwaysExpandActivity }
+    private var isExpanded: Bool { history.groupExpanded ?? alwaysExpandActivity }
 
     private var visibleCandidates: [ThreadWorkLogRow] { ThreadWorkLogRow.visible(rows) }
 
     private var onlyToolRows: Bool {
         !visibleCandidates.isEmpty && visibleCandidates.allSatisfy(\.toolLike)
     }
+
+    private var historicalSummary: String? { ThreadHistoricalWorkSummary.label(visibleCandidates.map(\.historicalSummaryItem)) }
 
     private var displayedRows: [ThreadWorkLogRow] {
         isExpanded ? visibleCandidates : ThreadWorkLogPresentation.collapsed(visibleCandidates)
@@ -823,19 +893,50 @@ struct ThreadWorkLog: View {
                         .padding(.bottom, 2)
                 }
 
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(displayedRows) { row in
-                        rowView(row)
+                if let focus = visibleCandidates.first(where: { $0.id == liveEntryID }) {
+                    Button { history.groupExpanded = !isExpanded } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
+                            ThreadToolActivityIcon(icon: focus.activityIcon, fallback: focus.icon.symbolName)
+                            Text(focus.summary).lineLimit(1).shimmering(focus.inProgress).frame(maxWidth: .infinity, alignment: .leading)
+                            Text("\(visibleCandidates.count)").monospacedDigit().foregroundStyle(T3Colors.textTertiary)
+                        }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
+                    }.buttonStyle(.plain).accessibilityLabel("\(focus.summary), \(visibleCandidates.count) tool calls")
+                        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                    if isExpanded {
+                        expandedHistory
+                    } else {
+                        ForEach(visibleCandidates.filter(\.isLiveBackgroundCommand)) { rowView($0) }
+                    }
+                } else if let summary = historicalSummary {
+                    Button { history.groupExpanded = !isExpanded } label: {
+                        HStack(spacing: 8) {
+                            ThreadToolActivityIcon(icon: visibleCandidates.allSatisfy { $0.icon != .pullRequest && $0.item.toolSource?.key != nil && $0.item.toolSource?.key == visibleCandidates.first?.item.toolSource?.key } ? visibleCandidates.first?.item.toolSource?.icon : nil, fallback: Set(visibleCandidates.map(\.icon)).count == 1 ? (visibleCandidates.first?.icon.symbolName ?? "hammer") : "hammer")
+                            Text(summary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
+                        }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
+                    }.buttonStyle(.plain).accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                    if isExpanded {
+                        expandedHistory
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(displayedRows) { row in rowView(row) }
                     }
                 }
 
-                if visibleCandidates.count > ThreadWorkLogPresentation.maxVisibleEntries,
+                if liveEntryID == nil, historicalSummary == nil, visibleCandidates.count > ThreadWorkLogPresentation.maxVisibleEntries,
                     isExpanded || !hiddenRows.isEmpty {
                     overflowToggle
                 }
             }
             .padding(.bottom, 12)
         }
+    }
+
+    private var expandedHistory: some View {
+        ThreadWorkLogExpandedHistory(rows: visibleCandidates, history: history, rowContent: rowView)
+            .id(historyKey)
     }
 
     @ViewBuilder
@@ -912,7 +1013,7 @@ struct ThreadWorkLog: View {
         let noun = ThreadWorkLogRow.overflowNoun(onlyToolRows: onlyToolRows, count: hiddenCount)
         let stats = ThreadWorkLogRow.totalDiffStat(hiddenRows)
         return Button {
-            overflowExpanded = !isExpanded
+            history.groupExpanded = !isExpanded
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -939,11 +1040,11 @@ struct ThreadWorkLog: View {
     }
 
     private func isRowExpanded(_ id: String) -> Bool {
-        expansion.isExpanded(id, expandedByDefault: alwaysExpandActivity)
+        history.rowExpansion.isExpanded(id, expandedByDefault: alwaysExpandActivity)
     }
 
     private func toggleRow(_ id: String) {
-        expansion.toggle(id, expandedByDefault: alwaysExpandActivity)
+        history.rowExpansion.toggle(id, expandedByDefault: alwaysExpandActivity)
     }
 
     private func copy(_ row: ThreadWorkLogRow) {
@@ -999,7 +1100,7 @@ private struct WorkLogRowButton: View {
     var body: some View {
         Button(action: onToggle) {
             HStack(spacing: 6) {
-                Image(systemName: row.icon.symbolName)
+                ThreadToolActivityIcon(icon: row.activityIcon, fallback: row.icon.symbolName)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isDestructive ? T3Colors.danger : T3Colors.textTertiary)
                     .frame(width: 20, height: 20)
@@ -1026,10 +1127,10 @@ private struct WorkLogRowButton: View {
                         .frame(width: 16, height: 16)
                     // Success is the default outcome — only surface deviations.
                     if row.status == .failure || row.status == .neutral {
-                        Image(systemName: row.status == .failure ? "xmark" : "minus")
+                        Image(systemName: row.status == .failure ? "exclamationmark.circle" : "minus")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(
-                                row.status == .failure ? T3Colors.danger : T3Colors.textTertiary
+                                row.status == .failure && isDestructive ? T3Colors.danger : T3Colors.textTertiary
                             )
                             .frame(width: 16, height: 16)
                     }
@@ -1390,5 +1491,175 @@ struct ChatFlowLayout: Layout {
             x += size.width + horizontalSpacing
             rowHeight = max(rowHeight, size.height)
         }
+    }
+}
+
+private struct ThreadWorkLogFramesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+/// Measurements are transient, so scroll events do not invalidate the whole
+/// transcript. Only the bounded coordinator cache owns durable reader choices.
+@MainActor private final class ThreadWorkLogViewportMeasurements {
+    var frames: [String: CGRect] = [:]
+    weak var scrollView: UIScrollView?
+    var pending: ThreadWorkLogViewportAnchor?
+
+    init(history: ThreadWorkLogHistory) {
+        pending = history.anchorID.map { .init(id: $0, offset: history.offsetWithinAnchor) }
+    }
+}
+
+private struct ThreadWorkLogExpandedHistory<Content: View>: View {
+    let rows: [ThreadWorkLogRow]
+    let history: ThreadWorkLogHistory
+    let rowContent: (ThreadWorkLogRow) -> Content
+    @State private var viewport: ThreadWorkLogViewportMeasurements
+
+    init(rows: [ThreadWorkLogRow], history: ThreadWorkLogHistory, @ViewBuilder rowContent: @escaping (ThreadWorkLogRow) -> Content) {
+        self.rows = rows
+        self.history = history
+        self.rowContent = rowContent
+        _viewport = State(initialValue: ThreadWorkLogViewportMeasurements(history: history))
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(rows) { row in
+                        rowContent(row).id(row.id)
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear.preference(key: ThreadWorkLogFramesKey.self, value: [row.id: geometry.frame(in: .named("work-log-content"))])
+                                }
+                            }
+                    }
+                }
+                .coordinateSpace(name: "work-log-content")
+                .background(ThreadWorkLogScrollObserver(onResolve: { scrollView in
+                    viewport.scrollView = scrollView
+                    restoreViewport()
+                }, onScroll: { scrollView in
+                    guard scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating else { return }
+                    viewport.pending = nil
+                    history.rememberViewport(rows: frames, contentOffset: scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
+                }))
+            }
+            .frame(maxHeight: 320)
+            .onPreferenceChange(ThreadWorkLogFramesKey.self) { frames in
+                viewport.frames = frames
+                restoreViewport()
+                if let scrollView = viewport.scrollView,
+                   scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
+                    history.rememberViewport(rows: self.frames, contentOffset: scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
+                }
+            }
+            .onAppear {
+                if let anchor = viewport.pending, rows.contains(where: { $0.id == anchor.id }) {
+                    // Bring the lazy target into the measured set first; its
+                    // actual frame then supplies the precise intra-row offset.
+                    proxy.scrollTo(anchor.id, anchor: .top)
+                    restoreViewport()
+                }
+            }
+            .onChange(of: rows.map(\.id)) { _, ids in
+                if let anchor = history.anchorID, !ids.contains(anchor) {
+                    history.clearViewport()
+                    viewport.pending = nil
+                    if let first = ids.first { proxy.scrollTo(first, anchor: .top) }
+                }
+            }
+        }
+    }
+
+    private var frames: [ThreadWorkLogRowFrame] {
+        viewport.frames.map { id, frame in .init(id: id, minY: frame.minY, height: frame.height) }
+    }
+
+    private func restoreViewport() {
+        guard let pending = viewport.pending, let scrollView = viewport.scrollView,
+              !scrollView.isTracking, !scrollView.isDragging, !scrollView.isDecelerating,
+              let frame = frames.first(where: { $0.id == pending.id }),
+              let offset = pending.restoredOffset(in: frame) else { return }
+        viewport.pending = nil
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: offset - scrollView.adjustedContentInset.top), animated: false)
+    }
+}
+
+/// iOS 17-compatible observation of the owned inner scroll view. KVO leaves
+/// SwiftUI's delegate intact; no display link, polling or transcript relayout.
+private struct ThreadWorkLogScrollObserver: UIViewRepresentable {
+    let onResolve: (UIScrollView) -> Void
+    let onScroll: (UIScrollView) -> Void
+
+    func makeUIView(context: Context) -> ObserverView {
+        let view = ObserverView()
+        view.isUserInteractionEnabled = false
+        view.accessibilityElementsHidden = true
+        return view
+    }
+    func updateUIView(_ view: ObserverView, context: Context) {
+        view.onResolve = onResolve
+        view.onScroll = onScroll
+        view.resolveSoon()
+    }
+    static func dismantleUIView(_ view: ObserverView, coordinator: ()) { view.detach() }
+
+    final class ObserverView: UIView {
+        var onResolve: ((UIScrollView) -> Void)?
+        var onScroll: ((UIScrollView) -> Void)?
+        private weak var observedScrollView: UIScrollView?
+        private var observation: NSKeyValueObservation?
+        private var resolutionTask: Task<Void, Never>?
+
+        override func didMoveToSuperview() { super.didMoveToSuperview(); resolveSoon() }
+        override func didMoveToWindow() { super.didMoveToWindow(); resolveSoon() }
+
+        func resolveSoon() {
+            resolutionTask?.cancel()
+            resolutionTask = Task { @MainActor [weak self] in
+                guard !Task.isCancelled, let self else { return }
+                var ancestor = superview
+                while let view = ancestor {
+                    if let scrollView = view as? UIScrollView {
+                        guard observedScrollView !== scrollView else { return }
+                        observation = nil
+                        observedScrollView = scrollView
+                        observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] scrollView, _ in
+                            MainActor.assumeIsolated { self?.onScroll?(scrollView) }
+                        }
+                        onResolve?(scrollView)
+                        return
+                    }
+                    ancestor = view.superview
+                }
+            }
+        }
+        func detach() {
+            resolutionTask?.cancel()
+            resolutionTask = nil
+            observation = nil
+            observedScrollView = nil
+            onResolve = nil
+            onScroll = nil
+        }
+    }
+}
+
+
+private struct ThreadToolActivityIcon: View {
+    let icon: ToolActivityIcon?
+    let fallback: String
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    var body: some View {
+        if icon?._tag == "native-app", let app = icon?.app {
+            NativeAppToolIcon(app: app, fallback: fallback)
+        } else if let url = icon?.imageURL(dark: colorScheme == .dark) {
+            NativeToolLogo(url: url, fallback: fallback)
+        } else { Image(systemName: fallback).accessibilityHidden(true) }
     }
 }

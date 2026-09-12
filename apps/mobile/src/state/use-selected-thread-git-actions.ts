@@ -325,6 +325,7 @@ export function useSelectedThreadGitActions() {
         "Running source control action",
         async ({ thread, cwd }) => {
           const result = await runStackedAction({
+            threadId: thread.id,
             actionId,
             action: input.action,
             ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),

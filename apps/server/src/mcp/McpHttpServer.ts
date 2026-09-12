@@ -1,3 +1,6 @@
+import * as PullRequestMcpService from "./PullRequestMcpService.ts";
+import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
+import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -247,6 +250,11 @@ export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit
   Layer.provide(WorktreeMcpService.layer),
 );
 
+export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
+  Layer.provide(PullRequestsToolkitHandlersLive),
+  Layer.provide(PullRequestMcpService.layer),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -258,4 +266,5 @@ export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   OrchestratorToolkitRegistrationLive,
   WorktreeToolkitRegistrationLive,
+  PullRequestsToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

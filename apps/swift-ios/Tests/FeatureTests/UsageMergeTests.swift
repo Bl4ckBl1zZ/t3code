@@ -9,6 +9,42 @@ final class UsageMergeTests: XCTestCase {
         XCTAssertEqual(RPCMethod.serverGetUsageSummary.rawValue, "server.getUsageSummary")
     }
 
+    func testCurrentWireFixtureMergesHourlyGrokUsage() throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("CoreTests/Fixtures/usageHistory.json")
+        let summary = try JSONDecoder().decode(UsageSummary.self, from: Data(contentsOf: fixture))
+        XCTAssertEqual(summary.contractVersion, usageContractVersion)
+        let merged = FeatureUsageMerge.merge([FeatureEnvironmentUsage(environmentID: "fixture", label: "Fixture", summary: summary)])
+        XCTAssertEqual(merged.totalTokens, 170)
+        XCTAssertEqual(merged.hourly.first?.day, "2026-09-12T11:00:00Z")
+        XCTAssertEqual(merged.hourly.first?.totalTokens, 170)
+        XCTAssertEqual(merged.providers.first?.provider, "grok")
+        XCTAssertTrue(merged.staleEnvironments.isEmpty)
+    }
+
+    func testVersionFourRemainsCompatibleButFutureVersionsAreExcluded() {
+        let merged = FeatureUsageMerge.merge([
+            environment(id: "v4", host: "v4", cost: 2, tokens: 100, sessions: 1, contractVersion: 4),
+            environment(id: "future", host: "future", cost: 9, tokens: 900, sessions: 1, contractVersion: usageContractVersion + 1),
+        ])
+        XCTAssertEqual(merged.costUsd, 2)
+        XCTAssertEqual(merged.staleEnvironments, ["future"])
+    }
+
+    func testHourlyWindowIsExactly24HoursAcrossDaylightSaving() throws {
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-03-29T12:00:00Z"))
+        let zone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        let hourly = UsageSummaryInput.window(days: 1, now: now, timeZone: zone)
+        let since = try XCTUnwrap(ISO8601DateFormatter().date(from: hourly.sinceTime!))
+        let until = try XCTUnwrap(ISO8601DateFormatter().date(from: hourly.untilTime!))
+        XCTAssertEqual(until.timeIntervalSince(since), 86400)
+        XCTAssertEqual(hourly.resolution, "hour")
+        XCTAssertEqual(hourly.sinceDay, "2026-03-28")
+        let daily = UsageSummaryInput.window(days: 7, now: now, timeZone: zone)
+        XCTAssertEqual(daily.sinceDay, "2026-03-23")
+        XCTAssertNil(daily.sinceTime)
+    }
+
     func testMergesTotalsAcrossEnvironments() {
         let merged = FeatureUsageMerge.merge([
             environment(id: "env-a", host: "host-a", cost: 2, tokens: 100, sessions: 3),
@@ -139,7 +175,7 @@ final class UsageMergeTests: XCTestCase {
                 cost: 9,
                 tokens: 900,
                 sessions: 9,
-                contractVersion: usageContractVersion - 1
+                contractVersion: usageMergeCompatibleSince - 1
             ),
         ])
         XCTAssertEqual(merged.costUsd, 2)

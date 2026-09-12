@@ -15,6 +15,29 @@ struct FeatureDetailRenderUpdate: Equatable {
 @MainActor
 @Observable
 public final class FeatureRootModel {
+    var pendingThreadFileDrops: [String: ThreadFileDropBatch] = [:]
+
+    var pendingPullRequestPrompts: [String: PendingPullRequestPrompt] = [:]
+
+    func stagePullRequestTask(scope: FeaturePullRequestScope, overview: FeaturePullRequestOverview, kind: PullRequestHandoffKind, mode: PullRequestCheckoutMode, selection: PullRequestHandoffSelection? = nil) async throws -> String {
+        let prepared: FeaturePullRequestPreparedThread
+        if case let .thread(id) = scope, kind != .checkout {
+            guard let thread = snapshot.threads.first(where: { $0.id == id }) else { throw FeatureCapabilityUnavailable("The thread is no longer available. Reopen the pull request from its project") }
+            prepared = FeaturePullRequestPreparedThread(thread: thread, staleCheckout: false)
+        } else {
+            guard let preparer = client as? any FeaturePullRequestThreadPreparing else {
+                throw FeatureCapabilityUnavailable("Pull request thread preparation")
+            }
+            prepared = try await preparer.preparePullRequestAgentThread(scope: scope, number: overview.detail.number, expectedURL: overview.detail.url, title: "PR #\(overview.detail.number): \(overview.detail.title)", mode: kind.needsCheckout ? mode : nil)
+            upsert(prepared.thread)
+        }
+        let prompt = PullRequestHandoffPrompt.build(kind: kind, detail: overview.detail, activity: overview.activity, selection: selection)
+        pendingPullRequestPrompts[prepared.thread.id] = PendingPullRequestPrompt(text: prompt, warning: prepared.staleCheckout ? "This checkout is not on the pull request's latest commits. Local changes or commits may have prevented it from moving. Review the branch before sending." : nil)
+        return prepared.thread.id
+    }
+
+    var pendingAssistantCitation: AssistantCitationNavigationRequest?
+
     public private(set) var snapshot = FeatureSnapshot()
     public private(set) var details: [String: FeatureThreadDetail] = [:]
     /// Advances whenever a Home presentation input changes.
@@ -65,6 +88,7 @@ public final class FeatureRootModel {
     private var outboxRetryAttempt = 0
     private var outboxGeneration: UInt64 = 0
     private var changeRequestThreadIDs: [String] = []
+    private var changeRequestLinks: [String: [FeatureLinkedPullRequest]] = [:]
     private var changeRequestTask: Task<Void, Never>?
 
     public init(
@@ -96,12 +120,15 @@ public final class FeatureRootModel {
     /// showing. Safe to call whenever that list is rebuilt: an unchanged set of
     /// threads keeps the existing subscriptions rather than restarting them.
     public func observeChangeRequests(threadIDs: [String]) {
-        guard threadIDs != changeRequestThreadIDs else { return }
+        let observed = Set(threadIDs)
+        let links = Dictionary(uniqueKeysWithValues: snapshot.threads.filter { observed.contains($0.id) }.map { ($0.id, $0.observedPullRequests) })
+        guard threadIDs != changeRequestThreadIDs || links != changeRequestLinks else { return }
+        let previousLinks = changeRequestLinks
+        changeRequestLinks = links
         changeRequestThreadIDs = threadIDs
         changeRequestTask?.cancel()
 
-        let observed = Set(threadIDs)
-        changeRequestsByThreadID = changeRequestsByThreadID.filter { observed.contains($0.key) }
+        changeRequestsByThreadID = changeRequestsByThreadID.filter { observed.contains($0.key) && previousLinks[$0.key] == links[$0.key] }
         guard !threadIDs.isEmpty else {
             changeRequestTask = nil
             return
@@ -119,7 +146,7 @@ public final class FeatureRootModel {
             ) {
                 // A cancelled stream can still hold one last emission; applying
                 // it would overwrite the replacement stream's fresher state.
-                if Task.isCancelled || self.changeRequestThreadIDs != threadIDs { return }
+                if Task.isCancelled || self.changeRequestThreadIDs != threadIDs || self.changeRequestLinks != links { return }
                 self.changeRequestsByThreadID = pullRequests
             }
         }
@@ -396,6 +423,7 @@ public final class FeatureRootModel {
         return await perform {
             try await client.deleteThread(id: id)
             guard currentEnvironmentIdentity == environment else { return }
+            pendingThreadFileDrops[id] = nil
             removeThread(id: id)
             removeDetail(id: id)
             // A deleted thread is the one thing that should drop a review
@@ -680,6 +708,7 @@ public final class FeatureRootModel {
         }
         threadCollectionRevision &+= 1
         homePresentationRevision &+= 1
+        observeChangeRequests(threadIDs: changeRequestThreadIDs)
     }
 
     private func removeThread(id: String) {
@@ -722,6 +751,7 @@ public final class FeatureRootModel {
             threadCollectionRevision &+= 1
         }
         snapshot = value
+        observeChangeRequests(threadIDs: changeRequestThreadIDs)
         if value.connection.state == .connected
             || value.environments.contains(where: { $0.connectionState == .connected }) {
             scheduleOutboxDrain()

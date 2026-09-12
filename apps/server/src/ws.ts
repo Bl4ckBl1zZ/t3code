@@ -1,3 +1,8 @@
+import { consumeInstanceResetCredit } from "./provider/consumeResetCredit.ts";
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import { withCreatedPullRequestLink } from "./git/linkCreatedPullRequest.ts";
+import { AgentSessionScanner } from "./project/AgentSessionScanner.ts";
+import { AgentSessionImporter } from "./project/AgentSessionImporter.ts";
 import * as DateTime from "effect/DateTime";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
@@ -131,6 +136,7 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -713,6 +719,8 @@ const makeWsRpcLayer = (
       const hermesCron = yield* HermesCron.HermesCron;
       const hermesSkills = yield* HermesSkills.HermesSkills;
       const hermesSessions = yield* HermesSessionImport.make;
+      const agentSessionScanner = yield* AgentSessionScanner;
+      const agentSessionImporter = yield* AgentSessionImporter;
       const hermesProactiveInbox = yield* HermesProactiveInbox;
       // Shared with the server, which owns the sweep fiber. Building one here
       // would give every connected client its own residency loop and its own
@@ -842,6 +850,7 @@ const makeWsRpcLayer = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
+      const hostResources = yield* HostResources.HostResources;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
@@ -1972,6 +1981,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetProcessDiagnostics, processDiagnostics.read, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverGetHostResources]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetHostResources, hostResources.read, {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverGetProcessResourceHistory,
@@ -1988,8 +2001,22 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.providerConsumeResetCredit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerConsumeResetCredit,
+            Effect.gen(function* () {
+              const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+              const instance = yield* providerInstances.getInstance(input.instanceId);
+              return yield* consumeInstanceResetCredit(instance, input);
+            }),
+            { "rpc.aggregate": "provider" },
+          ),
         [WS_METHODS.serverGetUsageSummary]: (input) =>
           observeRpcEffect(WS_METHODS.serverGetUsageSummary, usage.readSummary(input), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverRefreshUsageRates]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverRefreshUsageRates, usage.refreshRates, {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) =>
@@ -2069,6 +2096,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsListStats, pullRequests.listStats(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsStack]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsStack, pullRequests.stack(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsDetail]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsDetail, pullRequests.detail(input), {
             "rpc.aggregate": "pull-requests",
@@ -2133,6 +2164,16 @@ const makeWsRpcLayer = (
           }),
         [WS_METHODS.pullRequestsInvalidate]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsInvalidate, pullRequests.invalidate(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
+        [WS_METHODS.pullRequestsLabelCandidates]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsLabelCandidates,
+            pullRequests.labelCandidates(input),
+            { "rpc.aggregate": "pull-requests" },
+          ),
+        [WS_METHODS.pullRequestsSetLabels]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsSetLabels, pullRequests.setLabels(input), {
             "rpc.aggregate": "pull-requests",
           }),
         [WS_METHODS.pullRequestsReviewerCandidates]: (input) =>
@@ -2273,6 +2314,16 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
             "rpc.aggregate": "workspace",
           }),
+        [WS_METHODS.agentSessionsScan]: () =>
+          observeRpcEffect(WS_METHODS.agentSessionsScan, agentSessionScanner.scan, {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.agentSessionsImport]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentSessionsImport,
+            agentSessionImporter.importRecent(input),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.filesystemBrowse]: (input) =>
           observeRpcEffect(
             WS_METHODS.filesystemBrowse,
@@ -2324,7 +2375,10 @@ const makeWsRpcLayer = (
                     : {}),
                 });
               }
-              if (input.resource._tag !== "workspace-file") {
+              if (
+                input.resource._tag !== "workspace-file" &&
+                input.resource._tag !== "media-file"
+              ) {
                 return yield* issueAssetUrl({ resource: input.resource });
               }
               const thread = yield* threadManagement
@@ -2430,22 +2484,29 @@ const makeWsRpcLayer = (
           observeRpcStream(
             WS_METHODS.gitRunStackedAction,
             Stream.callback<GitActionProgressEvent, GitManagerServiceError>((queue) =>
-              gitWorkflow
-                .runStackedAction(input, {
+              withCreatedPullRequestLink(
+                input,
+                gitWorkflow.runStackedAction(input, {
                   actionId: input.actionId,
                   progressReporter: {
                     publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
                   },
-                })
-                .pipe(
-                  Effect.matchCauseEffect({
-                    onFailure: (cause) => Queue.failCause(queue, cause),
-                    onSuccess: () =>
-                      refreshGitStatus(input.cwd).pipe(
-                        Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
-                      ),
-                  }),
+                }),
+              ).pipe(
+                Effect.provideService(
+                  ThreadManagementService.ThreadManagementService,
+                  threadManagement,
                 ),
+                Effect.provideService(ProjectService.ProjectService, projectService),
+                Effect.provideService(Path.Path, path),
+                Effect.matchCauseEffect({
+                  onFailure: (cause) => Queue.failCause(queue, cause),
+                  onSuccess: () =>
+                    refreshGitStatus(input.cwd).pipe(
+                      Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
+                    ),
+                }),
+              ),
             ),
             { "rpc.aggregate": "vcs" },
           ),

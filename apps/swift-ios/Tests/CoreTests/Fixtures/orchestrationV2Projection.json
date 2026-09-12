@@ -14,6 +14,193 @@
     "interactionMode": "default",
     "branch": null,
     "worktreePath": null,
+    "pullRequests": [
+      {
+        "host": "github.com",
+        "repository": "example/repo",
+        "number": 41,
+        "projectId": "project-v2",
+        "url": "https://github.com/example/repo/pull/41",
+        "source": "agent",
+        "linkedAt": "2026-06-20T00:00:00.000Z",
+        "snapshot": {
+          "state": "open",
+          "title": "Change 41",
+          "headBranch": "feature/41",
+          "baseBranch": "main",
+          "isDraft": false,
+          "updatedAt": "2026-06-20T00:00:00.000Z",
+          "syncedAt": "2026-06-20T00:00:00.000Z",
+          "author": {
+            "login": "octocat",
+            "name": null,
+            "avatarUrl": null
+          },
+          "additions": 12,
+          "deletions": 3,
+          "changedFiles": 2,
+          "reviewDecision": "approved",
+          "checksState": "passing",
+          "mergeability": "mergeable"
+        },
+        "stack": {
+          "kind": "native",
+          "id": "stack-9",
+          "number": 9,
+          "url": "https://github.com/example/repo/stack/9",
+          "base": "main",
+          "layers": [
+            {
+              "number": 41,
+              "headBranch": "feature/41",
+              "state": "open"
+            },
+            {
+              "number": 42,
+              "headBranch": "feature/42",
+              "state": "open"
+            },
+            {
+              "number": 43,
+              "headBranch": "feature/43",
+              "state": "open"
+            }
+          ]
+        }
+      },
+      {
+        "host": "github.com",
+        "repository": "example/repo",
+        "number": 42,
+        "projectId": "project-v2",
+        "url": "https://github.com/example/repo/pull/42",
+        "source": "stack",
+        "linkedAt": "2026-06-20T00:00:00.000Z",
+        "snapshot": {
+          "state": "open",
+          "title": "Change 42",
+          "headBranch": "feature/42",
+          "baseBranch": "feature/41",
+          "isDraft": true,
+          "updatedAt": "2026-06-20T00:00:00.000Z",
+          "syncedAt": "2026-06-20T00:00:00.000Z",
+          "author": {
+            "login": "octocat",
+            "name": null,
+            "avatarUrl": null
+          },
+          "additions": 12,
+          "deletions": 3,
+          "changedFiles": 2,
+          "reviewDecision": "approved",
+          "checksState": "passing",
+          "mergeability": "mergeable"
+        },
+        "stack": {
+          "kind": "native",
+          "id": "stack-9",
+          "number": 9,
+          "url": "https://github.com/example/repo/stack/9",
+          "base": "main",
+          "layers": [
+            {
+              "number": 41,
+              "headBranch": "feature/41",
+              "state": "open"
+            },
+            {
+              "number": 42,
+              "headBranch": "feature/42",
+              "state": "open"
+            },
+            {
+              "number": 43,
+              "headBranch": "feature/43",
+              "state": "open"
+            }
+          ]
+        }
+      },
+      {
+        "host": "github.com",
+        "repository": "example/repo",
+        "number": 43,
+        "projectId": "project-v2",
+        "url": "https://github.com/example/repo/pull/43",
+        "source": "stack-dismissed",
+        "linkedAt": "2026-06-20T00:00:00.000Z",
+        "snapshot": {
+          "state": "open",
+          "title": "Change 43",
+          "headBranch": "feature/43",
+          "baseBranch": "feature/42",
+          "isDraft": false,
+          "updatedAt": "2026-06-20T00:00:00.000Z",
+          "syncedAt": "2026-06-20T00:00:00.000Z",
+          "author": {
+            "login": "octocat",
+            "name": null,
+            "avatarUrl": null
+          },
+          "additions": 12,
+          "deletions": 3,
+          "changedFiles": 2,
+          "reviewDecision": "approved",
+          "checksState": "passing",
+          "mergeability": "mergeable"
+        },
+        "stack": {
+          "kind": "native",
+          "id": "stack-9",
+          "number": 9,
+          "url": "https://github.com/example/repo/stack/9",
+          "base": "main",
+          "layers": [
+            {
+              "number": 41,
+              "headBranch": "feature/41",
+              "state": "open"
+            },
+            {
+              "number": 42,
+              "headBranch": "feature/42",
+              "state": "open"
+            },
+            {
+              "number": 43,
+              "headBranch": "feature/43",
+              "state": "open"
+            }
+          ]
+        }
+      }
+    ],
+    "branchPullRequest": {
+      "projectId": "project-v2",
+      "repository": "example/repo",
+      "number": 42,
+      "url": "https://github.com/example/repo/pull/42"
+    },
+    "linkedPullRequest": {
+      "projectId": "project-v2",
+      "repository": "example/repo",
+      "number": 41,
+      "url": "https://github.com/example/repo/pull/41"
+    },
+    "linkedPullRequests": [
+      {
+        "projectId": "project-v2",
+        "repository": "example/repo",
+        "number": 41,
+        "url": "https://github.com/example/repo/pull/41"
+      },
+      {
+        "projectId": "project-v2",
+        "repository": "example/repo",
+        "number": 42,
+        "url": "https://github.com/example/repo/pull/42"
+      }
+    ],
     "activeProviderThreadId": "provider-thread-1",
     "lineage": {
       "parentThreadId": null,
@@ -363,7 +550,21 @@
       "type": "approval_request",
       "requestId": "request-approval",
       "requestKind": "command",
-      "prompt": "Run ls?"
+      "prompt": "Run ls?",
+      "options": [
+        {
+          "decision": "accept",
+          "label": "Allow once"
+        },
+        {
+          "decision": "acceptForSession",
+          "label": "Allow this session"
+        },
+        {
+          "decision": "decline",
+          "label": "Decline"
+        }
+      ]
     },
     {
       "id": "item-checkpoint",
@@ -612,6 +813,24 @@
       "completedAt": "2026-06-20T00:00:00.000Z",
       "updatedAt": "2026-06-20T00:00:00.000Z",
       "type": "dynamic_tool",
+      "toolSurface": "browser",
+      "toolIcon": {
+        "_tag": "website",
+        "pageUrl": "https://github.com/org/repo",
+        "faviconUrlDark": "https://github.githubassets.com/favicons/favicon-dark.svg"
+      },
+      "toolSource": {
+        "key": "browser-use:chrome",
+        "name": "Chrome",
+        "kind": "integration",
+        "icon": {
+          "_tag": "native-app",
+          "app": {
+            "_tag": "display-name",
+            "displayName": "Google Chrome"
+          }
+        }
+      },
       "toolName": "t3-code__delegate_task",
       "input": {
         "task": "go"
@@ -1009,7 +1228,21 @@
         "type": "approval_request",
         "requestId": "request-approval",
         "requestKind": "command",
-        "prompt": "Run ls?"
+        "prompt": "Run ls?",
+        "options": [
+          {
+            "decision": "accept",
+            "label": "Allow once"
+          },
+          {
+            "decision": "acceptForSession",
+            "label": "Allow this session"
+          },
+          {
+            "decision": "decline",
+            "label": "Decline"
+          }
+        ]
       }
     },
     {
@@ -1324,6 +1557,24 @@
         "completedAt": "2026-06-20T00:00:00.000Z",
         "updatedAt": "2026-06-20T00:00:00.000Z",
         "type": "dynamic_tool",
+        "toolSurface": "browser",
+        "toolIcon": {
+          "_tag": "website",
+          "pageUrl": "https://github.com/org/repo",
+          "faviconUrlDark": "https://github.githubassets.com/favicons/favicon-dark.svg"
+        },
+        "toolSource": {
+          "key": "browser-use:chrome",
+          "name": "Chrome",
+          "kind": "integration",
+          "icon": {
+            "_tag": "native-app",
+            "app": {
+              "_tag": "display-name",
+              "displayName": "Google Chrome"
+            }
+          }
+        },
         "toolName": "t3-code__delegate_task",
         "input": {
           "task": "go"

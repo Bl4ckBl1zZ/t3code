@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E10000000000000000000001 /* SVGView in Frameworks */ = {isa = PBXBuildFile; productRef = E30000000000000000000001 /* SVGView */; };
 		B10000000000000000000001 /* ClerkKit in Frameworks */ = {isa = PBXBuildFile; productRef = B30000000000000000000001 /* ClerkKit */; };
 		B10000000000000000000002 /* ClerkKitUI in Frameworks */ = {isa = PBXBuildFile; productRef = B30000000000000000000002 /* ClerkKitUI */; };
 		D10000000000000000000001 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = D40000000000000000000001 /* GhosttyKit.xcframework */; };
@@ -96,6 +97,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B10000000000000000000001 /* ClerkKit in Frameworks */,
+				E10000000000000000000001 /* SVGView in Frameworks */,
 				B10000000000000000000002 /* ClerkKitUI in Frameworks */,
 				D10000000000000000000001 /* GhosttyKit.xcframework in Frameworks */,
 			);
@@ -257,6 +259,7 @@
 			name = T3Code;
 			packageProductDependencies = (
 				B30000000000000000000001 /* ClerkKit */,
+				E30000000000000000000001 /* SVGView */,
 				B30000000000000000000002 /* ClerkKitUI */,
 			);
 			productName = T3Code;
@@ -386,6 +389,7 @@
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A30000000000000000000002 /* Products */;
 			packageReferences = (
+				E20000000000000000000001 /* SVGView */,
 				B20000000000000000000001 /* XCRemoteSwiftPackageReference "clerk-ios" */,
 			);
 			projectDirPath = "";
@@ -954,6 +958,11 @@
 				version = 1.2.0;
 			};
 		};
+		E20000000000000000000001 /* SVGView */ = {
+            isa = XCRemoteSwiftPackageReference;
+            repositoryURL = "https://github.com/exyte/SVGView.git";
+            requirement = { kind = revision; revision = fd9f0303bc2da37e5d1ea98f42835c8273361c7b; };
+        };
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -967,6 +976,11 @@
 			package = B20000000000000000000001 /* XCRemoteSwiftPackageReference "clerk-ios" */;
 			productName = ClerkKitUI;
 		};
+		E30000000000000000000001 /* SVGView */ = {
+            isa = XCSwiftPackageProductDependency;
+            package = E20000000000000000000001 /* SVGView */;
+            productName = SVGView;
+        };
 /* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXFileReference section */

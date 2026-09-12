@@ -157,3 +157,17 @@ Use a totally separate `CODEX_HOME path` only when you want a separate Codex wor
 
 That means separate sessions and less account switching inside old threads. Most dual-account users
 should use the shared-home plus shadow-home setup instead.
+
+## Manage accounts from iOS
+
+Open **Settings → Agents**, select the paired server, and choose **Add provider account**.
+Choose a provider and a unique account ID, then set its name, color, connection settings,
+and environment variables. Paths refer to the selected server. Save to make the account
+available in that server's model picker; the provider may still require sign-in on the server.
+
+For an existing account, open **Configuration** to edit or disable it. Built-in accounts
+keep their IDs. Custom accounts can be removed and added again with the same ID; removing
+an account keeps its conversations and deletes its stored environment credentials.
+Sensitive values remain hidden after saving. Enter a replacement before changing a saved
+secret's variable name or sensitivity. If another client changes the same field, reopen
+the account settings before saving your edit.
