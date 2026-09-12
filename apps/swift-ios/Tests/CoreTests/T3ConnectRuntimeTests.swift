@@ -330,6 +330,18 @@ final class T3ConnectRuntimeTests: XCTestCase {
     }
 
     func testRejectedTokenRefreshesOnceAndRetriesWithANewProof() async throws {
+        try await checkRejectedSessionRecovery(status: 401)
+    }
+
+    func testUnauthenticatedSuccessfulSessionRefreshesOnce() async throws {
+        try await checkRejectedSessionRecovery(status: 200)
+    }
+
+    func testPersistentUnauthenticatedSessionFailsAfterOneRefresh() async throws {
+        try await checkRejectedSessionRecovery(status: 200, remainsRejected: true)
+    }
+
+    private func checkRejectedSessionRecovery(status: Int, remainsRejected: Bool = false) async throws {
         let signer = try testSigner()
         let thumbprint = try await signer.thumbprint()
         let environment = managedEnvironment(descriptor: descriptor())
@@ -345,14 +357,14 @@ final class T3ConnectRuntimeTests: XCTestCase {
         let transport = T3ConnectScriptedHTTPTransport { request, ordinal in
             switch (request.url?.path, ordinal) {
             case ("/api/auth/session", 1):
-                return (Data(#"{"message":"expired"}"#.utf8), 401)
+                return (Data(#"{"authenticated":false,"message":"expired"}"#.utf8), status)
             case ("/.well-known/t3/environment", 2):
                 return (.descriptor, 200)
             case ("/oauth/token", 3):
                 return (.token(scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes
                     .joined(separator: " ")), 200)
             case ("/api/auth/session", 4):
-                return (.authSession, 200)
+                return (remainsRejected ? Data(#"{"authenticated":false}"#.utf8) : .authSession, 200)
             default:
                 throw T3ConnectTestError.unexpectedPath(request.url?.path)
             }
@@ -374,7 +386,16 @@ final class T3ConnectRuntimeTests: XCTestCase {
             managedAuthorization: runtimeAuthorization
         )
 
-        _ = try await api.session(for: environment)
+        do {
+            let session = try await api.session(for: environment)
+            XCTAssertFalse(remainsRejected)
+            XCTAssertTrue(session.authenticated)
+        } catch let error as HTTPError {
+            guard remainsRejected else { throw error }
+            guard case let .status(code, message, _) = error else { throw error }
+            XCTAssertEqual(code, 401)
+            XCTAssertTrue(message.contains("renewed session authorization"))
+        }
 
         let refreshCalls = await bootstrap.calls
         XCTAssertEqual(refreshCalls, 1)

@@ -14,6 +14,7 @@ import {
   removeCatalogValue,
   removeConnectionFromCatalog,
   replaceCatalogValue,
+  putRemoteDpopTokenInCatalog,
 } from "@t3tools/client-runtime/platform";
 import { TokenStore } from "@t3tools/client-runtime/authorization";
 import {
@@ -426,15 +427,7 @@ export const connectionStorageLayer = Layer.effectContext(
             ),
           ),
         ),
-      put: (token) =>
-        catalog.update((document) => ({
-          ...document,
-          remoteDpopTokens: replaceCatalogValue(
-            document.remoteDpopTokens,
-            (value) => value.environmentId,
-            token,
-          ),
-        })),
+      put: (token) => catalog.update((document) => putRemoteDpopTokenInCatalog(document, token)),
       remove: (environmentId) =>
         catalog.update((document) => ({
           ...document,

@@ -193,6 +193,7 @@ public actor EnvironmentAPI {
             environment: environment,
             path: "/api/auth/session",
             method: "GET",
+            isUnauthorizedResponse: { !$0.authenticated },
             as: AuthSessionState.self
         )
     }
@@ -260,6 +261,7 @@ public actor EnvironmentAPI {
         body: Data? = nil,
         contentType: String = "application/json",
         timeoutInterval: TimeInterval? = nil,
+        isUnauthorizedResponse: @Sendable (Result) -> Bool = { _ in false },
         as type: Result.Type
     ) async throws -> Result {
         guard let credential = try await credentials.credential(for: environment.id) else {
@@ -324,7 +326,11 @@ public actor EnvironmentAPI {
                 request.timeoutInterval = timeoutInterval
             }
             do {
-                return try await send(request, as: type)
+                let result = try await send(request, as: type)
+                if isUnauthorizedResponse(result) {
+                    throw HTTPError.status(401, message: "The environment rejected the session authorization.", traceID: nil)
+                }
+                return result
             } catch let error as HTTPError where error.isRejectedAuthorization {
                 if let saved = try await newestUsableManagedCredential(
                     replacing: current,
@@ -354,7 +360,11 @@ public actor EnvironmentAPI {
                 if let timeoutInterval {
                     retry.timeoutInterval = timeoutInterval
                 }
-                return try await send(retry, as: type)
+                let result = try await send(retry, as: type)
+                guard !isUnauthorizedResponse(result) else {
+                    throw HTTPError.status(401, message: "The environment rejected the renewed session authorization.", traceID: nil)
+                }
+                return result
             }
         }
     }

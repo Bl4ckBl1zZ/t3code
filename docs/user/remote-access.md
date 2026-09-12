@@ -276,3 +276,10 @@ If T3 Connect encounters a timeout, DNS failure, or unreachable host, it suggest
 network or checking the VPN. This is a possible cause, not a diagnosis. Offline errors and
 sign-in failures stay distinct. Use **Retry connection** after addressing the problem, or expand
 **Technical details** for the transport error category and code.
+
+## Credential renewal
+
+T3 Connect renews access credentials when needed without disconnecting a healthy conversation.
+A failed renewal affects the request that needed it; retry after restoring connectivity or
+signing in again. A session with an open connection stays listed after its access credential
+expires and can still be revoked from connection management.
