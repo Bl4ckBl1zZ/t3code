@@ -58,6 +58,11 @@ choices take priority; changing defaults does not change running threads.
 
 ## Shared actions
 
+Edits to a checkout's `t3.json`, including edits made by an agent, are picked up
+automatically. Project actions sync within a few seconds. Open web, desktop, and
+React Native views also refresh the file every 1.5 seconds, so configuration
+changes such as preview URLs and new-thread defaults appear without reloading.
+
 Set **Default actions** in **Settings → Projects → Project defaults** on web or
 desktop. In iOS **Settings → Project defaults**, use **Machine actions**. Actions
 are available to projects that inherit them, and run in the selected checkout or
