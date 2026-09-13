@@ -257,7 +257,7 @@ import {
   EraserIcon,
   ListTodoIcon,
   PencilRulerIcon,
-  PlusIcon,
+  EllipsisIcon,
   PaperclipIcon,
   SquarePenIcon,
 } from "lucide-react";
@@ -3413,6 +3413,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
       {isComposerResting || isComposerFooterCompact ? (
         <CompactComposerControlsMenu
+          size={isComposerResting ? "xs" : "sm"}
           activePlan={showPlanSidebarToggle}
           interactionMode={interactionMode}
           planSidebarLabel={planSidebarLabel}
@@ -4030,63 +4031,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   "absolute bottom-px right-px z-10 h-12 w-max gap-1 py-0 sm:gap-1 sm:py-0",
               )}
             >
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                aria-label="Choose attachments"
+                onChange={(event) => {
+                  addComposerImages(Array.from(event.currentTarget.files ?? []));
+                  event.currentTarget.value = "";
+                }}
+              />
               <div
                 ref={composerFooterControlsRef}
-                className="-m-1 -ms-3.5 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 ps-3.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                data-chat-composer-controls="left"
+                data-chat-composer-footer-controls="true"
+                className={cn(
+                  "-m-1 -ms-3.5 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 ps-3.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                  isComposerResting && "hidden",
+                )}
               >
-                <input
-                  ref={attachmentInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  aria-label="Choose attachments"
-                  onChange={(event) => {
-                    addComposerImages(Array.from(event.currentTarget.files ?? []));
-                    event.currentTarget.value = "";
-                  }}
-                />
-                <Menu>
-                  <MenuTrigger
-                    type="button"
-                    className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-                    aria-label="Add to chat"
-                    title="Add to chat"
-                    disabled={
-                      isConnecting ||
-                      isComposerApprovalState ||
-                      pendingUserInputs.length > 0 ||
-                      projectSelectionRequired
-                    }
-                  >
-                    <PlusIcon className="size-4" />
-                  </MenuTrigger>
-                  <MenuPopup side="top" align="start" className="w-44">
-                    <MenuItem
-                      disabled={isAttachmentLimitReached(composerImages.length)}
-                      {...(isAttachmentLimitReached(composerImages.length)
-                        ? {
-                            title: `Attachment limit reached (${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} of ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS})`,
-                          }
-                        : {})}
-                      onClick={() => attachmentInputRef.current?.click()}
-                    >
-                      <PaperclipIcon />
-                      Attach files
-                    </MenuItem>
-                    {isProjectlessConversation ? (
-                      <>
-                        <MenuItem onClick={onStartFreshChat}>
-                          <SquarePenIcon />
-                          New chat
-                        </MenuItem>
-                        <MenuItem onClick={onClearChat}>
-                          <EraserIcon />
-                          Clear chat
-                        </MenuItem>
-                      </>
-                    ) : null}
-                  </MenuPopup>
-                </Menu>
                 {!isComposerResting ? composerModelControls : null}
               </div>
 
@@ -4099,6 +4063,66 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
+                {isProjectlessConversation ? (
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Chat actions"
+                        />
+                      }
+                      disabled={
+                        isConnecting ||
+                        isComposerApprovalState ||
+                        pendingUserInputs.length > 0 ||
+                        projectSelectionRequired
+                      }
+                    >
+                      <EllipsisIcon />
+                    </MenuTrigger>
+                    <MenuPopup side="top" align="end" className="w-44">
+                      <MenuItem onClick={onStartFreshChat}>
+                        <SquarePenIcon />
+                        New chat
+                      </MenuItem>
+                      <MenuItem onClick={onClearChat}>
+                        <EraserIcon />
+                        Clear chat
+                      </MenuItem>
+                    </MenuPopup>
+                  </Menu>
+                ) : null}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        onPointerDown={(event) => event.preventDefault()}
+                        onClick={() => attachmentInputRef.current?.click()}
+                        aria-label="Attach files"
+                        disabled={
+                          isConnecting ||
+                          isComposerApprovalState ||
+                          pendingUserInputs.length > 0 ||
+                          projectSelectionRequired ||
+                          isAttachmentLimitReached(composerImages.length)
+                        }
+                      />
+                    }
+                  >
+                    <PaperclipIcon />
+                  </TooltipTrigger>
+                  <TooltipPopup>
+                    {isAttachmentLimitReached(composerImages.length)
+                      ? `Attachment limit reached (${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} of ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS})`
+                      : "Attach files"}
+                  </TooltipPopup>
+                </Tooltip>
                 <ComposerVoiceAction
                   state={voice.state}
                   // Dictation stays available while the agent runs: the transcript only lands

@@ -2,7 +2,7 @@ import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon, ListTodoIcon } from "lucide-react";
 import type { resolveRuntimeModePicker } from "./composerRuntimeModes";
-import { Button } from "../ui/button";
+import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import {
   Menu,
   MenuItem,
@@ -14,6 +14,7 @@ import {
 } from "../ui/menu";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
+  size?: "sm" | "xs";
   activePlan: boolean;
   interactionMode: ProviderInteractionMode;
   planSidebarLabel: string;
@@ -29,15 +30,15 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
     <Menu>
       <MenuTrigger
         render={
-          <Button
-            size="sm"
+          <ComposerControl
+            size={props.size ?? "sm"}
             variant="ghost"
-            className="shrink-0 px-2 text-muted-foreground/70 hover:text-foreground/80"
+            className={props.size === "xs" ? "shrink-0" : "shrink-0 px-2"}
             aria-label="More composer controls"
           />
         }
       >
-        <EllipsisIcon aria-hidden="true" className="size-4" />
+        <ComposerControlIcon icon={EllipsisIcon} size={props.size ?? "sm"} />
       </MenuTrigger>
       <MenuPopup align="start">
         {props.traitsMenuContent ? (
