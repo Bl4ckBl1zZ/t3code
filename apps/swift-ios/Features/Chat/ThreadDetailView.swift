@@ -537,18 +537,6 @@ public struct ThreadDetailView: View {
                 // composer to the screen edge, but still rises for the
                 // keyboard.
                 .ignoresSafeArea(.container, edges: .bottom)
-                .overlay(alignment: .bottomTrailing) {
-                    HStack(spacing: 16) {
-                        Button("Previous turn", systemImage: "arrow.up") { turnNavigationRequest -= 1 }
-                        Button("Next turn", systemImage: "arrow.down") { turnNavigationRequest += 1 }
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.bordered)
-                    .padding(10)
-                    .background(.regularMaterial, in: Capsule())
-                    .padding(.bottom, composerHeight + 12)
-                    .padding(.trailing, 18)
-                }
             }
         }
         .overlay(alignment: .top) {
@@ -577,6 +565,22 @@ public struct ThreadDetailView: View {
                         key: TranscriptComposerHeightKey.self,
                         value: proxy.size.height
                     )
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if !detail.messages.isEmpty || !detail.timelineItems.isEmpty || isWorking {
+                    HStack(spacing: 16) {
+                        Button("Previous turn", systemImage: "arrow.up") { turnNavigationRequest -= 1 }
+                        Button("Next turn", systemImage: "arrow.down") { turnNavigationRequest += 1 }
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.bordered)
+                    .padding(10)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.trailing, 18)
+                    // Anchor to the composer stack itself: the transcript's
+                    // safe-area geometry already accounts for this stack.
+                    .alignmentGuide(.top) { $0[.bottom] + 12 }
                 }
             }
         }
