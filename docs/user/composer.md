@@ -13,6 +13,9 @@ attach videos, text files, PDFs, ZIP archives, and other files. Each file can be
 by the server, capped at 50 MB. Each message can contain up to eight attachments in total. Files
 upload directly to the environment, where your agent can read, copy, or edit them by their file path.
 
+On web and desktop, use the paperclip beside the voice and send controls to attach files.
+In projectless chats, the **Chat actions** menu offers **New chat** and **Clear chat**.
+
 On web and desktop, attachments upload as soon as you add them. The send button becomes available
 after every upload finishes. Failed uploads can be retried or removed. On mobile, tap **+** to open
 the photo library from either the compact or expanded composer. When the connected server supports
