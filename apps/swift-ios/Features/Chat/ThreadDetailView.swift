@@ -557,17 +557,6 @@ public struct ThreadDetailView: View {
             VStack(spacing: 0) {
                 queueSurfaces
                 ComposerTasksView(detail: detail)
-                composer(detail)
-            }
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: TranscriptComposerHeightKey.self,
-                        value: proxy.size.height
-                    )
-                }
-            }
-            .overlay(alignment: .topTrailing) {
                 if !detail.messages.isEmpty || !detail.timelineItems.isEmpty || isWorking {
                     HStack(spacing: 16) {
                         Button("Previous turn", systemImage: "arrow.up") { turnNavigationRequest -= 1 }
@@ -577,10 +566,17 @@ public struct ThreadDetailView: View {
                     .buttonStyle(.bordered)
                     .padding(10)
                     .background(.regularMaterial, in: Capsule())
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                     .padding(.trailing, 18)
-                    // Anchor to the composer stack itself: the transcript's
-                    // safe-area geometry already accounts for this stack.
-                    .alignmentGuide(.top) { $0[.bottom] + 12 }
+                }
+                composer(detail)
+            }
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: TranscriptComposerHeightKey.self,
+                        value: proxy.size.height
+                    )
                 }
             }
         }
