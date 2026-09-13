@@ -55,6 +55,9 @@ expand it again. Multiline drafts, open questions, approvals, and errors stay ex
 Turn this off with **Settings → General → Collapse composer while scrolling**. This
 preference does not change the native iOS composer's touch and voice gestures.
 
+In the native iOS app, the up and down arrows above the composer jump between your
+sent messages. They stay above the composer as it expands or the keyboard opens.
+
 ## Changing projects
 
 On web and desktop, changing the project from a new thread keeps the current environment when that
