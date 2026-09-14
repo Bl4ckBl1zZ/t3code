@@ -14,3 +14,6 @@ recording support.
 
 Agents can request text-only page snapshots or include an image. Large text responses are
 bounded, while structured page metadata remains available for precise page inspection.
+
+Floating browser previews show a red recording indicator while capture is active. The indicator
+also remains visible when the floating preview controls are open.

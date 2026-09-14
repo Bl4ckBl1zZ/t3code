@@ -13,10 +13,10 @@ const encodePreferences = Schema.encodeSync(Schema.fromJsonString(UsagePagePrefe
 export function readUsagePagePreferences(): UsagePagePreferences {
   try {
     const stored = typeof window === "undefined" ? null : window.localStorage.getItem(STORAGE_KEY);
-    return stored === null ? { metric: "cost", windowDays: 30 } : decodePreferences(stored);
+    return stored === null ? { metric: "limits", windowDays: 30 } : decodePreferences(stored);
   } catch (error) {
     console.error("Could not read Usage page preferences.", error);
-    return { metric: "cost", windowDays: 30 };
+    return { metric: "limits", windowDays: 30 };
   }
 }
 

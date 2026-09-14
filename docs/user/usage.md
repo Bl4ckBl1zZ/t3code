@@ -74,3 +74,13 @@ Hub accounts contribute to the same account comparisons and pooled bars. A known
 also configured locally is counted once, using its freshest report. Failed hubs show an error;
 refresh to try again. Hub accounts report quota but cannot run tasks. Eligible Codex hub
 accounts also support **Use reset**, with confirmation before spending a credit.
+
+## Unpriced activity
+
+On web and desktop, Usage opens on Limits the first time; your last selected tab is remembered.
+A model whose activity has no known prices shows **Unpriced** instead of **$0.00**. The API
+estimate explains when it excludes unpriced records. Token counts still include that activity.
+Unavailable account limits are highlighted so they are not mistaken for available quota.
+
+Usage history includes configured provider account homes, including disabled accounts with saved
+history. Accounts pointing to the same transcript directory are counted once.

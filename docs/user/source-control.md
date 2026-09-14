@@ -187,3 +187,14 @@ The native iOS review provides these actions too, including the saved auto-merge
 Actions are available only when your host supports them and your account has permission.
 
 Pull-request links can open another repository on a Git host configured in the same environment, even when that repository has no local project. Web and native iOS keep the linked repository selected throughout review, comments, diffs and actions. Your existing checkout is used to contact the host.
+
+## Review preferences
+
+On web and desktop, **Settings → General → Default diff file state** chooses whether review files
+start expanded or collapsed. It applies to the diff panel and a pull request's Code tab. You can
+still expand individual files, use the file tree to reveal a file, or expand and collapse all files.
+
+The pull-request workspace toolbar can filter by provider as well as host. Its right panel uses
+your configured panel shortcut. Save a pull-request description edit with **Cmd+Enter** on macOS
+or **Ctrl+Enter** elsewhere. Comment actions remain available when the comments section is folded.
+Working-tree reviews recognize renamed files, including unstaged moves, without changing staging.

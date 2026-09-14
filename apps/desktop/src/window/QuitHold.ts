@@ -90,6 +90,7 @@ export function makeQuitHoldHandler(
         if (!quitOnRelease) {
           release();
         } else {
+          clearWatchdog();
           watchdog = setTimeout(quitNow, QUIT_HOLD_RELEASE_GRACE_MS);
         }
       }
@@ -100,6 +101,7 @@ export function makeQuitHoldHandler(
     if (quitOnRelease && input.isAutoRepeat && key === "q") {
       event.preventDefault();
       clearWatchdog();
+      watchdog = setTimeout(quitNow, QUIT_HOLD_RELEASE_GRACE_MS);
       return;
     }
 

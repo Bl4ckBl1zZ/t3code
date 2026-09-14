@@ -87,7 +87,7 @@ describe("Claude manifest catalog", () => {
 
   it("assigns a manifest default even when discovery did not supply a previous default", () => {
     const models = [
-      { slug: "claude-sonnet-5", name: "Sonnet", isCustom: false, capabilities: null },
+      { slug: "claude-fable-5-1", name: "Fable 5.1", isCustom: false, capabilities: null },
     ];
     expect(
       applyManifestDefault(

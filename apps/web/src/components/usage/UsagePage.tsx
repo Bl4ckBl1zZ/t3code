@@ -9,7 +9,11 @@ import {
 import type { EnvironmentId, UsageProviderKind } from "@t3tools/contracts";
 import { useMemo, useRef, useState } from "react";
 
-import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
+import {
+  isModelCostUnknown,
+  type DailyTotals,
+  type HourlyTotals,
+} from "@t3tools/shared/usageMerge";
 
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
@@ -316,9 +320,11 @@ function UsageHistoryPage({
                           : formatTokens(merged.totalTokens)}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {metric === "cost"
-                          ? `${formatCount(merged.sessions)} sessions · API estimate`
-                          : `${formatCount(merged.sessions)} sessions`}
+                        {metric !== "cost"
+                          ? `${formatCount(merged.sessions)} sessions`
+                          : merged.costQuality.unpricedShare > 0
+                            ? `${formatCount(merged.sessions)} sessions · API estimate excludes ${formatPercent(merged.costQuality.unpricedShare)} unpriced records`
+                            : `${formatCount(merged.sessions)} sessions · API estimate`}
                       </span>
                     </div>
 
@@ -464,10 +470,10 @@ function UsageHistoryPage({
                                 </span>
                               </td>
                               <td className="py-2 text-right text-foreground tabular-nums">
-                                {formatUsd(model.costUsd)}
+                                {isModelCostUnknown(model) ? "Unpriced" : formatUsd(model.costUsd)}
                               </td>
                               <td className="py-2 text-right text-muted-foreground tabular-nums">
-                                {formatPercent(model.costShare)}
+                                {isModelCostUnknown(model) ? "—" : formatPercent(model.costShare)}
                               </td>
                               <td className="py-2 text-right text-muted-foreground tabular-nums">
                                 {formatTokens(model.totalTokens)}

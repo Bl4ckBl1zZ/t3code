@@ -18,6 +18,7 @@ import {
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Alert, AlertTitle } from "../ui/alert";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { Checkbox } from "../ui/checkbox";
 import { SidebarInset } from "../ui/sidebar";
@@ -329,12 +330,14 @@ export function UsageLimits({
                     No limits reported. Refresh to check.
                   </p>
                 ) : account.limits.unavailable ? (
-                  <p className="text-xs text-muted-foreground">
-                    {account.limits.unavailable.message ??
-                      (account.limits.unavailable.reason === "unsupported"
-                        ? "Limits are not supported for this account."
-                        : "Limits could not be checked.")}
-                  </p>
+                  <Alert variant="warning">
+                    <AlertTitle>
+                      {account.limits.unavailable.message ??
+                        (account.limits.unavailable.reason === "unsupported"
+                          ? "Limits are not supported for this account."
+                          : "Limits could not be checked.")}
+                    </AlertTitle>
+                  </Alert>
                 ) : account.limits.windows.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No quota windows reported.</p>
                 ) : (

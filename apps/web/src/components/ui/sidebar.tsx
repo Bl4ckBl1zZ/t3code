@@ -156,10 +156,8 @@ function SidebarProvider({
   return (
     <SidebarContext value={contextValue}>
       <div
-        className={cn(
-          "group/sidebar-wrapper flex min-h-svh w-full has-data-[variant=inset]:bg-sidebar",
-          className,
-        )}
+        // Inset layouts opt into bg-sidebar through className.
+        className={cn("group/sidebar-wrapper flex min-h-svh w-full", className)}
         data-sidebar-state={state}
         data-slot="sidebar-wrapper"
         style={
@@ -699,7 +697,7 @@ function SidebarContent({
       <ScrollArea hideScrollbars scrollFade className="h-auto min-h-0 flex-1">
         <div
           className={cn(
-            "flex w-full min-w-0 flex-col gap-2 group-data-[collapsible=icon]:overflow-hidden",
+            "flex w-full min-w-0 flex-col gap-2 [overflow-anchor:none] group-data-[collapsible=icon]:overflow-hidden",
             className,
           )}
           data-sidebar="content"
