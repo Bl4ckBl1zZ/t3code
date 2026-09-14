@@ -75,7 +75,7 @@ describe("HermesSessionCatalog", () => {
       }),
   );
 
-  effectIt.effect("refuses a remote endpoint even when remote access is enabled", () =>
+  effectIt.effect("connects to an encrypted remote endpoint when remote access is enabled", () =>
     Effect.gen(function* () {
       const fake = makeFakeClient(supportedCompatibility);
       const catalog = makeHermesSessionCatalog({
@@ -83,9 +83,9 @@ describe("HermesSessionCatalog", () => {
         endpoint: "wss://hermes.example.com:18789",
         clientFactory: () => fake.client,
       });
-      const error = yield* Effect.flip(catalog.list(10));
-      expect(error.code).toBe("provider_not_configured");
-      expect(fake.calls).toEqual([]);
+      const result = yield* catalog.list(10);
+      expect(result.sessions).toEqual([]);
+      expect(fake.calls).toEqual(["connect", "listSessions", "close"]);
     }),
   );
 

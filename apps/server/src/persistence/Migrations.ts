@@ -238,6 +238,7 @@ export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]
   [58, { kind: "column", table: "auth_sessions", column: "client_surface" }],
   [59, { kind: "column", table: "projection_projects", column: "project_icon_json" }],
   [60, { kind: "table", table: "agent_session_import_sources" }],
+  [61, { kind: "table", table: "hermes_work_runs" }],
 ];
 
 const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {
