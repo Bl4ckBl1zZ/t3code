@@ -13,6 +13,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import {
   BUNDLED_MODEL_MANIFEST,
   encodeManifestCache,
+  applyManifestDefault,
   classifyModels,
   isLegacyModel,
   make,
@@ -100,7 +101,7 @@ describe("classifyModels", () => {
 
 const REMOTE_MANIFEST: ModelManifestData = {
   version: 1,
-  updatedAt: "2026-09-10T00:00:00Z",
+  updatedAt: "2098-01-01T00:00:00Z",
   currentModels: {
     codex: ["gpt-5.4"],
     claudeAgent: ["claude-fable-5"],
@@ -348,4 +349,24 @@ describe("ModelManifest service", () => {
       ),
     ),
   );
+});
+
+describe("qualified Codex catalog identities", () => {
+  it("classifies and selects a family without rewriting its dispatch id", () => {
+    const manifest: ModelManifestData = {
+      version: 1,
+      currentModels: { codex: ["gpt-test"] },
+      providers: { codex: { models: [], profiles: {}, defaults: { chat: "gpt-test" } } },
+    };
+    const models: ServerProviderModel[] = [
+      { slug: "openai.gpt-old", name: "Old", isCustom: false, isDefault: true, capabilities: null },
+      { slug: "openai.gpt-test", name: "Test", isCustom: false, capabilities: null },
+    ];
+    assert.equal(isLegacyModel(manifest, CODEX, "openai.gpt-test"), false);
+    assert.equal(isLegacyModel(manifest, CODEX, "openai.gpt-old"), true);
+    assert.equal(
+      applyManifestDefault(models, manifest, CODEX).find((model) => model.isDefault)?.slug,
+      "openai.gpt-test",
+    );
+  });
 });

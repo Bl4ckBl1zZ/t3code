@@ -85,6 +85,7 @@ const modelTotals = Object.freeze([
     costUsd: 10,
     totalTokens: 100,
     records: 1,
+    unpricedRecords: 0,
     costShare: 10 / 16,
   },
   {
@@ -93,6 +94,7 @@ const modelTotals = Object.freeze([
     costUsd: 5,
     totalTokens: 1_000,
     records: 1,
+    unpricedRecords: 0,
     costShare: 5 / 16,
   },
   {
@@ -101,6 +103,7 @@ const modelTotals = Object.freeze([
     costUsd: 1,
     totalTokens: 1_000,
     records: 1,
+    unpricedRecords: 0,
     costShare: 1 / 16,
   },
 ]);

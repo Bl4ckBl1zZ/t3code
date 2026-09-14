@@ -183,8 +183,6 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       );
       const maintenanceCapabilities = yield* resolveMaintenance();
 
-      const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
-
       // Build a managed snapshot whose settings never change — mutations come
       // in as instance rebuilds from the registry rather than in-place
       // updates. Pre-provide `ChildProcessSpawner` so the check fits
@@ -239,6 +237,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
               cause,
             }),
         ),
+      );
+
+      const textGeneration = yield* makeCodexTextGeneration(
+        effectiveConfig,
+        processEnv,
+        snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
       );
 
       const orchestrationAdapter = yield* CodexAdapterV2Driver.create({

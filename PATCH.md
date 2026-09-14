@@ -1460,3 +1460,67 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   No cross-app capture API exists on iOS. Linux/Windows capture backends and desktop-config
   installers are omitted from the macOS-only build, and upstream's V1 provider injection is
   replaced by the V2 start/control boundaries. No migration or V1 runtime is imported.
+
+### September 14 upstream range: retained behavior and unresolved ports
+
+The `e16b8b059c..1bbca0e782` range has 159 commits. The earlier squash and feature ports
+remain authoritative; upstream ancestry is not evidence that their content is missing.
+This range is only partially ported. The sync PR contains the per-commit disposition ledger.
+Do not interpret its range marker as enabling the deferred features below.
+
+Carried changes use retained services: rename-aware review diffs use a temporary Git index;
+usage scans resolve account homes and deduplicate shared transcript directories; discovered
+qualified Codex model IDs survive manifest selection and auxiliary generation. The latter
+reads the V2 driver's managed model snapshot, not ProviderService or V1 sessions. Bundled defaults
+are Astra medium and Fable 5.1 medium. No SQLite migration is added.
+
+Web/desktop carry the default diff-folding preference (including reset, search, file reveal and
+PR Code), unpriced model totals, first-visit Limits selection, clearer unavailable limits,
+PR provider filter, configured PR-panel shortcut, comment visibility, editor save shortcut,
+preview recording indicator/corners/focus/fullscreen fixes, sidebar anchoring and styling fixes,
+and missing-page/startup retry actions. Date formatting caches only explicit timezones with a
+bounded cache. Desktop retains the native browser UA, bounds backend shutdown and recovers
+hold-to-quit after missed releases. SnapShot clipping marks rich text truncated so complete flat
+accessibility text can win; the macOS process boundary stays intact. Recording status is static,
+not an always-repainting animation. Cursor opens classic IDE mode; remote Zed accepts roots and
+Windows server paths. Expo-only implementations remain excluded; no Swift UI is implemented here.
+
+The following upstream work remains explicitly **unported**, pending human review and coordinated
+implementation. Future syncs must carry this list forward even though the upstream range advances:
+
+- Device host/simulator/emulator/SSH and concurrent sessions: `dca7b59bea`, `e022fa430e`,
+  `7734c6d71b`, `d2eeacd8cc`, `fb52d125b7`, `8bbe2bf660`, `66e39ca2aa`. Needs V2 ownership,
+  authorization and native contracts; no device capability is enabled.
+- Broad scoped project overrides and new-thread permission defaults: `2c0e891740`, `8b2c0465de`,
+  `e22040dfc1`, `cf1ba3d7da`. Existing narrow fork defaults do not imply this capability.
+- Provider-history rewind and keep-files rewind: `fd5553f1af`, `efccda9ac9`. Requires V2 checkpoint,
+  start and adapter semantics across providers.
+- Structured message context, attachment previews, large pastes and chip tint: `4fed6cfb35`,
+  `68c2277f50`, `75d8b132cd`. Needs V2 start/steering/persistence and Swift fixtures. Upstream
+  migration 051 is excluded; fork migration numbers 36+ remain owned by the fork.
+- Semantic response streaming and its setting: `c07575f573`, `1bbca0e782`. V1 ingestion is not
+  imported and clients must not advertise the setting before V2 implements it.
+- Environment disabling/reorganization/offline handling: `2587c8060c`, `f26198d799`, `2d73746502`,
+  `5e961d3d7f`. Preserve fork request-time renewal and native reconnection until integrated.
+- Compact rail/list and notification/badge work: `ca2cc1339b`, `77bca8b2d7`, `df7ccc8fd0`,
+  `7b61099886`, `0e0ddaeedf`, `42b6bcc6f5`, `6e5e986f15`. Needs V2 status and notification ownership.
+- Forgejo/Gitea and cross-account GitHub routing: `6fd68f5c3e`, `db6e0531e4`. Needs complete
+  host-scoped service and Swift contract/credential-routing review.
+- Shared macOS permissions and preview keystroke retargeting: `36668dbe4f`, `e816064945`.
+  Preserve fork process-isolated capture and Electron 43 ownership until native verification.
+- Generated license inventory `4a4c6dd2ad` must include fork and Swift dependencies. Reusable dev
+  token `3b75e607eb` needs a decision against the fork's existing pairing/worktree policy.
+- V2 timeline/tool/markdown adaptation and profiling: `502131adff`, `27eb79dc71`, `6c69534a58`,
+  `ef6fa11874`, `8fc253605e`, `a9dabbf100`, `d7d7f8f3eb`, `8078c532ce`, `211618fd9f`,
+  `a43f9b45ae`, `3486451525`, `6cdbf76fa4`, `3689c98d27`. Shared sync changes `6e8931d756`,
+  `e145c5f22a` and the non-date portion of `ca6416ec2d` likewise need V2-specific measurements.
+- V2 worktree fallback `dd6ba84dc9` and lazy ignored-file browsing `21d53ca2ee` require transaction
+  and contract parity tests. Preview/panel layout `18f7254e0a`, `c1ff6ab3d6`, `46140c96af`, project
+  picker presentation `c52b8d96e4`, `fb3d165d33`, `4a8ab1b720`, optimistic PR metadata `6a2d246667`
+  and combined branch/linked-PR availability `8461c25ffd` remain for integrated client review.
+
+V1 relinking, Claude launch-argument permission precedence, compaction queue, Grok lifecycle and
+Cursor ACP error changes resolve to fork V2 adapters. The V1 subagent bridge/work-row additions
+(`c0ddfb3a81`, `af2baccd10`) remain excluded, as does keyset thread pagination. Upstream sidebar/PR
+cosmetic replacements do not override the fork's current V2 review presentation. The retained
+project aggregate already exposes unenriched project shells without scanning thread state.
