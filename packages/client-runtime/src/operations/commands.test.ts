@@ -39,13 +39,10 @@ import {
   archiveThread,
   createProject,
   updateProject,
-  discoverHermesSessions,
   forkThreadFromRun,
   mergeThreadBack,
   cancelQueuedRun,
   editQueuedRun,
-  importHermesSessions,
-  resetHermesHistory,
   promoteQueuedRun,
   reorderQueuedRun,
   revertThreadCheckpoint,
@@ -75,7 +72,6 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
-  readonly rpcCalls?: Array<{ readonly method: string; readonly input: unknown }>;
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -110,53 +106,6 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
           updatedAt: "2026-06-06T00:00:00.000Z",
           deletedAt: null,
         };
-      }),
-    [WS_METHODS.hermesSessionsDiscover]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        input.rpcCalls?.push({ method: WS_METHODS.hermesSessionsDiscover, input: requestInput });
-        return {
-          providerInstanceId: "hermes-work",
-          profileKey: "default",
-          sessions: [],
-          capabilities: {
-            discovery: true,
-            lazyHistory: true,
-            transportSources: ["discord", "telegram"],
-            activityTimestamp: {
-              field: "started_at",
-              limitation: "last_active is unavailable",
-            },
-            childSessionLineage: { available: false, reason: "not exposed" },
-            copyChildSession: { available: false, reason: "latest head only" },
-          },
-          mainThreadId: null,
-        };
-      }),
-    [WS_METHODS.hermesSessionsImport]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        input.rpcCalls?.push({ method: WS_METHODS.hermesSessionsImport, input: requestInput });
-        return {
-          providerInstanceId: "hermes-work",
-          profileKey: "default",
-          imported: [],
-          mainThreadId: "thread-main",
-          capabilities: {
-            discovery: true,
-            lazyHistory: true,
-            transportSources: ["discord", "telegram"],
-            activityTimestamp: {
-              field: "started_at",
-              limitation: "last_active is unavailable",
-            },
-            childSessionLineage: { available: false, reason: "not exposed" },
-            copyChildSession: { available: false, reason: "latest head only" },
-          },
-        };
-      }),
-    [WS_METHODS.hermesHistoryReset]: (requestInput: unknown) =>
-      Effect.sync(() => {
-        input.rpcCalls?.push({ method: WS_METHODS.hermesHistoryReset, input: requestInput });
-        return { deletedThreadCount: 2, clearedImportCount: 2 };
       }),
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession.RpcSession = {
@@ -647,53 +596,6 @@ describe("V2 environment commands", () => {
           commandId: "order",
           threadId: v2ThreadId,
           pinOrderKey: "bn",
-        },
-      ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
-  );
-
-  it.effect("routes Hermes discovery, import, and reset through their capability-gated RPCs", () =>
-    Effect.gen(function* () {
-      const rpcCalls: Array<{ readonly method: string; readonly input: unknown }> = [];
-      const supervisor = yield* makeSupervisor({ commands: [], projects: [], rpcCalls });
-
-      yield* discoverHermesSessions({
-        providerInstanceId: ProviderInstanceId.make("hermes-work"),
-        limit: 50,
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-      yield* importHermesSessions({
-        providerInstanceId: ProviderInstanceId.make("hermes-work"),
-        backingProjectId: ProjectId.make("internal-work-backing"),
-        selection: { type: "selected", sessionIds: ["session-1"] },
-        activeWithinDays: 1,
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-      yield* resetHermesHistory({
-        providerInstanceId: ProviderInstanceId.make("hermes-work"),
-        backingProjectId: ProjectId.make("internal-work-backing"),
-        operationId: "history-reset-1",
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-
-      expect(rpcCalls).toEqual([
-        {
-          method: WS_METHODS.hermesSessionsDiscover,
-          input: { providerInstanceId: "hermes-work", limit: 50 },
-        },
-        {
-          method: WS_METHODS.hermesSessionsImport,
-          input: {
-            providerInstanceId: "hermes-work",
-            backingProjectId: "internal-work-backing",
-            selection: { type: "selected", sessionIds: ["session-1"] },
-            activeWithinDays: 1,
-          },
-        },
-        {
-          method: WS_METHODS.hermesHistoryReset,
-          input: {
-            providerInstanceId: "hermes-work",
-            backingProjectId: "internal-work-backing",
-            operationId: "history-reset-1",
-          },
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),

@@ -54,17 +54,15 @@ describe("resolveHermesProviderConnections", () => {
     ).toBe(true);
   });
 
-  it("blocks remote endpoints without dedicated pairing material even when remote access is enabled", () => {
+  it("uses the configured dashboard bearer token for enabled secure remote endpoints", () => {
     const directory = resolveHermesProviderConnections(
       settingsWith({
         config: { endpoint: "wss://hermes.example.com/api/ws", remoteAccessEnabled: true },
         enableRemoteHermes: true,
       }),
     );
-    expect(directory.ready).toEqual([]);
     expect(
-      directory.unavailable.find((provider) => provider.providerInstanceId === "hermes_main")
-        ?.diagnostic,
-    ).toContain("HERMES_REMOTE_PAIRING_TOKEN");
+      directory.ready.find((provider) => provider.providerInstanceId === "hermes_main"),
+    ).toMatchObject({ endpoint: "wss://hermes.example.com/api/ws", token: "token-1" });
   });
 });

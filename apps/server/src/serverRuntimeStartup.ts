@@ -40,10 +40,8 @@ import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManag
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
-import * as HermesProactiveService from "./hermes/HermesProactiveService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
-import { hermesProactiveDefaultMigration } from "./hermes/HermesProactiveDefaultMigration.ts";
 import {
   projectFileBackfillPatch,
   writeMissingProjectFiles,
@@ -446,7 +444,6 @@ export const make = (options?: StartupOptions) =>
     const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
     const threadSettlement = yield* ThreadSettlementReactor.ThreadSettlementReactor;
     const restartContinuation = yield* RestartContinuationService.RestartContinuationService;
-    const hermesProactive = yield* HermesProactiveService.HermesProactiveService;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const worktreeRetention = yield* WorktreeRetentionService.WorktreeRetentionService;
@@ -519,32 +516,6 @@ export const make = (options?: StartupOptions) =>
       // Retention is a durable mutator, so a managed-update trial must park it
       // until the activation boundary just like the orchestration worker.
       yield* forkParked(runStartupPhase("worktree-retention.start", worktreeRetention.start));
-
-      // Runs against settled settings, and only ever writes on the first boot
-      // after proactive mode became the default: an instance stored under the
-      // old default carries an explicit `false` the schema cannot reach.
-      yield* runStartupPhase(
-        "settings.hermes-proactive-default",
-        Effect.gen(function* () {
-          const settings = yield* serverSettings.getSettings;
-          const migration = hermesProactiveDefaultMigration(settings);
-          if (migration === null) return;
-          yield* serverSettings.updateSettings(migration.patch);
-          if (migration.rewrittenInstanceIds.length > 0) {
-            yield* Effect.logInfo("Enabled Hermes proactive mode on existing instances", {
-              providerInstanceIds: migration.rewrittenInstanceIds,
-            });
-          }
-        }).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("failed to apply the Hermes proactive default", {
-              path: error.settingsPath,
-              operation: error.operation,
-              cause: error.cause,
-            }),
-          ),
-        ),
-      );
 
       // Seeds `t3.json` for projects whose actions predate the file. Ordered
       // after settings so the marker is readable, and safe relative to
@@ -797,7 +768,6 @@ export const make = (options?: StartupOptions) =>
     // Independent of the startup phases: watching the Hermes schedule needs no
     // projection and blocks nothing, and a run that fires during a slow startup
     // should still be noticed.
-    yield* hermesProactive.start();
 
     yield* Effect.forkScoped(
       Effect.exit(startup).pipe(

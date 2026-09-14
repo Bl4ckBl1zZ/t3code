@@ -44,7 +44,7 @@ import {
   type ServerProvider,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
-  type ThreadId,
+  ThreadId,
   type RunId,
   type RuntimeRequestId,
   type KeybindingCommand,
@@ -312,6 +312,7 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
+import { hermesEnvironment } from "../state/hermes";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
@@ -1374,6 +1375,9 @@ function ChatViewContent(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
+  const openHermesConversation = useAtomCommand(hermesEnvironment.workMutate, {
+    reportFailure: true,
+  });
   const { settleThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -2113,9 +2117,6 @@ function ChatViewContent(props: ChatViewProps) {
         : rawActiveProject,
     [rawActiveProject, settings, supportsActionDefaults],
   );
-  const handleNewThreadInActiveProject = useCallback(() => {
-    startNewThreadForProject(activeProjectRef, handleNewThread);
-  }, [activeProjectRef, handleNewThread]);
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
@@ -6393,6 +6394,41 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
+  const openFreshHermesConversation = useCallback(
+    async (modelSelection: ModelSelection) => {
+      if (!activeProject) return;
+      const opened = await openHermesConversation({
+        environmentId: activeProject.environmentId,
+        input: {
+          providerInstanceId: modelSelection.instanceId,
+          profile: "default",
+          command: {
+            type: "conversation.open",
+            ...(activeThread ? { sourceThreadId: activeThread.id } : {}),
+            surface: readSidebarWorkspace() === "chat" ? "chat" : "work",
+          },
+        },
+      });
+      if (opened._tag === "Success" && opened.value.threadId) {
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(activeProject.environmentId, ThreadId.make(opened.value.threadId)),
+          ),
+        });
+      }
+    },
+    [activeProject, activeThread, navigate, openHermesConversation],
+  );
+  const handleNewThreadInActiveProject = useCallback(() => {
+    if (isHermesConversation) {
+      const selection = composerRef.current?.getSendContext()?.selectedModelSelection;
+      if (selection) void openFreshHermesConversation(selection);
+      return;
+    }
+    startNewThreadForProject(activeProjectRef, handleNewThread);
+  }, [activeProjectRef, handleNewThread, isHermesConversation, openFreshHermesConversation]);
+
   const clearCurrentHermesTimeline = useCallback(async () => {
     if (!activeThread || !isHermesConversation) {
       return false;
@@ -6702,10 +6738,7 @@ function ChatViewContent(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
-      await handleNewThread(scopeProjectRef(activeProject.environmentId, activeProject.id), {
-        fresh: true,
-        modelSelection: ctxSelectedModelSelection,
-      });
+      await openFreshHermesConversation(ctxSelectedModelSelection);
       return;
     }
     if (standaloneSlashCommand) {
@@ -8306,6 +8339,9 @@ function ChatViewContent(props: ChatViewProps) {
                 onUseArtifactTemplate={useArtifactTemplate}
                 key={activeThread.id}
                 isWorking={isWorking}
+                workingActivityText={
+                  isHermesConversation ? (activeProviderSession?.activityText ?? null) : null
+                }
                 activeTurnInProgress={isWorking || !latestRunSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
                 listRef={legendListRef}
@@ -8527,13 +8563,7 @@ function ChatViewContent(props: ChatViewProps) {
                               promptRef.current = "";
                               clearComposerDraftContent(composerDraftTarget);
                               composerRef.current?.resetCursorState();
-                              void handleNewThread(
-                                scopeProjectRef(activeProject.environmentId, activeProject.id),
-                                {
-                                  fresh: true,
-                                  modelSelection: sendContext.selectedModelSelection,
-                                },
-                              );
+                              void openFreshHermesConversation(sendContext.selectedModelSelection);
                             }}
                             onClearChat={() => {
                               void (async () => {

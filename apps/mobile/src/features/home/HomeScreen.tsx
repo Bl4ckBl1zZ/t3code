@@ -44,10 +44,8 @@ import {
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import {
-  ThreadListV2InboxHeader,
   ThreadListV2PendingRow,
   ThreadListV2Row,
-  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "../threads/thread-list-v2-items";
@@ -212,9 +210,7 @@ export function HomeScreen(props: HomeScreenProps) {
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  const threadListV2FlagEnabled = useThreadListV2Enabled();
-  // T3 Work always uses the v2 list layout regardless of the preference flag.
-  const threadListV2Enabled = props.workspace === "work" || threadListV2FlagEnabled;
+  const threadListV2Enabled = useThreadListV2Enabled();
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
     preferencesResult.value.autoSettleOnMerge !== false;
@@ -759,15 +755,8 @@ export function HomeScreen(props: HomeScreenProps) {
         settledShelfExpanded,
         settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
-        workSections: props.workspace === "work",
       }),
-    [
-      props.workspace,
-      settledShelfExpanded,
-      snoozedShelfExpanded,
-      threadListV2Layout,
-      v2PendingTasks,
-    ],
+    [settledShelfExpanded, snoozedShelfExpanded, threadListV2Layout, v2PendingTasks],
   );
 
   const renderV2Item = useCallback(
@@ -776,9 +765,6 @@ export function HomeScreen(props: HomeScreenProps) {
       const showTrailingDivider =
         nextItem?.type === "v2-thread" ||
         (nextItem?.type === "v2-pending" && !nextItem.showPendingDivider);
-      if (item.type === "v2-work-section") {
-        return <ThreadListV2SectionDivider label={item.label} tone={item.tone} />;
-      }
       if (item.type === "v2-pending") {
         const pendingScopeKey = scopedProjectKey(
           item.pendingTask.message.environmentId,
@@ -1098,7 +1084,7 @@ export function HomeScreen(props: HomeScreenProps) {
     props.catalogState.isLoadingConnections ||
     !props.catalogState.hasConnections ||
     !props.catalogState.hasLoadedShellSnapshot;
-  if (!hasAnyThreads && (props.workspace === "code" || catalogNotReady)) {
+  if (!hasAnyThreads) {
     return (
       <View
         className="flex-1 items-center justify-center bg-screen px-8"
@@ -1109,8 +1095,14 @@ export function HomeScreen(props: HomeScreenProps) {
       >
         <View className="w-full max-w-[430px]">
           <EmptyState
-            title={emptyState.title}
-            detail={emptyState.detail}
+            title={
+              props.workspace === "work" && !catalogNotReady ? "No threads yet" : emptyState.title
+            }
+            detail={
+              props.workspace === "work" && !catalogNotReady
+                ? "Create a thread to start a new Hermes conversation."
+                : emptyState.detail
+            }
             actionLabel={!props.catalogState.hasReadyEnvironment ? "Add environment" : undefined}
             onAction={!props.catalogState.hasReadyEnvironment ? props.onAddConnection : undefined}
             variant="plain"
@@ -1129,12 +1121,7 @@ export function HomeScreen(props: HomeScreenProps) {
 
   // Project scoping lives in the header filter menu (no inline chip row on
   // mobile — the menu is the one filter surface).
-  const v2ListHeader = (
-    <>
-      {listHeader}
-      {props.workspace === "work" ? <ThreadListV2InboxHeader /> : null}
-    </>
-  );
+  const v2ListHeader = listHeader;
 
   const listEmpty = !hasResults ? (
     hasSearchQuery && threadSearch.isPending ? null : hasSearchQuery ? (
@@ -1150,7 +1137,14 @@ export function HomeScreen(props: HomeScreenProps) {
         detail="Choose another environment or create a new task."
       />
     ) : (
-      <EmptyState title="No threads yet" detail="Create a task to start a new coding runtime." />
+      <EmptyState
+        title="No threads yet"
+        detail={
+          props.workspace === "work"
+            ? "Create a thread to start a new Hermes conversation."
+            : "Create a task to start a new coding runtime."
+        }
+      />
     )
   ) : null;
   // Self-contained: v1's listEmpty keys off projectGroups, which ignores the

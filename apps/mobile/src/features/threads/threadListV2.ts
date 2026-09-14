@@ -18,7 +18,6 @@ import {
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId, ThreadLinkedPullRequest } from "@t3tools/contracts";
 
-import { mobileWorkInboxSection, type MobileWorkInboxSection } from "../../lib/mobileWorkspace";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
 export { snoozeWakeLabel };
@@ -351,53 +350,11 @@ export interface ThreadListV2SettledShelfListItem {
   readonly expanded: boolean;
 }
 
-export interface ThreadListV2WorkSectionListItem {
-  readonly type: "v2-work-section";
-  readonly key: string;
-  readonly label: string;
-  /** "needs-you" draws in the attention tone; the rest are quiet dividers. */
-  readonly tone: "default" | "attention";
-}
-
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
-  | ThreadListV2WorkSectionListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem;
-
-const WORK_SECTIONS = [
-  { section: "main", label: "Main", tone: "default" },
-  { section: "needs-you", label: "Needs you", tone: "attention" },
-  { section: "active", label: "Active", tone: "default" },
-] as const satisfies ReadonlyArray<{
-  readonly section: MobileWorkInboxSection;
-  readonly label: string;
-  readonly tone: "default" | "attention";
-}>;
-
-/**
- * Splits the active block into the T3 Work sections, emitting a header only
- * for sections that have rows so an empty inbox stays quiet rather than
- * showing three bare labels.
- */
-function withWorkSectionHeaders(
-  activeItems: ReadonlyArray<ThreadListV2ListItem>,
-): ThreadListV2ListItem[] {
-  const result: ThreadListV2ListItem[] = [];
-  for (const { section, label, tone } of WORK_SECTIONS) {
-    const rows = activeItems.filter(
-      (item) => item.type === "v2-thread" && mobileWorkInboxSection(item.item.thread) === section,
-    );
-    if (rows.length === 0) continue;
-    result.push({ type: "v2-work-section", key: `v2-work-section:${section}`, label, tone });
-    result.push(...rows);
-  }
-  // Anything that is not a thread row (defensive: future item kinds) keeps its
-  // place at the end of the active block rather than being dropped.
-  result.push(...activeItems.filter((item) => item.type !== "v2-thread"));
-  return result;
-}
 
 /**
  * Builds the shared mobile order: active → pending → snoozed shelf → settled.
@@ -414,11 +371,6 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
-  /**
-   * T3 Work only: group the active block into Main / Needs you / Active.
-   * Omitted in Code, which keeps one undifferentiated active block.
-   */
-  readonly workSections?: boolean;
 }): ThreadListV2ListItem[] {
   const threadItems = input.items.map(
     (item): ThreadListV2ListItem => ({
@@ -446,11 +398,7 @@ export function buildThreadListV2ListItems(input: {
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const activeItems = threadItems.slice(0, activeEnd);
-  const result: ThreadListV2ListItem[] =
-    input.workSections === true
-      ? withWorkSectionHeaders(activeItems)
-      : [...activeItems, ...pendingItems];
-  if (input.workSections === true) result.push(...pendingItems);
+  const result: ThreadListV2ListItem[] = [...activeItems, ...pendingItems];
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",

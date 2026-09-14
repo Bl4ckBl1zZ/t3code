@@ -198,11 +198,11 @@ freshDatabase()("renumbered fork journal", (it) => {
         SELECT migration_id, name FROM effect_sql_migrations
         WHERE migration_id >= 36 ORDER BY migration_id
       `;
-      assert.strictEqual(journal.length, 25);
+      assert.strictEqual(journal.length, 26);
       assert.deepStrictEqual(journal[0], { migration_id: 36, name: "OrchestrationV2" });
-      assert.deepStrictEqual(journal[24], {
-        migration_id: 60,
-        name: "AgentSessionImports",
+      assert.deepStrictEqual(journal[25], {
+        migration_id: 61,
+        name: "HermesWorkRuns",
       });
     }),
   );
@@ -220,7 +220,7 @@ freshDatabase()("partially migrated fork database", (it) => {
       const journal = yield* sql<{ readonly n: number }>`
         SELECT COUNT(*) AS n FROM effect_sql_migrations WHERE migration_id >= 36
       `;
-      assert.deepStrictEqual(journal, [{ n: 25 }]);
+      assert.deepStrictEqual(journal, [{ n: 26 }]);
 
       const hermes = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hermes_session_bindings'

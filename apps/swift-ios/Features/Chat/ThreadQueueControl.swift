@@ -126,11 +126,13 @@ public struct ThreadTurnCapabilities: Equatable, Hashable, Sendable {
 }
 
 public struct ThreadWorkflowSession: Equatable, Hashable, Sendable, Identifiable {
+    public let activityText: String?
     public let id: String
     public let status: String
     public let turns: ThreadTurnCapabilities?
 
-    public init(id: String, status: String, turns: ThreadTurnCapabilities? = nil) {
+    public init(id: String, status: String, turns: ThreadTurnCapabilities? = nil, activityText: String? = nil) {
+        self.activityText = activityText
         self.id = id
         self.status = status
         self.turns = turns
@@ -149,7 +151,8 @@ public struct ThreadWorkflowSession: Equatable, Hashable, Sendable, Identifiable
                     supportsSteeringByInterruptRestart: $0.supportsSteeringByInterruptRestart,
                     supportsQueuedMessages: $0.supportsQueuedMessages
                 )
-            }
+            },
+            activityText: session.activityText
         )
     }
 }

@@ -397,6 +397,18 @@ describe("ServerSettings Hermes rollout", () => {
     });
     expect(() =>
       decodeHermesSettings({
+        endpoint: "ws://127.0.0.1/api/ws?session_secret=secret",
+        profileKey: "profile",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeHermesSettings({
+        endpoint: "wss://gateway.example.com/api/ws?session_secret=secret",
+        profileKey: "profile",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeHermesSettings({
         endpoint: "ws://gateway.example.com/api/ws",
         profileKey: "profile",
       }),

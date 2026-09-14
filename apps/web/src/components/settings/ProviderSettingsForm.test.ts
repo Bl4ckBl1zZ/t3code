@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
-import { DRIVER_OPTION_BY_VALUE } from "./providerDriverMeta";
+import { DRIVER_OPTION_BY_VALUE, DRIVER_OPTIONS } from "./providerDriverMeta";
 import {
   deriveProviderSettingsFields,
   nextProviderConfigWithFieldValue,
@@ -10,6 +10,12 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
+  it("offers each provider driver once, including Hermes", () => {
+    const values = DRIVER_OPTIONS.map((option) => option.value);
+    expect(new Set(values).size).toBe(values.length);
+    expect(values.filter((value) => value === "hermes")).toHaveLength(1);
+  });
+
   it("derives visible provider config fields from the client definition schema", () => {
     const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
 
@@ -77,16 +83,8 @@ describe("ProviderSettingsForm helpers", () => {
     ]);
   });
 
-  it("exposes Hermes in Code as a distinct instance-only ACP driver", () => {
-    const hermesAcp = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("hermesAcp")];
-
-    expect(hermesAcp).toBeDefined();
-    expect(hermesAcp?.label).toBe("Hermes in Code");
-    expect(hermesAcp?.hasDefaultInstance).toBe(false);
-    expect(deriveProviderSettingsFields(hermesAcp!).map((field) => field.key)).toEqual([
-      "binaryPath",
-    ]);
-    expect(hermesAcp?.environmentFields).toBeUndefined();
+  it("does not offer the removed Hermes in Code driver", () => {
+    expect(DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("hermesAcp")]).toBeUndefined();
   });
 
   it("exposes Hermes as a built-in provider with its required settings and secret", () => {
@@ -103,11 +101,7 @@ describe("ProviderSettingsForm helpers", () => {
         profileKey: "default",
         managedServerEnabled: true,
         customModels: [],
-        importEnabled: false,
-        mcpEnabled: true,
         attachmentsEnabled: true,
-        proactiveEnabled: true,
-        voiceEnabled: false,
       },
     });
     expect(deriveProviderSettingsFields(hermes!).map((field) => field.key)).toEqual([
@@ -115,11 +109,7 @@ describe("ProviderSettingsForm helpers", () => {
       "profileKey",
       "managedServerEnabled",
       "remoteAccessEnabled",
-      "importEnabled",
-      "mcpEnabled",
       "attachmentsEnabled",
-      "proactiveEnabled",
-      "voiceEnabled",
     ]);
     expect(hermes?.environmentFields).toEqual([
       {

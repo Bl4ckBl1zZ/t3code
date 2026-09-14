@@ -59,6 +59,9 @@ struct ThreadDetailsSheet: View {
     /// version control or automations — the environment row, background tasks,
     /// lineage and thread actions remain.
     var isChatConversation = false
+    var isHermesConversation = false
+    var activeProviderSessionID: String?
+    @State private var workDetailsReloadID = 0
 
     @State private var sourceControl: FeatureSourceControlStatus?
     @State private var isLoadingStatus = true
@@ -76,12 +79,16 @@ struct ThreadDetailsSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 connectionNotice
                 workspaceSection
-                actionsSection
+                if isHermesConversation, let environmentID = environment?.id ?? thread.environmentID,
+                   let manager = client as? any FeatureWorkManaging {
+                    HermesThreadDetailsView(manager: manager, environmentID: environmentID, threadID: thread.wireID ?? thread.id, refreshID: workDetailsReloadID)
+                }
+                if !isHermesConversation { actionsSection }
                 if !isChatConversation {
                     portsSection
                 }
                 backgroundTasksSection
-                if !isChatConversation {
+                if !isChatConversation && !isHermesConversation {
                     versionControlSection
                     automationsSection
                 }
@@ -96,10 +103,19 @@ struct ThreadDetailsSheet: View {
         .background(T3Colors.background)
         .navigationTitle(thread.title)
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { await loadSourceControl() }
+        .refreshable { if isHermesConversation { workDetailsReloadID += 1 } else { await loadSourceControl() } }
         .task { await loadSourceControl() }
+        .onChange(of: thread.updatedAt) { _, _ in
+            if isHermesConversation, thread.state != .working, thread.state != .queued { workDetailsReloadID += 1 }
+        }
+        .onChange(of: activeProviderSessionID) { _, _ in
+            if isHermesConversation { workDetailsReloadID += 1 }
+        }
+        .onChange(of: thread.state) { _, _ in
+            if isHermesConversation { workDetailsReloadID += 1 }
+        }
         .task(id: thread.id) {
-            guard !scripts.isEmpty else { return }
+            guard !scripts.isEmpty, !isHermesConversation else { return }
             for await sessions in client.terminalSessions(threadID: thread.id) {
                 liveScriptIDs = Set(sessions.filter { $0.hasRunningSubprocess }.compactMap(\.activeScriptID))
             }
@@ -186,8 +202,7 @@ struct ThreadDetailsSheet: View {
         sourceControl.map(ThreadDetailsGitStatus.init(sourceControl:))
     }
 
-    /// A Hermes conversation has no project, so it has no folder to name and
-    /// nothing under it to browse or run.
+    /// Code uses its T3 checkout; Hermes reports its native workspace separately.
     private var workspacePath: String? {
         thread.worktreePath ?? project?.path
     }
@@ -250,7 +265,7 @@ struct ThreadDetailsSheet: View {
                 onNavigate(.connections)
             }
 
-            if let workspacePath, !isChatConversation {
+            if let workspacePath, !isChatConversation, !isHermesConversation {
                 ThreadDetailsDivider()
                 ThreadDetailsRow(
                     systemImage: ThreadDetailsWorkspace.icon(worktreePath: thread.worktreePath),
@@ -653,6 +668,7 @@ struct ThreadDetailsSheet: View {
     }
 
     private func loadSourceControl() async {
+        guard !isHermesConversation else { isLoadingStatus = false; return }
         isLoadingStatus = true
         defer { isLoadingStatus = false }
         sourceControl = try? await client.sourceControlStatus(threadID: thread.id)

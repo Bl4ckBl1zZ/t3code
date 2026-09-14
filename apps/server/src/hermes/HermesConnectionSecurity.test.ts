@@ -5,8 +5,6 @@ import {
   sanitizeHermesEndpoint,
 } from "./HermesConnectionSecurity.ts";
 
-const fingerprint = "ab:".repeat(31) + "ab";
-
 const assess = (overrides: Partial<Parameters<typeof assessHermesConnectionSecurity>[0]> = {}) =>
   assessHermesConnectionSecurity({
     endpoint: "ws://127.0.0.1:9119/api/ws",
@@ -57,52 +55,43 @@ describe("Hermes connection security", () => {
     ).toMatchObject({ status: "blocked", code: "remote_instance_disabled" });
   });
 
-  it("requires dedicated pairing and explicit certificate trust material", () => {
+  it("accepts a dashboard bearer token over secure remote transport", () => {
     expect(
       assess({
         endpoint: "wss://gateway.example.com/api/ws",
         remoteGloballyEnabled: true,
         remoteInstanceEnabled: true,
       }),
-    ).toMatchObject({ status: "blocked", code: "remote_pairing_required" });
-
-    expect(
-      assess({
-        endpoint: "wss://gateway.example.com/api/ws",
-        remoteGloballyEnabled: true,
-        remoteInstanceEnabled: true,
-        remotePairingToken: "local-token",
-      }),
-    ).toMatchObject({ status: "blocked", code: "remote_credential_reuse" });
-
-    expect(
-      assess({
-        endpoint: "wss://gateway.example.com/api/ws",
-        remoteGloballyEnabled: true,
-        remoteInstanceEnabled: true,
-        remotePairingToken: "dedicated-pairing-token",
-        remoteTlsCertificateSha256: "not-a-fingerprint",
-      }),
-    ).toMatchObject({ status: "blocked", code: "remote_trust_required" });
+    ).toMatchObject({ status: "ready", scope: "remote", authToken: "local-token" });
   });
 
-  it("reports remote unsupported before creating a transport even when fully configured", () => {
-    const result = assess({
-      endpoint: "wss://gateway.example.com/api/ws?tenant=private",
-      remoteGloballyEnabled: true,
-      remoteInstanceEnabled: true,
-      remotePairingToken: "dedicated-pairing-token",
-      remoteTlsCertificateSha256: fingerprint,
-    });
+  it("uses an explicitly configured remote token when present", () => {
+    expect(
+      assess({
+        endpoint: "wss://gateway.example.com/api/ws",
+        remoteGloballyEnabled: true,
+        remoteInstanceEnabled: true,
+        remotePairingToken: "remote-token",
+      }),
+    ).toMatchObject({ status: "ready", authToken: "remote-token" });
+  });
 
-    expect(result).toMatchObject({
-      status: "unsupported",
-      code: "remote_verification_unsupported",
-      diagnosticEndpoint: "wss://gateway.example.com/api/ws?tenant=%3Credacted%3E",
+  it("requires authentication before creating a remote transport", () => {
+    expect(
+      assess({
+        endpoint: "wss://gateway.example.com/api/ws",
+        remoteGloballyEnabled: true,
+        remoteInstanceEnabled: true,
+        gatewayToken: undefined,
+      }),
+    ).toMatchObject({ status: "blocked", code: "authentication_required" });
+  });
+
+  it.each(["ticket", "access_token"])("rejects embedded %s credentials", (key) => {
+    expect(assess({ endpoint: `ws://localhost:9119/api/ws?${key}=secret` })).toMatchObject({
+      status: "blocked",
+      code: "invalid_endpoint",
     });
-    expect(JSON.stringify(result)).not.toContain("private");
-    expect(JSON.stringify(result)).not.toContain("dedicated-pairing-token");
-    expect(JSON.stringify(result)).not.toContain(fingerprint);
   });
 
   it("sanitizes all query values, userinfo, and fragments in diagnostics", () => {

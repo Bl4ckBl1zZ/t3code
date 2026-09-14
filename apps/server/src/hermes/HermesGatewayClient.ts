@@ -1,6 +1,7 @@
 // @effect-diagnostics globalTimers:off - This transport owns bounded WebSocket timers.
 import {
   HermesGatewayEvent,
+  HermesGatewayEventParams,
   HermesGatewayCronListResult,
   HermesGatewayCronMutationResult,
   HermesGatewayApprovalRespondResult,
@@ -41,7 +42,7 @@ import {
   type HermesGatewayInterruptResult as HermesGatewayInterruptResultType,
   type HermesGatewayPromptSubmitParams,
   type HermesGatewayPromptSubmitResult as HermesGatewayPromptSubmitResultType,
-  type HermesGatewayReadyEvent,
+  HermesGatewayReadyEvent,
   type HermesGatewayResponse,
   type HermesGatewayMutationStatusResult as HermesGatewayMutationStatusResultType,
   type HermesGatewayModelOptionsResult as HermesGatewayModelOptionsResultType,
@@ -73,121 +74,34 @@ import * as Schema from "effect/Schema";
 
 import {
   assessHermesConnectionSecurity,
+  isRemoteHermesEndpoint,
   sanitizeHermesEndpoint,
 } from "./HermesConnectionSecurity.ts";
 
-export const HERMES_GATEWAY_SUPPORTED_PROTOCOL_MAJOR = 1;
-
-export const HERMES_GATEWAY_LEGACY_CAPABILITIES =
-  [] as const satisfies ReadonlyArray<HermesGatewayCapabilityName>;
-
-/**
- * Tier 1: capabilities a non-advertising gateway may earn by demonstrating
- * them. Each entry is a side-effect-free read, so a gateway that does not
- * implement it answers `-32601` and simply stays without the capability —
- * the same signal the client already uses to revoke one at call time.
- *
- * `cron.manage` and `skills.manage` are single methods that dispatch on an
- * `action`, and their inventory action is a plain read. Listing is therefore
- * the same kind of evidence as any other probe here: it proves the method
- * exists without touching durable state. Which *mutating* actions a gateway
- * accepts is a separate question, answered by {@link cronActionInventory}.
+/** Native Hermes Serve methods verified against tui_gateway at the supported upstream revision.
+ * The native ready frame has no negotiated capability inventory. Never probe mutating methods.
  */
-const HERMES_GATEWAY_DISCOVERY_PROBES = [
-  { capabilities: ["commands.catalog"], method: "commands.catalog", params: {} },
-  {
-    capabilities: ["models.inventory"],
-    method: "model.options",
-    params: { explicit_only: true, include_unconfigured: false },
-  },
-  {
-    capabilities: ["reasoning.effective_state"],
-    method: "config.get",
-    params: { key: "reasoning" },
-  },
-  { capabilities: ["session.lifecycle"], method: "session.list", params: {} },
-  // One method backs both: reading the inventory is what proves T3 can reach
-  // the scheduler at all, and mutations stay gated per action below.
-  { capabilities: ["cron.read", "cron.manage"], method: "cron.manage", params: { action: "list" } },
-  { capabilities: ["skills.manage"], method: "skills.manage", params: { action: "list" } },
-] as const satisfies ReadonlyArray<{
-  readonly capabilities: ReadonlyArray<HermesGatewayCapabilityName>;
-  readonly method: string;
-  readonly params: HermesGatewayUnknownRecord;
-}>;
-
-/**
- * Granted only once `session.list` answers, which establishes that the
- * gateway speaks the protocol-1 session methods. These cannot be probed
- * without side effects — submitting a turn is not a read — so they are
- * inferred from that evidence and still revoked on `-32601` at call time.
- */
-const HERMES_GATEWAY_INFERRED_CAPABILITIES = [
+export const HERMES_SERVE_CAPABILITIES = [
+  "session.lifecycle",
   "session.history",
+  "session.title",
+  "session.branch.latest",
   "turn.prompt",
   "turn.interrupt",
   "events.tools",
-] as const satisfies ReadonlyArray<HermesGatewayCapabilityName>;
-
-/**
- * Granted alongside `skills.manage` for the same reason: reloading is part of
- * the same subsystem and cannot be probed as a read, since asking for it
- * performs it. Revoked on `-32601` at call time like any other.
- */
-const HERMES_GATEWAY_SKILLS_INFERRED_CAPABILITIES = [
+  "events.approvals",
+  "events.clarification",
+  "commands.catalog",
+  "models.inventory",
+  "reasoning.effective_state",
+  "attachments.image",
+  "attachments.pdf",
+  "attachments.file",
+  "cron.read",
+  "cron.manage",
+  "skills.manage",
   "skills.reload",
 ] as const satisfies ReadonlyArray<HermesGatewayCapabilityName>;
-
-/**
- * Tier 1b: capabilities whose methods mutate — staging bytes, renaming,
- * branching, answering a parked run — and so cannot be exercised as a read.
- * Every one of them resolves the session first, so asking with a session id
- * the gateway cannot hold answers "session not found" where the method exists
- * and `-32601` where it does not — the same evidence as tier 1, read from the
- * error instead of the result, and reaching no session state on the way.
- *
- * The two response methods matter most: a gateway that pushes
- * `approval.request` but never advertises `approval.respond` leaves T3 forcing
- * an interrupt on every run that asks for permission, when the method was
- * there all along.
- */
-const HERMES_GATEWAY_EXISTENCE_PROBE_SESSION_ID = "t3-code:capability-probe";
-const HERMES_GATEWAY_EXISTENCE_PROBES = [
-  { capability: "attachments.image", method: "image.attach_bytes" },
-  { capability: "attachments.pdf", method: "pdf.attach" },
-  { capability: "attachments.file", method: "file.attach" },
-  { capability: "session.title", method: "session.title" },
-  { capability: "session.branch.latest", method: "session.branch" },
-  { capability: "events.approvals", method: "approval.respond" },
-  { capability: "events.clarification", method: "clarify.respond" },
-] as const satisfies ReadonlyArray<{
-  readonly capability: HermesGatewayCapabilityName;
-  readonly method: string;
-}>;
-
-const HERMES_GATEWAY_METHOD_NOT_FOUND = -32601;
-
-/**
- * The mutating cron actions T3 knows how to send, probed as a set so the UI
- * offers exactly the operations the connected gateway implements. `list` is
- * excluded because reaching this point already proved it.
- */
-const HERMES_CRON_PROBED_ACTIONS = ["add", "update", "pause", "resume", "remove", "run"] as const;
-
-/**
- * Job name used to probe a cron action without reaching a real job. It has to
- * be one no user would type, because `remove` and `run` would otherwise hit it.
- */
-const HERMES_CRON_PROBE_JOB_NAME = "t3-code:cron-action-probe:0e4f1b6a";
-
-/**
- * Tier 2 is everything absent from the lists above: `session_mcp`,
- * `profile.import`, and `mutation.stable_ids`. `session_mcp` mints a T3 bearer
- * credential and hands it to another process, which is not something a probe
- * should ever be able to talk T3 into; the other two describe guarantees a
- * gateway has to promise rather than methods it happens to answer. They
- * require explicit advertisement and are never synthesized.
- */
 
 export type HermesGatewayConnectionState =
   | "disconnected"
@@ -230,6 +144,13 @@ export interface HermesGatewayOrderedEvent {
   readonly cursor: string | number | undefined;
   readonly mutationId: string | undefined;
   readonly frame: HermesGatewayEventFrame;
+}
+
+export interface HermesGatewayReplayGap {
+  readonly sessionId: string;
+  readonly reason: "epoch_changed" | "truncated" | "replay_failed";
+  readonly epoch: string;
+  readonly lastSeen: number;
 }
 
 export type HermesGatewayLogEvent =
@@ -305,10 +226,16 @@ export interface HermesGatewaySocket {
 
 export type HermesGatewaySocketFactory = (endpoint: string) => HermesGatewaySocket;
 
+type HermesGatewayFetch = (
+  input: Parameters<typeof globalThis.fetch>[0],
+  init?: Parameters<typeof globalThis.fetch>[1],
+) => ReturnType<typeof globalThis.fetch>;
+
 export interface HermesGatewayClientOptions {
   readonly endpoint: string;
   readonly authToken: string;
   readonly socketFactory?: HermesGatewaySocketFactory;
+  readonly fetch?: HermesGatewayFetch;
   readonly requestTimeoutMs?: number;
   readonly readyTimeoutMs?: number;
   readonly openTimeoutMs?: number;
@@ -318,13 +245,6 @@ export interface HermesGatewayClientOptions {
     readonly maxDelayMs?: number;
   };
   readonly criticalCapabilities?: ReadonlyArray<string>;
-  /**
-   * Probe a non-advertising ("legacy") gateway for the non-privileged
-   * capabilities it actually implements. Defaults to enabled. Set false to
-   * hold such gateways to a strictly empty capability set — the conformance
-   * harness does this so evidence reflects advertisement alone.
-   */
-  readonly discoverLegacyCapabilities?: boolean;
   readonly logger?: (event: HermesGatewayLogEvent) => void;
   readonly supervisor?: HermesGatewaySupervisor;
 }
@@ -439,8 +359,32 @@ export class HermesGatewayMutationsBlockedError extends Error {
   }
 }
 
+const HermesNativeModelSetResult = Schema.Struct({
+  key: Schema.Literal("model"),
+  value: Schema.NonEmptyString,
+  scope: Schema.String,
+  confirm_required: Schema.Boolean,
+  warning: Schema.optional(Schema.String),
+  confirm_message: Schema.optional(Schema.String),
+  deferred: Schema.optional(Schema.Boolean),
+});
+export type HermesNativeModelSetResult = typeof HermesNativeModelSetResult.Type;
+
+const HermesNativeResumeResult = Schema.Union([
+  HermesGatewaySessionResumeResult,
+  HermesGatewaySessionCreateResult,
+]);
+
+const HermesNativeReplayResult = Schema.Struct({
+  events: Schema.Array(HermesGatewayEventParams),
+  latest_seq: Schema.Number,
+  truncated: Schema.Boolean,
+  epoch: Schema.String,
+});
+
 const decodeInboundFrame = Schema.decodeUnknownSync(HermesGatewayInboundFrame);
 const decodeGatewayEvent = Schema.decodeUnknownSync(HermesGatewayEvent);
+const decodeReadyEvent = Schema.decodeUnknownSync(HermesGatewayReadyEvent);
 const decodeMutationOutcome = Schema.decodeUnknownSync(HermesGatewayMutationOutcome);
 
 const METHOD_CAPABILITIES: Readonly<Record<string, string>> = {
@@ -471,57 +415,21 @@ const METHOD_CAPABILITIES: Readonly<Record<string, string>> = {
 
 const SOCKET_OPEN = 1;
 
-function readyVersionFields(
-  payload: HermesGatewayReadyEvent["params"]["payload"],
-): Pick<HermesGatewayCompatibility, "serverVersion" | "revision"> {
-  return {
-    ...(payload.server_version === undefined ? {} : { serverVersion: payload.server_version }),
-    ...(payload.revision === undefined ? {} : { revision: payload.revision }),
-  };
-}
-
 export function classifyHermesGatewayReady(
   event: HermesGatewayReadyEvent,
 ): HermesGatewayCompatibility {
-  const protocol = event.params.payload.protocol ?? null;
-  const advertised = protocol?.capabilities ?? event.params.payload.capabilities;
-  const capabilities =
-    advertised === undefined
-      ? [...HERMES_GATEWAY_LEGACY_CAPABILITIES]
-      : Array.isArray(advertised)
-        ? [...advertised]
-        : Object.entries(advertised)
-            .filter(([capability, value]) => capability !== "version" && capabilityEnabled(value))
-            .map(([capability]) => capability)
-            .toSorted();
-
-  if (protocol === null) {
-    return {
-      status: "legacy",
-      protocol: null,
-      capabilities,
-      inventory: advertised ?? null,
-      reason: "Gateway did not advertise a negotiated protocol version.",
-      ...readyVersionFields(event.params.payload),
-    };
-  }
-  if (protocol.major !== HERMES_GATEWAY_SUPPORTED_PROTOCOL_MAJOR) {
-    return {
-      status: "unsupported",
-      protocol,
-      capabilities,
-      inventory: advertised ?? null,
-      reason: `Unsupported Hermes gateway protocol major ${protocol.major}.`,
-      ...readyVersionFields(event.params.payload),
-    };
-  }
+  const payload = event.params.payload;
+  const supported = payload.change_events === true;
   return {
-    status: "supported",
-    protocol,
-    capabilities,
-    inventory: advertised ?? null,
-    reason: `Hermes gateway protocol ${protocol.major}.${protocol.minor} is supported.`,
-    ...readyVersionFields(event.params.payload),
+    status: supported ? "supported" : "unsupported",
+    protocol: null,
+    capabilities: supported ? [...HERMES_SERVE_CAPABILITIES] : [],
+    inventory: null,
+    reason: supported
+      ? payload.replay_epoch
+        ? "Native Hermes Serve with event replay."
+        : "Native Hermes Serve with full history reconciliation on reconnect."
+      : "This Hermes version does not expose the required native Serve protocol. Update Hermes to a version with native change events.",
   };
 }
 
@@ -532,6 +440,8 @@ export function sanitizeHermesGatewayEndpoint(endpoint: string): string {
 export class HermesGatewayClient {
   private readonly endpoint: string;
   private readonly endpointLabel: string;
+  private readonly authToken: string;
+  private readonly fetch: HermesGatewayFetch;
   private readonly socketFactory: HermesGatewaySocketFactory;
   private readonly requestTimeoutMs: number;
   private readonly readyTimeoutMs: number;
@@ -540,16 +450,6 @@ export class HermesGatewayClient {
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
   private readonly criticalCapabilities: ReadonlyArray<string>;
-  private readonly discoverLegacyCapabilities: boolean;
-  /** Discovery result keyed by gateway build, so reconnects do not re-probe. */
-  private discoveredCapabilities:
-    | { readonly build: string; readonly capabilities: ReadonlyArray<string> }
-    | undefined;
-  /** Cron action inventory keyed the same way, and for the same reason. */
-  private discoveredCronActions:
-    | { readonly build: string; readonly actions: ReadonlySet<string> }
-    | undefined;
-  private cronActionInventoryTask: Promise<ReadonlySet<string>> | undefined;
   private readonly logger: ((event: HermesGatewayLogEvent) => void) | undefined;
   private readonly supervisor: HermesGatewaySupervisor | undefined;
 
@@ -572,6 +472,19 @@ export class HermesGatewayClient {
   >();
   private eventDispatch = Promise.resolve();
   private readyWaiter: ReadyWaiter | undefined;
+  private earlyReady: HermesGatewayReadyEvent | undefined;
+  private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+  private replayEpoch: string | undefined;
+  private replaying = false;
+  private readonly replaySequences = new Map<string, number>();
+  private readonly bufferedEvents: HermesGatewayEventFrame[] = [];
+  private readonly replayOverflows = new Set<string>();
+  private readonly reconnectListeners = new Set<
+    (event: { readonly epochChanged: boolean }) => void | Promise<void>
+  >();
+  private readonly replayGapListeners = new Set<
+    (event: HermesGatewayReplayGap) => void | Promise<void>
+  >();
   private connectTask: Promise<HermesGatewayCompatibility> | undefined;
   private reconnectTask: Promise<void> | undefined;
   private manuallyClosed = false;
@@ -581,6 +494,8 @@ export class HermesGatewayClient {
 
   constructor(options: HermesGatewayClientOptions) {
     this.endpoint = authenticatedEndpoint(options);
+    this.authToken = options.authToken.trim();
+    this.fetch = options.fetch ?? globalThis.fetch;
     this.endpointLabel = sanitizeHermesGatewayEndpoint(this.endpoint);
     this.socketFactory = options.socketFactory ?? defaultSocketFactory;
     this.requestTimeoutMs = positive(options.requestTimeoutMs, 15_000);
@@ -590,7 +505,6 @@ export class HermesGatewayClient {
     this.reconnectBaseDelayMs = positive(options.reconnect?.baseDelayMs, 100);
     this.reconnectMaxDelayMs = positive(options.reconnect?.maxDelayMs, 2_000);
     this.criticalCapabilities = options.criticalCapabilities ?? [];
-    this.discoverLegacyCapabilities = options.discoverLegacyCapabilities ?? true;
     this.logger = options.logger;
     this.supervisor = options.supervisor;
   }
@@ -638,6 +552,42 @@ export class HermesGatewayClient {
     this.healthListeners.add(listener);
     listener(this.health);
     return () => this.healthListeners.delete(listener);
+  }
+
+  onReconnected(
+    listener: (event: { readonly epochChanged: boolean }) => void | Promise<void>,
+  ): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
+  }
+
+  onReplayGap(listener: (event: HermesGatewayReplayGap) => void | Promise<void>): () => void {
+    this.replayGapListeners.add(listener);
+    return () => {
+      this.replayGapListeners.delete(listener);
+    };
+  }
+
+  /** Reattach without replaying work or consulting an indeterminate prompt's mutation fence. */
+  async reconnectSession(
+    params: HermesGatewaySessionResumeParams,
+  ): Promise<HermesGatewaySessionResumeResultType> {
+    const result = await this.sendRequest(
+      "session.resume",
+      { ...params, lazy: true },
+      {
+        operation: "read",
+        operationId: undefined,
+        mutationId: undefined,
+        requiredCapability: "session.lifecycle",
+        retryOnReconnect: false,
+        signal: undefined,
+        timeoutMs: this.requestTimeoutMs,
+      },
+    );
+    return decodeNativeResumeResult(result, params.session_id);
   }
 
   async connect(): Promise<HermesGatewayCompatibility> {
@@ -803,7 +753,7 @@ export class HermesGatewayClient {
         ...options,
         requiredCapability: "session.lifecycle",
       },
-      (result) => decodeResult(HermesGatewaySessionResumeResult, result, "session.resume"),
+      (result) => decodeNativeResumeResult(result, params.session_id),
     );
   }
 
@@ -932,75 +882,11 @@ export class HermesGatewayClient {
     return decodeResult(HermesGatewayCronListResult, result, "cron.manage/list");
   }
 
-  /**
-   * Which cron actions this gateway actually accepts.
-   *
-   * `cron.manage` dispatches on an `action`, so the method existing says
-   * nothing about which operations are behind it — the shipped Hermes build
-   * answers `list`/`add`/`pause`/`resume`/`remove` and rejects `update` and
-   * `run`. Asking is unambiguous: an unsupported action comes back as an RPC
-   * error, while a supported one reaches the scheduler and returns a result,
-   * `{success: false}` included. Naming a job that cannot exist is what keeps
-   * the supported branch inert.
-   */
+  /** Native cron RPC actions. Full schedule management uses the dashboard API. */
   async cronActionInventory(): Promise<ReadonlySet<string>> {
-    if (!this.hasCapability("cron.manage")) return new Set();
-    const build = `${this.compatibilityValue?.serverVersion ?? "unknown"}@${this.compatibilityValue?.revision ?? "unknown"}`;
-    const cached = this.discoveredCronActions;
-    if (cached !== undefined && cached.build === build) return cached.actions;
-    if (this.cronActionInventoryTask) return this.cronActionInventoryTask;
-
-    const task = (async () => {
-      const probes = HERMES_CRON_PROBED_ACTIONS.map(
-        async (action): Promise<string | null | undefined> => {
-          try {
-            await this.sendRequest(
-              "cron.manage",
-              action === "add"
-                ? // `add` validates its own required fields before it creates
-                  // anything, so an empty payload is refused by the scheduler
-                  // rather than by the dispatcher.
-                  { action }
-                : { action, name: HERMES_CRON_PROBE_JOB_NAME },
-              {
-                operation: "read",
-                operationId: undefined,
-                mutationId: undefined,
-                requiredCapability: undefined,
-                signal: undefined,
-                retryOnReconnect: false,
-                timeoutMs: this.requestTimeoutMs,
-              },
-            );
-            return action;
-          } catch (error) {
-            // Only a well-formed rejection is evidence of absence. A transport
-            // failure says nothing, and granting on it would offer the user a
-            // button that fails the moment the link recovers.
-            return error instanceof HermesGatewayRpcError ? null : undefined;
-          }
-        },
-      );
-      const settled = await Promise.all(probes);
-      const actions = new Set<string>(
-        settled.filter((action): action is string => typeof action === "string"),
-      );
-      // `list` got T3 this far, so it is known-good without spending a probe.
-      actions.add("list");
-      const inconclusive = settled.some((action) => action === undefined);
-      if (!inconclusive) this.discoveredCronActions = { build, actions };
-      this.logger?.({
-        type: "protocol",
-        outcome: "capability_discovered",
-        method: "cron.manage",
-        capability: [...actions].toSorted().join(",") || "none",
-      });
-      return actions as ReadonlySet<string>;
-    })().finally(() => {
-      this.cronActionInventoryTask = undefined;
-    });
-    this.cronActionInventoryTask = task;
-    return task;
+    return new Set(
+      this.hasCapability("cron.manage") ? ["list", "add", "pause", "resume", "remove"] : [],
+    );
   }
 
   async manageCron(
@@ -1158,6 +1044,25 @@ export class HermesGatewayClient {
     return outcome;
   }
 
+  async setSessionModel(
+    params: { readonly session_id: string; readonly model: string },
+    options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
+  ): Promise<HermesNativeModelSetResult> {
+    const result = await this.mutateDecoded(
+      "config.set",
+      {
+        session_id: params.session_id,
+        key: "model",
+        value: `${params.model} --session`,
+      },
+      options,
+      (value) => decodeResult(HermesNativeModelSetResult, value, "config.set/model"),
+    );
+    // Deliver native session.info updates preceding the reply before starting chat.
+    await this.eventDispatch;
+    return result;
+  }
+
   async submitPrompt(
     params: HermesGatewayPromptSubmitParams,
     options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
@@ -1269,6 +1174,7 @@ export class HermesGatewayClient {
   close(): void {
     if (this.stateValue === "closed") return;
     this.manuallyClosed = true;
+    clearTimeout(this.heartbeatTimer);
     this.setState("closed", 0);
     this.rejectReady(new HermesGatewayConnectionError("Hermes gateway client closed."));
     const socket = this.socket;
@@ -1286,6 +1192,31 @@ export class HermesGatewayClient {
     }
   }
 
+  private async connectionEndpoint(): Promise<string> {
+    if (!isRemoteHermesEndpoint(this.endpoint)) return this.endpoint;
+    const ticketUrl = new URL("/api/auth/ws-ticket", this.endpoint);
+    ticketUrl.protocol = "https:";
+    const response = await this.fetch(ticketUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.authToken}` },
+      signal: AbortSignal.timeout(this.openTimeoutMs),
+      redirect: "error",
+    });
+    if (!response.ok)
+      throw new HermesGatewayConnectionError(
+        "Hermes dashboard authentication failed while requesting a WebSocket ticket.",
+      );
+    const ticket = decodeResult(
+      Schema.Struct({ ticket: Schema.NonEmptyString }),
+      await response.json(),
+      "auth/ws-ticket",
+    );
+    const endpoint = new URL(this.endpoint);
+    endpoint.searchParams.delete("token");
+    endpoint.searchParams.set("ticket", ticket.ticket);
+    return endpoint.toString();
+  }
+
   private async connectAttempt(
     attempt: number,
     reconnect: boolean,
@@ -1297,9 +1228,17 @@ export class HermesGatewayClient {
       throw new HermesGatewayConnectionError("Hermes gateway client closed.");
     }
     const generation = ++this.connectionGeneration;
+    this.earlyReady = undefined;
+    this.replaying = reconnect;
+    this.bufferedEvents.length = 0;
+    this.replayOverflows.clear();
     let socket: HermesGatewaySocket;
     try {
-      socket = this.socketFactory(this.endpoint);
+      const endpoint = isRemoteHermesEndpoint(this.endpoint)
+        ? await this.connectionEndpoint()
+        : this.endpoint;
+      this.ensureAttemptActive(generation);
+      socket = this.socketFactory(endpoint);
     } catch (error) {
       if (!reconnect) this.setState("disconnected", attempt);
       throw error instanceof Error
@@ -1348,33 +1287,49 @@ export class HermesGatewayClient {
       this.ensureAttemptActive(generation);
       const ready = await this.waitForReady();
       this.ensureAttemptActive(generation);
-      let compatibility = classifyHermesGatewayReady(ready);
+      const compatibility = classifyHermesGatewayReady(ready);
       this.compatibilityValue = compatibility;
       if (compatibility.status === "unsupported") {
         throw new HermesGatewayProtocolError(compatibility.reason);
       }
       this.capabilities = new Set(compatibility.capabilities);
-      // A gateway that advertises nothing is not necessarily incapable: probe
-      // the non-privileged tier before holding it to the critical set, or every
-      // pre-negotiation build fails the handshake despite working correctly.
-      if (compatibility.status === "legacy" && this.discoverLegacyCapabilities) {
-        const discovered = await this.runLegacyCapabilityDiscovery(compatibility);
-        this.ensureAttemptActive(generation);
-        if (discovered.length > 0) {
-          this.capabilities = new Set(discovered);
-          compatibility = { ...compatibility, capabilities: discovered };
-          this.compatibilityValue = compatibility;
-        }
-      }
       for (const capability of this.criticalCapabilities) {
         this.requireCapability(capability);
       }
+      const epoch = ready.params.payload.replay_epoch?.trim() || undefined;
+      // The July native API has no replay ring. Reattach and reload history on
+      // every reconnect instead of inferring an epoch or replaying execution.
+      const epochChanged =
+        reconnect &&
+        (epoch === undefined || this.replayEpoch === undefined || this.replayEpoch !== epoch);
+      this.replayEpoch = epoch;
       this.setState("ready", attempt);
       await this.supervisor?.onConnected?.({ attempt, reconnect, compatibility });
       this.ensureAttemptActive(generation);
+      if (reconnect) {
+        for (const listener of this.reconnectListeners) await listener({ epochChanged });
+        this.ensureAttemptActive(generation);
+        if (epoch === undefined) this.replaySequences.clear();
+        else await this.recoverEvents(epochChanged, epoch);
+        for (const sessionId of this.replayOverflows) {
+          await this.reportReplayGap({
+            sessionId,
+            epoch: epoch ?? "",
+            reason: "replay_failed",
+            lastSeen: this.replaySequences.get(sessionId) ?? 0,
+          });
+        }
+        this.replayOverflows.clear();
+        this.ensureAttemptActive(generation);
+      }
+      this.replaying = false;
+      for (const event of this.bufferedEvents.splice(0)) this.enqueueEvent(event);
       this.replayPendingReads();
+      if (ready.params.payload.heartbeat === true) this.scheduleHeartbeat(generation);
       return compatibility;
     } catch (error) {
+      this.replaying = false;
+      this.bufferedEvents.length = 0;
       if (this.socket === socket) this.socket = undefined;
       // The WHATWG WebSocket API only permits callers to send code 1000 or
       // private-use codes in the 3000-4999 range. Undici correctly rejects
@@ -1403,6 +1358,7 @@ export class HermesGatewayClient {
   }
 
   private waitForReady(): Promise<HermesGatewayReadyEvent> {
+    if (this.earlyReady) return Promise.resolve(this.earlyReady);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.readyWaiter = undefined;
@@ -1414,7 +1370,10 @@ export class HermesGatewayClient {
 
   private resolveReady(event: HermesGatewayReadyEvent): void {
     const waiter = this.readyWaiter;
-    if (!waiter) return;
+    if (!waiter) {
+      this.earlyReady = event;
+      return;
+    }
     clearTimeout(waiter.timer);
     this.readyWaiter = undefined;
     waiter.resolve(event);
@@ -1430,9 +1389,15 @@ export class HermesGatewayClient {
 
   private handleMessage(event: HermesGatewaySocketEvent, generation: number): void {
     if (generation !== this.connectionGeneration || typeof event.data !== "string") return;
+    for (const line of event.data.split("\n")) {
+      if (line.trim()) this.handleFrame(line);
+    }
+  }
+
+  private handleFrame(line: string): void {
     let decoded: HermesGatewayInboundFrame;
     try {
-      decoded = decodeInboundFrame(JSON.parse(event.data));
+      decoded = decodeInboundFrame(JSON.parse(line));
     } catch {
       this.logger?.({ type: "protocol", outcome: "invalid_frame" });
       return;
@@ -1449,12 +1414,34 @@ export class HermesGatewayClient {
       }
       const gatewayEvent = decodeGatewayEvent(decoded);
       if (gatewayEvent.params.type === "gateway.ready") {
-        this.resolveReady(decoded as HermesGatewayReadyEvent);
+        try {
+          this.resolveReady(decodeReadyEvent(gatewayEvent));
+        } catch {
+          this.rejectReady(
+            new HermesGatewayProtocolError("Hermes Serve sent an invalid ready frame."),
+          );
+          return;
+        }
       }
       this.enqueueEvent(gatewayEvent);
       return;
     }
     this.handleResponse(decoded);
+  }
+
+  private scheduleHeartbeat(generation: number): void {
+    clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = setTimeout(() => {
+      if (this.stateValue !== "ready" || generation !== this.connectionGeneration) return;
+      void this.read("gateway.ping", {}, { retryOnReconnect: false, timeoutMs: 15_000 }).then(
+        () => this.scheduleHeartbeat(generation),
+        () => {
+          if (generation === this.connectionGeneration)
+            this.socket?.close(4000, "heartbeat timed out");
+        },
+      );
+    }, 15_000);
+    this.heartbeatTimer.unref?.();
   }
 
   private handleResponse(response: HermesGatewayResponse): void {
@@ -1502,7 +1489,68 @@ export class HermesGatewayClient {
     pending.resolve(response.result);
   }
 
+  private async recoverEvents(epochChanged: boolean, epoch: string): Promise<void> {
+    const sessions = [...this.replaySequences];
+    if (epochChanged) this.replaySequences.clear();
+    for (const [sessionId, lastSeen] of sessions) {
+      if (epochChanged) {
+        await this.reportReplayGap({ sessionId, lastSeen, epoch, reason: "epoch_changed" });
+        continue;
+      }
+      const result = await this.read(
+        "session.events.since",
+        { session_id: sessionId, last_seen: lastSeen },
+        { retryOnReconnect: false },
+      )
+        .then((value) => decodeResult(HermesNativeReplayResult, value, "session.events.since"))
+        .catch(() => undefined);
+      if (!result) {
+        await this.reportReplayGap({ sessionId, lastSeen, epoch, reason: "replay_failed" });
+        continue;
+      }
+      if (result.epoch !== epoch || result.truncated) {
+        await this.reportReplayGap({
+          sessionId,
+          lastSeen,
+          epoch: result.epoch,
+          reason: result.epoch !== epoch ? "epoch_changed" : "truncated",
+        });
+        this.replaySequences.set(sessionId, result.latest_seq);
+      } else {
+        for (const params of result.events)
+          this.deliverEvent({ jsonrpc: "2.0", method: "event", params });
+      }
+    }
+  }
+
+  private async reportReplayGap(event: HermesGatewayReplayGap): Promise<void> {
+    for (const listener of this.replayGapListeners) await listener(event);
+  }
+
   private enqueueEvent(frame: HermesGatewayEventFrame): void {
+    if (this.replaying && frame.params.seq !== undefined) {
+      if (this.bufferedEvents.length >= 4096) {
+        const discarded = this.bufferedEvents.shift();
+        if (discarded?.params.session_id) this.replayOverflows.add(discarded.params.session_id);
+      }
+      this.bufferedEvents.push(frame);
+      return;
+    }
+    this.deliverEvent(frame);
+  }
+
+  private deliverEvent(frame: HermesGatewayEventFrame): void {
+    const sid = frame.params.session_id;
+    const seq = frame.params.seq;
+    if (sid && seq !== undefined) {
+      if (seq <= (this.replaySequences.get(sid) ?? 0)) return;
+      this.replaySequences.delete(sid);
+      this.replaySequences.set(sid, seq);
+      if (this.replaySequences.size > HermesGatewayClient.MAX_SESSION_SEQUENCES) {
+        const oldest = this.replaySequences.keys().next();
+        if (!oldest.done) this.replaySequences.delete(oldest.value);
+      }
+    }
     const transportSequence = ++this.transportSequence;
     const sessionId = frame.params.session_id || undefined;
     const sessionKey = sessionId ?? "";
@@ -1521,12 +1569,12 @@ export class HermesGatewayClient {
       sessionSequence,
       sessionId,
       eventId: frame.params.event_id,
-      eventSequence: frame.params.event_sequence,
+      eventSequence: frame.params.seq ?? frame.params.event_sequence,
       emittedAt: frame.params.emitted_at,
       sessionKey: frame.params.session_key,
       runId: frame.params.run_id,
       messageId: frame.params.message_id,
-      cursor: frame.params.event_sequence ?? frame.params.cursor,
+      cursor: frame.params.seq ?? frame.params.event_sequence ?? frame.params.cursor,
       mutationId: frame.params.mutation_id,
       frame,
     };
@@ -1554,14 +1602,9 @@ export class HermesGatewayClient {
       readonly signal: AbortSignal | undefined;
       readonly retryOnReconnect: boolean;
       readonly timeoutMs: number;
-      /** Capability discovery runs mid-handshake, before the ready state. */
-      readonly allowBeforeReady?: boolean;
     },
   ): Promise<unknown> {
-    const ready =
-      (this.stateValue === "ready" ||
-        (options.allowBeforeReady === true && this.stateValue === "connecting")) &&
-      this.socket?.readyState === SOCKET_OPEN;
+    const ready = this.stateValue === "ready" && this.socket?.readyState === SOCKET_OPEN;
     const mayWaitForReconnect =
       options.operation === "read" &&
       options.retryOnReconnect &&
@@ -1691,6 +1734,7 @@ export class HermesGatewayClient {
   }
 
   private handleConnectionFailure(): void {
+    clearTimeout(this.heartbeatTimer);
     this.socket = undefined;
     for (const pending of this.pending.values()) {
       this.clearPendingResources(pending);
@@ -1785,78 +1829,6 @@ export class HermesGatewayClient {
     }
   }
 
-  /**
-   * Derive the capability set of a gateway that advertises none, by asking it
-   * what it implements. The client already treats a `-32601` as proof a
-   * capability is absent; this is the same evidence read in the affirmative,
-   * confined to non-privileged capabilities (see the tier lists above).
-   */
-  private async runLegacyCapabilityDiscovery(
-    compatibility: HermesGatewayCompatibility,
-  ): Promise<ReadonlyArray<string>> {
-    const build = `${compatibility.serverVersion ?? "unknown"}@${compatibility.revision ?? "unknown"}`;
-    const cached = this.discoveredCapabilities;
-    if (cached !== undefined && cached.build === build) return cached.capabilities;
-
-    const probe = (method: string, params: HermesGatewayUnknownRecord) =>
-      this.sendRequest(method, params, {
-        operation: "read",
-        operationId: undefined,
-        mutationId: undefined,
-        requiredCapability: undefined,
-        signal: undefined,
-        retryOnReconnect: false,
-        timeoutMs: this.requestTimeoutMs,
-        allowBeforeReady: true,
-      });
-
-    const [results, existenceResults] = await Promise.all([
-      Promise.allSettled(
-        HERMES_GATEWAY_DISCOVERY_PROBES.map((entry) => probe(entry.method, entry.params)),
-      ),
-      Promise.allSettled(
-        HERMES_GATEWAY_EXISTENCE_PROBES.map((entry) =>
-          probe(entry.method, { session_id: HERMES_GATEWAY_EXISTENCE_PROBE_SESSION_ID }),
-        ),
-      ),
-    ]);
-    const discovered = new Set<string>();
-    results.forEach((result, index) => {
-      if (result.status !== "fulfilled") return;
-      for (const capability of HERMES_GATEWAY_DISCOVERY_PROBES[index]!.capabilities) {
-        discovered.add(capability);
-      }
-    });
-    existenceResults.forEach((result, index) => {
-      // The probe carries no session, so an implemented method rejects. Only
-      // "unknown method" is evidence of absence; a transport failure or a
-      // timeout is evidence of nothing and leaves the capability ungranted.
-      const implemented =
-        result.status === "fulfilled" ||
-        (result.reason instanceof HermesGatewayRpcError &&
-          result.reason.code !== HERMES_GATEWAY_METHOD_NOT_FOUND);
-      if (implemented) discovered.add(HERMES_GATEWAY_EXISTENCE_PROBES[index]!.capability);
-    });
-    if (discovered.has("session.lifecycle")) {
-      for (const capability of HERMES_GATEWAY_INFERRED_CAPABILITIES) discovered.add(capability);
-    }
-    if (discovered.has("skills.manage")) {
-      for (const capability of HERMES_GATEWAY_SKILLS_INFERRED_CAPABILITIES) {
-        discovered.add(capability);
-      }
-    }
-
-    const capabilities = [...discovered].toSorted();
-    this.discoveredCapabilities = { build, capabilities };
-    this.logger?.({
-      type: "protocol",
-      outcome: "capability_discovered",
-      method: "gateway.discovery",
-      capability: capabilities.join(",") || "none",
-    });
-    return capabilities;
-  }
-
   private requireCapability(capability: string | undefined): void {
     if (capability && !this.capabilities.has(capability)) {
       throw new HermesGatewayCapabilityError(capability);
@@ -1935,8 +1907,8 @@ function authenticatedEndpoint(options: HermesGatewayClientOptions): string {
   const assessment = assessHermesConnectionSecurity({
     endpoint: options.endpoint,
     gatewayToken: options.authToken,
-    remoteGloballyEnabled: false,
-    remoteInstanceEnabled: false,
+    remoteGloballyEnabled: true,
+    remoteInstanceEnabled: true,
     remotePairingToken: undefined,
     remoteTlsCertificateSha256: undefined,
   });
@@ -1944,7 +1916,7 @@ function authenticatedEndpoint(options: HermesGatewayClientOptions): string {
     throw new HermesGatewayConfigurationError(assessment.message);
   }
   const endpoint = new URL(assessment.endpoint);
-  endpoint.searchParams.set("token", assessment.authToken);
+  if (assessment.scope === "loopback") endpoint.searchParams.set("token", assessment.authToken);
   return endpoint.toString();
 }
 
@@ -1971,26 +1943,36 @@ function decodeResult<S extends Schema.Top>(
   }
 }
 
+/** Hermes reattaches a never-prompted lazy session with its create-shaped payload. */
+function decodeNativeResumeResult(
+  value: unknown,
+  requestedSessionId: string,
+): HermesGatewaySessionResumeResultType {
+  const result = decodeResult(HermesNativeResumeResult, value, "session.resume");
+  if ("resumed" in result) return result;
+  if (result.info.lazy !== true)
+    throw new HermesGatewayProtocolError(
+      "Hermes returned an invalid unpersisted session resume result.",
+    );
+  const sessionKey = result.stored_session_id || requestedSessionId;
+  return {
+    session_id: result.session_id,
+    resumed: sessionKey,
+    session_key: sessionKey,
+    message_count: result.message_count,
+    messages: result.messages,
+    info: result.info,
+    running: false,
+    status: "idle",
+  };
+}
+
 function decodeOptionalMutationOutcome(value: unknown): HermesGatewayMutationOutcome | undefined {
   try {
     return decodeMutationOutcome(value);
   } catch {
     return undefined;
   }
-}
-
-function capabilityEnabled(value: unknown): boolean {
-  if (value === null || value === undefined || value === false) return false;
-  if (typeof value === "string") {
-    return !["", "disabled", "unsupported", "unavailable", "false"].includes(
-      value.trim().toLowerCase(),
-    );
-  }
-  if (typeof value === "object" && !Array.isArray(value)) {
-    const enabled = (value as Readonly<Record<string, unknown>>).enabled;
-    return enabled !== false;
-  }
-  return true;
 }
 
 function positive(value: number | undefined, fallback: number): number {

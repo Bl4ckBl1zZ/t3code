@@ -196,6 +196,7 @@ export interface ThreadFeedProps {
   readonly agentLabel: string;
   readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
+  readonly activeWorkActivityText: string | null;
   /** Hermes "clear chat" marker; entries at or before it are hidden. */
   readonly timelineClearedAt?: string | null;
   readonly listRef: RefObject<LegendListRef | null>;
@@ -1034,6 +1035,7 @@ function useMarkdownStyles(
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
   props: Pick<ThreadFeedProps, "environmentId" | "skills" | "threadId" | "workspaceRoot"> & {
+    readonly activeWorkActivityText: string | null;
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -1059,7 +1061,9 @@ function renderFeedEntry(
   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
 
   if (entry.type === "working") {
-    return <WorkingTimelineRow startedAt={entry.createdAt} />;
+    return (
+      <WorkingTimelineRow startedAt={entry.createdAt} activityText={props.activeWorkActivityText} />
+    );
   }
 
   if (entry.type === "lifecycle") {
@@ -1498,7 +1502,10 @@ function AgentUpdateLine(props: { readonly message: ThreadFeedMessage; readonly 
   );
 }
 
-const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly startedAt: string }) {
+const WorkingTimelineRow = memo(function WorkingTimelineRow(props: {
+  readonly startedAt: string;
+  readonly activityText: string | null;
+}) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -1517,8 +1524,13 @@ const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly st
         <View className="h-1 w-1 rounded-full bg-neutral-400/80 dark:bg-neutral-500/80" />
         <View className="h-1 w-1 rounded-full bg-neutral-400/60 dark:bg-neutral-500/60" />
       </View>
-      <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
-        Working for {durationLabel}
+      <Text
+        numberOfLines={1}
+        className="flex-1 font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400"
+      >
+        {props.activityText
+          ? `${props.activityText} · ${durationLabel}`
+          : `Working for ${durationLabel}`}
       </Text>
     </View>
   );
@@ -2340,6 +2352,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       renderFeedEntry(info, {
         environmentId: props.environmentId,
         threadId: props.threadId,
+        activeWorkActivityText: props.activeWorkActivityText,
         copiedRowId,
         expandedWorkGroups,
         expandedWorkRows,
@@ -2384,6 +2397,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.environmentId,
       props.threadId,
       props.threadTitle,
+      props.activeWorkActivityText,
       props.skills,
       props.workspaceRoot,
     ],

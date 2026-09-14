@@ -70,7 +70,6 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   ClockIcon,
-  DownloadIcon,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
@@ -150,7 +149,6 @@ import { readThreadShell, useProjects, useThreadShells } from "../state/entities
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
-import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
@@ -160,11 +158,10 @@ import {
 } from "../threadRoutes";
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import { useSidebarWorkspace } from "../sidebarWorkspace";
-import { isT3WorkBackingProject, t3WorkDirectoryForEnvironment } from "../t3WorkProject";
-import { createT3WorkBackingProject } from "../t3WorkProjectCreate";
+import { isT3WorkBackingProject } from "../t3WorkProject";
+import { useHermesChat } from "../hooks/useHermesChat";
 import type { SidebarThreadSummary } from "../types";
 import {
-  findReadyHermesEntry,
   resolveWorkEnvironmentScope,
   useWorkEnvironmentScopePreference,
 } from "../workEnvironmentScope";
@@ -192,13 +189,11 @@ import {
   shouldCreateNewThreadInCurrentProject,
   resolveWorkingStartedAt,
   resolveWorkInboxBadge,
-  sidebarProjectKey,
   sidebarProviderInstanceKey,
   sortSidebarV2ProjectGroups,
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
   useThreadJumpHintVisibility,
-  workInboxActiveSection,
   workspaceLandingKind,
   type SidebarWorkspace,
   type WorkInboxBadge,
@@ -251,7 +246,6 @@ import {
 } from "../composerDraftStore";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { T3Wordmark } from "./sidebar/SidebarChrome";
-import { HermesImportOnboarding } from "./HermesImportOnboarding";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -1616,24 +1610,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const diff = latestTurnDiff(thread);
 
-  // Where the row already carries its state, the right slot goes back to being
-  // the row's age: Work says it in the leading lozenge and Chat says it as
-  // "responding…" under the title, the way a message list does. Woke survives
-  // both — a wake is a lifecycle signal neither the lozenge nor the preview
-  // line models.
-  const headStatus = isWokeStatus
-    ? topStatus
-    : isWork && workBadge !== null
-      ? null
-      : isChat && status === "working"
-        ? null
-        : topStatus;
+  // Chat shows live progress below the title; other rows keep status beside it.
+  const headStatus = isWokeStatus ? topStatus : isChat && status === "working" ? null : topStatus;
 
   // The visible state owns this slot's width: status at rest, actions on
   // hover/keyboard focus or while the popover is open. Keeping the hidden state
   // out of flow lets the label beside it reclaim space without either state
-  // overlapping it. Code and Work hang it off the meta line; Chat has no meta
-  // line, so it hangs off the title.
+  // overlapping it. Code uses the meta line; Work and Chat use the title line.
   const statusSlot = (
     <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
       {/* Read-only status labels yield to the hover actions. Woke is
@@ -1768,7 +1751,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       {preview.text}
     </span>
   ) : (
-    <span className="flex-1" />
+    <span className="min-w-0 flex-1 truncate text-muted-foreground/55">
+      {isWork ? "Start a conversation" : null}
+    </span>
   );
 
   const rowIconCluster = (
@@ -1801,7 +1786,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     </span>
   );
 
-  const sortable = props.sortable;
   return (
     <li
       ref={props.sortable?.setNodeRef}
@@ -1811,7 +1795,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       data-thread-item
       className={cn(
         "list-none py-0.5 [content-visibility:auto]",
-        isChat ? "[contain-intrinsic-size:auto_66px]" : "[contain-intrinsic-size:auto_96px]",
+        isChat || isWork
+          ? "[contain-intrinsic-size:auto_66px]"
+          : "[contain-intrinsic-size:auto_96px]",
         props.sortable?.isDragging && "relative z-20 opacity-80",
       )}
     >
@@ -1843,14 +1829,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           <div
             className={cn(
               "relative z-10 px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]",
-              // Chat is two lines, not three: it has no meta line to fill.
-              isChat ? "h-[3.375rem]" : "h-[4.875rem]",
+              // Conversations lead with their title and preview.
+              isChat || isWork ? "h-[3.375rem]" : "h-[4.875rem]",
               workBadgeStyle?.railClassName != null &&
                 "pl-[calc(var(--sidebar-row-content-inset)+0.25rem)]",
             )}
           >
-            {isChat ? (
-              /* T3 Chat: a conversation, so title and time share one line and
+            {isChat || isWork ? (
+              /* T3 Work and Chat: a conversation, so title and time share one line and
                  the last thing said sits under it. There is no meta line above
                  the title, because every row in Chat would have filled it with
                  the same word. */
@@ -1860,7 +1846,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   {statusSlot}
                 </div>
                 <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-                  {status === "working" ? (
+                  {isChat && status === "working" ? (
                     <span className="min-w-0 flex-1 truncate whitespace-nowrap text-sky-600 dark:text-sky-400">
                       responding…
                     </span>
@@ -1874,58 +1860,27 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             ) : (
               <>
                 <div className="flex h-5 min-w-0 items-center gap-1.5">
-                  {isWork ? (
-                    /* T3 Work: an inbox item, so the row leads with its state
-                       instead of the backing checkout's name. Every Work row
-                       runs the same assistant on the same hidden checkout, so
-                       naming that is a constant; what differs is state. */
-                    <>
-                      {workBadgeStyle ? (
-                        <span
-                          className={cn(
-                            "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
-                            workBadgeStyle.className,
-                          )}
-                        >
-                          {workBadgeStyle.label}
-                        </span>
-                      ) : null}
-                      {/* Only a live run gets a ticking duration. A background
-                          row wears the same badge, but its run already settled,
-                          so a timer there would be counting nothing. */}
-                      {status === "working" ? (
-                        <span
-                          aria-hidden
-                          className="shrink-0 text-xs text-sky-600 tabular-nums dark:text-sky-400"
-                        >
-                          <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
-                        </span>
-                      ) : null}
+                  <>
+                    <ProjectFavicon
+                      projectId={thread.projectId}
+                      environmentId={thread.environmentId}
+                      cwd={props.projectCwd ?? ""}
+                      faviconPath={props.projectFaviconPath}
+                      className="size-4 shrink-0"
+                    />
+                    {props.projectTitle ? (
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
+                          shouldRecede ? "font-normal" : "font-medium",
+                        )}
+                      >
+                        {props.projectTitle}
+                      </span>
+                    ) : (
                       <span className="flex-1" />
-                    </>
-                  ) : (
-                    <>
-                      <ProjectFavicon
-                        projectId={thread.projectId}
-                        environmentId={thread.environmentId}
-                        cwd={props.projectCwd ?? ""}
-                        faviconPath={props.projectFaviconPath}
-                        className="size-4 shrink-0"
-                      />
-                      {props.projectTitle ? (
-                        <span
-                          className={cn(
-                            "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
-                            shouldRecede ? "font-normal" : "font-medium",
-                          )}
-                        >
-                          {props.projectTitle}
-                        </span>
-                      ) : (
-                        <span className="flex-1" />
-                      )}
-                    </>
-                  )}
+                    )}
+                  </>
                   {statusSlot}
                 </div>
                 <div className="mt-1 flex min-w-0">{titleLine}</div>
@@ -2237,9 +2192,6 @@ export default function Sidebar() {
     },
     [confirmThreadUnpin, pinnedThreadKeySet, pinThread, unpinThread],
   );
-  const createProject = useAtomCommand(projectEnvironment.create, {
-    reportFailure: false,
-  });
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({
@@ -2457,70 +2409,7 @@ export default function Sidebar() {
       workThreadEnvironmentIds,
     ],
   );
-  const workTargetEnvironmentId = workEnvironmentScopeId ?? primaryEnvironmentId;
-  const hermesProviderEntry = useMemo(() => {
-    const scopedProviders =
-      workTargetEnvironmentId === null
-        ? undefined
-        : serverConfigs.get(workTargetEnvironmentId)?.providers;
-    if (scopedProviders !== undefined) return findReadyHermesEntry(scopedProviders);
-    if (workTargetEnvironmentId !== primaryEnvironmentId || primaryEnvironmentId === null) {
-      return null;
-    }
-    return findReadyHermesEntry(serverConfigs.get(primaryEnvironmentId)?.providers ?? []);
-  }, [primaryEnvironmentId, serverConfigs, workTargetEnvironmentId]);
-  const t3WorkDirectory = t3WorkDirectoryForEnvironment(serverConfigs, workTargetEnvironmentId);
-  const hermesBackingProject =
-    projects.find(
-      (project) =>
-        project.environmentId === workTargetEnvironmentId &&
-        t3WorkDirectory !== null &&
-        project.workspaceRoot === t3WorkDirectory,
-    ) ?? null;
-  const t3WorkProjectCreateRef = useRef<string | null>(null);
-  // Bumped by the failure toast's "Try again" action: clearing the ref alone
-  // would not re-run the effect, since none of its other inputs changed.
-  const [t3WorkCreateRetry, setT3WorkCreateRetry] = useState(0);
-  useEffect(() => {
-    if (
-      (workspace !== "work" && workspace !== "chat") ||
-      workTargetEnvironmentId === null ||
-      t3WorkDirectory === null ||
-      hermesProviderEntry === null ||
-      hermesBackingProject !== null
-    ) {
-      return;
-    }
-    const createKey = `${workTargetEnvironmentId}:${t3WorkDirectory}`;
-    if (t3WorkProjectCreateRef.current === createKey) return;
-    t3WorkProjectCreateRef.current = createKey;
-    void createT3WorkBackingProject({
-      createProject,
-      environmentId: workTargetEnvironmentId,
-      workspaceRoot: t3WorkDirectory,
-      hermesProviderEntry,
-      onRetry: () => {
-        t3WorkProjectCreateRef.current = null;
-        setT3WorkCreateRetry((value) => value + 1);
-      },
-    }).then((outcome) => {
-      // An interrupted command may retry later; release the guard. Keep it
-      // set on a real failure so effect re-runs for the same
-      // environment/directory pair do not retry and re-toast endlessly.
-      if (outcome === "interrupted") {
-        t3WorkProjectCreateRef.current = null;
-      }
-    });
-  }, [
-    createProject,
-    hermesBackingProject,
-    hermesProviderEntry,
-    t3WorkDirectory,
-    t3WorkCreateRetry,
-    workTargetEnvironmentId,
-    workspace,
-  ]);
-  const [hermesImportOpen, setHermesImportOpen] = useState(false);
+  const hermesChat = useHermesChat();
   const projectCwdByKey = useMemo(
     () =>
       new Map(
@@ -2792,59 +2681,16 @@ export default function Sidebar() {
     workEnvironmentScopeId,
     workspace,
   ]);
-  const { mainThreads, needsYouThreads, ordinaryActiveThreads } = useMemo(() => {
-    const main: EnvironmentThreadShell[] = [];
-    const needsYou: EnvironmentThreadShell[] = [];
-    const active: EnvironmentThreadShell[] = [];
-    for (const thread of activeThreads) {
-      switch (workInboxActiveSection(thread)) {
-        case "main":
-          main.push(thread);
-          break;
-        case "needs-you":
-          needsYou.push(thread);
-          break;
-        case "active":
-          active.push(thread);
-          break;
-      }
-    }
+  // All workspaces share the same ordered thread list and drag behavior.
+  const { sortableThreadKeys, activeSectionByKey } = useMemo(() => {
+    const keys = activeThreads.map((thread) =>
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+    );
     return {
-      mainThreads: main,
-      needsYouThreads: needsYou,
-      ordinaryActiveThreads: active,
+      sortableThreadKeys: keys,
+      activeSectionByKey: new Map(keys.map((key) => [key, "active"] as const)),
     };
   }, [activeThreads]);
-
-  // Drag scope: the sortable id list in exact render order, plus each key's
-  // visual section. A drop only reorders within its own section — dragging a
-  // card into Snoozed/Settled or across work-inbox sections has no meaning
-  // here (section membership comes from thread state, not position).
-  const { sortableThreadKeys, activeSectionByKey } = useMemo(() => {
-    const keyOf = (thread: EnvironmentThreadShell) =>
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-    if (workspace !== "work") {
-      const keys = activeThreads.map(keyOf);
-      return {
-        sortableThreadKeys: keys,
-        activeSectionByKey: new Map(keys.map((key) => [key, "active"] as const)),
-      };
-    }
-    const sectionByKey = new Map<string, "main" | "needs-you" | "active">();
-    const keys: string[] = [];
-    for (const [section, sectionThreads] of [
-      ["main", mainThreads],
-      ["needs-you", needsYouThreads],
-      ["active", ordinaryActiveThreads],
-    ] as const) {
-      for (const thread of sectionThreads) {
-        const key = keyOf(thread);
-        keys.push(key);
-        sectionByKey.set(key, section);
-      }
-    }
-    return { sortableThreadKeys: keys, activeSectionByKey: sectionByKey };
-  }, [activeThreads, mainThreads, needsYouThreads, ordinaryActiveThreads, workspace]);
 
   const threadDragSensors = useSensors(
     useSensor(PointerSensor, {
@@ -2891,7 +2737,7 @@ export default function Sidebar() {
       if (activeSection === undefined || activeSection !== activeSectionByKey.get(overKey)) {
         return;
       }
-      if (reorderInFlight.current || pendingOrder !== null || activeSection === "main") return;
+      if (reorderInFlight.current || pendingOrder !== null) return;
       if (
         activeThreads.some(
           (thread) =>
@@ -3234,27 +3080,13 @@ export default function Sidebar() {
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
   );
   const handleThreadFileDrop = useSidebarFileDropNavigation(navigateToThread);
-  // The work-mode composer target: a fresh draft on the Hermes backing
-  // project. Returns false when Hermes is not ready so callers can fall back.
+  // Route all Work/Chat creation through the native Hermes conversation service.
   const openWorkComposer = useCallback((): boolean => {
-    const hermesModel =
-      hermesProviderEntry?.models.find((model) => model.slug === "default") ??
-      hermesProviderEntry?.models[0] ??
-      null;
-    if (!hermesBackingProject || !hermesProviderEntry || !hermesModel) return false;
+    if (!hermesChat.isReady) return false;
     if (isMobile) setOpenMobile(false);
-    void newThreadContext.handleNewThread(
-      scopeProjectRef(hermesBackingProject.environmentId, hermesBackingProject.id),
-      {
-        fresh: true,
-        modelSelection: {
-          instanceId: hermesProviderEntry.instanceId,
-          model: hermesModel.slug,
-        },
-      },
-    );
+    void hermesChat.start();
     return true;
-  }, [hermesBackingProject, hermesProviderEntry, isMobile, newThreadContext, setOpenMobile]);
+  }, [hermesChat, isMobile, setOpenMobile]);
   const handleWorkspaceChange = useCallback(
     (nextWorkspace: SidebarWorkspace) => {
       if (nextWorkspace === workspace) return;
@@ -4377,29 +4209,6 @@ export default function Sidebar() {
                   </Button>
                 ) : null}
               </div>
-              {workspace === "work" || workspace === "chat" ? (
-                <div className="shrink-0">
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span className="inline-flex">
-                          <SidebarMenuButton
-                            size="icon"
-                            type="button"
-                            className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                            onClick={() => setHermesImportOpen(true)}
-                            disabled={hermesProviderEntry === null || hermesBackingProject === null}
-                            aria-label="Import Hermes conversations"
-                          >
-                            <DownloadIcon />
-                          </SidebarMenuButton>
-                        </span>
-                      }
-                    />
-                    <TooltipPopup side="right">Import Hermes conversations</TooltipPopup>
-                  </Tooltip>
-                </div>
-              ) : null}
               <div className="shrink-0">
                 <Tooltip>
                   <TooltipTrigger
@@ -4412,7 +4221,7 @@ export default function Sidebar() {
                           onClick={handleNewThreadClick}
                           disabled={
                             workspace === "work" || workspace === "chat"
-                              ? hermesProviderEntry === null || hermesBackingProject === null
+                              ? !hermesChat.isReady
                               : projects.length === 0
                           }
                           aria-label="New thread"
@@ -4858,53 +4667,8 @@ export default function Sidebar() {
                           onNavigateToDraft={navigateToDraft}
                         />,
                       ];
-                      const addWorkSection = (
-                        key: string,
-                        label: string,
-                        sectionThreads: readonly EnvironmentThreadShell[],
-                        tone: "default" | "attention" = "default",
-                      ) => {
-                        if (sectionThreads.length === 0) return;
-                        items.push(
-                          <li
-                            key={`${key}-header`}
-                            data-thread-selection-safe
-                            className="list-none"
-                          >
-                            <div className="mb-1 mt-3 flex items-center gap-2 px-2.5">
-                              <span
-                                className={cn(
-                                  "text-xs font-medium",
-                                  tone === "attention"
-                                    ? "text-amber-600 dark:text-amber-400"
-                                    : "text-muted-foreground/65",
-                                )}
-                              >
-                                {label}
-                              </span>
-                              <span
-                                className={cn(
-                                  "h-px flex-1",
-                                  tone === "attention"
-                                    ? "bg-amber-500/20 dark:bg-amber-400/15"
-                                    : "bg-sidebar-border/60",
-                                )}
-                              />
-                            </div>
-                          </li>,
-                        );
-                        for (const thread of sectionThreads) {
-                          items.push(renderThreadRow(thread, "active"));
-                        }
-                      };
-                      if (workspace === "work") {
-                        addWorkSection("main", "Main", mainThreads);
-                        addWorkSection("needs-you", "Needs you", needsYouThreads, "attention");
-                        addWorkSection("active", "Active", ordinaryActiveThreads);
-                      } else {
-                        for (const thread of activeThreads) {
-                          items.push(renderThreadRow(thread, "active"));
-                        }
+                      for (const thread of activeThreads) {
+                        items.push(renderThreadRow(thread, "active"));
                       }
                       // Snoozed shelf: between the inbox and Settled — out of the
                       // way, never gone. The header always renders while anything
@@ -5023,14 +4787,6 @@ export default function Sidebar() {
           ) : null}
         </SidebarGroup>
       </SidebarContent>
-      <HermesImportOnboarding
-        environmentId={hermesBackingProject?.environmentId ?? null}
-        providerInstanceId={hermesProviderEntry?.instanceId ?? null}
-        backingProjectId={hermesBackingProject?.id ?? null}
-        autoOpenEnabled={workspace === "work"}
-        open={hermesImportOpen}
-        onOpenChange={setHermesImportOpen}
-      />
       <SidebarChromeFooter />
     </>
   );

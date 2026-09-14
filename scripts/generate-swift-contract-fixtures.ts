@@ -1,3 +1,19 @@
+import { WsHermesWorkModelAuthCancelRpc } from "../packages/contracts/src/rpc.ts";
+import { OrchestrationV2ProviderSession } from "../packages/contracts/src/orchestrationV2.ts";
+import { HermesWorkSetupState } from "../packages/contracts/src/hermesWorkSetup.ts";
+import {
+  HermesWorkModelStatus,
+  HermesWorkModelAuthStartResult,
+  HermesWorkModelAuthPollResult,
+  HermesWorkModelSetResult,
+} from "../packages/contracts/src/hermesWorkModelAuth.ts";
+import {
+  HermesWorkChangeEvent,
+  HermesWorkConnectionsResult,
+  HermesWorkQueryResult,
+  HermesWorkMutateResult,
+} from "../packages/contracts/src/hermesWork.ts";
+import { HermesWorkGroupsQueryResult } from "../packages/contracts/src/hermesWorkGroups.ts";
 import { ChatImageAttachment } from "../packages/contracts/src/chatAttachment.ts";
 import { TerminalSummary, TerminalWriteInput } from "../packages/contracts/src/terminal.ts";
 import {
@@ -1717,3 +1733,218 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(snapShotFixturePath, snapShotFixture);
+
+const hermesWorkPath = NodePath.join(NodePath.dirname(outputPath), "hermesWork.json");
+const hermesWorkFixture = `${JSON.stringify(
+  {
+    changeEvent: Schema.encodeSync(HermesWorkChangeEvent)({
+      providerInstanceId: "hermes-work",
+      kind: "cron.changed",
+    }),
+    providerActivity: {
+      active: Schema.encodeSync(OrchestrationV2ProviderSession.fields.activityText)("Formulating…"),
+      cleared: Schema.encodeSync(OrchestrationV2ProviderSession.fields.activityText)(null),
+    },
+    setup: Schema.encodeSync(HermesWorkSetupState)({
+      providerInstanceId: "hermes-work",
+      phase: "needs_model",
+      message: "Connect a model account.",
+      model: null,
+    }),
+    modelStatus: Schema.encodeSync(HermesWorkModelStatus)({
+      model: "test-model",
+      provider: "openai-codex",
+      ready: false,
+      providers: [
+        { id: "openai-codex", name: "ChatGPT", authenticated: false, models: ["test-model"] },
+      ],
+      accounts: [
+        {
+          id: "openai-codex",
+          name: "ChatGPT",
+          flow: "device_code",
+          loggedIn: false,
+          sourceLabel: null,
+        },
+      ],
+    }),
+    modelAuthStart: Schema.encodeSync(HermesWorkModelAuthStartResult)({
+      sessionId: "auth-fixture",
+      userCode: "TEST-CODE",
+      verificationUrl: "https://example.com/device",
+      expiresIn: 900,
+      pollInterval: 5,
+    }),
+    modelAuthPoll: Schema.encodeSync(HermesWorkModelAuthPollResult)({
+      status: "approved",
+      message: null,
+    }),
+    modelAuthCancel: Schema.encodeSync(WsHermesWorkModelAuthCancelRpc.successSchema)({ ok: true }),
+    modelSet: Schema.encodeSync(HermesWorkModelSetResult)({
+      ok: true,
+      confirmRequired: false,
+      message: null,
+    }),
+    connections: Schema.encodeSync(HermesWorkConnectionsResult)({
+      connections: [
+        { providerInstanceId: "hermes-work", displayName: "Home assistant", configured: true },
+      ],
+    }),
+    query: Schema.encodeSync(HermesWorkQueryResult)({
+      threadDetails: {
+        threadId: "thread:hermes-work:fixture",
+        status: "bound",
+        providerInstanceId: "hermes-work",
+        profile: "research",
+        sessionId: "session-1",
+        workspacePath: "/work/research",
+        schedulesAvailable: true,
+        gatewayRunning: true,
+        gatewayState: "running",
+        schedules: [
+          {
+            id: "hourly-check",
+            profile: "research",
+            name: "Hourly check",
+            prompt: "Report meaningful changes",
+            schedule: "every 1h",
+            paused: false,
+            deliver: "local",
+            model: "configured-model",
+            nextRunAt: "2026-09-14T09:00:00Z",
+            lastRunAt: "2026-09-14T08:00:00Z",
+            lastStatus: "completed",
+            lastError: null,
+            lastDeliveryError: null,
+            continuity: true,
+            relationship: "created_here",
+          },
+        ],
+      },
+      gatewayRunning: true,
+      gatewayState: "running",
+      automation: { timezone: "Europe/Luxembourg", allowAgentScheduling: false },
+      sessions: [
+        {
+          id: "session-1",
+          profile: "research",
+          title: "Research conversation",
+          preview: "A briefing",
+          active: false,
+          updatedAt: 1789372860,
+        },
+      ],
+      artifacts: [
+        {
+          id: "artifact-1",
+          kind: "file",
+          value: "/work/report.md",
+          label: "Report",
+          sessionId: "session-1",
+          profile: "research",
+          sessionTitle: "Research conversation",
+          timestamp: 1789372860000,
+        },
+      ],
+      artifactsNextOffset: null,
+      profiles: [
+        {
+          name: "research",
+          description: "Research assistant",
+          model: "configured-model",
+          isDefault: false,
+        },
+      ],
+      schedules: [
+        {
+          id: "hourly-check",
+          profile: "research",
+          name: "Hourly check",
+          prompt: "Report meaningful changes",
+          schedule: "every 1h",
+          paused: false,
+          deliver: "local",
+          model: "configured-model",
+          nextRunAt: "2026-09-14T09:00:00Z",
+          lastRunAt: "2026-09-14T08:00:00Z",
+          lastStatus: "completed",
+          lastError: null,
+          lastDeliveryError: null,
+          continuity: true,
+        },
+      ],
+      runs: [
+        {
+          id: "run-1",
+          profile: "research",
+          title: "Hourly check",
+          startedAt: 1789372800,
+          endedAt: 1789372860,
+          active: false,
+          jobId: "hourly-check",
+          status: "completed",
+          deliveryStatus: null,
+          content: "A meaningful change was found.",
+          readAt: null,
+        },
+      ],
+      skills: [{ name: "research", description: "Gather sources", enabled: true }],
+      channels: [
+        {
+          id: "telegram",
+          name: "Telegram",
+          description: "Send updates",
+          enabled: true,
+          configured: true,
+          fields: [
+            { name: "TELEGRAM_BOT_TOKEN", label: "Bot token", secret: true, configured: true },
+          ],
+        },
+      ],
+      files: [{ name: "report.md", path: "/work/report.md", directory: false, size: 42 }],
+      content: "A meaningful change was found.",
+      path: "/work/report.md",
+      diagnostics: [],
+    }),
+    mutation: Schema.encodeSync(HermesWorkMutateResult)({
+      message: "Conversation opened.",
+      threadId: "thread:hermes-work:fixture",
+    }),
+    groups: Schema.encodeSync(HermesWorkGroupsQueryResult)({
+      groups: [
+        {
+          id: "room-1",
+          name: "Research team",
+          members: [{ id: "member-1", profile: "research", handle: "research", name: "Research" }],
+          updatedAt: 1789372860,
+          disbandedAt: null,
+          latestSequence: 1,
+        },
+      ],
+      events: [
+        {
+          id: "event-1",
+          sequence: 1,
+          kind: "message",
+          actor: "research",
+          text: "Review complete.",
+          createdAt: 1789372860,
+        },
+      ],
+      cursor: 1,
+      hasMore: false,
+      nextOffset: null,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(hermesWorkPath) ||
+    NodeFS.readFileSync(hermesWorkPath, "utf8") !== hermesWorkFixture
+  ) {
+    console.error("[swift-fixtures] hermesWork.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(hermesWorkPath, hermesWorkFixture);

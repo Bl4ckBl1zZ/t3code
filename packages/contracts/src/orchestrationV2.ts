@@ -765,6 +765,8 @@ export const OrchestrationV2ProviderSession = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   lastError: Schema.NullOr(Schema.String),
+  /** Ephemeral provider activity, separate from assistant reasoning or transcript content. */
+  activityText: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type OrchestrationV2ProviderSession = typeof OrchestrationV2ProviderSession.Type;
 

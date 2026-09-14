@@ -27,6 +27,7 @@ import { cn } from "../../lib/utils";
 import { useKnownTerminalSessions } from "../../state/terminalSessions";
 import { useProjectScriptRunStates } from "../../state/projectScriptRuns";
 import { OpenInPicker } from "./OpenInPicker";
+import { HermesThreadDetailsPanel } from "./HermesThreadDetailsPanel";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadBackgroundTasksPanel } from "./ThreadBackgroundTasksPanel";
 import { ThreadConversationPanel } from "./ThreadConversationPanel";
@@ -152,9 +153,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       : {}),
   };
 
-  // A projectless conversation has no workspace, so its delegations are the
-  // panel's entire content. Name the section even while it is empty, otherwise
-  // opening the panel on a fresh Hermes chat shows a blank card.
+  // Keep delegation discoverable before this assistant has handed work to Code.
   const delegatedTasksEmptyState = (
     <section className="px-3.5 py-3" aria-labelledby="thread-details-delegation-heading">
       <h3
@@ -164,7 +163,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         Delegated tasks
       </h3>
       <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-        Coding tasks Hermes delegates through T3 Code will appear here.
+        No delegated tasks yet.
       </p>
     </section>
   );
@@ -183,6 +182,14 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           props.mode === "inline" ? "max-h-full" : "max-h-[calc(100dvh-6.5rem)]",
         )}
       >
+        {props.isProjectlessConversation ? (
+          <HermesThreadDetailsPanel
+            key={`${props.environmentId}:${props.threadId}`}
+            environmentId={props.environmentId}
+            threadId={props.threadId}
+            isServerThread={props.isServerThread}
+          />
+        ) : null}
         {!props.isProjectlessConversation ? (
           <section aria-labelledby="thread-details-workspace-heading">
             <div className="flex min-h-10 items-center justify-between gap-3 px-3.5 pb-1 pt-3">
@@ -337,10 +344,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           </section>
         ) : null}
 
-        {/* Keyed off `isServerThread` for the same reason as the section below:
-            automations bind to a thread id, which a local draft does not have
-            yet, and a T3 Work chat can schedule work just as a project thread
-            can — the binding has never been project-scoped. */}
+        {/* T3-owned tasks remain visible for existing threads, separately from
+            native Hermes schedules above. Local drafts have no task binding. */}
         {props.isServerThread ? (
           <ThreadAutomationsPanel environmentId={props.environmentId} threadId={props.threadId} />
         ) : null}
@@ -360,8 +365,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           delegatedTasksEmptyState
         ) : null}
 
-        {/* Last, and only where there is no workspace to describe: on a project
-            thread these facts duplicate the composer and the sections above. */}
+        {/* Shared conversation facts complement the native Hermes session details. */}
         {props.isProjectlessConversation && props.isServerThread ? (
           <ThreadConversationPanel environmentId={props.environmentId} threadId={props.threadId} />
         ) : null}

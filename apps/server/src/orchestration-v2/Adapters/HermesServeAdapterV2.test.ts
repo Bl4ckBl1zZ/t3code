@@ -41,6 +41,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
+  classifyHermesGatewayReady,
   HermesGatewayMutationIndeterminateError,
   HermesGatewayRpcError,
   type HermesGatewayMutationOptions,
@@ -50,7 +51,6 @@ import {
   HermesSessionBindingRepository,
   layer as HermesSessionBindingRepositoryLayer,
 } from "../../hermes/HermesSessionBindingRepository.ts";
-import type { HermesWitnessedRun } from "../../hermes/HermesProactiveInbox.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { IdAllocatorV2, layer as IdAllocatorV2Layer } from "../IdAllocator.ts";
@@ -185,6 +185,35 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     return () => this.listeners.delete(listener);
   }
 
+  readonly reconnectListeners = new Set<
+    (event: { epochChanged: boolean }) => void | Promise<void>
+  >();
+  readonly replayGapListeners = new Set<
+    (event: { sessionId: string; reason: string }) => void | Promise<void>
+  >();
+  onReconnected(listener: (event: { epochChanged: boolean }) => void | Promise<void>) {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
+  }
+  onReplayGap(listener: (event: { sessionId: string; reason: string }) => void | Promise<void>) {
+    this.replayGapListeners.add(listener);
+    return () => {
+      this.replayGapListeners.delete(listener);
+    };
+  }
+  async reconnectSession(params: HermesGatewaySessionResumeParams) {
+    return this.resumeSession(params, { operationId: "reconnect-read" });
+  }
+  async reconnect(epochChanged: boolean) {
+    for (const listener of this.reconnectListeners) await listener({ epochChanged });
+  }
+  async replayGap(sessionId = "live-create-1") {
+    for (const listener of this.replayGapListeners)
+      await listener({ sessionId, reason: "truncated" });
+  }
+
   async createSession(
     params: HermesGatewaySessionCreateParams,
     options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
@@ -311,6 +340,34 @@ class FakeHermesGatewayClient implements HermesGatewayClientLike {
     this.reconciliationMutationIds.push(mutationId);
     if (this.reconcileError) throw this.reconcileError;
     return this.mutationStatus;
+  }
+
+  readonly modelChanges: Array<{ readonly session_id: string; readonly model: string }> = [];
+  modelChangeResult:
+    | {
+        readonly key: "model";
+        readonly value: string;
+        readonly scope: string;
+        readonly confirm_required: boolean;
+        readonly warning?: string;
+        readonly confirm_message?: string;
+        readonly deferred?: boolean;
+      }
+    | undefined;
+  modelChangeError: Error | null = null;
+  onModelChange: (() => Promise<void>) | undefined;
+  async setSessionModel(params: { readonly session_id: string; readonly model: string }) {
+    this.modelChanges.push(params);
+    await this.onModelChange?.();
+    if (this.modelChangeError) throw this.modelChangeError;
+    return (
+      this.modelChangeResult ?? {
+        key: "model" as const,
+        value: params.model,
+        scope: "session",
+        confirm_required: false,
+      }
+    );
   }
 
   async submitPrompt(
@@ -569,7 +626,6 @@ const makeRuntime = Effect.fnUntraced(function* (
   resolveHistoryMedia?: Parameters<typeof makeHermesServeAdapterV2>[0]["resolveHistoryMedia"],
   continuationRequests?: Parameters<typeof makeHermesServeAdapterV2>[0]["continuationRequests"],
   proactiveEnabled = false,
-  proactiveInbox?: Parameters<typeof makeHermesServeAdapterV2>[0]["proactiveInbox"],
 ) {
   const idAllocator = yield* IdAllocatorV2;
   const repository = yield* HermesSessionBindingRepository;
@@ -595,7 +651,6 @@ const makeRuntime = Effect.fnUntraced(function* (
     ...(readAttachment === undefined ? {} : { readAttachment }),
     ...(resolveHistoryMedia === undefined ? {} : { resolveHistoryMedia }),
     ...(continuationRequests === undefined ? {} : { continuationRequests }),
-    ...(proactiveInbox === undefined ? {} : { proactiveInbox }),
     clientFactory: () => fake,
   });
   return yield* adapter.openSession({
@@ -2392,7 +2447,7 @@ describe("HermesServeAdapterV2", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("switches the session model through the /model command before the prompt", () =>
+  it.effect("switches the session model through native config.set before the prompt", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fake = new FakeHermesGatewayClient();
@@ -2416,9 +2471,9 @@ describe("HermesServeAdapterV2", () => {
           event.type === "provider_session.updated" ? [event.providerSession] : [],
         );
 
-        assert.equal(fake.prompts[0]?.params.text, "/model openai/gpt-6 --session");
+        assert.equal(fake.modelChanges[0]?.model, "openai/gpt-6");
         assert.include(
-          fake.prompts[1]?.params.text ?? "",
+          fake.prompts[0]?.params.text ?? "",
           "<user_request>\nhello Hermes\n</user_request>",
         );
         assert.equal(sessionUpdates.at(-1)?.model, "openai/gpt-6");
@@ -3387,7 +3442,7 @@ describe("HermesServeAdapterV2", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("rejects a fully configured remote gateway before constructing a client", () =>
+  it.effect("opens an explicitly enabled authenticated remote gateway", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const idAllocator = yield* IdAllocatorV2;
@@ -3428,8 +3483,8 @@ describe("HermesServeAdapterV2", () => {
             runtimePolicy,
           }),
         );
-        assert.equal(exit._tag, "Failure");
-        assert.equal(clientCreations, 0);
+        assert.equal(exit._tag, "Success");
+        assert.equal(clientCreations, 1);
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
@@ -3743,6 +3798,105 @@ describe("HermesServeAdapterV2 proactive runs", () => {
     };
   }
 
+  for (const withReasoning of [false, true]) {
+    it.effect(
+      `keeps native spinner labels out of reasoning, actual reasoning=${withReasoning}`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fake = new FakeHermesGatewayClient();
+            const continuations = recordContinuations();
+            const runtime = yield* makeRuntime(
+              fake,
+              true,
+              undefined,
+              false,
+              undefined,
+              continuations.sink,
+              true,
+            );
+            const providerThread = yield* runtime.ensureThread({
+              threadId,
+              modelSelection,
+              runtimePolicy,
+            });
+            yield* Effect.promise(() =>
+              fake.emit("thinking.delta", { text: "(o_o) formulating..." }),
+            );
+            assert.equal(continuations.offers.length, 0);
+            yield* runtime.startTurn(turnInput(providerThread));
+            yield* Effect.promise(() =>
+              fake.emit("thinking.delta", { text: "(o_o) formulating..." }),
+            );
+            assert.equal(runtime.providerSession.activityText, "(o_o) formulating...");
+            yield* Effect.promise(() =>
+              fake.emit("thinking.delta", { text: "(o_o) formulating..." }),
+            );
+            if (withReasoning) {
+              yield* Effect.promise(() =>
+                fake.emit("reasoning.delta", { text: "Actual reasoning" }),
+              );
+              assert.equal(runtime.providerSession.activityText, null);
+            }
+            yield* Effect.promise(() => fake.emit("thinking.delta", { text: "" }));
+            assert.equal(runtime.providerSession.activityText, null);
+            yield* Effect.promise(() => fake.emit("message.complete", { text: "Hello" }));
+            const events = yield* runtime.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runCollect,
+            );
+            const liveUpdates = events.filter(
+              (event) =>
+                event.type === "provider_session.updated" &&
+                event.providerSession.activityText === "(o_o) formulating...",
+            );
+            assert.equal(liveUpdates.length, 1);
+            const reasoning = events.flatMap((event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "reasoning"
+                ? [event.turnItem.text]
+                : [],
+            );
+            if (withReasoning) {
+              assert.isAbove(reasoning.length, 0);
+              assert.isTrue(reasoning.every((text) => text === "Actual reasoning"));
+            } else assert.deepEqual(reasoning, []);
+          }),
+        ).pipe(Effect.provide(TestLayer)),
+    );
+  }
+
+  it.effect("bounds live activity and clears it on tool work and terminal output", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = new FakeHermesGatewayClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("thinking.delta", { text: `  ${"x".repeat(200)}  ` }),
+        );
+        assert.equal(runtime.providerSession.activityText?.length, 160);
+        yield* Effect.promise(() =>
+          fake.emit("tool.start", {
+            tool_id: "activity-tool",
+            name: "terminal",
+            args: { command: "pwd" },
+          }),
+        );
+        assert.equal(runtime.providerSession.activityText, null);
+        yield* Effect.promise(() => fake.emit("thinking.delta", { text: "Thinking..." }));
+        yield* Effect.promise(() =>
+          fake.emit("message.complete", { text: "Done", status: "complete" }),
+        );
+        assert.equal(runtime.providerSession.activityText, null);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("offers a continuation for a gateway run T3 never submitted", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -3875,92 +4029,6 @@ describe("HermesServeAdapterV2 proactive runs", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("announces the finished external run outside its thread", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fake = new FakeHermesGatewayClient();
-        const continuations = recordContinuations();
-        const witnessed: Array<HermesWitnessedRun> = [];
-        const runtime = yield* makeRuntime(
-          fake,
-          true,
-          undefined,
-          false,
-          undefined,
-          continuations.sink,
-          true,
-          {
-            witness: (run) =>
-              Effect.sync(() => {
-                witnessed.push(run);
-              }),
-          },
-        );
-        const providerThread = yield* runtime.ensureThread({
-          threadId,
-          modelSelection,
-          runtimePolicy,
-        });
-
-        yield* Effect.promise(() =>
-          fake.emit("message.complete", { text: "inbox report", status: "complete" }),
-        );
-        yield* runtime.startTurn(continuationTurnInput(providerThread));
-        yield* runtime.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runDrain,
-        );
-
-        assert.equal(witnessed.length, 1);
-        assert.equal(witnessed[0]?.eventKind, "cron.run.witnessed");
-        assert.equal(witnessed[0]?.threadId, String(threadId));
-        assert.equal(witnessed[0]?.profileKey, "real-profile");
-        assert.equal(witnessed[0]?.title, "Hermes finished a run you did not start");
-        assert.include(witnessed[0]?.body ?? "", "inbox report");
-      }),
-    ).pipe(Effect.provide(TestLayer)),
-  );
-
-  it.effect("leaves a turn T3 asked for out of the inbox", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fake = new FakeHermesGatewayClient();
-        const witnessed: Array<HermesWitnessedRun> = [];
-        const runtime = yield* makeRuntime(
-          fake,
-          true,
-          undefined,
-          false,
-          undefined,
-          undefined,
-          true,
-          {
-            witness: (run) =>
-              Effect.sync(() => {
-                witnessed.push(run);
-              }),
-          },
-        );
-        const providerThread = yield* runtime.ensureThread({
-          threadId,
-          modelSelection,
-          runtimePolicy,
-        });
-
-        yield* runtime.startTurn(turnInput(providerThread));
-        yield* Effect.promise(() =>
-          fake.emit("message.complete", { text: "asked for", status: "complete" }),
-        );
-        yield* runtime.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runDrain,
-        );
-
-        assert.deepEqual(witnessed, []);
-      }),
-    ).pipe(Effect.provide(TestLayer)),
-  );
-
   it.effect("offers again for the next external run once a continuation has drained", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -4029,6 +4097,236 @@ describe("HermesServeAdapterV2 proactive runs", () => {
       }),
     ).pipe(Effect.provide(TestLayer)),
   );
+
+  it.effect(
+    "ignores unsequenced native tails and captures only the next native run without prompting",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = new FakeHermesGatewayClient();
+          fake.promptResult = { status: "streaming" };
+          const continuations = recordContinuations();
+          const runtime = yield* makeRuntime(
+            fake,
+            true,
+            undefined,
+            false,
+            undefined,
+            continuations.sink,
+            true,
+          );
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          const nativeEvent = (type: string, payload: unknown) =>
+            fake.emit(type, payload, {
+              runId: undefined,
+              messageId: undefined,
+              eventId: undefined,
+              eventSequence: undefined,
+              cursor: undefined,
+              frame: {
+                jsonrpc: "2.0",
+                method: "event",
+                params: { type, session_id: "live-create-1", payload },
+              },
+            });
+          yield* runtime.startTurn(turnInput(providerThread));
+          yield* Effect.promise(() => nativeEvent("message.start", {}));
+          yield* Effect.promise(() => nativeEvent("message.delta", { text: "Hello!" }));
+          yield* Effect.promise(() =>
+            nativeEvent("message.complete", { text: "Hello!", status: "complete" }),
+          );
+          yield* Effect.promise(() =>
+            nativeEvent("message.complete", { text: "Hello!", status: "complete" }),
+          );
+          yield* Effect.promise(() =>
+            nativeEvent("reasoning.available", { text: "already finished" }),
+          );
+          yield* Effect.promise(() =>
+            nativeEvent("tool.complete", {
+              tool_id: "late-tool",
+              name: "terminal",
+              result: "done",
+            }),
+          );
+          assert.equal(continuations.offers.length, 0);
+          assert.equal(fake.prompts.length, 1);
+
+          yield* Effect.promise(() => nativeEvent("message.start", {}));
+          yield* Effect.promise(() => nativeEvent("message.delta", { text: "scheduled result" }));
+          yield* Effect.promise(() =>
+            nativeEvent("message.complete", { text: "scheduled result", status: "complete" }),
+          );
+          assert.equal(continuations.offers.length, 1);
+          yield* runtime.startTurn(continuationTurnInput(providerThread));
+          assert.equal(fake.prompts.length, 1);
+
+          yield* Effect.promise(() =>
+            nativeEvent("reasoning.available", { text: "scheduled tail" }),
+          );
+          assert.equal(continuations.offers.length, 1);
+        }),
+      ).pipe(Effect.provide(TestLayer)),
+  );
+
+  for (const terminalStatus of ["idle", "error"] as const) {
+    it.effect(
+      `does not reopen an unsequenced native turn after early ${terminalStatus} status`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fake = new FakeHermesGatewayClient();
+            fake.promptResult = { status: "streaming" };
+            const continuations = recordContinuations();
+            const runtime = yield* makeRuntime(
+              fake,
+              true,
+              undefined,
+              false,
+              undefined,
+              continuations.sink,
+              true,
+            );
+            const providerThread = yield* runtime.ensureThread({
+              threadId,
+              modelSelection,
+              runtimePolicy,
+            });
+            const nativeEvent = (type: string, payload: unknown) =>
+              fake.emit(type, payload, {
+                runId: undefined,
+                messageId: undefined,
+                eventId: undefined,
+                eventSequence: undefined,
+                cursor: undefined,
+                frame: {
+                  jsonrpc: "2.0",
+                  method: "event",
+                  params: { type, session_id: "live-create-1", payload },
+                },
+              });
+            yield* runtime.startTurn(turnInput(providerThread));
+            yield* Effect.promise(() => nativeEvent("message.delta", { text: "answer" }));
+            yield* Effect.promise(() => nativeEvent("status.update", { status: terminalStatus }));
+            yield* Effect.promise(() =>
+              nativeEvent("message.complete", {
+                text: "answer",
+                status: terminalStatus === "error" ? "error" : "complete",
+              }),
+            );
+            assert.equal(continuations.offers.length, 0);
+            assert.equal(fake.prompts.length, 1);
+          }),
+        ).pipe(Effect.provide(TestLayer)),
+    );
+  }
+
+  it.effect(
+    "changes model for the second message without turning model control into external work",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = new FakeHermesGatewayClient();
+          fake.promptResult = { status: "streaming" };
+          const continuations = recordContinuations();
+          const runtime = yield* makeRuntime(
+            fake,
+            true,
+            undefined,
+            false,
+            undefined,
+            continuations.sink,
+            true,
+          );
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          const nativeEvent = (type: string, payload: unknown) =>
+            fake.emit(type, payload, {
+              runId: undefined,
+              eventId: undefined,
+              messageId: undefined,
+              eventSequence: undefined,
+              cursor: undefined,
+              frame: {
+                jsonrpc: "2.0",
+                method: "event",
+                params: { type, session_id: "live-create-1", payload },
+              },
+            });
+          yield* runtime.startTurn(turnInput(providerThread));
+          yield* Effect.promise(() =>
+            nativeEvent("message.complete", { text: "Hello!", status: "complete" }),
+          );
+          fake.onModelChange = () => nativeEvent("session.info", { model: "z-ai/glm-5.3" });
+          const first = turnInput(providerThread);
+          yield* runtime.startTurn({
+            ...first,
+            runId: RunId.make("run:model-second"),
+            attemptId: RunAttemptId.make("attempt:model-second"),
+            runOrdinal: 2,
+            providerTurnOrdinal: 2,
+            modelSelection: { instanceId, model: "z-ai/glm-5.3" },
+            message: {
+              ...first.message,
+              messageId: MessageId.make("message:model-second"),
+              text: "hi again",
+            },
+          });
+          yield* Effect.promise(() =>
+            nativeEvent("message.complete", { text: "Hi again!", status: "complete" }),
+          );
+          assert.equal(fake.modelChanges.length, 1);
+          assert.equal(fake.modelChanges[0]?.model, "z-ai/glm-5.3");
+          assert.equal(fake.prompts.length, 2);
+          assert.isTrue(fake.prompts.every(({ params }) => !params.text.includes("/model")));
+          assert.equal(continuations.offers.length, 0);
+          assert.equal(runtime.providerSession.model, "z-ai/glm-5.3");
+        }),
+      ).pipe(Effect.provide(TestLayer)),
+  );
+
+  for (const failure of ["rejected", "confirmation", "wrong_scope"] as const) {
+    it.effect(
+      `does not send a prompt or change the model when native model control is ${failure}`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fake = new FakeHermesGatewayClient();
+            const runtime = yield* makeRuntime(fake);
+            const providerThread = yield* runtime.ensureThread({
+              threadId,
+              modelSelection,
+              runtimePolicy,
+            });
+            const original = runtime.providerSession.model;
+            if (failure === "rejected") fake.modelChangeError = new Error("model unavailable");
+            else
+              fake.modelChangeResult = {
+                key: "model",
+                value: "z-ai/glm-5.3",
+                scope: failure === "wrong_scope" ? "global" : "session",
+                confirm_required: failure === "confirmation",
+                confirm_message: "Model switch needs confirmation",
+              };
+            const outcome = yield* Effect.result(
+              runtime.startTurn({
+                ...turnInput(providerThread),
+                modelSelection: { instanceId, model: "z-ai/glm-5.3" },
+              }),
+            );
+            assert.equal(outcome._tag, "Failure");
+            assert.equal(fake.prompts.length, 0);
+            assert.equal(runtime.providerSession.model, original);
+          }),
+        ).pipe(Effect.provide(TestLayer)),
+    );
+  }
 
   it.effect("holds session release while an external run waits for its turn", () =>
     Effect.scoped(
@@ -4244,4 +4542,255 @@ describe("sanitizeHermesToolValue", () => {
     assert.isBelow(JSON.stringify(sanitized).length, 2_000);
     assert.include(sanitized, "[TRUNCATED]");
   });
+});
+
+describe("HermesServeAdapterV2 native gateway", () => {
+  const nativeClient = () => {
+    const fake = new FakeHermesGatewayClient();
+    fake.compatibility = classifyHermesGatewayReady({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "gateway.ready",
+        payload: { skin: {}, change_events: true, heartbeat: true, replay_epoch: "native-test" },
+      },
+    });
+    fake.reconcileError = new Error("Native Hermes has no mutation.status method");
+    return fake;
+  };
+
+  it.effect("reattaches existing sessions after reconnect without restarting the prompt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = nativeClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() => fake.reconnect(false));
+        assert.lengthOf(fake.prompts, 1);
+        assert.lengthOf(fake.creates, 1);
+        assert.equal(fake.resumes[0]?.params.session_id, "stored-session-1");
+        assert.equal(fake.resumes[0]?.params.profile, "real-profile");
+        assert.equal(fake.resumes[0]?.params.lazy, true);
+        assert.deepEqual(fake.reconciliations, []);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("continues reconnecting other sessions when one session fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = nativeClient();
+        const runtime = yield* makeRuntime(fake);
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        yield* runtime.ensureThread({
+          threadId: ThreadId.make("another-hermes-thread"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const reconnect = fake.reconnectSession.bind(fake);
+        let attempts = 0;
+        fake.reconnectSession = async (params) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("session unavailable");
+          return reconnect(params);
+        };
+        yield* Effect.promise(() => fake.reconnect(false));
+        assert.equal(attempts, 2);
+        assert.lengthOf(fake.resumes, 1);
+        assert.lengthOf(fake.prompts, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("recovers a saved response after replay truncation without duplicate messages", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = nativeClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() => fake.emit("message.delta", { text: "Saved " }));
+        fake.history = {
+          count: 2,
+          messages: [
+            { role: "user", text: "hello Hermes" },
+            { role: "assistant", text: "Saved result" },
+          ],
+        };
+        yield* Effect.promise(() => fake.replayGap());
+        yield* Effect.promise(() => fake.replayGap());
+        const events = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        assert.isTrue(events.some((event) => event.type === "turn.terminal"));
+        const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
+        assert.lengthOf(
+          snapshot.messages.filter((message) => message.text === "Saved result"),
+          1,
+        );
+        assert.lengthOf(fake.prompts, 1);
+        assert.deepEqual(fake.reconciliations, []);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("does not report an old response as the outcome after a gateway restart", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = nativeClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        fake.history = {
+          count: 2,
+          messages: [
+            { role: "user", text: "a previous request" },
+            { role: "assistant", text: "an old answer" },
+          ],
+        };
+        yield* Effect.promise(() => fake.reconnect(true));
+        const events = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const terminal = events.find((event) => event.type === "turn.terminal");
+        assert.equal(terminal?.type, "turn.terminal");
+        if (terminal?.type === "turn.terminal") assert.equal(terminal.status, "failed");
+        assert.lengthOf(fake.prompts, 1);
+        assert.lengthOf(fake.creates, 1);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("executes a prompt and projects tools without mutation-status support", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = nativeClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread));
+        yield* Effect.promise(() =>
+          fake.emit("tool.start", {
+            tool_id: "native-tool",
+            name: "terminal",
+            arguments: { command: "pwd" },
+          }),
+        );
+        yield* Effect.promise(() =>
+          fake.emit("tool.complete", {
+            tool_id: "native-tool",
+            name: "terminal",
+            result: "/workspace",
+          }),
+        );
+        yield* Effect.promise(() => fake.emit("message.complete", { text: "Done" }));
+        const events = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        assert.lengthOf(fake.prompts, 1);
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "native-tool",
+          ),
+        );
+        assert.isTrue(events.some((event) => event.type === "turn.terminal"));
+        assert.deepEqual(fake.reconciliations, []);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("resumes stored native history without creating or prompting another session", () =>
+    Effect.gen(function* () {
+      const original = nativeClient();
+      const providerThread = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(original);
+          return yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        }),
+      );
+      const resumed = nativeClient();
+      resumed.history = {
+        count: 2,
+        messages: [
+          { role: "user", text: "Original request" },
+          { role: "assistant", text: "Saved result" },
+        ],
+      };
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* makeRuntime(resumed);
+          const thread = yield* runtime.resumeThread({
+            providerThread,
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          const snapshot = yield* runtime.readThreadSnapshot({ providerThread: thread });
+          assert.deepEqual(
+            snapshot.messages.map((message) => message.text),
+            ["Original request", "Saved result"],
+          );
+          assert.lengthOf(resumed.resumes, 1);
+          assert.lengthOf(resumed.creates, 0);
+          assert.lengthOf(resumed.prompts, 0);
+          assert.deepEqual(resumed.reconciliations, []);
+        }),
+      );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("answers approvals and stops native work without mutation-status support", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = nativeClient();
+        const runtime = yield* makeRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(turnInput(providerThread, supervisedRuntimePolicy));
+        yield* Effect.promise(() => fake.emit("approval.request", { command: "deploy" }));
+        const events = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "runtime_request.updated"),
+          Stream.runCollect,
+        );
+        const request = events.find((event) => event.type === "runtime_request.updated");
+        const turn = events.find((event) => event.type === "provider_turn.updated");
+        assert.equal(request?.type, "runtime_request.updated");
+        assert.equal(turn?.type, "provider_turn.updated");
+        if (request?.type !== "runtime_request.updated" || turn?.type !== "provider_turn.updated")
+          return;
+        yield* runtime.respondToRuntimeRequest({
+          requestId: request.runtimeRequest.id,
+          decision: "accept",
+        });
+        assert.deepEqual(fake.approvalResponses, [{ session_id: "live-create-1", choice: "once" }]);
+        yield* runtime.interruptTurn({ providerThread, providerTurnId: turn.providerTurn.id });
+        assert.lengthOf(fake.interrupts, 1);
+        assert.deepEqual(fake.reconciliations, []);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
 });

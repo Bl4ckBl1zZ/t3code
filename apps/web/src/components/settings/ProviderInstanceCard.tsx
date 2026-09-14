@@ -1,7 +1,7 @@
+import { HermesSetup } from "../HermesSetup";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { readProviderConfigString } from "./providerSettingsFields";
 import type { EnvironmentId } from "@t3tools/contracts";
-("use client");
 
 import { Spinner } from "~/components/ui/spinner";
 
@@ -508,6 +508,7 @@ export function ProviderInstanceCard({
   onRunUpdate,
   isUpdating = false,
 }: ProviderInstanceCardProps) {
+  const [showAdvancedHermes, setShowAdvancedHermes] = useState(false);
   const enabled = effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
   // The server-reported status wins when present; otherwise fall back to
   // "disabled"/"warning" based on the local `enabled` flag so the dot
@@ -779,12 +780,22 @@ export function ProviderInstanceCard({
             ) : null}
           </span>
         </button>
-        <Switch
-          checked={enabled}
-          disabled={readOnly}
-          onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-          aria-label={`Enable ${displayName}`}
-        />
+        {driverKind === "hermes" && environmentId && !enabled ? (
+          <HermesSetup
+            key={`${environmentId}:${instanceId}`}
+            environmentId={environmentId}
+            providerInstanceId={instanceId}
+            compact
+            readOnly={readOnly}
+          />
+        ) : (
+          <Switch
+            checked={enabled}
+            disabled={readOnly}
+            onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+            aria-label={`Enable ${displayName}`}
+          />
+        )}
       </div>
     );
   }
@@ -909,16 +920,49 @@ export function ProviderInstanceCard({
                 />
               </Button>
             ) : null}
-            <Switch
-              checked={enabled}
-              onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-              aria-label={`Enable ${displayName}`}
-            />
+            {driverKind === "hermes" && environmentId && !enabled ? null : (
+              <Switch
+                checked={enabled}
+                onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+                aria-label={`Enable ${displayName}`}
+              />
+            )}
           </div>
         </div>
       </div>
 
-      <Collapsible open={mode === "editor" || isExpanded} onOpenChange={onExpandedChange}>
+      {driverKind === "hermes" && environmentId ? (
+        <div className="grid gap-3 px-3 pb-4 sm:px-4">
+          <HermesSetup
+            key={`${environmentId}:${instanceId}`}
+            environmentId={environmentId}
+            environmentLabel={environmentLabel}
+            providerInstanceId={instanceId}
+            readOnly={readOnly}
+          />
+          <Button
+            size="xs"
+            variant="ghost"
+            className="w-fit"
+            aria-expanded={showAdvancedHermes}
+            onClick={() => setShowAdvancedHermes((value) => !value)}
+          >
+            Advanced Hermes settings
+          </Button>
+        </div>
+      ) : null}
+      <Collapsible
+        open={
+          driverKind === "hermes" && environmentId !== undefined
+            ? showAdvancedHermes
+            : mode === "editor" || isExpanded
+        }
+        onOpenChange={
+          driverKind === "hermes" && environmentId !== undefined
+            ? setShowAdvancedHermes
+            : onExpandedChange
+        }
+      >
         <CollapsibleContent>
           <div className="space-y-5 px-3 pb-4 pt-2 sm:px-4">
             <div>

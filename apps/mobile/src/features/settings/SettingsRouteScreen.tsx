@@ -700,6 +700,7 @@ function ArchivedThreadsSettingsSection() {
     <SettingsSection title="Threads">
       <SettingsRow icon="archivebox" label="Archived Threads" target="SettingsArchive" />
       <SettingsRow icon="calendar.badge.clock" label="Automations" target="SettingsAutomations" />
+      <SettingsRow icon="sparkles" label="T3 Work" target="SettingsHermesWork" />
     </SettingsSection>
   );
 }

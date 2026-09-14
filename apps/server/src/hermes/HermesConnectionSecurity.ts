@@ -7,15 +7,12 @@ export type HermesConnectionSecurityCode =
   | "invalid_endpoint"
   | "remote_disabled"
   | "remote_instance_disabled"
-  | "remote_pairing_required"
-  | "remote_trust_required"
-  | "remote_credential_reuse"
-  | "remote_verification_unsupported";
+  | "authentication_required";
 
 export type HermesConnectionSecurityAssessment =
   | {
       readonly status: "ready";
-      readonly scope: "loopback";
+      readonly scope: HermesEndpointScope;
       readonly endpoint: string;
       readonly diagnosticEndpoint: string;
       readonly authToken: string;
@@ -38,7 +35,6 @@ export interface HermesConnectionSecurityInput {
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-const SHA256_FINGERPRINT = /^(?:[0-9a-f]{64}|(?:[0-9a-f]{2}:){31}[0-9a-f]{2})$/iu;
 
 export function sanitizeHermesEndpoint(endpoint: string): string {
   let parsed: URL;
@@ -85,22 +81,24 @@ export function assessHermesConnectionSecurity(
   }
 
   const scope: HermesEndpointScope = LOOPBACK_HOSTS.has(endpoint.hostname) ? "loopback" : "remote";
-  const hasQueryCredential = [...endpoint.searchParams.keys()].some(
-    (key) => key.toLowerCase() === "token",
+  const hasQueryCredential = [...endpoint.searchParams.keys()].some((key) =>
+    ["token", "ticket", "access_token"].includes(key.toLowerCase()),
   );
   if (
     endpoint.username ||
     endpoint.password ||
     endpoint.hash ||
     hasQueryCredential ||
-    (scope === "loopback" ? endpoint.protocol !== "ws:" : endpoint.protocol !== "wss:")
+    (scope === "loopback"
+      ? !["ws:", "wss:"].includes(endpoint.protocol)
+      : endpoint.protocol !== "wss:")
   ) {
     return blocked(
       "invalid_endpoint",
       scope,
       diagnosticEndpoint,
       scope === "loopback"
-        ? "Loopback Hermes endpoints must use credential-free ws://."
+        ? "Loopback Hermes endpoints must use credential-free ws:// or wss://."
         : "Remote Hermes endpoints must use credential-free wss://.",
     );
   }
@@ -141,41 +139,25 @@ export function assessHermesConnectionSecurity(
     );
   }
 
-  const pairingToken = input.remotePairingToken?.trim();
-  if (!pairingToken) {
+  const authToken = input.remotePairingToken?.trim() || input.gatewayToken?.trim();
+  if (!authToken) {
     return blocked(
-      "remote_pairing_required",
+      "authentication_required",
       scope,
       diagnosticEndpoint,
-      `Remote Hermes requires a dedicated sensitive ${HERMES_REMOTE_PAIRING_TOKEN_ENV}.`,
-    );
-  }
-  if (pairingToken === input.gatewayToken?.trim()) {
-    return blocked(
-      "remote_credential_reuse",
-      scope,
-      diagnosticEndpoint,
-      "Remote Hermes pairing material must be distinct from the local gateway credential.",
+      "Remote Hermes requires a sensitive dashboard bearer token.",
     );
   }
 
-  const fingerprint = input.remoteTlsCertificateSha256?.trim();
-  if (!fingerprint || !SHA256_FINGERPRINT.test(fingerprint)) {
-    return blocked(
-      "remote_trust_required",
-      scope,
-      diagnosticEndpoint,
-      `Remote Hermes requires an explicit SHA-256 certificate fingerprint in ${HERMES_REMOTE_TLS_CERT_SHA256_ENV}.`,
-    );
-  }
-
+  // The dashboard authenticates HTTPS management requests with this bearer
+  // token and issues single-use tickets for WebSocket connections. TLS trust
+  // is verified by the transport using the system certificate authorities.
   return {
-    status: "unsupported",
+    status: "ready",
     scope,
-    code: "remote_verification_unsupported",
+    endpoint: endpoint.toString(),
     diagnosticEndpoint,
-    message:
-      "Remote Hermes is configured but unsupported: the current gateway/WebSocket transport cannot prove scoped pairing or verify the configured TLS certificate fingerprint.",
+    authToken,
   };
 }
 

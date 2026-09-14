@@ -18,8 +18,14 @@ import {
 } from "../../orchestration-v2/Adapters/HermesServeAdapterV2.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { BUILT_IN_DRIVERS } from "../builtInDrivers.ts";
-import { HermesDriver, hermesProviderModels, hermesSlashCommands } from "./HermesDriver.ts";
+import {
+  HermesDriver,
+  hermesProviderModels,
+  hermesSlashCommands,
+  hermesProviderSnapshot,
+} from "./HermesDriver.ts";
 
+const decodeHermesSettingsSync = Schema.decodeUnknownSync(HermesSettings);
 const ServerConfigTestLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-hermes-driver-test-",
 });
@@ -31,6 +37,53 @@ const TestLayer = Layer.mergeAll(
 const decodeHermesSettingsEffect = Schema.decodeUnknownEffect(HermesSettings);
 
 describe("HermesDriver", () => {
+  it("does not claim readiness until the selected model provider is authenticated", () => {
+    const settings = decodeHermesSettingsSync({ profileKey: "default" });
+    const base = {
+      instanceId: ProviderInstanceId.make("hermes_setup"),
+      displayName: "Hermes",
+      accentColor: undefined,
+      enabled: true,
+      settings,
+      gatewayToken: "token",
+      remotePairingToken: undefined,
+      remoteTlsCertificateSha256: undefined,
+      continuationKey: "hermes",
+      checkedAt: "2026-09-14T00:00:00.000Z",
+      effectiveEndpoint: "ws://127.0.0.1:9119/api/ws",
+    };
+    const missing = hermesProviderSnapshot({
+      ...base,
+      inventory: { models: { model: "", provider: "openai", providers: [] } },
+    });
+    assert.equal(missing.status, "warning");
+    assert.include(missing.message, "sign in");
+    const unauthenticated = hermesProviderSnapshot({
+      ...base,
+      inventory: {
+        models: {
+          model: "gpt-5.4",
+          provider: "openai",
+          providers: [{ slug: "openai", name: "OpenAI", authenticated: false, is_current: true }],
+        },
+      },
+    });
+    assert.equal(unauthenticated.status, "warning");
+    assert.equal(unauthenticated.auth.status, "unauthenticated");
+    const ready = hermesProviderSnapshot({
+      ...base,
+      inventory: {
+        models: {
+          model: "gpt-5.4",
+          provider: "openai",
+          providers: [{ slug: "openai", name: "OpenAI", authenticated: true, is_current: true }],
+        },
+      },
+    });
+    assert.equal(ready.status, "ready");
+    assert.equal(ready.auth.status, "authenticated");
+  });
+
   it("presents the default sentinel as the effective Hermes model with live options", () => {
     const models = hermesProviderModels(
       {

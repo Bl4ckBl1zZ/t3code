@@ -50,6 +50,7 @@ public struct WorkspaceView: View {
     @State private var showingAddProject = false
     @State private var editingProjectIcon: FeatureProject?
     @State private var showingSettings = false
+    @State private var showingHermesSetup = false
     @State private var showingPullRequests = false
     @State private var showingArrangement = false
     @State private var renamingThread: FeatureThread?
@@ -244,6 +245,7 @@ public struct WorkspaceView: View {
                 PullRequestWorkspaceView(model: model, manager: manager)
             }
         }
+        .sheet(isPresented: $showingHermesSetup) { WorkSetupSheet(model: model) }
         .sheet(isPresented: $showingSettings) {
             SettingsView(model: model)
         }
@@ -1041,8 +1043,8 @@ public struct WorkspaceView: View {
             // Work gets its own compose screen: assistant-shaped, no project
             // or git chrome. It re-resolves the target itself.
             showingNewWorkConversation = true
-        case let .hermesUnavailable(title, message):
-            noticeAlert = ThreadListActionAlert(title: title, message: message)
+        case .hermesUnavailable:
+            showingHermesSetup = true
         }
     }
 

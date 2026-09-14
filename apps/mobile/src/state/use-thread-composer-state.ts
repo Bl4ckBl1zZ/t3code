@@ -4,6 +4,7 @@ import {
   deriveThreadActivityRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
+import { resolveThreadProviderSession } from "@t3tools/client-runtime/state/thread-workflows";
 import { useCallback, useEffect, useMemo } from "react";
 
 import {
@@ -157,6 +158,12 @@ export function useThreadComposerState(options?: {
         : (selectedThreadShell?.latestRun ?? null),
     [selectedThreadProjection, selectedThreadShell?.latestRun],
   );
+
+  const activeWorkActivityText = useMemo(() => {
+    if (!selectedThreadProjection || selectedThreadRuntime?.activeRunId == null) return null;
+    const session = resolveThreadProviderSession(selectedThreadProjection.projection);
+    return session?.status === "running" ? session.activityText?.trim() || null : null;
+  }, [selectedThreadProjection, selectedThreadRuntime?.activeRunId]);
 
   const selectedThreadSessionActivity = useMemo(() => {
     if (!selectedThreadRuntime) {
@@ -515,6 +522,7 @@ export function useThreadComposerState(options?: {
     onUpdateQueuedMessageText,
     onQueuedMessageEditingChange,
     activeWorkStartedAt,
+    activeWorkActivityText,
     draftMessage,
     draftAttachments,
     modelSelection,

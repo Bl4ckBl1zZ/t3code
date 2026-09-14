@@ -54,6 +54,30 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("separates reading Hermes work from changing assistants or schedules", () => {
+    for (const method of [
+      WS_METHODS.hermesWorkSetupStatus,
+      WS_METHODS.hermesWorkModelStatus,
+      WS_METHODS.hermesWorkConnections,
+      WS_METHODS.hermesWorkQuery,
+      WS_METHODS.hermesWorkSubscribeChanges,
+      WS_METHODS.hermesWorkGroupsQuery,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.hermesWorkMutate,
+      WS_METHODS.hermesWorkGroupsMutate,
+      WS_METHODS.hermesWorkSetupStart,
+      WS_METHODS.hermesWorkModelAuthStart,
+      WS_METHODS.hermesWorkModelAuthPoll,
+      WS_METHODS.hermesWorkModelAuthCancel,
+      WS_METHODS.hermesWorkModelSet,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

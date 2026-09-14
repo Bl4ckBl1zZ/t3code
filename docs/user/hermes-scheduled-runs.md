@@ -1,97 +1,51 @@
-# Hermes scheduled runs
+# Hermes in T3 Work
 
-For recurring messages in a T3 conversation, use T3 scheduled tasks. These keep
-an explicit provider and model selection and send each prompt back to the bound
-thread. You can manage them in **Settings → Scheduled tasks**.
+Use T3 Work to manage your Hermes assistants, conversations, scheduled tasks, and results. Switch between Work, Code, and Chat using the existing controls.
 
-Hermes also owns a separate native scheduler. Native cron jobs created with
-Hermes's cron tool or **Settings → Hermes cron** are stored and run by Hermes.
-They do not send prompts back into the T3 conversation.
+## Connect an assistant
 
-This page is about what T3 Code does with those runs.
+Choose **Set up Hermes** in Work or in the Hermes provider settings. T3 finds an existing installation or installs Hermes, creates the local connection, and starts it on the selected computer. You do not need to copy a local token or configure a port. Automatic installation currently supports macOS and Linux; Windows hosts need an existing Hermes installation or a WSL environment.
 
-## The panel shows what the gateway supports
+Setup shows progress and offers a retry if a step fails. If Hermes already has a configured model account, it reuses it. Otherwise, connect an account in the setup panel and choose a model. For supported sign-in providers, open the sign-in page, enter the displayed code, and return to T3. Account sign-in still requires your participation.
 
-**Settings → Hermes cron** lists every job on each connected Hermes instance
-with its schedule, its next run, and **how its last run ended**. A job whose
-last run failed is called out in red with the reason Hermes gave, so a schedule
-that has been firing and failing for a week does not read as a healthy one.
+Existing remote Hermes connections keep their endpoint and credentials. Advanced connection settings remain available for connecting to a separately managed server.
 
-Which buttons appear depends on the gateway in front of you. T3 asks it which
-cron operations it accepts and offers exactly those — the current Hermes build
-supports create, pause, resume, and delete, and does not implement edit or run
-now, so those two do not appear.
+Work uses the same thread sidebar and conversation view as Code. Each new Work thread starts its own Hermes session; reopening a thread continues that session.
 
-## Runs appear in the inbox
+Open a Work thread's details to see its Hermes assistant, session, workspace, and linked scheduled tasks. The workspace is on the computer hosting Hermes, which may be different from the device you are using. Task details include their timing and latest status, with a link to manage schedules. The list updates automatically as tasks are created or changed. Tasks belonging to other conversations are not listed as this thread's tasks.
 
-**Settings → Hermes cron → Runs you did not start** lists every run T3 noticed,
-newest first, with how it ended. Selecting one marks it read.
+Open **T3 Work** in Settings to manage assistants and scheduled tasks. Select the environment, connection, and assistant you want to manage. Conversations opened here use the selected assistant's Hermes profile.
 
-On iPhone and iPad the same list is **Settings → Hermes Runs**, and the row
-carries a badge with the unread count. Tap a run to open it; touch and hold one
-to mark it unread or dismiss it.
+Your existing Hermes conversations are available under Conversations. Open one to continue it in T3, or start a new conversation. Memory, skills, and schedules remain owned by Hermes.
 
-Each entry can be marked read or unread, and dismissed or restored, so nothing
-disappears permanently.
+## Schedule work
 
-T3 finds these by comparing each job's last run against what it recorded on the
-previous check, which happens every ten minutes for as long as the server is
-running — no client has to be connected and no window has to be open. A run
-that Hermes reports at the same time with a different outcome (a retry that
-also failed, say) is reported again rather than swallowed. Existing failures
-are reported when first discovered, and completed or paused jobs still have
-their final outcome reported.
+In Scheduled tasks, create a task with its instructions, timing, and delivery destination. For example, use `every 1h` for an hourly check or `in 30m` for a one-time task. You can also ask the assistant to schedule work in conversation.
 
-## Reading what a run actually did
+Review the profile's background service status. The service must be running for unattended tasks to execute. Starting the connection alone does not guarantee that the scheduler is running.
 
-A Hermes cron job does not run inside a conversation. Each run spawns its own
-Hermes session, does its work, and ends — which is why a run is reported from
-the schedule rather than streamed into an existing thread.
+Use the schedule controls to edit, pause, resume, run now, or remove a task. Pausing affects future executions. It does not mean a run already in progress has stopped. Removing a task does not erase results already synchronized into T3.
 
-Those sessions are still real, and **Settings → Hermes → Import sessions**
-brings them in as T3 threads with their full transcripts. Scheduled runs show up
-there alongside your other Hermes conversations, titled with the job name and
-the time it ran.
+Hermes schedules and T3 scheduled tasks for other providers have different execution owners. Creating a Hermes schedule does not create a second T3 timer.
 
-## Runs that do stream in
+## Read results
 
-Work Hermes starts on a session T3 is already subscribed to — a prompt sent from
-another Hermes client, or anything the model keeps doing after a turn settles —
-streams into that thread on its own and is written to the transcript like any
-other turn. **Proactive mode** is what keeps those sessions subscribed while
-nobody is looking. Residency is capped per profile, so on a profile with many
-Hermes threads only the most recent are held open.
+Open a schedule's run history to inspect its individual runs, then select a run to read the output. The broader run list includes activity discovered from Hermes even when you did not start it in T3.
 
-## Keeping the schedule alive
+The T3 environment checks for background activity while its server is running. Reconnecting a client does not rerun the task. When Hermes does not report an outcome, T3 shows the uncertainty instead of assuming success.
 
-T3 enables Hermes's embedded scheduler when launching a managed server. Native
-jobs only fire while that process or a separate Hermes scheduler is running.
-A manually launched `hermes serve` alone does not enable the embedded scheduler;
-use `HERMES_DESKTOP=1 hermes serve` or run `hermes gateway run` alongside it.
+A task's execution and its delivery are separate outcomes. A result saved locally does not mean it was sent to a messaging channel. Choose and configure the destination you intend to use.
 
-If you start Hermes yourself, it keeps running after you quit T3 Code and your
-jobs keep firing. If instead you let T3 Code launch it — the **Managed server**
-switch on the instance — then the gateway is T3's child process and stops when
-T3 does, taking the schedule with it. Run Hermes yourself if you want jobs to
-fire while T3 Code is closed.
+## Work while away
 
-## What still needs Hermes-side support
+Closing a browser window does not stop a separately running Hermes background service. Shutting down its hosting machine makes that environment unavailable. Use an environment that remains online for overnight or recurring responsibilities.
 
-The **Proactive delivery** panel labels each instance either **Replays
-transcripts** or **Reports runs**. Reports runs means the gateway offers no
-durable event cursor — the case for every current Hermes build — so T3 cannot
-stream back the moment-by-moment events of a run it was not connected for. It
-still reports that the run happened and how it ended, and the transcript is
-still importable.
+If a change loses its connection before Hermes confirms it, refresh the state before repeating the action: the change may already have completed.
 
-## When a job fires without starting the agent
+## Manage the assistant
 
-Hermes can reject a run before inference begins. In particular, an unpinned job
-may stop running when the global provider or model changes. Pin the intended
-provider and model using Hermes's native job update tools; resuming the job
-alone does not fix that mismatch. Some gateways report only the failed status,
-so inspect the job in Hermes for the detailed error when T3 cannot show it.
+The management view provides instructions, memory, skills, messaging configuration, and files for the selected assistant. Check the selected environment and assistant before saving changes. Memory edits can be rejected if Hermes changed that memory after you opened it; reload before editing again.
 
-Native delivery to `origin` also requires an actual Hermes delivery destination.
-It does not mean the T3 thread where you asked for the schedule. Use a T3
-scheduled task when results should continue that conversation.
+Group conversations let assistants collaborate. Their messages and controls remain attached to the selected connection and group.
+
+For Hermes's schedule formats and execution behavior, see the [official scheduled tasks guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron).

@@ -21,7 +21,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchBarCommands } from "react-native-screens";
 
 import { AppText as Text } from "../../components/AppText";
-import { CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
@@ -79,10 +78,8 @@ import {
   ThreadListShowMoreRow,
 } from "./thread-list-items";
 import {
-  ThreadListV2InboxHeader,
   ThreadListV2PendingRow,
   ThreadListV2Row,
-  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "./thread-list-v2-items";
@@ -101,7 +98,6 @@ import {
 type SidebarListItem =
   | HomeListItem
   | ThreadListV2ListItem
-  | { readonly type: "v2-inbox"; readonly key: string }
   | { readonly type: "v2-show-more"; readonly key: string; readonly hiddenCount: number };
 
 const SIDEBAR_STICKY_HEADER_HEIGHT = 106;
@@ -181,10 +177,8 @@ function ThreadNavigationSidebarPane(
     movePinnedThread,
     regenerateThreadTitle,
   } = useThreadListActions();
-  const threadListV2FlagEnabled = useThreadListV2Enabled();
+  const threadListV2Enabled = useThreadListV2Enabled();
   const [workspace, setWorkspace] = useMobileWorkspace();
-  // T3 Work always uses the v2 list layout regardless of the preference flag.
-  const threadListV2Enabled = workspace === "work" || threadListV2FlagEnabled;
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const providerDrivers = useMemo(() => buildProviderDriverMap(serverConfigs), [serverConfigs]);
   const visibleThreads = useMemo(
@@ -618,12 +612,6 @@ function ThreadNavigationSidebarPane(
           pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
     );
     const items: SidebarListItem[] = [];
-    if (workspace === "work") {
-      items.push({
-        type: "v2-inbox",
-        key: "v2-inbox",
-      });
-    }
     items.push(
       ...buildThreadListV2ListItems({
         items: threadListV2Layout.items,
@@ -635,7 +623,6 @@ function ThreadNavigationSidebarPane(
         settledShelfExpanded,
         settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
-        workSections: workspace === "work",
       }),
     );
     if (settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0) {
@@ -891,17 +878,11 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-show-more" && item.type === "v2-show-more") {
         return previous.hiddenCount === item.hiddenCount;
       }
-      if (previous.type === "v2-inbox" && item.type === "v2-inbox") {
-        return true;
-      }
       if (previous.type === "v2-pending" && item.type === "v2-pending") {
         return (
           previous.pendingTask === item.pendingTask &&
           previous.showPendingDivider === item.showPendingDivider
         );
-      }
-      if (previous.type === "v2-work-section" && item.type === "v2-work-section") {
-        return previous.label === item.label && previous.tone === item.tone;
       }
       if (previous.type === "v2-snoozed-shelf" && item.type === "v2-snoozed-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
@@ -915,15 +896,11 @@ function ThreadNavigationSidebarPane(
         previous.type === "v2-pending" ||
         previous.type === "v2-snoozed-shelf" ||
         previous.type === "v2-settled-shelf" ||
-        previous.type === "v2-inbox" ||
-        previous.type === "v2-work-section" ||
         item.type === "v2-thread" ||
         item.type === "v2-show-more" ||
         item.type === "v2-pending" ||
         item.type === "v2-snoozed-shelf" ||
-        item.type === "v2-settled-shelf" ||
-        item.type === "v2-inbox" ||
-        item.type === "v2-work-section"
+        item.type === "v2-settled-shelf"
       ) {
         return false;
       }
@@ -951,10 +928,6 @@ function ThreadNavigationSidebarPane(
   const renderListItem = useCallback(
     ({ item }: { readonly item: SidebarListItem }) => {
       switch (item.type) {
-        case "v2-inbox":
-          return <ThreadListV2InboxHeader pane="sidebar" />;
-        case "v2-work-section":
-          return <ThreadListV2SectionDivider label={item.label} pane="sidebar" tone={item.tone} />;
         case "v2-pending": {
           const pendingScopeKey = scopedProjectKey(
             item.pendingTask.message.environmentId,

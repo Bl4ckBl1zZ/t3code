@@ -1,11 +1,7 @@
-import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   isProviderAvailable,
   type EnvironmentId,
-  type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ServerConfig,
@@ -76,26 +72,7 @@ export function isMobileWorkspaceThread(
 }
 
 /**
- * Sections of the T3 Work inbox, mirroring the web sidebar: Main is the
- * always-pinned thread, "needs you" is blocked-on-you work, and everything
- * else is ordinary active work.
- */
-export type MobileWorkInboxSection = "main" | "needs-you" | "active";
-
-export function mobileWorkInboxSection(
-  thread: Pick<
-    EnvironmentThreadShell,
-    "hasPendingApprovals" | "hasPendingUserInput" | "workInboxRole"
-  >,
-): MobileWorkInboxSection {
-  if (thread.workInboxRole === "main") return "main";
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "needs-you";
-  return "active";
-}
-
-/**
- * Main is pinned by definition and cannot be unpinned, and parked or finished
- * work is not inbox work — so neither offers the pin affordance.
+ * Archived, parked, or finished work does not offer the pin affordance.
  */
 export function canPinMobileWorkThread(input: {
   readonly thread: Pick<
@@ -113,7 +90,6 @@ export function canPinMobileWorkThread(input: {
   readonly isSettled: boolean;
 }): boolean {
   return (
-    input.thread.workInboxRole !== "main" &&
     input.thread.archivedAt === null &&
     input.thread.lineage.relationshipToParent !== "subagent" &&
     isHermesThread(input.thread, input.providerDrivers) &&
@@ -137,58 +113,26 @@ export function resolveDraftWorkspaceMode(input: {
   return input.isWorkConversation ? "local" : input.requestedMode;
 }
 
-export interface HermesConversationTarget {
-  readonly project: EnvironmentProject;
-  readonly modelSelection: ModelSelection;
-}
-
-/**
- * Resolves the existing project shell used only to route a Hermes launch.
- * Work UI never exposes this backing project, and `prepareWorkspace: false`
- * prevents project/worktree setup from leaking into the conversation.
- */
+/** Selects an available environment; the server owns profile and session creation. */
 export function resolveHermesConversationTarget(input: {
-  readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, ServerConfig>;
   readonly requiredEnvironmentId: EnvironmentId | null;
-}): HermesConversationTarget | null {
+  readonly requiredProviderInstanceId?: string;
+}) {
   for (const [environmentId, config] of input.serverConfigs) {
-    if (input.requiredEnvironmentId !== null && environmentId !== input.requiredEnvironmentId) {
+    if (input.requiredEnvironmentId !== null && environmentId !== input.requiredEnvironmentId)
       continue;
-    }
-    const workDirectory = config.t3WorkDirectory;
-    const project =
-      workDirectory === undefined
-        ? undefined
-        : input.projects.find(
-            (candidate) =>
-              candidate.environmentId === environmentId &&
-              candidate.workspaceRoot === workDirectory,
-          );
-    if (!project) continue;
-    for (const provider of config.providers) {
-      if (
-        provider.driver !== "hermes" ||
-        !provider.enabled ||
-        !provider.installed ||
-        provider.status !== "ready" ||
-        !isProviderAvailable(provider)
-      ) {
-        continue;
-      }
-      const model =
-        provider.models.find((candidate) => candidate.slug === "default") ??
-        provider.models.find((candidate) => candidate.isDefault === true) ??
-        provider.models[0];
-      if (!model) continue;
-      return {
-        project,
-        modelSelection: {
-          instanceId: provider.instanceId,
-          model: model.slug,
-        },
-      };
-    }
+    const provider = config.providers.find(
+      (provider) =>
+        provider.driver === "hermes" &&
+        (input.requiredProviderInstanceId === undefined ||
+          provider.instanceId === input.requiredProviderInstanceId) &&
+        provider.enabled &&
+        provider.installed &&
+        provider.status === "ready" &&
+        isProviderAvailable(provider),
+    );
+    if (provider) return { environmentId, providerInstanceId: provider.instanceId };
   }
   return null;
 }

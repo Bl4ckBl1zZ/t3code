@@ -5,7 +5,6 @@ import {
   CodexSettings,
   CursorSettings,
   GrokSettings,
-  HermesAcpSettings,
   HermesSettings,
   OpenClawSettings,
   OpenCodeSettings,
@@ -99,11 +98,7 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
         profileKey: "default",
         managedServerEnabled: true,
         customModels: [],
-        importEnabled: false,
-        mcpEnabled: true,
         attachmentsEnabled: true,
-        proactiveEnabled: true,
-        voiceEnabled: false,
       },
     },
     environmentFields: [
@@ -135,13 +130,6 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
         customModels: [],
       },
     },
-  },
-  {
-    value: ProviderDriverKind.make("hermesAcp"),
-    label: "Hermes in Code",
-    badgeLabel: "ACP",
-    settingsSchema: HermesAcpSettings,
-    hasDefaultInstance: false,
   },
   {
     value: ProviderDriverKind.make("acpRegistry"),

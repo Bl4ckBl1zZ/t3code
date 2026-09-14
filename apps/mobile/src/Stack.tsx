@@ -43,6 +43,7 @@ import { NewTaskDraftRouteScreen } from "./features/threads/NewTaskDraftRouteScr
 import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
+import { SettingsHermesWorkRouteScreen } from "./features/settings/SettingsHermesWorkRouteScreen";
 import { SettingsAutomationsRouteScreen } from "./features/settings/SettingsAutomationsRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
@@ -159,6 +160,11 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Archived Threads",
       },
+    }),
+    SettingsHermesWork: createNativeStackScreen({
+      screen: SettingsHermesWorkRouteScreen,
+      linking: "hermes-work",
+      options: { title: "T3 Work" },
     }),
     SettingsAutomations: createNativeStackScreen({
       screen: SettingsAutomationsRouteScreen,

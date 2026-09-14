@@ -48,7 +48,6 @@ export * from "./voice.ts";
 export * from "./usage.ts";
 export * from "./rpc.ts";
 export * from "./hermesGateway.ts";
-export * from "./hermesProactive.ts";
 export * from "./hermesSkills.ts";
 export * from "./hermesSessions.ts";
 
@@ -68,3 +67,13 @@ export * from "./browserImport.ts";
 export * from "./providerSetup.ts";
 
 export * from "./snapShot.ts";
+
+export * from "./hermesWork.ts";
+
+export * from "./hermesWorkGroups.ts";
+
+export * from "./hermesWorkArtifacts.ts";
+
+export * from "./hermesWorkSetup.ts";
+
+export * from "./hermesWorkModelAuth.ts";

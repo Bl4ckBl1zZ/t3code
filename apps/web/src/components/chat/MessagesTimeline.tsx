@@ -1,4 +1,5 @@
 import { SnapShotAttachmentDetails } from "./SnapShotAttachmentDetails";
+import { resolveWorkingActivityText } from "./workingActivity";
 import { ActivityFocusText } from "./ActivityFocusText";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useAssetUrlState } from "../../assets/assetUrls";
@@ -229,6 +230,7 @@ interface TimelineRowSharedState {
 }
 
 interface TimelineRowActivityState {
+  workingActivityText: string | null;
   isPreparingWorktree: boolean;
   isWorking: boolean;
   isRevertingCheckpoint: boolean;
@@ -250,6 +252,8 @@ const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
+  /** Transient provider status shown in the existing working row. */
+  workingActivityText?: string | null;
   isPreparingWorktree?: boolean;
   citationRequest?: AssistantCitationRequest | null;
   citationHistoryLoading?: boolean;
@@ -317,6 +321,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onCiteAssistantText,
   onUseArtifactTemplate,
   isWorking,
+  workingActivityText = null,
   isPreparingWorktree = false,
   activeTurnInProgress,
   activeTurnStartedAt,
@@ -660,13 +665,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const activityState = useMemo<TimelineRowActivityState>(
     () => ({
+      workingActivityText: resolveWorkingActivityText(workingActivityText, isWorking),
       isWorking,
       isPreparingWorktree,
       isRevertingCheckpoint,
       activeTurnInProgress,
       latestRunId: latestRun?.runId ?? null,
     }),
-    [isPreparingWorktree, activeTurnInProgress, isRevertingCheckpoint, isWorking, latestRun?.runId],
+    [
+      isPreparingWorktree,
+      activeTurnInProgress,
+      isRevertingCheckpoint,
+      isWorking,
+      workingActivityText,
+      latestRun?.runId,
+    ],
   );
   const listHeader = useMemo(
     () =>
@@ -2115,11 +2128,21 @@ function V2EventTimelineRow({
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
-  const { isPreparingWorktree } = use(TimelineRowActivityCtx);
+  const { isPreparingWorktree, workingActivityText } = use(TimelineRowActivityCtx);
   return (
     <div className="min-h-6 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
       {isPreparingWorktree ? (
         <ActivityFocusText text="Setting up worktree…" />
+      ) : workingActivityText ? (
+        <>
+          <span>{workingActivityText}</span>
+          {row.createdAt ? (
+            <>
+              {" "}
+              · <WorkingTimer createdAt={row.createdAt} />
+            </>
+          ) : null}
+        </>
       ) : row.createdAt ? (
         <>
           Working for <WorkingTimer createdAt={row.createdAt} />

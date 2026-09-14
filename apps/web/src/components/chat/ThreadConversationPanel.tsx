@@ -11,11 +11,9 @@ import { resolveThreadModelBadge } from "./threadModelBadge";
 /**
  * Thread details panel section describing the conversation itself.
  *
- * Only rendered for T3 Work, where there is no workspace, no ports and no
- * version control to describe — without it the panel has nothing to say until
- * the conversation happens to schedule or delegate something. Everything here
- * comes off the thread shell the sidebar already subscribes to, so the section
- * costs no extra traffic.
+ * Complements the native Hermes workspace and schedules with the shared T3
+ * conversation model and access settings. These facts come from the thread
+ * shell the sidebar already subscribes to and require no extra traffic.
  */
 export function ThreadConversationPanel(props: {
   readonly environmentId: EnvironmentId;

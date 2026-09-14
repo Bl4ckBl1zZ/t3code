@@ -1,12 +1,18 @@
 import * as NodeNet from "node:net";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
+import { hermesProcessDiagnostic } from "./HermesProcessDiagnostic.ts";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { HermesGatewayClient } from "./HermesGatewayClient.ts";
+
+// Driver and management services can request the same owned endpoint concurrently.
+const endpointLocks = new Map<string, { readonly mutex: Semaphore.Semaphore; users: number }>();
 
 export const DEFAULT_HERMES_SERVE_ENDPOINT = "ws://127.0.0.1:9119/api/ws";
 
@@ -26,6 +32,7 @@ export interface HermesServeRuntimeShape {
 
 interface HermesOwnedProcessHandle {
   readonly isRunning: Effect.Effect<boolean, HermesOwnedProcessError>;
+  readonly diagnostics?: Effect.Effect<string>;
   readonly kill: () => Effect.Effect<void, HermesOwnedProcessError>;
 }
 
@@ -137,8 +144,24 @@ export const makeHermesServeRuntime = Effect.fn("makeHermesServeRuntime")(functi
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const ownerScope = yield* Scope.Scope;
-  const mutex = yield* Semaphore.make(1);
   const effectiveEndpoint = resolveHermesServeEndpoint(options.endpoint);
+  const lock = yield* Effect.sync(() => {
+    const existing = endpointLocks.get(effectiveEndpoint);
+    if (existing) {
+      existing.users += 1;
+      return existing;
+    }
+    const created = { mutex: Semaphore.makeUnsafe(1), users: 1 };
+    endpointLocks.set(effectiveEndpoint, created);
+    return created;
+  });
+  const mutex = lock.mutex;
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      lock.users -= 1;
+      if (lock.users === 0) endpointLocks.delete(effectiveEndpoint);
+    }),
+  );
   const probe = options.probe ?? defaultProbe;
   const endpointReachable = options.endpointReachable ?? defaultEndpointReachable;
   const startupAttempts = options.startupAttempts ?? 80;
@@ -159,20 +182,20 @@ export const makeHermesServeRuntime = Effect.fn("makeHermesServeRuntime")(functi
         .spawn(
           ChildProcess.make(
             "hermes",
-            ["serve", "--host", input.host, "--port", String(input.port)],
+            ["serve", "--host", input.host, "--port", String(input.port), "--skip-build"],
             {
               env: {
                 ...options.processEnvironment,
                 HERMES_DASHBOARD_SESSION_TOKEN: input.authToken,
-                // Hermes Serve only starts its embedded cron ticker in app-owned
-                // mode. This also keeps named profiles isolated at this endpoint.
-                HERMES_DESKTOP: "1",
+                // Scheduling belongs to the explicit Hermes gateway service. Desktop
+                // mode also reaps unrelated processes and must not be impersonated.
+                HERMES_DESKTOP: "0",
               },
               extendEnv: false,
               detached: false,
               stdin: "ignore",
-              stdout: "ignore",
-              stderr: "ignore",
+              stdout: "pipe",
+              stderr: "pipe",
               forceKillAfter: "5 seconds",
             },
           ),
@@ -180,15 +203,34 @@ export const makeHermesServeRuntime = Effect.fn("makeHermesServeRuntime")(functi
         .pipe(
           Effect.provideService(Scope.Scope, ownerScope),
           Effect.mapError((cause) => new HermesOwnedProcessError({ cause })),
-          Effect.map((handle) => ({
-            isRunning: handle.isRunning.pipe(
-              Effect.mapError((cause) => new HermesOwnedProcessError({ cause })),
-            ),
-            kill: () =>
-              handle
-                .kill({ forceKillAfter: "5 seconds" })
-                .pipe(Effect.mapError((cause) => new HermesOwnedProcessError({ cause }))),
-          })),
+          Effect.flatMap((handle) =>
+            Effect.gen(function* () {
+              let tail = "";
+              const reader = yield* handle.all.pipe(
+                Stream.decodeText(),
+                Stream.runForEach((chunk) =>
+                  Effect.sync(() => {
+                    tail = (tail + chunk).slice(-8000);
+                  }),
+                ),
+                Effect.orElseSucceed(() => undefined),
+                Effect.forkIn(ownerScope),
+              );
+              return {
+                isRunning: handle.isRunning.pipe(
+                  Effect.mapError((cause) => new HermesOwnedProcessError({ cause })),
+                ),
+                diagnostics: Fiber.join(reader).pipe(
+                  Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.void }),
+                  Effect.map(() => hermesProcessDiagnostic(tail)),
+                ),
+                kill: () =>
+                  handle
+                    .kill({ forceKillAfter: "5 seconds" })
+                    .pipe(Effect.mapError((cause) => new HermesOwnedProcessError({ cause }))),
+              };
+            }),
+          ),
         ));
 
   const stopOwnedProcess = Effect.fn("HermesServeRuntime.stopOwnedProcess")(function* () {
@@ -299,6 +341,7 @@ export const makeHermesServeRuntime = Effect.fn("makeHermesServeRuntime")(functi
       }
       ownedProcess = started.success;
 
+      let exited = false;
       for (let attempt = 0; attempt < startupAttempts; attempt += 1) {
         const ready = yield* Effect.result(probeEffect(authToken));
         if (ready._tag === "Success") {
@@ -310,15 +353,19 @@ export const makeHermesServeRuntime = Effect.fn("makeHermesServeRuntime")(functi
           return connection;
         }
         const stillRunning = yield* ownedProcess.isRunning.pipe(Effect.orElseSucceed(() => false));
-        if (!stillRunning) break;
+        if (!stillRunning) {
+          exited = true;
+          break;
+        }
         yield* Effect.sleep(startupPollInterval);
       }
 
+      const diagnostic = ownedProcess.diagnostics;
       yield* stopOwnedProcess();
+      const detail = diagnostic ? hermesProcessDiagnostic(yield* diagnostic) : "";
       return yield* new HermesServeRuntimeError({
         code: "managed_start_failed",
-        message:
-          "T3 launched `hermes serve`, but the gateway did not become ready before the startup timeout.",
+        message: `${exited ? "Hermes Serve exited before becoming ready." : "Hermes Serve did not become ready before the startup timeout."}${detail ? ` ${detail}` : " Check that the installed Hermes version supports the native dashboard backend."}`,
       });
     }),
   );

@@ -1173,6 +1173,24 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     box-shadow: inset 0 1px rgb(255 255 255 / 4%);
   }
 
+  .panel-glass[data-thread-details-card] {
+    --thread-details-surface: var(--card);
+    box-shadow:
+      0 4px 16px -4px rgb(0 0 0 / 12%),
+      inset 0 1px rgb(255 255 255 / 8%);
+  }
+
+  .panel-glass[data-thread-details-card]::before {
+    background: color-mix(in srgb, var(--thread-details-surface) var(--glass-opacity), transparent);
+  }
+
+  .dark .panel-glass[data-thread-details-card] {
+    --thread-details-surface: color-mix(in srgb, var(--background) 96%, var(--color-white));
+    box-shadow:
+      0 6px 20px -6px rgb(0 0 0 / 28%),
+      inset 0 1px rgb(255 255 255 / 5%);
+  }
+
   .dark .model-picker-surface.model-picker-surface {
     background: color-mix(
       in srgb,
@@ -1330,6 +1348,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     .dropdown-glass,
     .panel-glass::before {
       background: var(--popover) !important;
+    }
+
+    .panel-glass[data-thread-details-card]::before {
+      background: var(--thread-details-surface) !important;
     }
   }
 }

@@ -1,3 +1,32 @@
+import {
+  HermesWorkModelStatusInput,
+  HermesWorkModelStatus,
+  HermesWorkModelAuthStartInput,
+  HermesWorkModelAuthStartResult,
+  HermesWorkModelAuthPollInput,
+  HermesWorkModelAuthPollResult,
+  HermesWorkModelAuthCancelInput,
+  HermesWorkModelSetInput,
+  HermesWorkModelSetResult,
+} from "./hermesWorkModelAuth.ts";
+import { HermesWorkSetupInput, HermesWorkSetupState } from "./hermesWorkSetup.ts";
+import {
+  HermesWorkGroupsQueryInput,
+  HermesWorkGroupsQueryResult,
+  HermesWorkGroupsMutateInput,
+  HermesWorkGroupsMutateResult,
+} from "./hermesWorkGroups.ts";
+import {
+  HermesWorkSubscribeChangesInput,
+  HermesWorkChangeEvent,
+  HermesWorkConnectionsInput,
+  HermesWorkConnectionsResult,
+  HermesWorkQueryInput,
+  HermesWorkQueryResult,
+  HermesWorkMutateInput,
+  HermesWorkMutateResult,
+  HermesWorkError,
+} from "./hermesWork.ts";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ProviderAuthState,
@@ -95,15 +124,6 @@ import {
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
 } from "./threadSearch.ts";
-import {
-  HermesHistoryResetInput,
-  HermesHistoryResetResult,
-  HermesSessionDiscoveryInput,
-  HermesSessionDiscoveryResult,
-  HermesSessionImportInput,
-  HermesSessionImportResult,
-  HermesSessionsError,
-} from "./hermesSessions.ts";
 import {
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
@@ -255,33 +275,6 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import {
-  HermesCronError,
-  HermesCronListInput,
-  HermesCronListResult,
-  HermesCronMutationInput,
-  HermesCronMutationResponse,
-} from "./hermesGateway.ts";
-import {
-  HermesProactiveInboxError,
-  HermesProactiveInboxInput,
-  HermesProactiveInboxSnapshot,
-  HermesProactiveMarkNotificationsInput,
-  HermesProactiveMarkNotificationsResult,
-  HermesProactiveStatusInput,
-  HermesProactiveStatusResult,
-} from "./hermesProactive.ts";
-import {
-  HermesSkillsError,
-  HermesSkillsInspectInput,
-  HermesSkillsInspectResult,
-  HermesSkillsListInput,
-  HermesSkillsListResult,
-  HermesSkillsReloadInput,
-  HermesSkillsReloadResponse,
-  HermesSkillsSearchInput,
-  HermesSkillsSearchResult,
-} from "./hermesSkills.ts";
-import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
@@ -398,11 +391,6 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
-  // Hermes durable session discovery/import
-  hermesSessionsDiscover: "hermes.sessions.discover",
-  hermesSessionsImport: "hermes.sessions.import",
-  hermesHistoryReset: "hermes.history.reset",
-
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
@@ -410,15 +398,19 @@ export const WS_METHODS = {
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
   scheduledTasksDelete: "scheduledTasks.delete",
   scheduledTasksRunNow: "scheduledTasks.runNow",
-  hermesCronList: "hermesCron.list",
-  hermesCronMutate: "hermesCron.mutate",
-  hermesProactiveStatus: "hermesProactive.status",
-  hermesProactiveMarkNotifications: "hermesProactive.markNotifications",
-  subscribeHermesProactiveInbox: "hermesProactive.subscribeInbox",
-  hermesSkillsList: "hermesSkills.list",
-  hermesSkillsSearch: "hermesSkills.search",
-  hermesSkillsInspect: "hermesSkills.inspect",
-  hermesSkillsReload: "hermesSkills.reload",
+  hermesWorkGroupsQuery: "hermesWork.groupsQuery",
+  hermesWorkGroupsMutate: "hermesWork.groupsMutate",
+  hermesWorkSetupStart: "hermesWork.setupStart",
+  hermesWorkSetupStatus: "hermesWork.setupStatus",
+  hermesWorkModelStatus: "hermesWork.modelStatus",
+  hermesWorkModelAuthStart: "hermesWork.modelAuthStart",
+  hermesWorkModelAuthPoll: "hermesWork.modelAuthPoll",
+  hermesWorkModelAuthCancel: "hermesWork.modelAuthCancel",
+  hermesWorkModelSet: "hermesWork.modelSet",
+  hermesWorkConnections: "hermesWork.connections",
+  hermesWorkSubscribeChanges: "hermesWork.subscribeChanges",
+  hermesWorkQuery: "hermesWork.query",
+  hermesWorkMutate: "hermesWork.mutate",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -673,24 +665,6 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
-});
-
-export const WsHermesSessionsDiscoverRpc = Rpc.make(WS_METHODS.hermesSessionsDiscover, {
-  payload: HermesSessionDiscoveryInput,
-  success: HermesSessionDiscoveryResult,
-  error: Schema.Union([HermesSessionsError, EnvironmentAuthorizationError]),
-});
-
-export const WsHermesSessionsImportRpc = Rpc.make(WS_METHODS.hermesSessionsImport, {
-  payload: HermesSessionImportInput,
-  success: HermesSessionImportResult,
-  error: Schema.Union([HermesSessionsError, EnvironmentAuthorizationError]),
-});
-
-export const WsHermesHistoryResetRpc = Rpc.make(WS_METHODS.hermesHistoryReset, {
-  payload: HermesHistoryResetInput,
-  success: HermesHistoryResetResult,
-  error: Schema.Union([HermesSessionsError, EnvironmentAuthorizationError]),
 });
 
 export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
@@ -1375,69 +1349,71 @@ export const WsScheduledTasksRunNowRpc = Rpc.make(WS_METHODS.scheduledTasksRunNo
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
-export const WsHermesCronListRpc = Rpc.make(WS_METHODS.hermesCronList, {
-  payload: HermesCronListInput,
-  success: HermesCronListResult,
-  error: Schema.Union([HermesCronError, EnvironmentAuthorizationError]),
+export const WsHermesWorkGroupsQueryRpc = Rpc.make(WS_METHODS.hermesWorkGroupsQuery, {
+  payload: HermesWorkGroupsQueryInput,
+  success: HermesWorkGroupsQueryResult,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
 });
-
-export const WsHermesCronMutateRpc = Rpc.make(WS_METHODS.hermesCronMutate, {
-  payload: HermesCronMutationInput,
-  success: HermesCronMutationResponse,
-  error: Schema.Union([HermesCronError, EnvironmentAuthorizationError]),
+export const WsHermesWorkGroupsMutateRpc = Rpc.make(WS_METHODS.hermesWorkGroupsMutate, {
+  payload: HermesWorkGroupsMutateInput,
+  success: HermesWorkGroupsMutateResult,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
 });
-
-export const WsHermesProactiveStatusRpc = Rpc.make(WS_METHODS.hermesProactiveStatus, {
-  payload: HermesProactiveStatusInput,
-  success: HermesProactiveStatusResult,
-  error: EnvironmentAuthorizationError,
+export const WsHermesWorkSetupStartRpc = Rpc.make(WS_METHODS.hermesWorkSetupStart, {
+  payload: HermesWorkSetupInput,
+  success: HermesWorkSetupState,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
 });
-
-export const WsHermesProactiveMarkNotificationsRpc = Rpc.make(
-  WS_METHODS.hermesProactiveMarkNotifications,
-  {
-    payload: HermesProactiveMarkNotificationsInput,
-    success: HermesProactiveMarkNotificationsResult,
-    error: Schema.Union([HermesProactiveInboxError, EnvironmentAuthorizationError]),
-  },
-);
-
-/**
- * Pushed rather than polled: a cron run can land at any hour, and the badge it
- * feeds sits in the sidebar of every connected client.
- */
-export const WsSubscribeHermesProactiveInboxRpc = Rpc.make(
-  WS_METHODS.subscribeHermesProactiveInbox,
-  {
-    payload: HermesProactiveInboxInput,
-    success: HermesProactiveInboxSnapshot,
-    error: Schema.Union([HermesProactiveInboxError, EnvironmentAuthorizationError]),
-    stream: true,
-  },
-);
-
-export const WsHermesSkillsListRpc = Rpc.make(WS_METHODS.hermesSkillsList, {
-  payload: HermesSkillsListInput,
-  success: HermesSkillsListResult,
-  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+export const WsHermesWorkSetupStatusRpc = Rpc.make(WS_METHODS.hermesWorkSetupStatus, {
+  payload: HermesWorkSetupInput,
+  success: HermesWorkSetupState,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
 });
-
-export const WsHermesSkillsSearchRpc = Rpc.make(WS_METHODS.hermesSkillsSearch, {
-  payload: HermesSkillsSearchInput,
-  success: HermesSkillsSearchResult,
-  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+export const WsHermesWorkModelStatusRpc = Rpc.make(WS_METHODS.hermesWorkModelStatus, {
+  payload: HermesWorkModelStatusInput,
+  success: HermesWorkModelStatus,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
 });
-
-export const WsHermesSkillsInspectRpc = Rpc.make(WS_METHODS.hermesSkillsInspect, {
-  payload: HermesSkillsInspectInput,
-  success: HermesSkillsInspectResult,
-  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+export const WsHermesWorkModelAuthStartRpc = Rpc.make(WS_METHODS.hermesWorkModelAuthStart, {
+  payload: HermesWorkModelAuthStartInput,
+  success: HermesWorkModelAuthStartResult,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
 });
-
-export const WsHermesSkillsReloadRpc = Rpc.make(WS_METHODS.hermesSkillsReload, {
-  payload: HermesSkillsReloadInput,
-  success: HermesSkillsReloadResponse,
-  error: Schema.Union([HermesSkillsError, EnvironmentAuthorizationError]),
+export const WsHermesWorkModelAuthPollRpc = Rpc.make(WS_METHODS.hermesWorkModelAuthPoll, {
+  payload: HermesWorkModelAuthPollInput,
+  success: HermesWorkModelAuthPollResult,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
+});
+export const WsHermesWorkModelAuthCancelRpc = Rpc.make(WS_METHODS.hermesWorkModelAuthCancel, {
+  payload: HermesWorkModelAuthCancelInput,
+  success: Schema.Struct({ ok: Schema.Boolean }),
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
+});
+export const WsHermesWorkModelSetRpc = Rpc.make(WS_METHODS.hermesWorkModelSet, {
+  payload: HermesWorkModelSetInput,
+  success: HermesWorkModelSetResult,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
+});
+export const WsHermesWorkConnectionsRpc = Rpc.make(WS_METHODS.hermesWorkConnections, {
+  payload: HermesWorkConnectionsInput,
+  success: HermesWorkConnectionsResult,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
+});
+export const WsHermesWorkSubscribeChangesRpc = Rpc.make(WS_METHODS.hermesWorkSubscribeChanges, {
+  payload: HermesWorkSubscribeChangesInput,
+  success: HermesWorkChangeEvent,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+export const WsHermesWorkQueryRpc = Rpc.make(WS_METHODS.hermesWorkQuery, {
+  payload: HermesWorkQueryInput,
+  success: HermesWorkQueryResult,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
+});
+export const WsHermesWorkMutateRpc = Rpc.make(WS_METHODS.hermesWorkMutate, {
+  payload: HermesWorkMutateInput,
+  success: HermesWorkMutateResult,
+  error: Schema.Union([HermesWorkError, EnvironmentAuthorizationError]),
 });
 
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
@@ -1493,9 +1469,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderInstallRemoveRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
-  WsHermesSessionsDiscoverRpc,
-  WsHermesSessionsImportRpc,
-  WsHermesHistoryResetRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
@@ -1505,15 +1478,19 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
-  WsHermesCronListRpc,
-  WsHermesCronMutateRpc,
-  WsHermesProactiveStatusRpc,
-  WsHermesProactiveMarkNotificationsRpc,
-  WsSubscribeHermesProactiveInboxRpc,
-  WsHermesSkillsListRpc,
-  WsHermesSkillsSearchRpc,
-  WsHermesSkillsInspectRpc,
-  WsHermesSkillsReloadRpc,
+  WsHermesWorkGroupsQueryRpc,
+  WsHermesWorkGroupsMutateRpc,
+  WsHermesWorkSetupStartRpc,
+  WsHermesWorkSetupStatusRpc,
+  WsHermesWorkModelStatusRpc,
+  WsHermesWorkModelAuthStartRpc,
+  WsHermesWorkModelAuthPollRpc,
+  WsHermesWorkModelAuthCancelRpc,
+  WsHermesWorkModelSetRpc,
+  WsHermesWorkConnectionsRpc,
+  WsHermesWorkSubscribeChangesRpc,
+  WsHermesWorkQueryRpc,
+  WsHermesWorkMutateRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

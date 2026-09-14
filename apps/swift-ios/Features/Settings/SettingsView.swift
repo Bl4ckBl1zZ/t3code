@@ -19,11 +19,8 @@ public struct SettingsView: View {
     @State private var showingLoadBalancing = false
     @State private var showingVoiceInput = false
     @State private var showingAutomations = false
-    @State private var showingHermesRuns = false
+    @State private var showingWorkManagement = false
     @State private var showingUsage = false
-    /// Lives here rather than in the runs screen so the badge on the row stays
-    /// live without opening it, and so both read one subscription.
-    @State private var hermesInboxStore = HermesInboxStore()
     @State private var removalTarget: FeatureEnvironment?
     @State private var saveErrorMessage: String?
 
@@ -224,21 +221,15 @@ public struct SettingsView: View {
                 }
                 .presentationDragIndicator(.visible)
             }
-            .sheet(isPresented: $showingHermesRuns) {
+            .sheet(isPresented: $showingWorkManagement) {
                 NavigationStack {
-                    SettingsHermesRunsView(
-                        model: model,
-                        manager: hermesInboxManager,
-                        store: hermesInboxStore,
-                        onOpenThread: openThreadFromHermesRun
-                    )
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { showingHermesRuns = false }
+                    WorkManagementView(model: model)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showingWorkManagement = false }
+                            }
                         }
-                    }
                 }
-                .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showingT3Connect) {
                 if let capability = model.client as? any T3ConnectCapable {
@@ -265,33 +256,9 @@ public struct SettingsView: View {
                 // untouched form from becoming a stale overwrite.
                 if settings == previous { settings = next }
             }
-            // Follows every environment's Hermes inbox for as long as Settings
-            // is open, which is what keeps the row's badge honest before anyone
-            // taps into the list.
-            .task(id: model.snapshot.environments.map(\.id)) {
-                await hermesInboxStore.observe(
-                    environments: model.snapshot.environments,
-                    manager: hermesInboxManager
-                )
-            }
+
         }
         .presentationDragIndicator(.visible)
-    }
-
-    /// Leaves Settings behind before routing: the thread opens in the workspace
-    /// underneath, and a sheet still covering it would look like nothing
-    /// happened.
-    private func openThreadFromHermesRun(environmentID: String, threadID: String) {
-        showingHermesRuns = false
-        dismiss()
-        NotificationCenter.default.post(
-            name: .platformRouteReceived,
-            object: nil,
-            userInfo: ["route": PlatformRoute.thread(
-                environmentID: environmentID,
-                threadID: threadID
-            )]
-        )
     }
 
     private var settingsHeader: some View {
@@ -558,12 +525,11 @@ public struct SettingsView: View {
                 settingsDivider
 
                 Button {
-                    showingHermesRuns = true
+                    showingWorkManagement = true
                 } label: {
                     SettingsNavigationRow(
-                        title: "Hermes Runs",
-                        systemImage: "clock.arrow.circlepath",
-                        badge: HermesRunLabels.badgeText(unreadCount: hermesInboxStore.totalUnreadCount)
+                        title: "Work settings",
+                        systemImage: "clock.arrow.circlepath"
                     )
                 }
                 .buttonStyle(.plain)
@@ -758,11 +724,6 @@ public struct SettingsView: View {
     private var scheduledTaskManager: any FeatureScheduledTaskManaging {
         (model.client as? any FeatureScheduledTaskManaging)
             ?? EmptyFeatureScheduledTaskManager.shared
-    }
-
-    private var hermesInboxManager: any FeatureHermesInboxManaging {
-        (model.client as? any FeatureHermesInboxManaging)
-            ?? EmptyFeatureHermesInboxManager.shared
     }
 
     private var selectedProvider: FeatureProvider? {
