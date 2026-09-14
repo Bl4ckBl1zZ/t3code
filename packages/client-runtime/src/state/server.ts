@@ -961,23 +961,6 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetResourceTelemetryHistory,
       staleTimeMs: 5_000,
     }),
-    hermesCron: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:hermes-cron",
-      tag: WS_METHODS.hermesCronList,
-    }),
-    hermesProactive: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:hermes-proactive",
-      tag: WS_METHODS.hermesProactiveStatus,
-    }),
-    /** Hermes runs that happened without a T3 turn: snapshot, then every change. */
-    hermesProactiveInbox: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
-      label: "environment-data:server:hermes-proactive-inbox",
-      tag: WS_METHODS.subscribeHermesProactiveInbox,
-    }),
-    hermesSkills: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:hermes-skills",
-      tag: WS_METHODS.hermesSkillsList,
-    }),
     // A cold transcript scan is measured in seconds, so keep the result around
     // long enough that switching windows or re-rendering does not rescan.
     usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -1135,28 +1118,6 @@ export function createServerEnvironmentAtoms<R, E>(
         mode: "singleFlight",
         key: ({ environmentId }) => environmentId,
       },
-    }),
-    mutateHermesCron: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:hermes-cron:mutate",
-      tag: WS_METHODS.hermesCronMutate,
-      scheduler: configScheduler,
-      concurrency: configConcurrency,
-    }),
-    markHermesProactiveNotifications: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:hermes-proactive:mark",
-      tag: WS_METHODS.hermesProactiveMarkNotifications,
-    }),
-    searchHermesSkills: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:hermes-skills:search",
-      tag: WS_METHODS.hermesSkillsSearch,
-    }),
-    inspectHermesSkill: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:hermes-skills:inspect",
-      tag: WS_METHODS.hermesSkillsInspect,
-    }),
-    reloadHermesSkills: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:hermes-skills:reload",
-      tag: WS_METHODS.hermesSkillsReload,
     }),
   };
 }

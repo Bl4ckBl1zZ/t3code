@@ -1,3 +1,6 @@
+import { subscribeHermesWorkChanges } from "./hermes/HermesWorkChanges.ts";
+import { HermesWorkSetupService } from "./hermes/HermesWorkSetupService.ts";
+import { HermesWorkModelAuth } from "./hermes/HermesWorkModelAuth.ts";
 import type { SnapShotSource } from "@t3tools/contracts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
@@ -104,11 +107,9 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import * as ThreadFeedbackService from "./orchestration-v2/ThreadFeedbackService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
-import * as HermesCron from "./hermes/HermesCron.ts";
-import { HermesProactiveInbox } from "./hermes/HermesProactiveInbox.ts";
-import * as HermesProactive from "./hermes/HermesProactiveService.ts";
-import * as HermesSkills from "./hermes/HermesSkills.ts";
-import * as HermesSessionImport from "./hermes/HermesSessionImportService.ts";
+import { HermesDashboardClient } from "./hermes/HermesDashboardClient.ts";
+import { HermesWorkService } from "./hermes/HermesWorkService.ts";
+import { HermesWorkGroupsService } from "./hermes/HermesWorkGroupsService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -725,17 +726,13 @@ const makeWsRpcLayer = (
       );
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
-      const hermesCron = yield* HermesCron.HermesCron;
-      const hermesSkills = yield* HermesSkills.HermesSkills;
-      const hermesSessions = yield* HermesSessionImport.make;
+      const hermesSetup = yield* HermesWorkSetupService;
+      const hermesModelAuth = yield* HermesWorkModelAuth;
+      const hermesDashboard = yield* HermesDashboardClient;
+      const hermesWork = yield* HermesWorkService;
+      const hermesWorkGroups = yield* HermesWorkGroupsService;
       const agentSessionScanner = yield* AgentSessionScanner;
       const agentSessionImporter = yield* AgentSessionImporter;
-      const hermesProactiveInbox = yield* HermesProactiveInbox;
-      // Shared with the server, which owns the sweep fiber. Building one here
-      // would give every connected client its own residency loop and its own
-      // "have I swept before" memory, which is how a live run gets announced
-      // as a missed one.
-      const hermesProactive = yield* HermesProactive.HermesProactiveService;
       const projectService = yield* ProjectService.ProjectService;
       const textGeneration = yield* TextGeneration.TextGeneration;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
@@ -1010,7 +1007,6 @@ const makeWsRpcLayer = (
                 }),
             ),
           );
-          yield* hermesSessions.hydrateThread(input.threadId);
 
           const eventStreamFrom = (afterSequence: number) =>
             threadManagement
@@ -1799,61 +1795,34 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "scheduledTasks",
             "scheduled_task.id": input.id,
           }),
-        [WS_METHODS.hermesCronList]: (_input) =>
-          observeRpcEffect(WS_METHODS.hermesCronList, hermesCron.list(), {
-            "rpc.aggregate": "hermesCron",
+        [WS_METHODS.hermesWorkSetupStart]: (input) => hermesSetup.start(input),
+        [WS_METHODS.hermesWorkSetupStatus]: (input) => hermesSetup.status(input),
+        [WS_METHODS.hermesWorkModelStatus]: (input) => hermesModelAuth.modelStatus(input),
+        [WS_METHODS.hermesWorkModelAuthStart]: (input) => hermesModelAuth.modelAuthStart(input),
+        [WS_METHODS.hermesWorkModelAuthPoll]: (input) => hermesModelAuth.modelAuthPoll(input),
+        [WS_METHODS.hermesWorkModelAuthCancel]: (input) => hermesModelAuth.modelAuthCancel(input),
+        [WS_METHODS.hermesWorkModelSet]: (input) => hermesModelAuth.modelSet(input),
+        [WS_METHODS.hermesWorkConnections]: () =>
+          observeRpcEffect(WS_METHODS.hermesWorkConnections, hermesDashboard.connections(), {
+            "rpc.aggregate": "hermesWork",
           }),
-        [WS_METHODS.hermesCronMutate]: (input) =>
-          observeRpcEffect(WS_METHODS.hermesCronMutate, hermesCron.mutate(input), {
-            "rpc.aggregate": "hermesCron",
+        [WS_METHODS.hermesWorkSubscribeChanges]: (input) =>
+          subscribeHermesWorkChanges(hermesDashboard, input),
+        [WS_METHODS.hermesWorkQuery]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesWorkQuery, hermesWork.query(input), {
+            "rpc.aggregate": "hermesWork",
           }),
-        [WS_METHODS.hermesProactiveStatus]: (_input) =>
-          observeRpcEffect(WS_METHODS.hermesProactiveStatus, hermesProactive.report(), {
-            "rpc.aggregate": "hermesProactive",
+        [WS_METHODS.hermesWorkMutate]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesWorkMutate, hermesWork.mutate(input), {
+            "rpc.aggregate": "hermesWork",
           }),
-        [WS_METHODS.hermesProactiveMarkNotifications]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.hermesProactiveMarkNotifications,
-            hermesProactiveInbox.mark(input),
-            { "rpc.aggregate": "hermesProactive" },
-          ),
-        [WS_METHODS.subscribeHermesProactiveInbox]: (_input) =>
-          observeRpcStream(
-            WS_METHODS.subscribeHermesProactiveInbox,
-            Stream.unwrap(
-              Effect.map(hermesProactiveInbox.subscribe, ({ latest, changes }) =>
-                Stream.concat(Stream.make(latest), changes),
-              ),
-            ),
-            { "rpc.aggregate": "hermesProactive" },
-          ),
-        [WS_METHODS.hermesSkillsList]: (_input) =>
-          observeRpcEffect(WS_METHODS.hermesSkillsList, hermesSkills.list(), {
-            "rpc.aggregate": "hermesSkills",
+        [WS_METHODS.hermesWorkGroupsQuery]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesWorkGroupsQuery, hermesWorkGroups.query(input), {
+            "rpc.aggregate": "hermesWork",
           }),
-        [WS_METHODS.hermesSkillsSearch]: (input) =>
-          observeRpcEffect(WS_METHODS.hermesSkillsSearch, hermesSkills.search(input), {
-            "rpc.aggregate": "hermesSkills",
-          }),
-        [WS_METHODS.hermesSkillsInspect]: (input) =>
-          observeRpcEffect(WS_METHODS.hermesSkillsInspect, hermesSkills.inspect(input), {
-            "rpc.aggregate": "hermesSkills",
-          }),
-        [WS_METHODS.hermesSkillsReload]: (input) =>
-          observeRpcEffect(WS_METHODS.hermesSkillsReload, hermesSkills.reload(input), {
-            "rpc.aggregate": "hermesSkills",
-          }),
-        [WS_METHODS.hermesSessionsDiscover]: (input) =>
-          observeRpcEffect(WS_METHODS.hermesSessionsDiscover, hermesSessions.discover(input), {
-            "rpc.aggregate": "hermesSessions",
-          }),
-        [WS_METHODS.hermesSessionsImport]: (input) =>
-          observeRpcEffect(WS_METHODS.hermesSessionsImport, hermesSessions.importSessions(input), {
-            "rpc.aggregate": "hermesSessions",
-          }),
-        [WS_METHODS.hermesHistoryReset]: (input) =>
-          observeRpcEffect(WS_METHODS.hermesHistoryReset, hermesSessions.resetHistory(input), {
-            "rpc.aggregate": "hermesSessions",
+        [WS_METHODS.hermesWorkGroupsMutate]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesWorkGroupsMutate, hermesWorkGroups.mutate(input), {
+            "rpc.aggregate": "hermesWork",
           }),
         [WS_METHODS.serverProbe]: (_input) =>
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {

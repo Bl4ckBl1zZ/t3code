@@ -1003,12 +1003,12 @@ const HermesGatewayEndpoint = TrimmedString.check(
     const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(endpoint.hostname);
     const hasToken = hasSensitiveQueryKey(endpoint);
     return (
-      (((endpoint.protocol === "ws:" && loopback) || (endpoint.protocol === "wss:" && !loopback)) &&
+      (((endpoint.protocol === "ws:" && loopback) || endpoint.protocol === "wss:") &&
         !endpoint.username &&
         !endpoint.password &&
         !endpoint.hash &&
         !hasToken) ||
-      "Hermes endpoint must be credential-free loopback ws:// or remote wss://; supply authentication through sensitive provider environment."
+      "Hermes endpoint must be credential-free ws:// on loopback or wss://; supply authentication through sensitive provider environment."
     );
   }),
 );
@@ -1037,9 +1037,9 @@ export const HermesSettings = makeProviderSettingsSchema(
     endpoint: HermesGatewayEndpoint.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
-        title: "Gateway endpoint",
+        title: "Hermes connection",
         description:
-          "Leave blank to use ws://127.0.0.1:9119/api/ws. T3 attaches there first and can start Hermes Serve when it is unused.",
+          "Connect to the Hermes desktop backend. Leave blank for the local default; use wss:// for a remote backend.",
         providerSettingsForm: {
           placeholder: "ws://127.0.0.1:9119/api/ws",
           clearWhenEmpty: "persist",
@@ -1054,15 +1054,16 @@ export const HermesSettings = makeProviderSettingsSchema(
     profileKey: HermesProfileKey.pipe(
       Schema.withDecodingDefault(Effect.succeed("default")),
       Schema.annotateKey({
-        title: "Profile key",
-        description: "Durable Hermes profile containing the sessions owned by this instance.",
+        title: "Default assistant",
+        description:
+          "The Hermes profile used for new conversations. Manage other assistants in Work.",
         providerSettingsForm: { placeholder: "default", clearWhenEmpty: "persist" },
       }),
     ),
     managedServerEnabled: HermesFeatureSwitch(
       true,
       "Start Hermes automatically",
-      "Attach to a compatible gateway at this endpoint, or launch and supervise `hermes serve` when no local gateway is running.",
+      "Start the local Hermes connection when needed. Scheduled tasks use the separate background service managed in Work.",
     ),
     customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
@@ -1072,12 +1073,12 @@ export const HermesSettings = makeProviderSettingsSchema(
       false,
       "Profile import",
       "Expose import controls only when the gateway advertises a compatible import API.",
-    ),
+    ).pipe(Schema.annotateKey({ providerSettingsForm: { hidden: true } })),
     mcpEnabled: HermesFeatureSwitch(
       true,
       "MCP",
       "Allow MCP only when session-scoped registration and revocation are advertised.",
-    ),
+    ).pipe(Schema.annotateKey({ providerSettingsForm: { hidden: true } })),
     attachmentsEnabled: HermesFeatureSwitch(
       true,
       "Attachments",
@@ -1087,12 +1088,12 @@ export const HermesSettings = makeProviderSettingsSchema(
       true,
       "Proactive mode",
       "Keep Hermes threads subscribed so gateway-side runs stream in on their own, and answer requests those runs raise. Off still shows that work — it arrives when the thread is opened instead.",
-    ),
+    ).pipe(Schema.annotateKey({ providerSettingsForm: { hidden: true } })),
     voiceEnabled: HermesFeatureSwitch(
       false,
       "Voice",
       "Allow voice features only when explicitly supported by the gateway.",
-    ),
+    ).pipe(Schema.annotateKey({ providerSettingsForm: { hidden: true } })),
   },
   {
     order: [

@@ -50,6 +50,10 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOpt
   E,
   R
 > {
+  readonly invalidation?: (target: {
+    readonly environmentId: EnvironmentIdType;
+    readonly input: Input;
+  }) => Atom.Atom<unknown> | undefined;
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
@@ -535,6 +539,8 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         A,
         E | ConnectionAttemptError | EnvironmentNotRegisteredError | EnvironmentRpcUnavailableError
       >((get) => {
+        const invalidation = options.invalidation?.(target);
+        if (invalidation) get(invalidation);
         const connection = Option.getOrNull(
           AsyncResult.value(get(connectionAtom(target.environmentId))),
         );
@@ -643,6 +649,10 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
   options: {
     readonly label: string;
     readonly tag: TTag;
+    readonly invalidation?: (target: {
+      readonly environmentId: EnvironmentIdType;
+      readonly input: EnvironmentRpcInput<TTag>;
+    }) => Atom.Atom<unknown> | undefined;
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
@@ -650,6 +660,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
 ) {
   return createEnvironmentQueryAtomFamily(runtime, {
     label: options.label,
+    ...(options.invalidation === undefined ? {} : { invalidation: options.invalidation }),
     ...(options.staleTimeMs === undefined ? {} : { staleTimeMs: options.staleTimeMs }),
     ...(options.idleTtlMs === undefined ? {} : { idleTtlMs: options.idleTtlMs }),
     ...(options.refreshIntervalMs === undefined

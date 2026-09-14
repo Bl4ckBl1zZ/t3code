@@ -41,7 +41,8 @@ struct ThreadWorkingStatus: Equatable, Sendable {
         workingStartedAt: Date?,
         timelineItems: [OrchestrationV2ProjectedTurnItem],
         activeRunID: String?,
-        isPreparingWorkspace: Bool = false
+        isPreparingWorkspace: Bool = false,
+        activityText: String? = nil
     ) -> ThreadWorkingStatus? {
         switch state {
         case .idle, .waitingForApproval, .waitingForInput, .failed, .completed:
@@ -56,6 +57,9 @@ struct ThreadWorkingStatus: Equatable, Sendable {
                 startedAt: isPreparingWorkspace ? nil : workingStartedAt
             )
         case .working:
+            if let activity = activityText?.trimmingCharacters(in: .whitespacesAndNewlines), !activity.isEmpty {
+                return ThreadWorkingStatus(headline: activity, symbolName: "circle.dotted", startedAt: workingStartedAt)
+            }
             guard let live = liveItem(in: timelineItems, activeRunID: activeRunID) else {
                 return ThreadWorkingStatus(
                     headline: "Thinking",

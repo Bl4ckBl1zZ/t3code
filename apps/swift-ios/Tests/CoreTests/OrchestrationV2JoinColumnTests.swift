@@ -302,6 +302,22 @@ final class OrchestrationV2JoinColumnTests: XCTestCase {
         return row
     }
 
+    func testProviderSessionActivityAcceptsMissingPresentAndNull() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/hermesWork.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
+        let activity = try XCTUnwrap(fixture["providerActivity"] as? [String: Any])
+        var present = sessionRow(id: "present", capabilities: nil)
+        present["activityText"] = activity["active"]
+        var cleared = sessionRow(id: "cleared", capabilities: nil)
+        cleared["activityText"] = activity["cleared"]
+        let projection = try decodeProjection {
+            $0["providerSessions"] = [sessionRow(id: "legacy", capabilities: nil), present, cleared]
+        }
+        XCTAssertNil(projection.providerSessions[0].activityText)
+        XCTAssertEqual(projection.providerSessions[1].activityText, "Formulating…")
+        XCTAssertNil(projection.providerSessions[2].activityText)
+    }
+
     func testProviderSessionsCarryTheTurnCapabilitiesTheQueueChecks() throws {
         let turns: [String: Any] = [
             "exposesNativeTurnId": true,

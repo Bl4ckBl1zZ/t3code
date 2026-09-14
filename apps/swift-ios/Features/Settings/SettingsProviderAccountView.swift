@@ -35,7 +35,14 @@ struct SettingsProviderAccountView: View {
                     if let definition {
                         identitySection(draft, definition: definition).disabled(updatingProvider || !supported)
                         if !draft.isNew {
-                            if draft.driver == "antigravity" {
+                            if draft.driver == "hermes", let workManager = manager as? any FeatureWorkManaging {
+                                SettingsSection(title: "Hermes", footer: "Save account changes before setup. Hermes runs on this environment.") {
+                                    NavigationLink {
+                                        SettingsHermesSetupView(manager: workManager, environmentID: environmentID, instanceID: draft.instanceID)
+                                    } label: { Label("Set up Hermes", systemImage: "arrow.down.circle").frame(minHeight: T3Metrics.minimumTapTarget) }
+                                    .disabled(!supported || draft.envelope != draft.original).padding(SettingsMetrics.rowPadding)
+                                }
+                            } else if draft.driver == "antigravity" {
                                 SettingsSection(title: "Antigravity", footer: "Save account changes before installing or signing in. Setup runs on the selected server.") {
                                     NavigationLink {
                                         SettingsAntigravitySetupView(manager: manager, environmentID: environmentID, instanceID: draft.instanceID, authMethod: draft.config["authMethod"]?.stringValue ?? "oauth-personal", binaryPath: draft.config["binaryPath"]?.stringValue ?? "")

@@ -19,7 +19,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { assessHermesConnectionSecurity } from "../../hermes/HermesConnectionSecurity.ts";
+import {
+  assessHermesConnectionSecurity,
+  isRemoteHermesEndpoint,
+} from "../../hermes/HermesConnectionSecurity.ts";
 import { HermesGatewayClient } from "../../hermes/HermesGatewayClient.ts";
 import {
   makeHermesServeRuntime,
@@ -376,7 +379,7 @@ export function hermesSlashCommands(
   return commands;
 }
 
-function snapshot(input: {
+export function hermesProviderSnapshot(input: {
   readonly instanceId: ProviderInstance["instanceId"];
   readonly displayName: string | undefined;
   readonly accentColor: string | undefined;
@@ -426,16 +429,32 @@ function snapshot(input: {
         remoteTlsCertificateSha256: input.remoteTlsCertificateSha256,
       })
     : undefined;
-  const hasGatewayToken = input.gatewayToken !== undefined;
+  const hasGatewayToken = Boolean(
+    input.gatewayToken?.trim() ||
+    (connectionSecurity?.scope === "remote" && input.remotePairingToken?.trim()),
+  );
   const isConfigured = hasProfileKey && connectionSecurity?.status === "ready";
+  const modelInventory = input.inventory?.models;
+  const modelReady =
+    Boolean(modelInventory?.model?.trim()) &&
+    (modelInventory?.providers ?? []).some(
+      (provider) =>
+        (provider.slug === modelInventory?.provider || provider.is_current === true) &&
+        provider.authenticated === true,
+    );
+  const modelSetupMessage = modelReady
+    ? undefined
+    : "Finish Hermes setup in Work: sign in to a model provider and select a model before starting a conversation.";
   const isUnauthenticated =
     !input.enabled ||
     !hasGatewayToken ||
+    (modelInventory !== undefined && !modelReady) ||
     (connectionSecurity?.status !== "ready" &&
-      connectionSecurity?.code === "remote_pairing_required") ||
+      connectionSecurity?.code === "authentication_required") ||
     (!hasGatewayToken && connectionSecurity?.scope === "loopback");
   const isAuthenticated =
     hasGatewayToken &&
+    modelReady &&
     input.inventory !== undefined &&
     Object.values(input.inventory).some((value) => value !== undefined);
   const configurationMessage = !input.enabled
@@ -446,6 +465,7 @@ function snapshot(input: {
         ? "Add a sensitive HERMES_GATEWAY_TOKEN. T3 will use it to attach to an existing Hermes Serve instance or securely launch its own."
         : connectionSecurity?.status === "ready"
           ? (input.inventoryWarning ??
+            modelSetupMessage ??
             (input.connectionOwnership === "t3_owned"
               ? "Running a private Hermes Serve process managed by T3 Work."
               : input.connectionOwnership === "external"
@@ -463,7 +483,7 @@ function snapshot(input: {
     version: null,
     status: !input.enabled
       ? "disabled"
-      : isConfigured && input.inventoryWarning === undefined
+      : isConfigured && modelReady && input.inventoryWarning === undefined
         ? "ready"
         : "warning",
     auth: {
@@ -497,9 +517,14 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       });
       let checkedAt = DateTime.formatIso(yield* DateTime.now);
       const gatewayToken = resolveHermesGatewayToken(environment);
+      const remotePairingToken = resolveHermesRemotePairingToken(environment);
+      const remoteTlsCertificateSha256 = resolveHermesRemoteTlsCertificateSha256(environment);
+      const dashboardToken = isRemoteHermesEndpoint(config.endpoint)
+        ? remotePairingToken?.trim() || gatewayToken
+        : gatewayToken;
       const connectionRuntime = yield* makeHermesServeRuntime({
         endpoint: config.endpoint,
-        authToken: gatewayToken,
+        authToken: dashboardToken,
         managedServerEnabled: config.managedServerEnabled,
         processEnvironment: mergeProviderInstanceEnvironment(environment),
       });
@@ -524,8 +549,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
             }),
         ),
       );
-      const remotePairingToken = resolveHermesRemotePairingToken(environment);
-      const remoteTlsCertificateSha256 = resolveHermesRemoteTlsCertificateSha256(environment);
       let inventory:
         | {
             readonly commands?: HermesGatewayCommandsCatalogResult;
@@ -537,7 +560,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       let inventoryWarning: string | undefined;
       let connectionOwnership: HermesServeOwnership | undefined;
       const currentSnapshot = () =>
-        snapshot({
+        hermesProviderSnapshot({
           instanceId,
           displayName,
           accentColor,
@@ -561,6 +584,18 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         inventory = undefined;
         inventoryWarning = undefined;
         connectionOwnership = undefined;
+        const configuredSecurity = assessHermesConnectionSecurity({
+          endpoint: connectionRuntime.effectiveEndpoint,
+          gatewayToken: dashboardToken,
+          remoteGloballyEnabled: enabled,
+          remoteInstanceEnabled: config.remoteAccessEnabled,
+          remotePairingToken: undefined,
+          remoteTlsCertificateSha256: undefined,
+        });
+        if (configuredSecurity.status !== "ready") {
+          inventoryWarning = configuredSecurity.message;
+          return currentSnapshot();
+        }
         const resolvedConnection = yield* Effect.result(connectionRuntime.ensureReady);
         if (resolvedConnection._tag === "Failure") {
           inventoryWarning = resolvedConnection.failure.message;
@@ -576,11 +611,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
           remoteTlsCertificateSha256,
         });
         if (security.status !== "ready") return currentSnapshot();
-        if (security.scope !== "loopback") {
-          inventoryWarning =
-            "Hermes command/model inventory probing is unavailable for remote gateways in this build.";
-          return currentSnapshot();
-        }
         const client = new HermesGatewayClient({
           endpoint: security.endpoint,
           authToken: security.authToken,
@@ -594,7 +624,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
                 client.readCommandsCatalog(),
                 client.readModelOptions({
                   explicit_only: true,
-                  include_unconfigured: false,
+                  include_unconfigured: true,
                 }),
                 client.readReasoningConfig(),
                 client.readFastConfig(),
@@ -676,7 +706,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
               hermesSessionCatalog: makeHermesSessionCatalog({
                 providerInstanceId: instanceId,
                 endpoint: connectionRuntime.effectiveEndpoint,
-                authToken: gatewayToken,
+                authToken: dashboardToken,
                 remoteGloballyEnabled: enabled,
                 remoteInstanceEnabled: config.remoteAccessEnabled,
                 remotePairingToken,

@@ -1103,34 +1103,46 @@ public actor T3Client {
         )
     }
 
-    // MARK: - Hermes proactive inbox
-    //
-    // Runs a Hermes gateway performed on its own schedule. Pushed rather than
-    // polled: a cron job can finish at any hour, and the server emits the whole
-    // snapshot on subscribe and again after every change.
-
-    public func hermesProactiveInboxEvents() async
-        -> AsyncThrowingStream<HermesProactiveInboxSnapshot, Error>
-    {
-        await rpc.subscribe(
-            RPCMethod.subscribeHermesProactiveInbox.rawValue,
-            payload: .object([:]),
-            as: HermesProactiveInboxSnapshot.self
-        )
+    public func workGroupsQuery(_ input: JSONValue) async throws -> HermesWorkGroupsResult {
+        try await rpc.request("hermesWork.groupsQuery", payload: input, as: HermesWorkGroupsResult.self)
+    }
+    public func workGroupsMutate(_ input: JSONValue) async throws -> HermesWorkMutationResult {
+        try await rpc.request("hermesWork.groupsMutate", payload: input, as: HermesWorkMutationResult.self)
+    }
+    public func workSetupStart(instanceID: String) async throws -> HermesWorkSetupState {
+        try await rpc.request("hermesWork.setupStart", payload: .object(["providerInstanceId": .string(instanceID)]), as: HermesWorkSetupState.self)
+    }
+    public func workSetupStatus(instanceID: String) async throws -> HermesWorkSetupState {
+        try await rpc.request("hermesWork.setupStatus", payload: .object(["providerInstanceId": .string(instanceID)]), as: HermesWorkSetupState.self)
+    }
+    public func workModelStatus(_ input: JSONValue) async throws -> HermesWorkModelStatus {
+        try await rpc.request("hermesWork.modelStatus", payload: input, as: HermesWorkModelStatus.self)
+    }
+    public func workModelAuthStart(_ input: JSONValue) async throws -> HermesWorkModelAuthStart {
+        try await rpc.request("hermesWork.modelAuthStart", payload: input, as: HermesWorkModelAuthStart.self)
+    }
+    public func workModelAuthPoll(_ input: JSONValue) async throws -> HermesWorkModelAuthPoll {
+        try await rpc.request("hermesWork.modelAuthPoll", payload: input, as: HermesWorkModelAuthPoll.self)
+    }
+    public func workModelAuthCancel(_ input: JSONValue) async throws -> HermesWorkModelAuthCancel {
+        try await rpc.request("hermesWork.modelAuthCancel", payload: input, as: HermesWorkModelAuthCancel.self)
+    }
+    public func workModelSet(_ input: JSONValue) async throws -> HermesWorkModelSet {
+        try await rpc.request("hermesWork.modelSet", payload: input, as: HermesWorkModelSet.self)
+    }
+    public func workChanges(instanceID: String) async -> AsyncThrowingStream<HermesWorkChange, Error> {
+        await rpc.subscribe("hermesWork.subscribeChanges", payload: .object(["providerInstanceId": .string(instanceID)]), as: HermesWorkChange.self)
+    }
+    public func workConnections() async throws -> HermesWorkConnections {
+        try await rpc.request("hermesWork.connections", payload: .object([:]), as: HermesWorkConnections.self)
     }
 
-    public func markHermesProactiveNotifications(
-        ids: [String],
-        status: String
-    ) async throws -> HermesProactiveMarkResult {
-        try await rpc.request(
-            RPCMethod.hermesProactiveMarkNotifications.rawValue,
-            payload: .object([
-                "notificationIds": .array(ids.map { .string($0) }),
-                "status": .string(status),
-            ]),
-            as: HermesProactiveMarkResult.self
-        )
+    public func workQuery(_ input: JSONValue) async throws -> HermesWorkQueryResult {
+        try await rpc.request("hermesWork.query", payload: input, as: HermesWorkQueryResult.self)
+    }
+
+    public func workMutate(_ input: JSONValue) async throws -> HermesWorkMutationResult {
+        try await rpc.request("hermesWork.mutate", payload: input, as: HermesWorkMutationResult.self)
     }
 
     public func listProjectEntries(cwd: String) async throws -> ProjectEntriesResult {
@@ -2154,42 +2166,6 @@ public enum RPCMethod: String, Sendable {
     case scheduledTasksSetEnabled = "scheduledTasks.setEnabled"
     case scheduledTasksDelete = "scheduledTasks.delete"
     case scheduledTasksRunNow = "scheduledTasks.runNow"
-    case hermesProactiveMarkNotifications = "hermesProactive.markNotifications"
-    case subscribeHermesProactiveInbox = "hermesProactive.subscribeInbox"
-}
-
-/// One Hermes run that happened without a T3 turn, as
-/// `packages/contracts/src/hermesProactive.ts` reports it. `threadId` is absent
-/// when the gateway never told T3 which session the job runs in, so a row is
-/// not always openable.
-public struct HermesProactiveNotification: Decodable, Equatable, Sendable, Identifiable {
-    public let notificationId: String
-    public let eventId: String
-    public let workItemId: String
-    public let projectId: String?
-    public let threadId: String?
-    public let title: String
-    public let body: String
-    /// `unread`, `read`, or `dismissed`. Kept as the wire string so a status a
-    /// future server adds cannot fail the whole list.
-    public let status: String
-    public let createdAt: String
-    public let updatedAt: String
-
-    public var id: String { notificationId }
-}
-
-public struct HermesProactiveInboxSnapshot: Decodable, Equatable, Sendable {
-    public let notifications: [HermesProactiveNotification]
-    public let unreadCount: Int
-    /// Notifications the server's delivery outbox gave up on. Reported rather
-    /// than hidden, so a broken delivery path does not read as a quiet inbox.
-    public let deadLetterCount: Int
-}
-
-public struct HermesProactiveMarkResult: Decodable, Equatable, Sendable {
-    public let updated: Int
-    public let snapshot: HermesProactiveInboxSnapshot
 }
 
 /// A persisted automation, as `packages/contracts/src/scheduledTask.ts` reports

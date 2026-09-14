@@ -79,6 +79,7 @@ function queryConnectionState(
 
 const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness")(function* <A, E>(
   execute: Effect.Effect<A, E>,
+  invalidation?: Atom.Atom<unknown>,
 ) {
   const supervisorState = yield* SubscriptionRef.make(queryConnectionState());
   const supervisorSession = yield* SubscriptionRef.make(Option.some(QUERY_RPC_SESSION));
@@ -107,6 +108,7 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
   );
   const family = createEnvironmentQueryAtomFamily(runtime, {
     label: "test.environment-query",
+    ...(invalidation ? { invalidation: () => invalidation } : {}),
     staleTimeMs: 60_000,
     execute: () => execute,
   });
@@ -272,6 +274,36 @@ describe("environmentRpcKey", () => {
 });
 
 describe("environment query lifecycle", () => {
+  it.effect("refreshes mounted queries when their scoped invalidation changes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const revision = Atom.make(0);
+        const firstRead = Latch.makeUnsafe();
+        const secondRead = Latch.makeUnsafe();
+        let executions = 0;
+        const harness = yield* makeEnvironmentQueryHarness(
+          Effect.sync(() => {
+            executions += 1;
+            (executions === 1 ? firstRead : secondRead).openUnsafe();
+            return executions;
+          }),
+          revision,
+        );
+        const registry = AtomRegistry.make();
+        const unsubscribe = registry.subscribe(harness.atom, () => {}, { immediate: true });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            unsubscribe();
+            registry.dispose();
+          }),
+        );
+        yield* firstRead.await;
+        registry.set(revision, 1);
+        yield* secondRead.await;
+        expect(executions).toBe(2);
+      }),
+    ),
+  );
   it.effect(
     "retries an interrupted query without exposing a failure during session replacement",
     () =>

@@ -20,7 +20,38 @@ describe("HermesServeRuntime", () => {
     );
   });
 
-  it.effect("launches the managed backend with its cron ticker enabled and stops it on close", () =>
+  it.effect("includes redacted diagnostics when the owned service exits before readiness", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeHermesServeRuntime({
+        endpoint: "ws://127.0.0.1:19120/api/ws",
+        authToken: "token",
+        managedServerEnabled: true,
+        processEnvironment: {},
+        probe: async () => {
+          throw new Error("not ready");
+        },
+        endpointReachable: async () => false,
+        start: () =>
+          Effect.succeed({
+            isRunning: Effect.succeed(false),
+            diagnostics: Effect.succeed(
+              "Authorization: Bearer private-token\nModuleNotFoundError: fastapi",
+            ),
+            kill: () => Effect.void,
+          }),
+      });
+      const result = yield* runtime.ensureReady.pipe(
+        Effect.match({
+          onSuccess: () => "unexpected success",
+          onFailure: (error) => error.message,
+        }),
+      );
+      assert.include(result, "exited before becoming ready");
+      assert.include(result, "ModuleNotFoundError: fastapi");
+      assert.notInclude(result, "private-token");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+  it.effect("launches only its owned serve process without impersonating Hermes Desktop", () =>
     Effect.gen(function* () {
       let ready = false;
       let kills = 0;
@@ -30,8 +61,15 @@ describe("HermesServeRuntime", () => {
           if (!ChildProcess.isStandardCommand(command))
             throw new Error("Expected standard command");
           assert.equal(command.command, "hermes");
-          assert.deepEqual(command.args, ["serve", "--host", "127.0.0.1", "--port", "19119"]);
-          assert.equal(command.options.env?.HERMES_DESKTOP, "1");
+          assert.deepEqual(command.args, [
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "19119",
+            "--skip-build",
+          ]);
+          assert.equal(command.options.env?.HERMES_DESKTOP, "0");
           assert.equal(command.options.env?.HERMES_HOME, "/isolated/hermes-profile");
           assert.equal(command.options.env?.HERMES_DASHBOARD_SESSION_TOKEN, "test-token");
           ready = true;
@@ -272,3 +310,38 @@ describe("HermesServeRuntime", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+it.effect("serializes management and driver startup for the same endpoint", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let ready = false;
+      let starts = 0;
+      const options = {
+        endpoint: "ws://127.0.0.1:19129/api/ws",
+        authToken: "shared-token",
+        managedServerEnabled: true,
+        processEnvironment: {},
+        probe: async () => {
+          if (!ready) throw new Error("not ready");
+        },
+        endpointReachable: async () => ready,
+        start: () =>
+          Effect.sync(() => {
+            starts += 1;
+            ready = true;
+            return { isRunning: Effect.succeed(true), kill: () => Effect.void };
+          }),
+      };
+      const driver = yield* makeHermesServeRuntime(options);
+      const management = yield* makeHermesServeRuntime(options);
+      const connections = yield* Effect.all([driver.ensureReady, management.ensureReady], {
+        concurrency: "unbounded",
+      });
+      assert.equal(starts, 1);
+      assert.deepEqual(connections.map((connection) => connection.ownership).sort(), [
+        "external",
+        "t3_owned",
+      ]);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);

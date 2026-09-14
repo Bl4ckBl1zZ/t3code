@@ -77,6 +77,7 @@ export function resolveSelectableModelSelection(
     (candidate) => candidate.instanceId === selection.instanceId,
   );
   return provider &&
+    provider.driver !== "hermesAcp" &&
     provider.enabled &&
     provider.installed &&
     provider.auth.status !== "unauthenticated"
@@ -113,6 +114,7 @@ export function resolveDefaultableModelSelection(
 export type ModelOptionProviderScope = "all" | "hermes-only" | "exclude-hermes";
 
 function matchesProviderScope(driver: string, scope: ModelOptionProviderScope): boolean {
+  if (driver === "hermesAcp") return false;
   if (scope === "all") return true;
   return scope === "hermes-only" ? driver === "hermes" : driver !== "hermes";
 }

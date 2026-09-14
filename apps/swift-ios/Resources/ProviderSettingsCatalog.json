@@ -122,11 +122,7 @@
         "profileKey": "default",
         "managedServerEnabled": true,
         "customModels": [],
-        "importEnabled": false,
-        "mcpEnabled": true,
-        "attachmentsEnabled": true,
-        "proactiveEnabled": true,
-        "voiceEnabled": false
+        "attachmentsEnabled": true
       }
     },
     "badgeLabel": "Preview",
@@ -143,16 +139,16 @@
       {
         "key": "endpoint",
         "control": "text",
-        "label": "Gateway endpoint",
-        "description": "Leave blank to use ws://127.0.0.1:9119/api/ws. T3 attaches there first and can start Hermes Serve when it is unused.",
+        "label": "Hermes connection",
+        "description": "Connect to the Hermes desktop backend. Leave blank for the local default; use wss:// for a remote backend.",
         "placeholder": "ws://127.0.0.1:9119/api/ws",
         "clearWhenEmpty": "persist"
       },
       {
         "key": "profileKey",
         "control": "text",
-        "label": "Profile key",
-        "description": "Durable Hermes profile containing the sessions owned by this instance.",
+        "label": "Default assistant",
+        "description": "The Hermes profile used for new conversations. Manage other assistants in Work.",
         "placeholder": "default",
         "clearWhenEmpty": "persist"
       },
@@ -160,7 +156,7 @@
         "key": "managedServerEnabled",
         "control": "switch",
         "label": "Start Hermes automatically",
-        "description": "Attach to a compatible gateway at this endpoint, or launch and supervise `hermes serve` when no local gateway is running.",
+        "description": "Start the local Hermes connection when needed. Scheduled tasks use the separate background service managed in Work.",
         "clearWhenEmpty": "persist",
         "defaultBooleanValue": true
       },
@@ -173,44 +169,12 @@
         "defaultBooleanValue": false
       },
       {
-        "key": "importEnabled",
-        "control": "switch",
-        "label": "Profile import",
-        "description": "Expose import controls only when the gateway advertises a compatible import API.",
-        "clearWhenEmpty": "persist",
-        "defaultBooleanValue": false
-      },
-      {
-        "key": "mcpEnabled",
-        "control": "switch",
-        "label": "MCP",
-        "description": "Allow MCP only when session-scoped registration and revocation are advertised.",
-        "clearWhenEmpty": "persist",
-        "defaultBooleanValue": true
-      },
-      {
         "key": "attachmentsEnabled",
         "control": "switch",
         "label": "Attachments",
         "description": "Allow attachment uploads supported by the connected gateway.",
         "clearWhenEmpty": "persist",
         "defaultBooleanValue": true
-      },
-      {
-        "key": "proactiveEnabled",
-        "control": "switch",
-        "label": "Proactive mode",
-        "description": "Keep Hermes threads subscribed so gateway-side runs stream in on their own, and answer requests those runs raise. Off still shows that work — it arrives when the thread is opened instead.",
-        "clearWhenEmpty": "persist",
-        "defaultBooleanValue": true
-      },
-      {
-        "key": "voiceEnabled",
-        "control": "switch",
-        "label": "Voice",
-        "description": "Allow voice features only when explicitly supported by the gateway.",
-        "clearWhenEmpty": "persist",
-        "defaultBooleanValue": false
       }
     ]
   },
@@ -281,23 +245,6 @@
         "description": "Start `openclaw acp` with `--reset-session`.",
         "clearWhenEmpty": "persist",
         "defaultBooleanValue": false
-      }
-    ]
-  },
-  {
-    "driver": "hermesAcp",
-    "label": "Hermes in Code",
-    "hasDefaultInstance": false,
-    "badgeLabel": "ACP",
-    "environmentFields": [],
-    "fields": [
-      {
-        "key": "binaryPath",
-        "control": "text",
-        "label": "Binary path",
-        "description": "Path to a Hermes Agent CLI that exposes the `hermes acp` stdio protocol.",
-        "placeholder": "hermes",
-        "clearWhenEmpty": "omit"
       }
     ]
   },

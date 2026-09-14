@@ -160,19 +160,14 @@ export function projectHermesFeatureDiagnostics(
           ? []
           : required(feature)
         : required(feature).filter((capability) => !available.has(capability));
-    const isAvailable =
-      feature === "remote"
-        ? false
-        : compatibility?.status === "supported" && missingCapabilities.length === 0;
+    const isAvailable = compatibility?.status === "supported" && missingCapabilities.length === 0;
     const reason = !requested[feature]
       ? "Disabled for this instance."
-      : feature === "remote"
-        ? "Remote transport remains blocked until scoped pairing and TLS pin verification are implemented."
-        : isAvailable
-          ? "Enabled and advertised by the gateway."
-          : compatibility?.status === "legacy"
-            ? "Unavailable without a negotiated capability inventory."
-            : "Requested but not advertised by the gateway.";
+      : isAvailable
+        ? "Enabled and advertised by the gateway."
+        : compatibility?.status === "legacy"
+          ? "Unavailable without a negotiated capability inventory."
+          : "Requested but not advertised by the gateway.";
     return {
       feature,
       requested: requested[feature],

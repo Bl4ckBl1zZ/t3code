@@ -10,6 +10,25 @@ import {
 } from "./modelOptions";
 
 describe("mobile model options", () => {
+  it("excludes retired Hermes ACP from new selections while retaining historical labels", () => {
+    const selection = { instanceId: ProviderInstanceId.make("old-hermes"), model: "default" };
+    const config = {
+      providers: [
+        {
+          instanceId: selection.instanceId,
+          driver: "hermesAcp",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [{ slug: "default", name: "Hermes in Code", capabilities: null }],
+        },
+      ],
+    } as unknown as ServerConfig;
+    expect(resolveSelectableModelSelection(config, selection)).toBeNull();
+    expect(buildModelOptions(config, null)).toEqual([]);
+    expect(buildModelOptions(config, selection)).toMatchObject([{ selection }]);
+  });
+
   it("groups models by provider and flags legacy entries", () => {
     const config = {
       providers: [

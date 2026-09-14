@@ -98,6 +98,7 @@ export interface ThreadDetailScreenProps {
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
+  readonly activeWorkActivityText: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: RuntimeRequestId | null;
   readonly activePendingUserInput: PendingUserInput | null;
@@ -674,6 +675,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             threadTitle={props.selectedThread.title}
             latestRun={props.activityRun}
             activeWorkStartedAt={props.activeWorkStartedAt}
+            activeWorkActivityText={props.activeWorkActivityText}
             timelineClearedAt={props.selectedThread.timelineClearedAt ?? null}
             listRef={listRef}
             freeze={freeze}

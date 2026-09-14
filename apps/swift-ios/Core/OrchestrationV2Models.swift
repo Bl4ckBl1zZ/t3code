@@ -951,6 +951,8 @@ public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identi
 }
 
 public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Identifiable {
+    /// Transient provider activity, separate from assistant reasoning items.
+    public var activityText: String? = nil
     public let id: String
     public let status: String
     public let model: String?

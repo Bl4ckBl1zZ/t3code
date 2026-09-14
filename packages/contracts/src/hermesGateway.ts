@@ -123,6 +123,7 @@ export const HermesGatewayKnownEventType = Schema.Literals([
 export type HermesGatewayKnownEventType = typeof HermesGatewayKnownEventType.Type;
 
 export const HermesGatewayEventParams = Schema.Struct({
+  seq: Schema.optional(Schema.Number),
   type: Schema.NonEmptyString,
   session_id: Schema.optional(Schema.String),
   payload: Schema.optional(Schema.Unknown),
@@ -170,7 +171,10 @@ export const HermesGatewayProtocolVersion = Schema.Struct({
 export type HermesGatewayProtocolVersion = typeof HermesGatewayProtocolVersion.Type;
 
 export const HermesGatewayReadyPayload = Schema.Struct({
-  skin: Schema.optional(Schema.String),
+  skin: Schema.optional(Schema.Unknown),
+  change_events: Schema.optional(Schema.Boolean),
+  heartbeat: Schema.optional(Schema.Boolean),
+  replay_epoch: Schema.optional(Schema.String),
   protocol: Schema.optional(HermesGatewayProtocolVersion),
   // Kept for pre-negotiation development builds that advertised at payload level.
   capabilities: Schema.optional(HermesGatewayCapabilityInventory),
@@ -492,7 +496,7 @@ export const HermesGatewaySessionResumeResult = Schema.Struct({
   queued: Schema.optional(Schema.Unknown),
   running: Schema.Boolean,
   session_key: Schema.String,
-  started_at: Schema.Number,
+  started_at: Schema.optional(Schema.Number),
   status: Schema.String,
 });
 export type HermesGatewaySessionResumeResult = typeof HermesGatewaySessionResumeResult.Type;

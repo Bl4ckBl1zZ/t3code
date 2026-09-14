@@ -46,6 +46,15 @@ describe("Hermes operational onboarding and gates", () => {
     expect(result.diagnosticEndpoint).not.toContain("private-gateway-token");
   });
 
+  it("reports configured remote transport available after the native connection succeeds", () => {
+    const remote = decodeHermesSettings({ ...settings, remoteAccessEnabled: true });
+    expect(
+      projectHermesFeatureDiagnostics(remote, supported).find(
+        (entry) => entry.feature === "remote",
+      ),
+    ).toMatchObject({ requested: true, available: true, missingCapabilities: [] });
+  });
+
   it("requires an upgrade for unsupported protocols or missing recovery capabilities", () => {
     expect(
       deriveHermesUpgradeGate({

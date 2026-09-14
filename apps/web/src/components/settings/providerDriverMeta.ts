@@ -29,7 +29,6 @@ const icons: Record<string, Icon> = {
   antigravity: AntigravityIcon,
   hermes: HermesIcon,
   openclaw: OpenClawIcon,
-  hermesAcp: HermesIcon,
   acpRegistry: ACPRegistryIcon,
   opencode: OpenCodeIcon,
 };

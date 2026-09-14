@@ -41,6 +41,7 @@ public struct ThreadDetailView: View {
     /// which is the only handle the reader has for quoting it later.
     @State private var feedbackReceipt: String?
     @State private var feedbackFailure: String?
+    @State private var workConversationFailure: String?
     @State private var didRestoreDraft = false
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var toolSurface: FeatureThreadToolSurface?
@@ -230,7 +231,9 @@ public struct ThreadDetailView: View {
                                 )
                             }
                         },
-                        isChatConversation: currentThread.workInboxRole == "chat"
+                        isChatConversation: currentThread.workInboxRole == "chat",
+                        isHermesConversation: ModelOptions.isHermesProvider(currentThread.providerID, in: environmentProviders),
+                        activeProviderSessionID: detail?.workflow.providerSession?.id
                     )
                 case let .files(path, line):
                     FeatureFilesView(
@@ -301,6 +304,9 @@ public struct ThreadDetailView: View {
         } message: {
             Text(feedbackFailure ?? "")
         }
+        .alert("Could not start conversation", isPresented: Binding(get: { workConversationFailure != nil }, set: { if !$0 { workConversationFailure = nil } })) {
+            Button("OK") { workConversationFailure = nil }
+        } message: { Text(workConversationFailure ?? "") }
         .simultaneousGesture(edgeBackGesture)
     }
 
@@ -334,7 +340,10 @@ public struct ThreadDetailView: View {
             workingStartedAt: detail.thread.workingStartedAt,
             timelineItems: detail.timelineItems,
             activeRunID: queueState.activeRun?.id,
-            isPreparingWorkspace: queueState.activeRun?.status == "preparing"
+            isPreparingWorkspace: queueState.activeRun?.status == "preparing",
+            activityText: detail.workflow.providerSession.flatMap { session in
+                ["stopped", "error"].contains(session.status) ? nil : session.activityText
+            }
         )
     }
 
@@ -1141,11 +1150,43 @@ public struct ThreadDetailView: View {
         }
     }
 
+    private func startFreshWorkConversation(providerID: String) {
+        guard let manager = model.client as? any FeatureWorkManaging,
+              let environmentID = threadEnvironment?.id ?? currentThread.environmentID else {
+            workConversationFailure = "This environment does not support starting Work conversations."
+            return
+        }
+        isSending = true
+        let sourceThreadID = currentThread.wireID ?? currentThread.id
+        let surface = currentThread.workInboxRole == "chat" ? "chat" : "work"
+        Task {
+            defer { isSending = false }
+            do {
+                let response = try await manager.workMutate(environmentID: environmentID, input: .object([
+                    "providerInstanceId": .string(providerID), "profile": .string("default"),
+                    "command": .object(["type": .string("conversation.open"), "sourceThreadId": .string(sourceThreadID), "surface": .string(surface)])
+                ]))
+                guard let threadID = response.threadId else { throw FeatureCapabilityUnavailable("Starting a Work conversation") }
+                draftSaveTask?.cancel()
+                draft = ""
+                try? await draftStore.removeDraft(for: draftKey)
+                NotificationCenter.default.post(name: .platformRouteReceived, object: nil, userInfo: ["route": PlatformRoute.thread(environmentID: environmentID, threadID: threadID)])
+            } catch { workConversationFailure = error.localizedDescription }
+        }
+    }
+
     private func send() {
         let message = draft
         let pendingAttachments = attachments
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !pendingAttachments.isEmpty else {
+            return
+        }
+        if pendingAttachments.isEmpty,
+           ["/new", "/reset"].contains(message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()),
+           let providerID = currentThread.providerID,
+           ModelOptions.isHermesProvider(providerID, in: environmentProviders) {
+            startFreshWorkConversation(providerID: providerID)
             return
         }
         // `/feedback` goes to the provider, not the agent. Only when the thread

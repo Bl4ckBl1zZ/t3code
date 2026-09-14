@@ -265,6 +265,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
       Effect.gen(function* () {
         const codexId = ProviderInstanceId.make("codex_main");
         const ghostId = ProviderInstanceId.make("ghost_main");
+        const retiredHermesId = ProviderInstanceId.make("hermes_code_legacy");
 
         const configMap: ProviderInstanceConfigMap = {
           [codexId]: {
@@ -278,6 +279,12 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
             enabled: false,
             config: { arbitrary: "payload", preserved: true },
           },
+          [retiredHermesId]: {
+            driver: ProviderDriverKind.make("hermesAcp"),
+            displayName: "Hermes in Code",
+            enabled: true,
+            config: { binaryPath: "hermes", customModels: [] },
+          },
         };
 
         const { registry } = yield* makeProviderInstanceRegistry<CodexDriverEnv>({
@@ -290,12 +297,19 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
         expect(instances[0]!.instanceId).toBe(codexId);
 
         const unavailable = yield* registry.listUnavailable;
-        expect(unavailable).toHaveLength(1);
-        const ghost = unavailable[0]!;
+        expect(unavailable).toHaveLength(2);
+        const ghost = unavailable.find((provider) => provider.instanceId === ghostId)!;
         expect(ghost.instanceId).toBe(ghostId);
         expect(ghost.driver).toBe("ghostDriver");
         expect(ghost.availability).toBe("unavailable");
         expect(ghost.unavailableReason).toMatch(/ghostDriver/);
+        const retiredHermes = unavailable.find(
+          (provider) => provider.instanceId === retiredHermesId,
+        )!;
+        expect(retiredHermes.driver).toBe("hermesAcp");
+        expect(retiredHermes.availability).toBe("unavailable");
+        expect(retiredHermes.enabled).toBe(false);
+        expect(yield* registry.getInstance(retiredHermesId)).toBeUndefined();
       }).pipe(Effect.provide(testLayer)),
   );
 });

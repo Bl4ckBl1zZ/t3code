@@ -10,6 +10,7 @@ import {
   buildProviderDriverMap,
   isHermesProviderInstance,
   isMobileWorkspaceThread,
+  resolveHermesConversationTarget,
 } from "../../lib/mobileWorkspace";
 import { useStartHermesConversation } from "../threads/use-start-hermes-conversation";
 import { useMobileWorkspace } from "../../state/preferences";
@@ -17,6 +18,7 @@ import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { HermesSetupCard } from "../hermes/HermesSetupCard";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { checkForAppUpdateOnLaunch, startAppUpdateForegroundRecheck } from "../updates/app-updates";
@@ -46,6 +48,7 @@ export function HomeRouteScreen() {
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
+  const [setupEnvironmentInProgress, setSetupEnvironmentInProgress] = useState<string | null>(null);
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
@@ -140,6 +143,35 @@ export function HomeRouteScreen() {
     startHermesConversation();
   };
 
+  const setupEnvironmentId = selectedEnvironmentId ?? serverConfigs.keys().next().value ?? null;
+  const needsHermesSetup =
+    workspace === "work" &&
+    setupEnvironmentId !== null &&
+    (setupEnvironmentInProgress === setupEnvironmentId ||
+      resolveHermesConversationTarget({
+        serverConfigs,
+        requiredEnvironmentId: setupEnvironmentId,
+      }) === null);
+  const setupProvider = setupEnvironmentId
+    ? serverConfigs
+        .get(setupEnvironmentId)
+        ?.providers.find((provider) => provider.driver === "hermes")
+    : undefined;
+  const setupCard =
+    needsHermesSetup && setupEnvironmentId ? (
+      <HermesSetupCard
+        key={`${setupEnvironmentId}:${setupProvider?.instanceId ?? "hermes"}`}
+        environmentId={setupEnvironmentId}
+        onStarted={() => setSetupEnvironmentInProgress(setupEnvironmentId)}
+        onConnected={() => setSetupEnvironmentInProgress(null)}
+        providerInstanceId={setupProvider?.instanceId ?? "hermes"}
+        environmentLabel={
+          environments.find((environment) => environment.environmentId === setupEnvironmentId)
+            ?.label
+        }
+      />
+    ) : null;
+
   // In split layouts the persistent sidebar IS the thread list — Home becomes
   // an empty detail pane so selecting a thread never transitions layouts.
   if (layout.usesSplitView) {
@@ -161,6 +193,7 @@ export function HomeRouteScreen() {
             />
           }
         />
+        {setupCard}
         <WorkspaceEmptyDetail onStartNewTask={startNewTask} />
       </>
     );
@@ -215,6 +248,7 @@ export function HomeRouteScreen() {
           onThreadSortOrderChange={setThreadSortOrder}
         />
 
+        {setupCard}
         <HomeScreen
           catalogState={catalogState}
           environments={environments}

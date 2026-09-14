@@ -364,23 +364,6 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   );
 });
 
-export const ThreadListV2InboxHeader = memo(function ThreadListV2InboxHeader(props: {
-  readonly pane?: "screen" | "sidebar";
-}) {
-  const borderColor = useThemeColor("--color-border");
-  return (
-    <View
-      className={cn(
-        "mb-1.5 mt-2 flex-row items-center gap-2.5",
-        props.pane === "sidebar" ? "px-3" : "px-5",
-      )}
-    >
-      <Text className="text-xs font-t3-medium text-foreground-tertiary">Inbox</Text>
-      <View className="h-px flex-1" style={{ backgroundColor: borderColor }} />
-    </View>
-  );
-});
-
 export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly thread: EnvironmentThreadShell;
   readonly variant: "card" | "slim";

@@ -4,7 +4,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   HermesGatewayCapabilityError,
   HermesGatewayClient,
-  HermesGatewayConfigurationError,
   HermesGatewayConnectionError,
   HermesGatewayMutationIndeterminateError,
   HermesGatewayMutationsBlockedError,
@@ -17,6 +16,7 @@ import {
 class FakeSocket implements HermesGatewaySocket {
   readyState = 0;
   readonly sent: string[] = [];
+  onSend?: (data: string) => void;
   readonly closeCalls: Array<{ readonly code: number; readonly reason?: string }> = [];
   readonly endpoint: string;
   private readonly listeners = new Map<
@@ -31,6 +31,7 @@ class FakeSocket implements HermesGatewaySocket {
   send(data: string): void {
     if (this.readyState !== 1) throw new Error("socket is not open");
     this.sent.push(data);
+    this.onSend?.(data);
   }
 
   close(code = 1000, reason?: string): void {
@@ -63,10 +64,7 @@ class FakeSocket implements HermesGatewaySocket {
     this.emit("error", {});
   }
 
-  private emit(
-    type: "open" | "message" | "close" | "error",
-    event: HermesGatewaySocketEvent,
-  ): void {
+  emit(type: "open" | "message" | "close" | "error", event: HermesGatewaySocketEvent): void {
     const entries = [...(this.listeners.get(type) ?? [])];
     this.listeners.set(
       type,
@@ -78,76 +76,26 @@ class FakeSocket implements HermesGatewaySocket {
 
 class FakeSocketFactory {
   readonly sockets: FakeSocket[] = [];
+  onCreate?: (socket: FakeSocket) => void;
 
   readonly create = (endpoint: string): FakeSocket => {
     const socket = new FakeSocket(endpoint);
     this.sockets.push(socket);
+    this.onCreate?.(socket);
     return socket;
   };
 }
 
-const legacyReady = {
+const nativeReady = {
   jsonrpc: "2.0",
   method: "event",
   params: {
     type: "gateway.ready",
-    payload: { skin: "default" },
+    payload: { skin: {}, change_events: true, heartbeat: true, replay_epoch: "epoch-1" },
   },
 } as const;
-
-const stableMutationReady = {
-  jsonrpc: "2.0",
-  method: "event",
-  params: {
-    type: "gateway.ready",
-    payload: {
-      protocol: {
-        major: 1,
-        minor: 0,
-        capabilities: {
-          "mutation.stable_ids": "durable-v1",
-          "session.lifecycle": "supported",
-          "turn.interrupt": "supported",
-          "turn.prompt": "supported",
-        },
-      },
-    },
-  },
-} as const;
-
-const fullyNegotiatedReady = {
-  jsonrpc: "2.0",
-  method: "event",
-  params: {
-    type: "gateway.ready",
-    payload: {
-      protocol: {
-        major: 1,
-        minor: 0,
-        capabilities: Object.fromEntries(
-          [
-            "session.lifecycle",
-            "session.history",
-            "session.title",
-            "session.branch.latest",
-            "turn.prompt",
-            "turn.interrupt",
-            "commands.catalog",
-            "models.inventory",
-            "reasoning.effective_state",
-            "attachments.image",
-            "attachments.file",
-            "attachments.pdf",
-            "cron.read",
-            "cron.manage",
-            "profile.import",
-          ].map((capability) => [capability, "supported"]),
-        ),
-      },
-    },
-  },
-} as const;
-
+const fullyNegotiatedReady = nativeReady;
+const legacyReady = nativeReady;
 function success(id: string, result: unknown): unknown {
   return { jsonrpc: "2.0", id, result };
 }
@@ -162,14 +110,11 @@ function sentFrames(socket: FakeSocket): Array<{
 
 async function openClient(
   factory: FakeSocketFactory,
-  options: Partial<ConstructorParameters<typeof HermesGatewayClient>[0]> & {
-    readonly discoverySupports?: ReadonlyArray<string>;
-    readonly discoveryImplements?: ReadonlyArray<string>;
-  } = {},
-  readyFrame: unknown = fullyNegotiatedReady,
-): Promise<{ readonly client: HermesGatewayClient; readonly socket: FakeSocket }> {
+  options: Partial<ConstructorParameters<typeof HermesGatewayClient>[0]> = {},
+  readyFrame: unknown = nativeReady,
+) {
   const client = new HermesGatewayClient({
-    endpoint: "ws://127.0.0.1:9119/api/ws",
+    endpoint: "ws://localhost:9119/api/ws",
     authToken: "private-token",
     socketFactory: factory.create,
     reconnect: { maxAttempts: 0 },
@@ -177,195 +122,15 @@ async function openClient(
   });
   const connecting = client.connect();
   await Promise.resolve();
-  const socket = factory.sockets[0]!;
-  socket.open();
   await Promise.resolve();
+  const socket = factory.sockets.at(-1)!;
+  socket.open();
   socket.receive(readyFrame);
-  // A legacy ready frame triggers capability discovery, which blocks the
-  // handshake until every probe settles. Default to answering "unsupported"
-  // so callers keep the strictly-empty legacy capability set unless they opt
-  // into `discoverySupports`.
-  await answerDiscoveryProbes(
-    socket,
-    options.discoverySupports ?? [],
-    options.discoveryImplements ?? [],
-  );
   await connecting;
   return { client, socket };
 }
 
-/**
- * Replies to any outstanding discovery probes: success for `supported`, the
- * gateway's "session not found" for `implemented` (what a real gateway answers
- * a session-scoped existence probe), and -32601 otherwise.
- */
-async function answerDiscoveryProbes(
-  socket: FakeSocket,
-  supported: ReadonlyArray<string>,
-  implemented: ReadonlyArray<string> = [],
-): Promise<void> {
-  for (let pass = 0; pass < 4; pass += 1) {
-    await Promise.resolve();
-    const seen = answered.get(socket) ?? new Set<string>();
-    answered.set(socket, seen);
-    const pending = socket.sent
-      .map((raw) => JSON.parse(raw) as { readonly id?: string; readonly method?: string })
-      .filter((frame) => frame.id !== undefined && !seen.has(frame.id));
-    for (const frame of pending) {
-      seen.add(frame.id!);
-      if (frame.method !== undefined && supported.includes(frame.method)) {
-        socket.receive({ jsonrpc: "2.0", id: frame.id, result: {} });
-      } else if (frame.method !== undefined && implemented.includes(frame.method)) {
-        socket.receive({
-          jsonrpc: "2.0",
-          id: frame.id,
-          error: { code: 4001, message: "session not found" },
-        });
-      } else {
-        socket.receive({
-          jsonrpc: "2.0",
-          id: frame.id,
-          error: { code: -32601, message: "Method not found" },
-        });
-      }
-    }
-    await Promise.resolve();
-  }
-}
-
-const answered = new WeakMap<FakeSocket, Set<string>>();
-
-describe("HermesGatewayClient transport security", () => {
-  it("registers and revokes an ephemeral session MCP lease", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(
-      factory,
-      {},
-      {
-        jsonrpc: "2.0",
-        method: "event",
-        params: {
-          type: "gateway.ready",
-          payload: {
-            protocol: {
-              major: 1,
-              minor: 0,
-              capabilities: {
-                session_mcp: "ephemeral-lease-v1",
-              },
-            },
-          },
-        },
-      },
-    );
-
-    const replacing = client.replaceSessionMcp(
-      {
-        session_id: "live-1",
-        servers: {
-          "t3-code": {
-            url: "http://127.0.0.1:43123/mcp",
-            headers: { Authorization: "Bearer scoped-token" },
-          },
-        },
-      },
-      { operationId: "mcp-replace" },
-    );
-    let frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({
-      method: "session.mcp.replace",
-      params: {
-        session_id: "live-1",
-        servers: {
-          "t3-code": {
-            url: "http://127.0.0.1:43123/mcp",
-            headers: { Authorization: "Bearer scoped-token" },
-          },
-        },
-      },
-    });
-    socket.receive(
-      success(frame.id, {
-        lease_id: "lease-1",
-        generation: 1,
-        servers: [{ name: "t3-code", runtime_name: "tui_session_lease_t3_code" }],
-        tool_names: ["mcp__tui_session_lease_t3_code__delegate_task"],
-        scope: { session_id: "live-1", session_key: "stored-1" },
-        persisted: false,
-        history_recorded: false,
-      }),
-    );
-    await expect(replacing).resolves.toMatchObject({ lease_id: "lease-1", generation: 1 });
-
-    const revoking = client.revokeSessionMcp("live-1", { operationId: "mcp-revoke" });
-    frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({
-      method: "session.mcp.revoke",
-      params: { session_id: "live-1" },
-    });
-    socket.receive(
-      success(frame.id, {
-        revoked: true,
-        lease_id: "lease-1",
-        persisted: false,
-      }),
-    );
-    await expect(revoking).resolves.toEqual({
-      revoked: true,
-      lease_id: "lease-1",
-      persisted: false,
-    });
-    client.close();
-  });
-
-  it("requires authenticated loopback ws by default and never logs credentials", async () => {
-    expect(
-      () =>
-        new HermesGatewayClient({
-          endpoint: "ws://example.com/api/ws",
-          authToken: "private-token",
-        }),
-    ).toThrow(HermesGatewayConfigurationError);
-    expect(
-      () =>
-        new HermesGatewayClient({
-          endpoint: "ws://localhost:9119/api/ws",
-          authToken: "",
-        }),
-    ).toThrow(HermesGatewayConfigurationError);
-
-    const logs: HermesGatewayLogEvent[] = [];
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {
-      logger: (event) => logs.push(event),
-    });
-    const request = client.mutate(
-      "prompt.submit",
-      { session_id: "session-1", text: "PRIVATE PROMPT" },
-      { operationId: "operation-1" },
-    );
-    const frame = sentFrames(socket)[0]!;
-    socket.receive(success(frame.id, { text: "PRIVATE RESULT" }));
-    await request;
-
-    const serializedLogs = JSON.stringify(logs);
-    expect(serializedLogs).not.toContain("private-token");
-    expect(serializedLogs).not.toContain("PRIVATE PROMPT");
-    expect(serializedLogs).not.toContain("PRIVATE RESULT");
-    expect(serializedLogs).toContain("%3Credacted%3E");
-    client.close();
-  });
-});
-
-describe("HermesGatewayClient protocol and ordering", () => {
-  it("does not manufacture optional or mutating capabilities for legacy gateways", () => {
-    expect(classifyHermesGatewayReady(legacyReady).capabilities).toEqual([]);
-  });
-
-  // The shipped gateway answers a title read with the title and its key, and a
-  // title write with the title alone. Demanding the revisioned fields turned
-  // both into protocol errors, which took the whole session bind down with
-  // them.
+describe("Native Hermes Serve transport", () => {
   it("reads and writes a title on a gateway that omits the revision metadata", async () => {
     const factory = new FakeSocketFactory();
     const { client, socket } = await openClient(factory);
@@ -383,53 +148,6 @@ describe("HermesGatewayClient protocol and ordering", () => {
     frame = sentFrames(socket).at(-1)!;
     socket.receive(success(frame.id, { pending: false, title: "Named" }));
     await expect(writing).resolves.toEqual({ pending: false, title: "Named" });
-    client.close();
-  });
-
-  it("publishes negotiated version, capability, and reconnect health", async () => {
-    const factory = new FakeSocketFactory();
-    const client = new HermesGatewayClient({
-      endpoint: "ws://localhost:9119/api/ws?label=private-value",
-      authToken: "private-token",
-      socketFactory: factory.create,
-      reconnect: { maxAttempts: 0 },
-    });
-    const health: unknown[] = [];
-    client.onHealthChange((snapshot) => health.push(snapshot));
-    const connecting = client.connect();
-    await Promise.resolve();
-    const socket = factory.sockets[0]!;
-    socket.open();
-    await Promise.resolve();
-    socket.receive({
-      ...stableMutationReady,
-      params: {
-        ...stableMutationReady.params,
-        payload: {
-          ...stableMutationReady.params.payload,
-          server_version: "1.3.0",
-        },
-      },
-    });
-    await connecting;
-
-    expect(client.health).toMatchObject({
-      state: "ready",
-      reconnectAttempt: 0,
-      protocolStatus: "supported",
-      protocolMajor: 1,
-      protocolMinor: 0,
-      serverVersion: "1.3.0",
-      writesBlocked: false,
-      indeterminateMutationCount: 0,
-    });
-    expect(client.health.capabilities).toEqual([
-      "mutation.stable_ids",
-      "session.lifecycle",
-      "turn.interrupt",
-      "turn.prompt",
-    ]);
-    expect(health).toHaveLength(3);
     client.close();
   });
 
@@ -508,106 +226,6 @@ describe("HermesGatewayClient protocol and ordering", () => {
     await expect(history).resolves.toEqual({ count: 3 });
     await expect(sessions).resolves.toEqual({ sessions: [] });
     client.close();
-  });
-
-  it("preserves negotiated event identities and rejects unsupported protocol majors", async () => {
-    const factory = new FakeSocketFactory();
-    const client = new HermesGatewayClient({
-      endpoint: "ws://localhost:9119/api/ws",
-      authToken: "private-token",
-      socketFactory: factory.create,
-      reconnect: { maxAttempts: 0 },
-    });
-    const events: unknown[] = [];
-    client.onEvent((event) => {
-      events.push(event);
-    });
-    const connecting = client.connect();
-    await Promise.resolve();
-    const socket = factory.sockets[0]!;
-    socket.open();
-    await Promise.resolve();
-    socket.receive({
-      jsonrpc: "2.0",
-      method: "event",
-      params: {
-        type: "gateway.ready",
-        payload: {
-          protocol: {
-            major: 1,
-            minor: 4,
-            build_revision: "upstream-revision",
-            capabilities: {
-              version: "1",
-              "session.lifecycle": "supported",
-              "event.stable_ids": "supported",
-              "attachments.pdf": "unsupported",
-              branching: { mode: "latest", stable_boundaries: false },
-            },
-          },
-        },
-        event_id: "ready-event",
-        event_sequence: 7,
-        emitted_at: "2026-07-24T00:00:00Z",
-        session_key: "durable-1",
-        run_id: "run-1",
-        message_id: "message-1",
-      },
-    });
-    const compatibility = await connecting;
-    expect(compatibility.status).toBe("supported");
-    expect(client.hasCapability("event.stable_ids")).toBe(true);
-    expect(client.hasCapability("attachments.pdf")).toBe(false);
-    expect(client.hasCapability("branching")).toBe(true);
-    expect(compatibility.inventory).toMatchObject({
-      version: "1",
-      branching: { mode: "latest", stable_boundaries: false },
-    });
-    await eventually(() => events.length === 1);
-    expect(events[0]).toMatchObject({
-      eventId: "ready-event",
-      eventSequence: 7,
-      cursor: 7,
-      emittedAt: "2026-07-24T00:00:00Z",
-      sessionKey: "durable-1",
-      runId: "run-1",
-      messageId: "message-1",
-    });
-    client.close();
-
-    const rejectedFactory = new FakeSocketFactory();
-    const rejected = new HermesGatewayClient({
-      endpoint: "ws://127.0.0.1:9119/api/ws",
-      authToken: "private-token",
-      socketFactory: rejectedFactory.create,
-      reconnect: { maxAttempts: 0 },
-    });
-    const rejection = rejected.connect();
-    await Promise.resolve();
-    rejectedFactory.sockets[0]!.open();
-    await Promise.resolve();
-    rejectedFactory.sockets[0]!.receive({
-      jsonrpc: "2.0",
-      method: "event",
-      params: {
-        type: "gateway.ready",
-        payload: {
-          protocol: {
-            major: 2,
-            minor: 0,
-            build_revision: "future",
-            capabilities: {
-              version: "1",
-              "session.lifecycle": "supported",
-            },
-          },
-        },
-      },
-    });
-    await expect(rejection).rejects.toThrow("Unsupported Hermes gateway protocol major 2");
-    expect(rejectedFactory.sockets[0]!.closeCalls).toEqual([
-      { code: 4002, reason: "gateway handshake failed" },
-    ]);
   });
 
   it("degrades a missing optional RPC independently", async () => {
@@ -875,9 +493,7 @@ describe("HermesGatewayClient protocol and ordering", () => {
     });
     client.close();
   });
-});
 
-describe("HermesGatewayClient recovery", () => {
   it("coalesces concurrent initial connects onto one socket", async () => {
     const factory = new FakeSocketFactory();
     const client = new HermesGatewayClient({
@@ -974,25 +590,6 @@ describe("HermesGatewayClient recovery", () => {
     client.close();
   });
 
-  it("fails a queued read locally when the reconnected gateway drops its capability", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {
-      reconnect: { maxAttempts: 2, baseDelayMs: 1, maxDelayMs: 1 },
-    });
-    socket.close(1006);
-
-    const read = client.read("cron.list", {}, { requiredCapability: "cron.read" });
-    await eventually(() => factory.sockets.length === 2);
-    const replacement = factory.sockets[1]!;
-    replacement.open();
-    await Promise.resolve();
-    replacement.receive(stableMutationReady);
-
-    await expect(read).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
-    expect(replacement.sent).toHaveLength(0);
-    client.close();
-  });
-
   it("still reconnects when a health listener throws during disconnect", async () => {
     const factory = new FakeSocketFactory();
     const { client, socket } = await openClient(factory, {
@@ -1042,163 +639,9 @@ describe("HermesGatewayClient recovery", () => {
     expect(client.state).toBe("closed");
   });
 
-  it("uses mutation.status to release only an authoritatively completed local fence", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {}, stableMutationReady);
-    const prompt = client.submitPrompt(
-      { session_id: "session-1", text: "private" },
-      {
-        operationId: "prompt-recovery-operation",
-        mutationId: "prompt-recovery-mutation",
-      },
-    );
-    let frame = sentFrames(socket).at(-1)!;
-    socket.receive(
-      success(frame.id, {
-        mutation_id: "prompt-recovery-mutation",
-        mutation_status: "indeterminate",
-        run_id: "run-recovery",
-        replayed: true,
-      }),
-    );
-    await expect(prompt).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
-
-    const reconciliation = client.reconcileMutation(
-      "prompt-recovery-operation",
-      "prompt-recovery-mutation",
-    );
-    frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({
-      method: "mutation.status",
-      params: { mutation_id: "prompt-recovery-mutation" },
-    });
-    const health: Array<{ writesBlocked: boolean; indeterminateMutationCount: number }> = [];
-    client.onHealthChange((snapshot) =>
-      health.push({
-        writesBlocked: snapshot.writesBlocked,
-        indeterminateMutationCount: snapshot.indeterminateMutationCount,
-      }),
-    );
-    expect(health.at(-1)).toEqual({ writesBlocked: true, indeterminateMutationCount: 1 });
-    socket.receive(success(frame.id, { mutation_status: "completed" }));
-
-    await expect(reconciliation).resolves.toEqual({ mutation_status: "completed" });
-    expect(client.mutationRecord("prompt-recovery-operation")).toBeUndefined();
-    expect(client.writesBlocked).toBe(false);
-    expect(health.at(-1)).toEqual({ writesBlocked: false, indeterminateMutationCount: 0 });
-    client.close();
-  });
-
-  it("keeps the local fence for a mutation reconciled as still admitted", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {}, stableMutationReady);
-    const prompt = client.submitPrompt(
-      { session_id: "session-1", text: "private" },
-      {
-        operationId: "prompt-admitted-operation",
-        mutationId: "prompt-admitted-mutation",
-      },
-    );
-    let frame = sentFrames(socket).at(-1)!;
-    socket.receive(
-      success(frame.id, {
-        mutation_id: "prompt-admitted-mutation",
-        mutation_status: "indeterminate",
-        run_id: "run-admitted",
-        replayed: true,
-      }),
-    );
-    await expect(prompt).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
-
-    const reconciliation = client.reconcileMutation(
-      "prompt-admitted-operation",
-      "prompt-admitted-mutation",
-    );
-    frame = sentFrames(socket).at(-1)!;
-    socket.receive(success(frame.id, { mutation_status: "admitted" }));
-    await expect(reconciliation).resolves.toEqual({ mutation_status: "admitted" });
-
-    expect(client.mutationRecord("prompt-admitted-operation")?.state).toBe("pending");
-    expect(client.writesBlocked).toBe(false);
-    await expect(
-      client.submitPrompt(
-        { session_id: "session-1", text: "must not race" },
-        { operationId: "prompt-admitted-operation" },
-      ),
-    ).rejects.toThrow("already been used");
-    client.close();
-  });
-
-  it("defaults reconciliation to the stored mutationId for the operation", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {}, stableMutationReady);
-    const prompt = client.submitPrompt(
-      { session_id: "session-1", text: "private" },
-      {
-        operationId: "prompt-stored-operation",
-        mutationId: "prompt-stored-mutation",
-      },
-    );
-    let frame = sentFrames(socket).at(-1)!;
-    socket.receive(
-      success(frame.id, {
-        mutation_id: "prompt-stored-mutation",
-        mutation_status: "indeterminate",
-        run_id: "run-stored",
-        replayed: true,
-      }),
-    );
-    await expect(prompt).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
-
-    const reconciliation = client.reconcileMutation("prompt-stored-operation");
-    frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({
-      method: "mutation.status",
-      params: { mutation_id: "prompt-stored-mutation" },
-    });
-    socket.receive(success(frame.id, { mutation_status: "completed" }));
-    await expect(reconciliation).resolves.toEqual({ mutation_status: "completed" });
-    client.close();
-  });
-
-  it("does not release the fence when reconciling an unrelated mutation id", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {}, stableMutationReady);
-    const prompt = client.submitPrompt(
-      { session_id: "session-1", text: "private" },
-      {
-        operationId: "prompt-fenced-operation",
-        mutationId: "prompt-fenced-mutation",
-      },
-    );
-    let frame = sentFrames(socket).at(-1)!;
-    socket.receive(
-      success(frame.id, {
-        mutation_id: "prompt-fenced-mutation",
-        mutation_status: "indeterminate",
-        run_id: "run-fenced",
-        replayed: true,
-      }),
-    );
-    await expect(prompt).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
-
-    const reconciliation = client.reconcileMutation("prompt-fenced-operation", "other-mutation");
-    frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({
-      method: "mutation.status",
-      params: { mutation_id: "other-mutation" },
-    });
-    socket.receive(success(frame.id, { mutation_status: "completed" }));
-    await expect(reconciliation).resolves.toEqual({ mutation_status: "completed" });
-
-    expect(client.mutationRecord("prompt-fenced-operation")?.state).toBe("indeterminate");
-    expect(client.writesBlocked).toBe(true);
-    client.close();
-  });
-
   it("rejects sent mutations as indeterminate when the client is closed", async () => {
     const factory = new FakeSocketFactory();
-    const { client } = await openClient(factory, {}, stableMutationReady);
+    const { client } = await openClient(factory, {}, nativeReady);
     const prompt = client.submitPrompt(
       { session_id: "session-1", text: "private" },
       { operationId: "prompt-closed-operation" },
@@ -1245,129 +688,6 @@ describe("HermesGatewayClient recovery", () => {
     client.close();
     await expect(connecting).rejects.toBeInstanceOf(HermesGatewayConnectionError);
     expect(client.state).toBe("closed");
-  });
-
-  it("marks a status-less indeterminate replay and blocks later mutations", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {}, stableMutationReady);
-    const prompt = client.submitPrompt(
-      { session_id: "session-1", text: "private" },
-      {
-        operationId: "prompt-recovery-operation",
-        mutationId: "prompt-recovery-mutation",
-      },
-    );
-    const frame = sentFrames(socket).at(-1)!;
-    expect(frame.params.mutation_id).toBe("prompt-recovery-mutation");
-    socket.receive(
-      success(frame.id, {
-        mutation_id: "prompt-recovery-mutation",
-        mutation_status: "indeterminate",
-        run_id: "run-recovery",
-        replayed: true,
-      }),
-    );
-
-    await expect(prompt).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
-    expect(client.mutationRecord("prompt-recovery-operation")?.state).toBe("indeterminate");
-    expect(client.writesBlocked).toBe(true);
-    await expect(
-      client.interrupt("session-1", { operationId: "blocked-interrupt" }),
-    ).rejects.toBeInstanceOf(HermesGatewayMutationsBlockedError);
-    expect(sentFrames(socket)).toHaveLength(1);
-    client.close();
-  });
-
-  it.each(["complete", "interrupted", "error"] as const)(
-    "accepts and confirms a terminal %s prompt replay",
-    async (status) => {
-      const factory = new FakeSocketFactory();
-      const { client, socket } = await openClient(factory, {}, stableMutationReady);
-      const operationId = `prompt-${status}-operation`;
-      const prompt = client.submitPrompt(
-        { session_id: "session-1", text: "private" },
-        {
-          operationId,
-          mutationId: `prompt-${status}-mutation`,
-        },
-      );
-      const frame = sentFrames(socket).at(-1)!;
-      socket.receive(
-        success(frame.id, {
-          status,
-          mutation_id: `prompt-${status}-mutation`,
-          mutation_status: "completed",
-          run_id: `run-${status}`,
-          message_id: `message-${status}`,
-        }),
-      );
-
-      await expect(prompt).resolves.toMatchObject({
-        status,
-        mutation_status: "completed",
-        run_id: `run-${status}`,
-      });
-      expect(client.mutationRecord(operationId)?.state).toBe("confirmed");
-      expect(client.writesBlocked).toBe(false);
-      client.close();
-    },
-  );
-
-  it("handles indeterminate replays before decoding create, resume, and interrupt results", async () => {
-    const cases = [
-      {
-        operationId: "create-recovery-operation",
-        mutationId: "create-recovery-mutation",
-        invoke: (client: HermesGatewayClient) =>
-          client.createSession(
-            { source: "t3-code" },
-            {
-              operationId: "create-recovery-operation",
-              mutationId: "create-recovery-mutation",
-            },
-          ),
-      },
-      {
-        operationId: "resume-recovery-operation",
-        mutationId: "resume-recovery-mutation",
-        invoke: (client: HermesGatewayClient) =>
-          client.resumeSession(
-            { session_id: "stored-session-1" },
-            {
-              operationId: "resume-recovery-operation",
-              mutationId: "resume-recovery-mutation",
-            },
-          ),
-      },
-      {
-        operationId: "interrupt-recovery-operation",
-        mutationId: "interrupt-recovery-mutation",
-        invoke: (client: HermesGatewayClient) =>
-          client.interrupt("session-1", {
-            operationId: "interrupt-recovery-operation",
-            mutationId: "interrupt-recovery-mutation",
-          }),
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const factory = new FakeSocketFactory();
-      const { client, socket } = await openClient(factory, {}, stableMutationReady);
-      const mutation = testCase.invoke(client);
-      const frame = sentFrames(socket).at(-1)!;
-      socket.receive(
-        success(frame.id, {
-          mutation_id: testCase.mutationId,
-          mutation_status: "indeterminate",
-          run_id: "",
-          replayed: true,
-        }),
-      );
-
-      await expect(mutation).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
-      expect(client.mutationRecord(testCase.operationId)?.state).toBe("indeterminate");
-      client.close();
-    }
   });
 
   it("does not confirm an undecodable successful mutation response", async () => {
@@ -1486,354 +806,6 @@ describe("HermesGatewayClient recovery", () => {
     ]);
   });
 });
-
-const skillsReady = {
-  jsonrpc: "2.0",
-  method: "event",
-  params: {
-    type: "gateway.ready",
-    payload: {
-      protocol: {
-        major: 1,
-        minor: 0,
-        capabilities: {
-          "skills.manage": "supported",
-          "skills.reload": "supported",
-        },
-      },
-    },
-  },
-} as const;
-
-describe("HermesGatewayClient skills", () => {
-  it("uses the skills.manage read and skills.reload mutation wire protocol", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {}, skillsReady);
-
-    const listing = client.listSkills();
-    let frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({ method: "skills.manage", params: { action: "list" } });
-    socket.receive(success(frame.id, { skills: [{ name: "notes", description: "Take notes" }] }));
-    await expect(listing).resolves.toEqual({
-      skills: [{ name: "notes", description: "Take notes" }],
-    });
-
-    const searching = client.searchSkills("git");
-    frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({
-      method: "skills.manage",
-      params: { action: "search", query: "git" },
-    });
-    socket.receive(success(frame.id, { results: [{ name: "git-helper", description: "Git" }] }));
-    await expect(searching).resolves.toEqual({
-      results: [{ name: "git-helper", description: "Git" }],
-    });
-
-    const inspecting = client.inspectSkill("git-helper");
-    frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({
-      method: "skills.manage",
-      params: { action: "inspect", query: "git-helper" },
-    });
-    socket.receive(success(frame.id, { info: { name: "git-helper" } }));
-    await expect(inspecting).resolves.toEqual({ info: { name: "git-helper" } });
-
-    const reloading = client.reloadSkills({ operationId: "skills-reload-1" });
-    frame = sentFrames(socket).at(-1)!;
-    expect(frame).toMatchObject({ method: "skills.reload", params: {} });
-    socket.receive(
-      success(frame.id, {
-        output: "Reloaded",
-        result: { added: [{ name: "new-skill" }], removed: [], total: 4 },
-      }),
-    );
-    await expect(reloading).resolves.toEqual({
-      output: "Reloaded",
-      result: { added: [{ name: "new-skill" }], removed: [], total: 4 },
-    });
-    client.close();
-  });
-
-  it("removes only the skills.manage capability after a -32601 response", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(factory, {}, skillsReady);
-
-    const listing = client.listSkills();
-    const frame = sentFrames(socket).at(-1)!;
-    socket.receive({
-      jsonrpc: "2.0",
-      id: frame.id,
-      error: { code: -32601, message: "method not found" },
-    });
-    await expect(listing).rejects.toThrow("skills.manage failed with code -32601");
-    expect(client.hasCapability("skills.manage")).toBe(false);
-    expect(client.hasCapability("skills.reload")).toBe(true);
-    await expect(client.listSkills()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
-    client.close();
-  });
-
-  it("grants non-privileged capabilities a legacy gateway proves it implements", async () => {
-    const factory = new FakeSocketFactory();
-    const { client } = await openClient(
-      factory,
-      {
-        discoverySupports: ["commands.catalog", "model.options", "config.get", "session.list"],
-      },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    // Directly probed.
-    expect(capabilities).toContain("commands.catalog");
-    expect(capabilities).toContain("models.inventory");
-    expect(capabilities).toContain("reasoning.effective_state");
-    expect(capabilities).toContain("session.lifecycle");
-    // Inferred from session.list answering.
-    expect(capabilities).toContain("turn.prompt");
-    expect(capabilities).toContain("turn.interrupt");
-    expect(capabilities).toContain("events.tools");
-    client.close();
-  });
-
-  it("never synthesizes credential-minting or promise-shaped capabilities", async () => {
-    const factory = new FakeSocketFactory();
-    const { client } = await openClient(
-      factory,
-      {
-        // Answer every probe affirmatively. Even then, capabilities that hand
-        // out a T3 credential or describe a durability promise stay ungranted:
-        // no method existing can be evidence for either.
-        discoverySupports: [
-          "commands.catalog",
-          "model.options",
-          "config.get",
-          "session.list",
-          "cron.manage",
-          "skills.manage",
-        ],
-        discoveryImplements: [
-          "image.attach_bytes",
-          "pdf.attach",
-          "file.attach",
-          "session.title",
-          "session.branch",
-          "approval.respond",
-          "clarify.respond",
-          "session.mcp.register",
-        ],
-      },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    for (const privileged of ["session_mcp", "profile.import", "mutation.stable_ids"]) {
-      expect(capabilities).not.toContain(privileged);
-    }
-    client.close();
-  });
-
-  it("grants cron from the one method that backs both reading and managing it", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(
-      factory,
-      { discoverySupports: ["session.list", "cron.manage"] },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    expect(capabilities).toContain("cron.read");
-    expect(capabilities).toContain("cron.manage");
-    // Listing is a read, so the probe must not have asked for anything else.
-    const probes = sentFrames(socket).filter((frame) => frame.method === "cron.manage");
-    expect(probes).toHaveLength(1);
-    expect(probes[0]!.params).toEqual({ action: "list" });
-    client.close();
-  });
-
-  it("grants skills and its reload companion together", async () => {
-    const factory = new FakeSocketFactory();
-    const { client } = await openClient(
-      factory,
-      { discoverySupports: ["session.list", "skills.manage"] },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    expect(capabilities).toContain("skills.manage");
-    expect(capabilities).toContain("skills.reload");
-    client.close();
-  });
-
-  it("grants the response methods that keep a parked run answerable", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(
-      factory,
-      {
-        discoverySupports: ["session.list"],
-        discoveryImplements: [
-          "approval.respond",
-          "clarify.respond",
-          "session.title",
-          "session.branch",
-        ],
-      },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    expect(capabilities).toContain("events.approvals");
-    expect(capabilities).toContain("events.clarification");
-    expect(capabilities).toContain("session.title");
-    expect(capabilities).toContain("session.branch.latest");
-    // The probe must not name a session the gateway could act on.
-    const probes = sentFrames(socket).filter((frame) => frame.method === "approval.respond");
-    expect(probes).toHaveLength(1);
-    expect(probes[0]!.params).toEqual({ session_id: "t3-code:capability-probe" });
-    client.close();
-  });
-
-  it("withholds response methods a gateway reports as unknown", async () => {
-    const factory = new FakeSocketFactory();
-    const { client } = await openClient(
-      factory,
-      { discoverySupports: ["session.list"], discoveryImplements: ["approval.respond"] },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    expect(capabilities).toContain("events.approvals");
-    expect(capabilities).not.toContain("events.clarification");
-    client.close();
-  });
-
-  it("grants attachment capabilities a legacy gateway answers a session error for", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(
-      factory,
-      {
-        discoverySupports: ["session.list"],
-        discoveryImplements: ["image.attach_bytes", "pdf.attach", "file.attach"],
-      },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    expect(capabilities).toContain("attachments.image");
-    expect(capabilities).toContain("attachments.pdf");
-    expect(capabilities).toContain("attachments.file");
-    // The probe must not name a session the gateway could act on.
-    const probes = sentFrames(socket).filter((frame) => frame.method === "image.attach_bytes");
-    expect(probes).toHaveLength(1);
-    expect(probes[0]!.params).toEqual({ session_id: "t3-code:capability-probe" });
-    expect(probes[0]!.params["content_base64"]).toBeUndefined();
-    client.close();
-  });
-
-  it("withholds attachment capabilities a legacy gateway reports as unknown methods", async () => {
-    const factory = new FakeSocketFactory();
-    const { client } = await openClient(
-      factory,
-      { discoverySupports: ["session.list"], discoveryImplements: ["image.attach_bytes"] },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    expect(capabilities).toContain("attachments.image");
-    expect(capabilities).not.toContain("attachments.pdf");
-    expect(capabilities).not.toContain("attachments.file");
-    client.close();
-  });
-
-  it("withholds capabilities a legacy gateway does not implement", async () => {
-    const factory = new FakeSocketFactory();
-    // Only session.list answers: the catalog/model/config probes return -32601.
-    const { client } = await openClient(
-      factory,
-      { discoverySupports: ["session.list"] },
-      legacyReady,
-    );
-    const capabilities = client.health.capabilities ?? [];
-    expect(capabilities).toContain("session.lifecycle");
-    expect(capabilities).toContain("turn.prompt");
-    expect(capabilities).not.toContain("commands.catalog");
-    expect(capabilities).not.toContain("models.inventory");
-    client.close();
-  });
-
-  it("holds a legacy gateway to advertisement alone when discovery is disabled", async () => {
-    const factory = new FakeSocketFactory();
-    const { client } = await openClient(
-      factory,
-      { discoverLegacyCapabilities: false, discoverySupports: ["session.list"] },
-      legacyReady,
-    );
-    expect(client.health.capabilities ?? []).toEqual([]);
-    client.close();
-  });
-
-  it("reads the cron action inventory from what the dispatcher accepts", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(
-      factory,
-      { discoverySupports: ["session.list", "cron.manage"] },
-      legacyReady,
-    );
-    const inventory = client.cronActionInventory();
-    await Promise.resolve();
-    await Promise.resolve();
-    // Mirrors the shipped gateway: an unknown action is an RPC error, while a
-    // known one reaches the scheduler and reports that the job is missing.
-    const supported = new Set(["add", "pause", "resume", "remove"]);
-    for (const frame of sentFrames(socket)) {
-      if (frame.method !== "cron.manage" || frame.params["action"] === "list") continue;
-      const action = String(frame.params["action"]);
-      socket.receive(
-        supported.has(action)
-          ? success(frame.id, { success: false, error: "Job with ID or name not found" })
-          : {
-              jsonrpc: "2.0",
-              id: frame.id,
-              error: { code: 4016, message: `unknown cron action: ${action}` },
-            },
-      );
-    }
-    const actions = await inventory;
-    expect([...actions].toSorted()).toEqual(["add", "list", "pause", "remove", "resume"]);
-    // Naming a real job would risk removing or running it.
-    const removeProbe = sentFrames(socket).find(
-      (frame) => frame.method === "cron.manage" && frame.params["action"] === "remove",
-    );
-    expect(removeProbe!.params["name"]).toBe("t3-code:cron-action-probe:0e4f1b6a");
-
-    // Probed once per build: a second call spends no further requests.
-    const before = socket.sent.length;
-    expect([...(await client.cronActionInventory())].toSorted()).toEqual([
-      "add",
-      "list",
-      "pause",
-      "remove",
-      "resume",
-    ]);
-    expect(socket.sent.length).toBe(before);
-    client.close();
-  });
-
-  it("reports no cron actions when the gateway has no cron at all", async () => {
-    const factory = new FakeSocketFactory();
-    const { client, socket } = await openClient(
-      factory,
-      { discoverySupports: ["session.list"] },
-      legacyReady,
-    );
-    const before = socket.sent.length;
-    expect((await client.cronActionInventory()).size).toBe(0);
-    expect(socket.sent.length).toBe(before);
-    client.close();
-  });
-
-  it("refuses skills access on a legacy gateway without a negotiated inventory", async () => {
-    const factory = new FakeSocketFactory();
-    const { client } = await openClient(factory, {}, legacyReady);
-    await expect(client.listSkills()).rejects.toBeInstanceOf(HermesGatewayCapabilityError);
-    await expect(client.reloadSkills({ operationId: "skills-reload-2" })).rejects.toBeInstanceOf(
-      HermesGatewayCapabilityError,
-    );
-    client.close();
-  });
-});
-
 async function eventually(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -1841,3 +813,387 @@ async function eventually(predicate: () => boolean, timeoutMs = 1_000): Promise<
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
 }
+
+describe("Hermes Serve native protocol", () => {
+  it("accepts the upstream ready frame immediately after socket open without sending discovery probes", async () => {
+    const { client, socket } = await openClient(new FakeSocketFactory());
+    expect(client.compatibility?.status).toBe("supported");
+    expect(socket.sent).toEqual([]);
+    expect(client.hasCapability("events.approvals")).toBe(true);
+    expect(client.hasCapability("session_mcp")).toBe(false);
+    expect(client.hasCapability("mutation.stable_ids")).toBe(false);
+    expect(await client.cronActionInventory()).toEqual(
+      new Set(["list", "add", "pause", "resume", "remove"]),
+    );
+    expect(socket.sent).toEqual([]);
+    client.close();
+  });
+
+  it("rejects fabricated negotiated and outdated ready frames with an upgrade explanation", () => {
+    for (const payload of [
+      {},
+      { protocol: { major: 1, minor: 0, capabilities: ["session_mcp"] } },
+    ]) {
+      const result = classifyHermesGatewayReady({
+        ...nativeReady,
+        params: { type: "gateway.ready", payload },
+      });
+      expect(result.status).toBe("unsupported");
+      expect(result.capabilities).toEqual([]);
+      expect(result.reason).toContain("Update Hermes");
+    }
+  });
+
+  it("decodes coalesced newline frames and preserves native replay sequences and global changes", async () => {
+    const { client, socket } = await openClient(new FakeSocketFactory());
+    const events: Array<{ eventSequence: number | undefined; type: string }> = [];
+    let finish!: () => void;
+    const received = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    client.onEvent((event) => {
+      events.push({ eventSequence: event.eventSequence, type: event.frame.params.type });
+      if (events.length === 2) finish();
+    });
+    const first = {
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "message.delta", session_id: "s1", seq: 7, payload: { text: "hello" } },
+    };
+    const second = {
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "cron.changed", payload: {} },
+    };
+    socket.emit("message", { data: `${JSON.stringify(first)}\n${JSON.stringify(second)}\n` });
+    await received;
+    expect(events).toEqual([
+      { eventSequence: 7, type: "message.delta" },
+      { eventSequence: undefined, type: "cron.changed" },
+    ]);
+    client.close();
+  });
+
+  it("uses a fresh remote dashboard ticket without putting the session bearer in the websocket URL", async () => {
+    const factory = new FakeSocketFactory();
+    let ticketRequested!: () => void;
+    const requested = new Promise<void>((resolve) => {
+      ticketRequested = resolve;
+    });
+    let socketCreated!: () => void;
+    const created = new Promise<void>((resolve) => {
+      socketCreated = resolve;
+    });
+    factory.onCreate = () => socketCreated();
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    const client = new HermesGatewayClient({
+      endpoint: "wss://hermes.example/api/ws",
+      authToken: "session-secret",
+      socketFactory: factory.create,
+      fetch: async (input, init) => {
+        requests.push({
+          url: String(input),
+          authorization: new Headers(init?.headers).get("Authorization"),
+        });
+        ticketRequested();
+        return Response.json({ ticket: "single-use-ticket", ttl_seconds: 30 });
+      },
+      reconnect: { maxAttempts: 0 },
+    });
+    const connecting = client.connect();
+    await requested;
+    await created;
+    const socket = factory.sockets[0]!;
+    expect(requests).toEqual([
+      { url: "https://hermes.example/api/auth/ws-ticket", authorization: "Bearer session-secret" },
+    ]);
+    expect(socket.endpoint).toBe("wss://hermes.example/api/ws?ticket=single-use-ticket");
+    socket.open();
+    socket.receive(nativeReady);
+    await connecting;
+    client.close();
+  });
+});
+
+describe("Hermes native event recovery", () => {
+  it("reattaches before replay and emits each missed or concurrent event once", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory, {
+      reconnect: { maxAttempts: 1, baseDelayMs: 1 },
+    });
+    const observed: number[] = [];
+    let firstSeen!: () => void;
+    const first = new Promise<void>((resolve) => {
+      firstSeen = resolve;
+    });
+    let replaySeen!: () => void;
+    const recovered = new Promise<void>((resolve) => {
+      replaySeen = resolve;
+    });
+    client.onEvent((event) => {
+      if (event.eventSequence === undefined) return;
+      observed.push(event.eventSequence);
+      if (observed.length === 1) firstSeen();
+      if (observed.length === 3) replaySeen();
+    });
+    const params = (seq: number) => ({
+      type: "message.delta",
+      session_id: "s1",
+      seq,
+      payload: { text: String(seq) },
+    });
+    socket.receive({ jsonrpc: "2.0", method: "event", params: params(1) });
+    await first;
+    let reattached = false;
+    client.onReconnected(async () => {
+      await client.reconnectSession({ session_id: "stored-1" });
+      reattached = true;
+    });
+    factory.onCreate = (next) => {
+      next.onSend = (data) => {
+        const frame = JSON.parse(data) as {
+          id: string;
+          method: string;
+          params: Record<string, unknown>;
+        };
+        if (frame.method === "session.resume") {
+          expect(frame.params.lazy).toBe(true);
+          queueMicrotask(() =>
+            next.receive(
+              success(frame.id, {
+                session_id: "s1",
+                resumed: "stored-1",
+                session_key: "stored-1",
+                message_count: 0,
+                messages: [],
+                info: {},
+                running: true,
+                started_at: 1,
+                status: "streaming",
+              }),
+            ),
+          );
+        } else if (frame.method === "session.events.since") {
+          expect(reattached).toBe(true);
+          expect(frame.params).toEqual({ session_id: "s1", last_seen: 1 });
+          queueMicrotask(() => {
+            next.receive({ jsonrpc: "2.0", method: "event", params: params(3) });
+            next.receive(
+              success(frame.id, {
+                events: [params(2), params(3)],
+                latest_seq: 3,
+                truncated: false,
+                epoch: "epoch-1",
+              }),
+            );
+          });
+        }
+      };
+      queueMicrotask(() => {
+        next.open();
+        next.receive(nativeReady);
+      });
+    };
+    socket.close();
+    await recovered;
+    expect(observed).toEqual([1, 2, 3]);
+    client.close();
+  });
+
+  it("reports a replay gap instead of manufacturing missing progress", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(factory, {
+      reconnect: { maxAttempts: 1, baseDelayMs: 1 },
+    });
+    let seen!: () => void;
+    const initial = new Promise<void>((resolve) => {
+      seen = resolve;
+    });
+    client.onEvent((event) => {
+      if (event.eventSequence === 5) seen();
+    });
+    socket.receive({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "message.delta", session_id: "s1", seq: 5, payload: { text: "saved" } },
+    });
+    await initial;
+    let gapSeen!: (value: unknown) => void;
+    const gap = new Promise<unknown>((resolve) => {
+      gapSeen = resolve;
+    });
+    client.onReplayGap(gapSeen);
+    factory.onCreate = (next) => {
+      next.onSend = (data) => {
+        const frame = JSON.parse(data) as { id: string; method: string };
+        if (frame.method === "session.events.since")
+          queueMicrotask(() =>
+            next.receive(
+              success(frame.id, { events: [], latest_seq: 90, truncated: true, epoch: "epoch-1" }),
+            ),
+          );
+      };
+      queueMicrotask(() => {
+        next.open();
+        next.receive(nativeReady);
+      });
+    };
+    socket.close();
+    await expect(gap).resolves.toEqual({
+      sessionId: "s1",
+      lastSeen: 5,
+      epoch: "epoch-1",
+      reason: "truncated",
+    });
+    client.close();
+  });
+});
+
+describe("Hermes unpersisted session recovery", () => {
+  it("reattaches a never-prompted lazy session without inventing a timestamp or executing work", async () => {
+    const { client, socket } = await openClient(new FakeSocketFactory());
+    const result = client.reconnectSession({ session_id: "stored-fresh", profile: "personal" });
+    const frame = sentFrames(socket).at(-1)!;
+    expect(frame.method).toBe("session.resume");
+    expect(frame.params).toEqual({ session_id: "stored-fresh", profile: "personal", lazy: true });
+    socket.receive(
+      success(frame.id, {
+        session_id: "live-fresh",
+        stored_session_id: "stored-fresh",
+        message_count: 0,
+        messages: [],
+        info: { model: "hermes-model", lazy: true, profile_name: "personal" },
+      }),
+    );
+    await expect(result).resolves.toEqual({
+      session_id: "live-fresh",
+      session_key: "stored-fresh",
+      resumed: "stored-fresh",
+      message_count: 0,
+      messages: [],
+      info: { model: "hermes-model", lazy: true, profile_name: "personal" },
+      running: false,
+      status: "idle",
+    });
+    expect(sentFrames(socket)).toHaveLength(1);
+    client.close();
+  });
+});
+
+describe("Hermes July native Serve", () => {
+  const julyReady = {
+    jsonrpc: "2.0",
+    method: "event",
+    params: { type: "gateway.ready", payload: { skin: { name: "default" }, change_events: true } },
+  } as const;
+
+  it("accepts the observed July native ready frame without claiming replay support", async () => {
+    const { client, socket } = await openClient(new FakeSocketFactory(), {}, julyReady);
+    expect(client.compatibility?.status).toBe("supported");
+    expect(client.compatibility?.reason).toContain("history reconciliation");
+    expect(socket.sent).toEqual([]);
+    client.close();
+  });
+
+  it("reattaches and asks the adapter to recover history when the server has no replay epoch", async () => {
+    const factory = new FakeSocketFactory();
+    const { client, socket } = await openClient(
+      factory,
+      { reconnect: { maxAttempts: 1, baseDelayMs: 1 } },
+      julyReady,
+    );
+    let finish!: () => void;
+    const reconnected = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const requests: string[] = [];
+    client.onReconnected(async ({ epochChanged }) => {
+      expect(epochChanged).toBe(true);
+      await client.reconnectSession({ session_id: "stored-1" });
+      finish();
+    });
+    factory.onCreate = (next) => {
+      next.onSend = (data) => {
+        const frame = JSON.parse(data) as {
+          id: string;
+          method: string;
+          params: Record<string, unknown>;
+        };
+        requests.push(frame.method);
+        expect(frame.method).toBe("session.resume");
+        expect(frame.params.lazy).toBe(true);
+        queueMicrotask(() =>
+          next.receive(
+            success(frame.id, {
+              session_id: "s1",
+              stored_session_id: "stored-1",
+              message_count: 0,
+              messages: [],
+              info: { lazy: true },
+            }),
+          ),
+        );
+      };
+      queueMicrotask(() => {
+        next.open();
+        next.receive(julyReady);
+      });
+    };
+    socket.close();
+    await reconnected;
+    expect(requests).toEqual(["session.resume"]);
+    client.close();
+  });
+});
+
+describe("Hermes native model control", () => {
+  it("sends config.set with session scope and delivers preceding native events before resolving", async () => {
+    const { client, socket } = await openClient(new FakeSocketFactory());
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let seen!: () => void;
+    const delivered = new Promise<void>((resolve) => {
+      seen = resolve;
+    });
+    client.onEvent(async (event) => {
+      if (event.frame.params.type !== "session.info") return;
+      seen();
+      await hold;
+    });
+    const change = client.setSessionModel(
+      { session_id: "s1", model: "z-ai/glm-5.3" },
+      { operationId: "model-1" },
+    );
+    const frame = sentFrames(socket).at(-1)!;
+    expect(frame.method).toBe("config.set");
+    expect(frame.params).toEqual({
+      session_id: "s1",
+      key: "model",
+      value: "z-ai/glm-5.3 --session",
+    });
+    socket.receive({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "session.info", session_id: "s1", payload: { model: "z-ai/glm-5.3" } },
+    });
+    socket.receive(
+      success(frame.id, {
+        key: "model",
+        value: "z-ai/glm-5.3",
+        scope: "session",
+        confirm_required: false,
+      }),
+    );
+    let resolved = false;
+    void change.then(() => {
+      resolved = true;
+    });
+    await delivered;
+    expect(resolved).toBe(false);
+    release();
+    await expect(change).resolves.toMatchObject({ value: "z-ai/glm-5.3", scope: "session" });
+    client.close();
+  });
+});

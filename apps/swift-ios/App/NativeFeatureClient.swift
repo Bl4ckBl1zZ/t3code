@@ -6693,67 +6693,6 @@ extension NativeFeatureClient: FeatureScheduledTaskManaging {
     }
 }
 
-// MARK: - Hermes proactive inbox
-
-/// Hermes runs nobody asked for are environment state for the same reason
-/// automations are: each paired server reaches its own Hermes gateway and
-/// answers for its own inbox, so every call routes through that environment's
-/// client rather than the active one.
-extension NativeFeatureClient: FeatureHermesInboxManaging {
-    func hermesInboxUpdates(
-        environmentID: String
-    ) async -> AsyncThrowingStream<FeatureHermesInbox, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                do {
-                    let client = try await environmentClient(id: environmentID)
-                    for try await snapshot in await client.hermesProactiveInboxEvents() {
-                        continuation.yield(Self.mapHermesInbox(snapshot))
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-
-    func markHermesRuns(
-        environmentID: String,
-        ids: [String],
-        status: FeatureHermesRunStatus
-    ) async throws -> FeatureHermesInbox {
-        let client = try await environmentClient(id: environmentID)
-        let result = try await client.markHermesProactiveNotifications(
-            ids: ids,
-            status: status.rawValue
-        )
-        return Self.mapHermesInbox(result.snapshot)
-    }
-
-    private static func mapHermesInbox(
-        _ snapshot: HermesProactiveInboxSnapshot
-    ) -> FeatureHermesInbox {
-        FeatureHermesInbox(
-            runs: snapshot.notifications.map { notification in
-                FeatureHermesRun(
-                    id: notification.notificationId,
-                    title: notification.title,
-                    body: notification.body,
-                    threadID: notification.threadId,
-                    // A status this build cannot name reads as already-read
-                    // rather than failing the list or inflating the badge.
-                    status: FeatureHermesRunStatus(rawValue: notification.status) ?? .read,
-                    createdAt: notification.createdAt
-                )
-            },
-            unreadCount: snapshot.unreadCount,
-            deadLetterCount: snapshot.deadLetterCount
-        )
-    }
-}
-
 // MARK: - Server settings
 
 /// Server-authoritative settings, scoped to the environment whose row the user
@@ -7275,4 +7214,61 @@ struct NativeVoiceRelayClient: Sendable {
 private struct SharedSettingsWriteFailure: LocalizedError {
     let machines: [String]
     var errorDescription: String? { "Saved on the selected machine, but could not update shared preferences on " + machines.joined(separator: ", ") + ". Reload and apply to all to retry." }
+}
+
+// Every Work action uses its explicitly selected environment.
+extension NativeFeatureClient: FeatureWorkManaging {
+    func workChanges(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<HermesWorkChange, Error> {
+        let client = try await environmentClient(id: environmentID)
+        return await client.workChanges(instanceID: instanceID)
+    }
+    func workModelStatus(environmentID: String, input: JSONValue) async throws -> HermesWorkModelStatus {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workModelStatus(input)
+    }
+    func workModelAuthStart(environmentID: String, input: JSONValue) async throws -> HermesWorkModelAuthStart {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workModelAuthStart(input)
+    }
+    func workModelAuthPoll(environmentID: String, input: JSONValue) async throws -> HermesWorkModelAuthPoll {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workModelAuthPoll(input)
+    }
+    func workModelAuthCancel(environmentID: String, input: JSONValue) async throws -> HermesWorkModelAuthCancel {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workModelAuthCancel(input)
+    }
+    func workModelSet(environmentID: String, input: JSONValue) async throws -> HermesWorkModelSet {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workModelSet(input)
+    }
+
+    func workSetupStart(environmentID: String, instanceID: String) async throws -> HermesWorkSetupState {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workSetupStart(instanceID: instanceID)
+    }
+    func workSetupStatus(environmentID: String, instanceID: String) async throws -> HermesWorkSetupState {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workSetupStatus(instanceID: instanceID)
+    }
+    func workGroupsQuery(environmentID: String, input: JSONValue) async throws -> HermesWorkGroupsResult {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workGroupsQuery(input)
+    }
+    func workGroupsMutate(environmentID: String, input: JSONValue) async throws -> HermesWorkMutationResult {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workGroupsMutate(input)
+    }
+    func workConnections(environmentID: String) async throws -> HermesWorkConnections {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workConnections()
+    }
+    func workQuery(environmentID: String, input: JSONValue) async throws -> HermesWorkQueryResult {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workQuery(input)
+    }
+    func workMutate(environmentID: String, input: JSONValue) async throws -> HermesWorkMutationResult {
+        let client = try await environmentClient(id: environmentID)
+        return try await client.workMutate(input)
+    }
 }

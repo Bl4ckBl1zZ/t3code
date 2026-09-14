@@ -8,6 +8,13 @@ import Testing
 /// item belongs to an interrupted attempt says nothing about that item.
 @Suite("Thread working status")
 struct ThreadWorkingStatusTests {
+    @Test func transientActivityOnlyLabelsAnActiveTurn() {
+        let active = ThreadWorkingStatus.resolve(state: .working, workingStartedAt: nil, timelineItems: [], activeRunID: "run", activityText: " Checking sources ")
+        #expect(active?.headline == "Checking sources")
+        #expect(ThreadWorkingStatus.resolve(state: .idle, workingStartedAt: nil, timelineItems: [], activeRunID: nil, activityText: "Stale activity") == nil)
+        #expect(ThreadWorkingStatus.resolve(state: .working, workingStartedAt: nil, timelineItems: [], activeRunID: "run", activityText: " ")?.headline == "Thinking")
+    }
+
     @Test func workspacePreparationDoesNotStartTheAgentTimer() {
         let status = ThreadWorkingStatus.resolve(state: .queued, workingStartedAt: .now, timelineItems: [], activeRunID: "run", isPreparingWorkspace: true)
         #expect(status?.headline == "Preparing workspace")

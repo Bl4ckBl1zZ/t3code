@@ -28,6 +28,7 @@ vi.mock("../ProjectScriptsControl", () => ({
     return null;
   },
 }));
+vi.mock("./HermesThreadDetailsPanel", () => ({ HermesThreadDetailsPanel: () => null }));
 vi.mock("./ThreadAutomationsPanel", () => ({
   ThreadAutomationsPanel: () => null,
 }));

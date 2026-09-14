@@ -6,7 +6,12 @@ import {
 } from "@t3tools/client-runtime/state/vcs";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import { resolveThreadChangeStat } from "@t3tools/shared/git";
-import { CommonActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import {
+  CommonActions,
+  useIsFocused,
+  useNavigation,
+  type StaticScreenProps,
+} from "@react-navigation/native";
 import type { SFSymbol } from "expo-symbols";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Platform, RefreshControl, ScrollView, View } from "react-native";
@@ -18,6 +23,9 @@ import { AppText as Text } from "../../../components/AppText";
 import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
 import { useThemeColor } from "../../../lib/useThemeColor";
 import { nativeHeaderScrollEdgeEffects } from "../../../native/StackHeader";
+import { buildProviderDriverMap, isHermesThread } from "../../../lib/mobileWorkspace";
+import { useServerConfigs } from "../../../state/entities";
+import { hermesEnvironment } from "../../../state/hermes";
 import { useEnvironmentQuery } from "../../../state/query";
 import {
   useRemoteConnections,
@@ -46,6 +54,7 @@ import {
 import { ThreadDetailsAutomations } from "./ThreadDetailsAutomations";
 import { ThreadDetailsBackgroundTasks } from "./ThreadDetailsBackgroundTasks";
 import { ThreadDetailsLineage } from "./ThreadDetailsLineage";
+import { ThreadDetailsHermes } from "./ThreadDetailsHermes";
 import { ThreadDetailsPorts } from "./ThreadDetailsPorts";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
@@ -67,18 +76,44 @@ function quickActionIcon(kind: string, action: string | undefined): SFSymbol {
  * The thread details sheet — the mobile presentation of the desktop thread
  * details panel, opened from the `line.3.horizontal.decrease` header button.
  *
- * Same sections in the same order (Workspace, Ports, Background Tasks, Version
- * Control, Automations, Lineage), each hiding itself when it has nothing to
- * report, so the sheet is only ever as tall as the thread has facts.
+ * Workspace and execution details follow the thread's provider. Hermes adds
+ * its native profile, session, workspace and linked schedules; project threads
+ * retain their repository controls.
  */
 export function ThreadDetailsSheet(props: ThreadDetailsSheetProps) {
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const environmentId = EnvironmentId.make(props.route.params.environmentId);
   const threadId = ThreadId.make(props.route.params.threadId);
   const { selectedThread, selectedThreadProject, selectedEnvironmentConnection } =
     useThreadSelection();
   const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
+  const serverConfigs = useServerConfigs();
+  const providerDrivers = useMemo(() => buildProviderDriverMap(serverConfigs), [serverConfigs]);
+  const isHermes = selectedThread != null && isHermesThread(selectedThread, providerDrivers);
+  const hermesDetails = useEnvironmentQuery(
+    isHermes && isFocused
+      ? hermesEnvironment.workQuery({
+          environmentId,
+          input: { providerInstanceId: "", profile: "", section: "thread", id: threadId },
+        })
+      : null,
+  );
+
+  const hermesProviderInstanceId = hermesDetails.data?.threadDetails?.providerInstanceId;
+  const hermesChanges = useEnvironmentQuery(
+    isHermes && isFocused && hermesProviderInstanceId
+      ? hermesEnvironment.workChanges({
+          environmentId,
+          input: { providerInstanceId: hermesProviderInstanceId },
+        })
+      : null,
+  );
+  useEffect(() => {
+    if (hermesChanges.data !== null) hermesDetails.refresh();
+  }, [hermesChanges.data, hermesDetails.refresh]);
+
   const environmentRuntime = useRemoteEnvironmentRuntime(environmentId);
   const { onReconnectEnvironment } = useRemoteConnections();
   const gitState = useSelectedThreadGitState();
@@ -90,16 +125,16 @@ export function ThreadDetailsSheet(props: ThreadDetailsSheetProps) {
   const sheetColor = String(useThemeColor("--color-sheet"));
 
   const gitStatus = useEnvironmentQuery(
-    selectedThreadCwd !== null
+    selectedThreadCwd !== null && !isHermes
       ? vcsEnvironment.status({ environmentId, input: { cwd: selectedThreadCwd } })
       : null,
   );
 
   useEffect(() => {
-    void gitActions.refreshSelectedThreadGitStatus({ quiet: true });
-  }, [gitActions]);
+    if (!isHermes) void gitActions.refreshSelectedThreadGitStatus({ quiet: true });
+  }, [gitActions, isHermes]);
 
-  const projectScripts = selectedThreadProject?.scripts ?? [];
+  const projectScripts = isHermes ? [] : (selectedThreadProject?.scripts ?? []);
   const status = gitStatus.data;
   const currentBranchLabel = status?.refName ?? selectedThread?.branch ?? "Detached HEAD";
   const busy = gitState.gitOperationLabel !== null;
@@ -211,11 +246,12 @@ export function ThreadDetailsSheet(props: ThreadDetailsSheetProps) {
   const handlePullRefresh = useCallback(async () => {
     setIsPullRefreshing(true);
     try {
-      await gitActions.refreshSelectedThreadGitStatus();
+      if (isHermes) hermesDetails.refresh();
+      else await gitActions.refreshSelectedThreadGitStatus();
     } finally {
       setIsPullRefreshing(false);
     }
-  }, [gitActions]);
+  }, [gitActions, hermesDetails.refresh, isHermes]);
 
   const workspaceLabel =
     basename(selectedThreadWorktreePath) ??
@@ -235,7 +271,10 @@ export function ThreadDetailsSheet(props: ThreadDetailsSheetProps) {
       contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, gap: 16 }}
       refreshControl={
-        <RefreshControl refreshing={isPullRefreshing} onRefresh={() => void handlePullRefresh()} />
+        <RefreshControl
+          refreshing={isPullRefreshing || (isHermes && hermesDetails.isPending)}
+          onRefresh={() => void handlePullRefresh()}
+        />
       }
       showsVerticalScrollIndicator={false}
     >
@@ -270,9 +309,9 @@ export function ThreadDetailsSheet(props: ThreadDetailsSheetProps) {
           onPress={() => navigateFromSheet("Connections", {})}
           title={selectedEnvironmentConnection?.environmentLabel ?? String(environmentId)}
         />
-        {/* A Hermes conversation has no project, so it has no folder to name
-            and nothing under it to browse or run. */}
-        {selectedThreadCwd !== null ? (
+        {/* Project-backed threads expose repository navigation here. Native
+            Hermes workspace facts are shown in the conversation section. */}
+        {selectedThreadCwd !== null && !isHermes ? (
           <>
             <DetailsDivider />
             <DetailsRow
@@ -326,6 +365,39 @@ export function ThreadDetailsSheet(props: ThreadDetailsSheetProps) {
         })}
       </DetailsSection>
 
+      {isHermes ? (
+        hermesDetails.error ? (
+          <DetailsNotice
+            title="Hermes details unavailable"
+            body={hermesDetails.error}
+            actions={<DetailsNoticeButton label="Retry" onPress={hermesDetails.refresh} />}
+          />
+        ) : hermesDetails.data?.threadDetails ? (
+          <ThreadDetailsHermes
+            key={threadId}
+            refreshing={hermesDetails.isPending}
+            environmentId={environmentId}
+            details={hermesDetails.data.threadDetails}
+            diagnostics={hermesDetails.data.diagnostics}
+            onRefresh={hermesDetails.refresh}
+            onManage={() =>
+              navigateFromSheet("SettingsSheet", {
+                screen: "SettingsContent",
+                params: { screen: "SettingsHermesWork" },
+              })
+            }
+          />
+        ) : (
+          <DetailsSection title="Hermes conversation">
+            <Text className="px-4 py-3 text-sm text-foreground-muted">
+              {hermesDetails.isPending
+                ? "Loading native session details…"
+                : "Native thread details are not available."}
+            </Text>
+          </DetailsSection>
+        )
+      ) : null}
+
       <ThreadDetailsPorts
         environmentId={environmentId}
         pinnedPreviewUrl={pinnedPreviewUrl}
@@ -335,7 +407,7 @@ export function ThreadDetailsSheet(props: ThreadDetailsSheetProps) {
 
       <ThreadDetailsBackgroundTasks environmentId={environmentId} threadId={threadId} />
 
-      {selectedThreadCwd !== null ? (
+      {selectedThreadCwd !== null && !isHermes ? (
         <DetailsSection title="Version Control">
           <DetailsRow
             icon="point.topleft.down.curvedto.point.bottomright.up"

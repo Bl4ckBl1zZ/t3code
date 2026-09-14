@@ -9,7 +9,7 @@ import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import {
   ChatComposerLanding,
   CodeDraftLanding,
-  WorkInboxLanding,
+  WorkComposerLanding,
 } from "../components/WorkspaceLanding";
 import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
@@ -29,8 +29,8 @@ function ChatIndexRouteView() {
   // the side the user is actually in: dropping T3 Work or T3 Chat into the
   // Code composer offers a coding thread their own sidebar cannot list.
   switch (workspaceLandingKind(workspace)) {
-    case "work-inbox":
-      return <WorkInboxLanding />;
+    case "work-composer":
+      return <WorkComposerLanding />;
     case "chat-composer":
       return <ChatComposerLanding />;
     case "code-composer":

@@ -4,9 +4,6 @@ import {
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
   type ChatAttachment,
-  type HermesSessionDiscoveryInput,
-  type HermesHistoryResetInput,
-  type HermesSessionImportInput,
   type MessageId,
   type ModelSelection,
   type OrchestrationV2Command,
@@ -407,24 +404,6 @@ export const settleThread = Effect.fn("EnvironmentCommands.settleThread")(functi
   input: SettleThreadInput,
 ) {
   return yield* simpleThreadCommand("thread.settle", input);
-});
-
-export const discoverHermesSessions = Effect.fn("EnvironmentCommands.discoverHermesSessions")(
-  function* (input: HermesSessionDiscoveryInput) {
-    return yield* request(WS_METHODS.hermesSessionsDiscover, input);
-  },
-);
-
-export const importHermesSessions = Effect.fn("EnvironmentCommands.importHermesSessions")(
-  function* (input: HermesSessionImportInput) {
-    return yield* request(WS_METHODS.hermesSessionsImport, input);
-  },
-);
-
-export const resetHermesHistory = Effect.fn("EnvironmentCommands.resetHermesHistory")(function* (
-  input: HermesHistoryResetInput,
-) {
-  return yield* request(WS_METHODS.hermesHistoryReset, input);
 });
 
 export const unsettleThread = Effect.fn("EnvironmentCommands.unsettleThread")(function* (

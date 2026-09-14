@@ -2,7 +2,7 @@
 
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { CheckIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   type EnvironmentId,
   ProviderInstanceId,
@@ -10,6 +10,12 @@ import {
   type ProviderInstanceConfig,
 } from "@t3tools/contracts";
 
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+
+import { HermesSetup } from "../HermesSetup";
+import { hermesEnvironment } from "../../state/hermes";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { normalizeProviderAccentColor } from "../../providerInstances";
@@ -123,6 +129,16 @@ export function AddProviderInstanceDialog({
 }: AddProviderInstanceDialogProps) {
   const settings = useEnvironmentSettings(environmentId);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const saveSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const startHermesSetup = useAtomCommand(hermesEnvironment.workSetupStart, {
+    reportFailure: false,
+  });
+  const [setupInstance, setSetupInstance] = useState<{
+    environmentId: EnvironmentId;
+    id: string;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
 
   const [wizardStep, setWizardStep] = useState(0);
   const [driver, setDriver] = useState<ProviderDriverKind>(DEFAULT_DRIVER_KIND);
@@ -180,7 +196,8 @@ export function AddProviderInstanceDialog({
     );
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (savingRef.current) return;
     setHasAttemptedSubmit(true);
     if (instanceIdError !== null) return;
 
@@ -190,7 +207,7 @@ export function AddProviderInstanceDialog({
 
     const nextInstance: ProviderInstanceConfig = {
       driver,
-      enabled: true,
+      enabled: driver !== "hermes",
       ...(label.trim().length > 0 ? { displayName: label.trim() } : {}),
       ...(normalizedAccentColor ? { accentColor: normalizedAccentColor } : {}),
       ...(hasConfig ? { config } : {}),
@@ -204,10 +221,39 @@ export function AddProviderInstanceDialog({
       ...settings.providerInstances,
       [brandedId]: nextInstance,
     };
+    if (driver === "hermes") {
+      savingRef.current = true;
+      setSaving(true);
+      let saved = false;
+      try {
+        const persisted = await saveSettings({
+          environmentId,
+          input: { patch: { providerInstances: nextMap } },
+        });
+        if (persisted._tag === "Failure") throw squashAtomCommandFailure(persisted);
+        saved = true;
+        const started = await startHermesSetup({
+          environmentId,
+          input: { providerInstanceId: brandedId },
+        });
+        if (started._tag === "Failure") throw squashAtomCommandFailure(started);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: saved ? "Hermes setup needs attention" : "Could not add Hermes",
+          description:
+            error instanceof Error ? error.message : "The environment request failed. Try again.",
+        });
+      } finally {
+        if (saved) setSetupInstance({ environmentId, id: brandedId });
+        savingRef.current = false;
+        setSaving(false);
+      }
+      return;
+    }
     try {
       updateSettings({
         providerInstances: nextMap,
-        ...(driver === "hermes" ? { enableHermes: true } : {}),
       });
       toastManager.add({
         type: "success",
@@ -224,8 +270,38 @@ export function AddProviderInstanceDialog({
     }
   };
 
+  if (setupInstance) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogPopup className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Set up Hermes</DialogTitle>
+            <DialogDescription>Finish connecting this assistant to T3 Work.</DialogDescription>
+          </DialogHeader>
+          <div className="px-6 py-5">
+            <HermesSetup
+              key={`${setupInstance.environmentId}:${setupInstance.id}`}
+              environmentId={setupInstance.environmentId}
+              providerInstanceId={setupInstance.id}
+            />
+          </div>
+          <DialogFooter>
+            <Button size="sm" variant="outline" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+    );
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!saving) onOpenChange(nextOpen);
+      }}
+    >
       <DialogPopup className="max-w-xl overflow-hidden">
         <div className="flex min-h-0 flex-col overflow-hidden">
           <DialogHeader>
@@ -238,7 +314,9 @@ export function AddProviderInstanceDialog({
               currentStep={wizardStep}
               summaries={wizardStepSummaries}
               instanceIdError={instanceIdError}
-              onNavigation={applyWizardNavigation}
+              onNavigation={(navigation) => {
+                if (!saving) applyWizardNavigation(navigation);
+              }}
             />
           </DialogHeader>
 
@@ -253,7 +331,9 @@ export function AddProviderInstanceDialog({
                 </div>
                 <RadioGroup
                   value={driver}
-                  onValueChange={(value) => setDriver(ProviderDriverKind.make(value))}
+                  onValueChange={(value) => {
+                    if (!saving) setDriver(ProviderDriverKind.make(value));
+                  }}
                   aria-labelledby="add-instance-driver-label"
                   className="grid grid-cols-1 gap-2 sm:grid-cols-2"
                 >
@@ -414,6 +494,7 @@ export function AddProviderInstanceDialog({
             <Button
               variant="outline"
               size="sm"
+              disabled={saving}
               onClick={() => {
                 if (wizardStep === 0) {
                   onOpenChange(false);
@@ -429,8 +510,12 @@ export function AddProviderInstanceDialog({
                 Next
               </Button>
             ) : (
-              <Button size="sm" onClick={handleSave}>
-                Add instance
+              <Button size="sm" disabled={saving} onClick={() => void handleSave()}>
+                {saving
+                  ? "Setting up Hermes…"
+                  : driver === "hermes"
+                    ? "Set up Hermes"
+                    : "Add instance"}
               </Button>
             )}
           </DialogFooter>

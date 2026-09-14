@@ -1,0 +1,241 @@
+{
+  "changeEvent": {
+    "providerInstanceId": "hermes-work",
+    "kind": "cron.changed"
+  },
+  "providerActivity": {
+    "active": "Formulating…",
+    "cleared": null
+  },
+  "setup": {
+    "providerInstanceId": "hermes-work",
+    "phase": "needs_model",
+    "message": "Connect a model account.",
+    "model": null
+  },
+  "modelStatus": {
+    "model": "test-model",
+    "provider": "openai-codex",
+    "ready": false,
+    "providers": [
+      {
+        "id": "openai-codex",
+        "name": "ChatGPT",
+        "authenticated": false,
+        "models": [
+          "test-model"
+        ]
+      }
+    ],
+    "accounts": [
+      {
+        "id": "openai-codex",
+        "name": "ChatGPT",
+        "flow": "device_code",
+        "loggedIn": false,
+        "sourceLabel": null
+      }
+    ]
+  },
+  "modelAuthStart": {
+    "sessionId": "auth-fixture",
+    "userCode": "TEST-CODE",
+    "verificationUrl": "https://example.com/device",
+    "expiresIn": 900,
+    "pollInterval": 5
+  },
+  "modelAuthPoll": {
+    "status": "approved",
+    "message": null
+  },
+  "modelAuthCancel": {
+    "ok": true
+  },
+  "modelSet": {
+    "ok": true,
+    "confirmRequired": false,
+    "message": null
+  },
+  "connections": {
+    "connections": [
+      {
+        "providerInstanceId": "hermes-work",
+        "displayName": "Home assistant",
+        "configured": true
+      }
+    ]
+  },
+  "query": {
+    "threadDetails": {
+      "schedulesAvailable": true,
+      "threadId": "thread:hermes-work:fixture",
+      "status": "bound",
+      "providerInstanceId": "hermes-work",
+      "profile": "research",
+      "sessionId": "session-1",
+      "workspacePath": "/work/research",
+      "schedules": [
+        {
+          "continuity": true,
+          "lastDeliveryError": null,
+          "id": "hourly-check",
+          "profile": "research",
+          "name": "Hourly check",
+          "prompt": "Report meaningful changes",
+          "schedule": "every 1h",
+          "paused": false,
+          "deliver": "local",
+          "model": "configured-model",
+          "nextRunAt": "2026-09-14T09:00:00Z",
+          "lastRunAt": "2026-09-14T08:00:00Z",
+          "lastStatus": "completed",
+          "lastError": null,
+          "relationship": "created_here"
+        }
+      ],
+      "gatewayRunning": true,
+      "gatewayState": "running"
+    },
+    "artifacts": [
+      {
+        "id": "artifact-1",
+        "kind": "file",
+        "value": "/work/report.md",
+        "label": "Report",
+        "sessionId": "session-1",
+        "profile": "research",
+        "sessionTitle": "Research conversation",
+        "timestamp": 1789372860000
+      }
+    ],
+    "artifactsNextOffset": null,
+    "automation": {
+      "timezone": "Europe/Luxembourg",
+      "allowAgentScheduling": false
+    },
+    "sessions": [
+      {
+        "id": "session-1",
+        "profile": "research",
+        "title": "Research conversation",
+        "preview": "A briefing",
+        "active": false,
+        "updatedAt": 1789372860
+      }
+    ],
+    "gatewayRunning": true,
+    "gatewayState": "running",
+    "profiles": [
+      {
+        "name": "research",
+        "description": "Research assistant",
+        "model": "configured-model",
+        "isDefault": false
+      }
+    ],
+    "schedules": [
+      {
+        "continuity": true,
+        "lastDeliveryError": null,
+        "id": "hourly-check",
+        "profile": "research",
+        "name": "Hourly check",
+        "prompt": "Report meaningful changes",
+        "schedule": "every 1h",
+        "paused": false,
+        "deliver": "local",
+        "model": "configured-model",
+        "nextRunAt": "2026-09-14T09:00:00Z",
+        "lastRunAt": "2026-09-14T08:00:00Z",
+        "lastStatus": "completed",
+        "lastError": null
+      }
+    ],
+    "runs": [
+      {
+        "id": "run-1",
+        "profile": "research",
+        "title": "Hourly check",
+        "startedAt": 1789372800,
+        "endedAt": 1789372860,
+        "active": false,
+        "jobId": "hourly-check",
+        "status": "completed",
+        "deliveryStatus": null,
+        "content": "A meaningful change was found.",
+        "readAt": null
+      }
+    ],
+    "skills": [
+      {
+        "name": "research",
+        "description": "Gather sources",
+        "enabled": true
+      }
+    ],
+    "channels": [
+      {
+        "id": "telegram",
+        "name": "Telegram",
+        "description": "Send updates",
+        "enabled": true,
+        "configured": true,
+        "fields": [
+          {
+            "name": "TELEGRAM_BOT_TOKEN",
+            "label": "Bot token",
+            "secret": true,
+            "configured": true
+          }
+        ]
+      }
+    ],
+    "files": [
+      {
+        "name": "report.md",
+        "path": "/work/report.md",
+        "directory": false,
+        "size": 42
+      }
+    ],
+    "content": "A meaningful change was found.",
+    "path": "/work/report.md",
+    "diagnostics": []
+  },
+  "mutation": {
+    "message": "Conversation opened.",
+    "threadId": "thread:hermes-work:fixture"
+  },
+  "groups": {
+    "groups": [
+      {
+        "id": "room-1",
+        "name": "Research team",
+        "members": [
+          {
+            "id": "member-1",
+            "profile": "research",
+            "handle": "research",
+            "name": "Research"
+          }
+        ],
+        "updatedAt": 1789372860,
+        "disbandedAt": null,
+        "latestSequence": 1
+      }
+    ],
+    "events": [
+      {
+        "id": "event-1",
+        "sequence": 1,
+        "kind": "message",
+        "actor": "research",
+        "text": "Review complete.",
+        "createdAt": 1789372860
+      }
+    ],
+    "cursor": 1,
+    "hasMore": false,
+    "nextOffset": null
+  }
+}

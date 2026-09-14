@@ -184,6 +184,15 @@ function ThreadRouteContent(
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const startHermesConversation = useStartHermesConversation({
     requiredEnvironmentId: selectedThread?.environmentId ?? null,
+    ...(selectedThread
+      ? {
+          sourceThreadId: selectedThread.id,
+          providerInstanceId:
+            selectedThread.runtime?.providerInstanceId ??
+            selectedThread.providerInstanceId ??
+            selectedThread.modelSelection.instanceId,
+        }
+      : {}),
   });
   const composer = useThreadComposerState({
     onRequestFreshHermesChat: startHermesConversation,
@@ -632,6 +641,7 @@ function ThreadRouteContent(
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
           selectedThreadFeed={composer.selectedThreadFeed}
           activityRun={composer.selectedThreadActivityRun}
+          activeWorkActivityText={composer.activeWorkActivityText}
           activeWorkStartedAt={composer.activeWorkStartedAt}
           activePendingApproval={requests.activePendingApproval}
           respondingApprovalId={requests.respondingApprovalId}

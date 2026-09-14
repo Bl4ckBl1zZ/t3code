@@ -1,6 +1,5 @@
 import {
   type ChatAttachment,
-  HermesProactiveEventKinds,
   type HermesGatewayCompatibility,
   type HermesGatewayApprovalRespondResult,
   type HermesGatewayClarificationRespondResult,
@@ -88,10 +87,6 @@ import {
   type HermesServeRuntimeShape,
 } from "../../hermes/HermesServeRuntime.ts";
 import {
-  HermesProactiveInbox,
-  type HermesWitnessedRun,
-} from "../../hermes/HermesProactiveInbox.ts";
-import {
   HermesSessionBindingRepository,
   type HermesMutationIntent,
   type HermesMutationIntentState,
@@ -139,8 +134,6 @@ const DEFAULT_HERMES_SETTINGS = Schema.decodeSync(HermesSettings)({});
 
 const LEASE_MINUTES = 30;
 const INTERRUPT_TERMINAL_TIMEOUT = "15 seconds";
-const HERMES_MODEL_SWITCH_POLL_ATTEMPTS = 40;
-const HERMES_MODEL_SWITCH_POLL_INTERVAL = "250 millis";
 
 /**
  * Hermes may receive T3's provider-session credential only when the negotiated
@@ -272,6 +265,31 @@ export interface HermesGatewayClientLike {
   connect(): Promise<HermesGatewayCompatibility>;
   hasCapability(capability: string): boolean;
   onEvent(listener: (event: HermesGatewayOrderedEvent) => void | Promise<void>): () => void;
+  onReconnected?(
+    listener: (event: { readonly epochChanged: boolean }) => void | Promise<void>,
+  ): () => void;
+  onReplayGap?(
+    listener: (event: {
+      readonly sessionId: string;
+      readonly reason: string;
+    }) => void | Promise<void>,
+  ): () => void;
+  reconnectSession?(
+    params: HermesGatewaySessionResumeParams,
+  ): Promise<HermesGatewaySessionResumeResult>;
+
+  setSessionModel(
+    params: { readonly session_id: string; readonly model: string },
+    options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
+  ): Promise<{
+    readonly key: "model";
+    readonly value: string;
+    readonly scope: string;
+    readonly confirm_required: boolean;
+    readonly warning?: string;
+    readonly confirm_message?: string;
+    readonly deferred?: boolean;
+  }>;
   createSession(
     params: HermesGatewaySessionCreateParams,
     options: Omit<HermesGatewayMutationOptions, "requiredCapability">,
@@ -384,13 +402,6 @@ export interface HermesServeAdapterV2Options {
    */
   readonly continuationRequests?: {
     readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void>;
-  };
-  /**
-   * Where a finished external run is announced outside its thread. Defaults to
-   * dropping it, for the same reason as `continuationRequests`.
-   */
-  readonly proactiveInbox?: {
-    readonly witness: (run: HermesWitnessedRun) => Effect.Effect<void>;
   };
 }
 
@@ -661,7 +672,7 @@ function hermesLiveToolTurnItem(
 
 interface HermesThreadState {
   readonly binding: HermesSessionBinding;
-  readonly liveSessionId: string;
+  liveSessionId: string;
   lease: HermesOwnerLease;
   titleRevision: number;
   title: string | null;
@@ -683,6 +694,9 @@ interface HermesThreadState {
    * mistaken for new external work and open an empty continuation turn.
    */
   settledRunId: string | null;
+  /** Native Serve omits run IDs; message.start identifies the next run after settlement. */
+  awaitingNativeRunStart: boolean;
+  sessionCommandActive: boolean;
   ownershipLost: boolean;
   readonly turns: Map<string, OrchestrationV2ProviderTurn>;
   readonly messages: Map<string, OrchestrationV2ConversationMessage>;
@@ -779,34 +793,6 @@ function isHermesProviderContinuationTurn(input: ProviderAdapterV2TurnInput): bo
 export const HERMES_EXTERNAL_RUN_CONTINUATION_DETAIL = "Hermes ran this session outside T3.";
 
 /**
- * How much of a run's reply travels with its notification. Long enough to say
- * what happened at a glance, short enough that a chatty job does not push a
- * wall of text through the websocket to every connected client.
- */
-const HERMES_EXTERNAL_RUN_SUMMARY_LIMIT = 400;
-
-function hermesExternalRunTitle(status: "completed" | "interrupted" | "failed"): string {
-  switch (status) {
-    case "completed":
-      return "Hermes finished a run you did not start";
-    case "interrupted":
-      return "A Hermes run you did not start was interrupted";
-    case "failed":
-      return "A Hermes run you did not start failed";
-  }
-}
-
-function hermesExternalRunBody(assistantText: string, failureMessage: string | undefined): string {
-  const summary = assistantText.trim();
-  if (summary.length > 0) {
-    return summary.length > HERMES_EXTERNAL_RUN_SUMMARY_LIMIT
-      ? `${summary.slice(0, HERMES_EXTERNAL_RUN_SUMMARY_LIMIT).trimEnd()}…`
-      : summary;
-  }
-  return failureMessage ?? "The run produced no message. Open the thread for the full transcript.";
-}
-
-/**
  * Ceiling on events held for a continuation that never attaches (a thread the
  * orchestrator refuses to wake). Dropping the tail keeps a long-running
  * external session from growing the buffer without bound; the turn still shows
@@ -824,7 +810,6 @@ const HERMES_EXTERNAL_CONTENT_EVENT_TYPES = new Set([
   "message.delta",
   "message.interim",
   "message.complete",
-  "thinking.delta",
   "reasoning.delta",
   "reasoning.available",
   "tool.generating",
@@ -1155,7 +1140,6 @@ export function makeHermesServeAdapterV2(
     },
   };
   const continuationRequests = options.continuationRequests ?? { offer: () => Effect.void };
-  const proactiveInbox = options.proactiveInbox ?? { witness: () => Effect.void };
   const makeClient =
     options.clientFactory ??
     ((input) =>
@@ -1177,7 +1161,7 @@ export function makeHermesServeAdapterV2(
     getCapabilities: () => Effect.succeed(configuredCapabilities),
     planSelectionTransition: () =>
       // Model changes are applied when the next turn starts, through Hermes'
-      // `/model` command channel.
+      // native config.set operation.
       Effect.succeed({ type: "apply_on_next_turn" } as const),
     openSession: Effect.fn("HermesServeAdapterV2.openSession")(function* (
       input: ProviderAdapterV2OpenSessionInput,
@@ -1339,6 +1323,7 @@ export function makeHermesServeAdapterV2(
         createdAt: yield* DateTime.now,
         updatedAt: yield* DateTime.now,
         lastError: null,
+        activityText: null,
       };
 
       const emit = (event: ProviderAdapterV2Event) =>
@@ -1388,6 +1373,7 @@ export function makeHermesServeAdapterV2(
             ...providerSession,
             status,
             lastError,
+            activityText: null,
             updatedAt: yield* DateTime.now,
           };
           yield* emit({
@@ -1396,6 +1382,13 @@ export function makeHermesServeAdapterV2(
             providerSession,
           });
         });
+
+      const updateActivityText = Effect.fnUntraced(function* (text: string | null) {
+        const activityText = text?.replace(/\s+/g, " ").trim().slice(0, 160) || null;
+        if ((providerSession.activityText ?? null) === activityText) return;
+        providerSession = { ...providerSession, activityText, updatedAt: yield* DateTime.now };
+        yield* emit({ type: "provider_session.updated", driver: HERMES_PROVIDER, providerSession });
+      });
 
       const updateThread = (
         state: HermesThreadState,
@@ -2700,23 +2693,7 @@ export function makeHermesServeAdapterV2(
         );
         yield* Deferred.succeed(active.completion, undefined);
         state.settledRunId = active.gatewayRunId ?? active.sourceRunId ?? state.settledRunId;
-        // The transcript now has the run, but only someone already looking at
-        // this thread would know. An external run is by definition one nobody
-        // was waiting on, so it is announced here as well.
-        if (active.external) {
-          yield* proactiveInbox.witness({
-            providerInstanceId: String(options.instanceId),
-            profileKey: state.binding.profileKey,
-            runIdentity:
-              active.gatewayRunId ?? active.sourceRunId ?? String(active.providerTurn.id),
-            eventKind: HermesProactiveEventKinds.cronRunWitnessed,
-            title: hermesExternalRunTitle(projectedStatus),
-            body: hermesExternalRunBody(active.assistantText, projectedFailureMessage),
-            threadId: String(active.input.threadId),
-            projectId: null,
-            occurredAt: DateTime.formatIso(now),
-          });
-        }
+        state.awaitingNativeRunStart = true;
         state.activeTurn = null;
       });
 
@@ -2751,6 +2728,18 @@ export function makeHermesServeAdapterV2(
         if (!isContent && !(isTerminalSignal && state.externalEvents.length > 0)) return;
         if (state.ownershipLost) return;
         if (event.runId !== undefined && event.runId === state.settledRunId) return;
+        // July Serve has no run IDs. Completion snapshots, reasoning and tool
+        // callbacks can outlive the T3 turn; only a new native start proves
+        // they belong to another run once the previous turn has settled.
+        if (
+          event.runId === undefined &&
+          state.awaitingNativeRunStart &&
+          !state.externalRunActive &&
+          state.externalEvents.length === 0 &&
+          eventType !== "message.start"
+        )
+          return;
+        state.awaitingNativeRunStart = false;
         // Trimming the tail costs transcript detail, which is why the limit is
         // safe for content. It is not safe for a request: drop that one and the
         // continuation turn opens with no prompt to answer while the gateway
@@ -2820,90 +2809,69 @@ export function makeHermesServeAdapterV2(
         );
       });
 
-      /**
-       * Applies a mid-session model switch through Hermes' `/model` command
-       * channel: the pinned gateway protocol exposes no model mutation, but
-       * the command executes gateway-side and Hermes confirms the switch with
-       * a `session.info` event. The optimistic session update keeps
-       * back-to-back turns from resubmitting the switch while that event is
-       * still in flight.
-       */
+      /** Switch the live model through the native command channel, then verify its identity. */
       const applySessionModelSwitch = Effect.fnUntraced(function* (
         state: HermesThreadState,
         turnInput: ProviderAdapterV2TurnInput,
         model: string,
       ) {
-        const operationId = `hermes:model:${turnInput.attemptId}`;
-        const prepared = yield* prepareBoundMutation(state, {
-          operationId,
-          mutationKind: "model_switch",
-          method: "prompt.submit",
-          payloadDigest: stableDigest(state.binding.storedSessionKey, model),
-        });
-        const submit = () =>
-          client.submitPrompt(
-            {
-              session_id: state.liveSessionId,
-              text: `/model ${model} --session`,
-            },
-            mutationOptions(operationId),
-          );
-        const submitted = prepared.replay
-          ? yield* gatewayEffect(submit).pipe(
-              Effect.tap(() =>
-                transitionIntent(
-                  state,
-                  operationId,
-                  prepared.intentState,
-                  prepared.intentState === "admitted" ? "confirmed" : "reconciled",
-                ),
-              ),
-            )
-          : yield* settleMutation(state, operationId, submit);
-        if (submitted.mutation_status === "completed") {
-          if (submitted.status === "error") {
-            return yield* new ProviderAdapterProtocolError({
-              driver: HERMES_PROVIDER,
-              detail: `Hermes rejected the model switch to ${model}`,
-            });
-          }
-        } else {
-          // The command was admitted as its own gateway run; wait for the
-          // session to settle so the actual prompt is not queued into the
-          // command run.
-          let settled = false;
-          for (let attempt = 0; attempt < HERMES_MODEL_SWITCH_POLL_ATTEMPTS; attempt += 1) {
-            const status = yield* gatewayEffect(() =>
-              client.readSessionStatus({
-                session_id: state.liveSessionId,
-                profile: options.settings.profileKey,
-              }),
-            );
-            if (!isActiveHermesStatus(hermesSessionRuntimeStatus(status))) {
-              settled = true;
-              break;
-            }
-            yield* Effect.sleep(HERMES_MODEL_SWITCH_POLL_INTERVAL);
-          }
-          if (!settled) {
-            return yield* new ProviderAdapterProtocolError({
-              driver: HERMES_PROVIDER,
-              detail: `Hermes did not settle the model switch to ${model}`,
-            });
-          }
-        }
-        if (providerSession.model !== model) {
-          providerSession = {
-            ...providerSession,
-            model,
-            updatedAt: yield* DateTime.now,
-          };
-          yield* emit({
-            type: "provider_session.updated",
-            driver: HERMES_PROVIDER,
-            providerSession,
+        state.sessionCommandActive = true;
+        return yield* Effect.gen(function* () {
+          const operationId = `hermes:model:${turnInput.attemptId}`;
+          const prepared = yield* prepareBoundMutation(state, {
+            operationId,
+            mutationKind: "model_switch",
+            method: "config.set",
+            payloadDigest: stableDigest(state.binding.storedSessionKey, model),
           });
-        }
+          const submit = () =>
+            client.setSessionModel(
+              {
+                session_id: state.liveSessionId,
+                model,
+              },
+              mutationOptions(operationId),
+            );
+          const result = prepared.replay
+            ? yield* gatewayEffect(submit).pipe(
+                Effect.tap(() =>
+                  transitionIntent(
+                    state,
+                    operationId,
+                    prepared.intentState,
+                    prepared.intentState === "admitted" ? "confirmed" : "reconciled",
+                  ),
+                ),
+              )
+            : yield* settleMutation(state, operationId, submit);
+          if (result.confirm_required || result.scope !== "session") {
+            return yield* new ProviderAdapterProtocolError({
+              driver: HERMES_PROVIDER,
+              detail:
+                result.confirm_message?.trim() ||
+                result.warning?.trim() ||
+                `Hermes did not confirm the session model switch to ${model}.`,
+            });
+          }
+          if (!result.deferred && providerSession.model !== result.value) {
+            providerSession = {
+              ...providerSession,
+              model: result.value,
+              updatedAt: yield* DateTime.now,
+            };
+            yield* emit({
+              type: "provider_session.updated",
+              driver: HERMES_PROVIDER,
+              providerSession,
+            });
+          }
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              state.sessionCommandActive = false;
+            }),
+          ),
+        );
       });
 
       // Consume one absorbed completion for a Hermes-side queued steering
@@ -2966,6 +2934,7 @@ export function makeHermesServeAdapterV2(
           }
           return;
         }
+        if (state.sessionCommandActive) return;
         const active = state.activeTurn;
         if (active === null) {
           const externalStatus =
@@ -2994,15 +2963,14 @@ export function makeHermesServeAdapterV2(
           active.seenEventIds.add(event.eventId);
         }
 
+        if (HERMES_EXTERNAL_CONTENT_EVENT_TYPES.has(event.frame.params.type)) {
+          yield* updateActivityText(null);
+        }
         switch (event.frame.params.type) {
-          case "thinking.delta": {
-            const text = eventText(event);
-            if (text.length > 0 && !active.reasoningHasStreamedDelta) {
-              active.reasoningText += text;
-              yield* reasoningArtifacts(state, active, false);
-            }
+          // Native thinking callbacks carry live activity, never reasoning text.
+          case "thinking.delta":
+            if (providerSession.status === "running") yield* updateActivityText(eventText(event));
             return;
-          }
           case "reasoning.delta": {
             const text = eventText(event);
             if (text.length > 0) {
@@ -3535,7 +3503,7 @@ export function makeHermesServeAdapterV2(
         titleState?: HermesGatewaySessionTitleResult,
       ) {
         const now = yield* DateTime.now;
-        const nativeThreadId = `${options.instanceId}:${options.settings.profileKey}:${binding.storedSessionKey}`;
+        const nativeThreadId = `${options.instanceId}:${binding.profileKey}:${binding.storedSessionKey}`;
         const providerThread: OrchestrationV2ProviderThread = {
           id: options.idAllocator.derive.providerThread({
             driver: HERMES_PROVIDER,
@@ -3570,6 +3538,8 @@ export function makeHermesServeAdapterV2(
           externalContinuationRequested: false,
           externalRunId: null,
           settledRunId: null,
+          awaitingNativeRunStart: false,
+          sessionCommandActive: false,
           ownershipLost: false,
           turns: new Map(),
           messages: new Map(hydrated.messages.map((message) => [String(message.id), message])),
@@ -3907,9 +3877,127 @@ export function makeHermesServeAdapterV2(
         return yield* createBinding(threadInput, binding.storedSessionKey);
       });
 
+      const recoverReplayGap = Effect.fn("HermesServeAdapterV2.recoverReplayGap")(function* (
+        state: HermesThreadState,
+      ) {
+        const status = yield* gatewayEffect(() =>
+          client.readSessionStatus({
+            session_id: state.liveSessionId,
+            profile: state.binding.profileKey,
+          }),
+        );
+        const history = yield* gatewayEffect(() =>
+          client.readSessionHistory({
+            session_id: state.liveSessionId,
+            profile: state.binding.profileKey,
+          }),
+        );
+        const hydrated = yield* historyMessages(
+          state.providerThread.appThreadId ?? input.threadId,
+          state.binding,
+          history,
+        );
+        const active = state.activeTurn;
+        const lastAssistant = hydrated.messages.findLast((message) => message.role === "assistant");
+        const lastUser = hydrated.messages.findLast((message) => message.role === "user");
+        const activeMessageId =
+          active?.assistantNativeId === null || active === null
+            ? null
+            : options.idAllocator.derive.messageFromProviderItem({
+                driver: HERMES_PROVIDER,
+                nativeItemId: active.assistantNativeId,
+              });
+        // A persisted response can replace a streamed prefix only when its identity
+        // or the prompt and nonempty prefix establish that it belongs to this run.
+        const recoveredActiveResponse =
+          active !== null &&
+          lastAssistant !== undefined &&
+          (lastAssistant.id === activeMessageId ||
+            (active.assistantText.length > 0 &&
+              lastAssistant.text.startsWith(active.assistantText) &&
+              lastUser?.text === active.input.message.text));
+        if (active !== null && recoveredActiveResponse && lastAssistant) {
+          active.assistantText = lastAssistant.text;
+          yield* messageArtifacts(state, active, false);
+        }
+        const hydratedIds = new Set(hydrated.messages.map((message) => String(message.id)));
+        const existing = new Map<string, number>();
+        for (const message of state.messages.values()) {
+          if (hydratedIds.has(String(message.id))) continue;
+          const key = `${message.role}\n${message.text}`;
+          existing.set(key, (existing.get(key) ?? 0) + 1);
+        }
+        for (const message of hydrated.messages) {
+          if (state.messages.has(String(message.id))) {
+            state.messages.set(String(message.id), message);
+            yield* emit({ type: "message.updated", driver: HERMES_PROVIDER, message });
+            continue;
+          }
+          const key = `${message.role}\n${message.text}`;
+          const count = existing.get(key) ?? 0;
+          if (count > 0) {
+            existing.set(key, count - 1);
+            continue;
+          }
+          state.messages.set(String(message.id), message);
+          yield* emit({ type: "message.updated", driver: HERMES_PROVIDER, message });
+        }
+        for (const item of hydrated.turnItems) {
+          state.importedTurnItems.set(String(item.id), item);
+          yield* emit({ type: "turn_item.updated", driver: HERMES_PROVIDER, turnItem: item });
+        }
+        const runtimeStatus = hermesSessionRuntimeStatus(status);
+        if (active !== null && !isActiveHermesStatus(runtimeStatus)) {
+          if (runtimeStatus === "interrupted") yield* finalizeTurn(state, "interrupted");
+          else if (runtimeStatus === "failed" || runtimeStatus === "error")
+            yield* finalizeTurn(state, "failed", "Hermes reported an error after reconnecting.");
+          else if (
+            recoveredActiveResponse &&
+            ["idle", "complete", "completed"].includes(runtimeStatus)
+          )
+            yield* finalizeTurn(state, "completed");
+          else
+            yield* finalizeTurn(
+              state,
+              "failed",
+              "Hermes event history was interrupted. Saved history was recovered, but this attempt's outcome could not be confirmed. Review it before retrying.",
+            );
+        }
+      });
+      const unsubscribeReconnect = client.onReconnected?.(({ epochChanged }) =>
+        runPromise(
+          Effect.gen(function* () {
+            for (const state of statesByProviderThread.values()) {
+              if (!client.reconnectSession) continue;
+              const resumed = yield* gatewayEffect(() =>
+                client.reconnectSession!({
+                  session_id: state.binding.storedSessionKey,
+                  profile: state.binding.profileKey,
+                  lazy: true,
+                }),
+              );
+              statesByLiveSession.delete(state.liveSessionId);
+              state.liveSessionId = resumed.session_id;
+              statesByLiveSession.set(state.liveSessionId, state);
+              if (epochChanged) yield* recoverReplayGap(state);
+            }
+          }),
+        ),
+      );
+      const unsubscribeReplayGap = client.onReplayGap?.(({ sessionId }) =>
+        runPromise(
+          Effect.gen(function* () {
+            const state = statesByLiveSession.get(sessionId);
+            if (state) yield* recoverReplayGap(state);
+          }),
+        ),
+      );
+
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           unsubscribe();
+          unsubscribeReconnect?.();
+          unsubscribeReplayGap?.();
           // A Hermes session outlives the T3 process that was driving it. T3
           // cancels its own pending requests when the server restarts, but the
           // gateway keeps the run parked on the decision until someone answers
@@ -4905,7 +4993,6 @@ export const makeHermesServeAdapterV2Driver = Effect.fn("makeHermesServeAdapterV
     const serverConfig = yield* ServerConfig;
     const hostPlatform = yield* HostProcessPlatform;
     const continuationRequests = yield* ProviderContinuationRequests;
-    const proactiveInbox = yield* HermesProactiveInbox;
     const configuredHermesHome = input.environment.find(
       (variable) => variable.name === "HERMES_HOME" && variable.value.trim().length > 0,
     )?.value;
@@ -4937,7 +5024,6 @@ export const makeHermesServeAdapterV2Driver = Effect.fn("makeHermesServeAdapterV
       idAllocator,
       repository,
       continuationRequests,
-      proactiveInbox,
       readAttachment: (attachment) =>
         Effect.gen(function* () {
           const attachmentPath = resolveAttachmentPath({

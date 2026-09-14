@@ -1,7 +1,5 @@
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   EnvironmentId,
-  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -20,23 +18,6 @@ import {
 const environmentId = EnvironmentId.make("environment:local");
 const hermesInstanceId = ProviderInstanceId.make("hermes-primary");
 const rootThreadId = ThreadId.make("thread:root");
-
-function project(
-  id: string,
-  workspaceRoot: string,
-  projectEnvironmentId = environmentId,
-): EnvironmentProject {
-  return {
-    environmentId: projectEnvironmentId,
-    id: ProjectId.make(id),
-    title: id,
-    workspaceRoot,
-    defaultModelSelection: null,
-    scripts: [],
-    createdAt: "2026-07-26T00:00:00.000Z",
-    updatedAt: "2026-07-26T00:00:00.000Z",
-  };
-}
 
 function serverConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
@@ -151,97 +132,69 @@ describe("mobile workspace routing", () => {
     ).toBe(false);
   });
 
-  it("routes new Work conversations through the private backing project", () => {
-    const ordinaryProject = project("project:ordinary", "/workspace/repo");
-    const backingProject = project("project:t3-work", "/private/t3-work");
-
-    expect(
-      resolveHermesConversationTarget({
-        projects: [ordinaryProject, backingProject],
-        serverConfigs: new Map([[environmentId, serverConfig()]]),
-        requiredEnvironmentId: null,
-      }),
-    ).toEqual({
-      project: backingProject,
-      modelSelection: {
-        instanceId: hermesInstanceId,
-        model: "default",
-      },
-    });
-  });
-
-  it("routes new Work conversations through the selected environment", () => {
+  it("opens Work on the selected environment without requiring a backing project or model", () => {
     const otherEnvironmentId = EnvironmentId.make("environment:other");
-    const firstBackingProject = project(
-      "project:first-t3-work",
-      "/private/t3-work",
-      otherEnvironmentId,
-    );
-    const selectedBackingProject = project("project:selected-t3-work", "/private/t3-work");
-
+    const config = serverConfig();
+    const serverConfigs = new Map([
+      [otherEnvironmentId, config],
+      [
+        environmentId,
+        { ...config, providers: config.providers.map((provider) => ({ ...provider, models: [] })) },
+      ],
+    ]);
     expect(
-      resolveHermesConversationTarget({
-        projects: [firstBackingProject, selectedBackingProject],
-        serverConfigs: new Map([
-          [otherEnvironmentId, serverConfig()],
-          [environmentId, serverConfig()],
-        ]),
-        requiredEnvironmentId: environmentId,
-      }),
-    ).toEqual({
-      project: selectedBackingProject,
-      modelSelection: {
-        instanceId: hermesInstanceId,
-        model: "default",
-      },
-    });
+      resolveHermesConversationTarget({ serverConfigs, requiredEnvironmentId: environmentId }),
+    ).toEqual({ environmentId, providerInstanceId: hermesInstanceId });
   });
 
-  it("falls back to a later ready Hermes provider when the first has no models", () => {
-    const backingProject = project("project:t3-work", "/private/t3-work");
-    const modellessInstanceId = ProviderInstanceId.make("hermes-modelless");
+  it("keeps fresh conversations on the source thread’s provider", () => {
     const config = serverConfig();
-    const configs = new Map([
+    const otherProvider = ProviderInstanceId.make("hermes-other");
+    const serverConfigs = new Map([
       [
         environmentId,
         {
           ...config,
-          providers: [
-            { ...config.providers[0], instanceId: modellessInstanceId, models: [] },
-            ...config.providers,
-          ],
-        } as ServerConfig,
+          providers: [...config.providers, { ...config.providers[0]!, instanceId: otherProvider }],
+        },
       ],
     ]);
-
     expect(
       resolveHermesConversationTarget({
-        projects: [backingProject],
-        serverConfigs: configs,
-        requiredEnvironmentId: null,
+        serverConfigs,
+        requiredEnvironmentId: environmentId,
+        requiredProviderInstanceId: otherProvider,
       }),
-    ).toEqual({
-      project: backingProject,
-      modelSelection: {
-        instanceId: hermesInstanceId,
-        model: "default",
-      },
-    });
-  });
-
-  it("does not attach Work conversations to an arbitrary project while setup is incomplete", () => {
+    ).toEqual({ environmentId, providerInstanceId: otherProvider });
     expect(
       resolveHermesConversationTarget({
-        projects: [project("project:ordinary", "/workspace/repo")],
-        serverConfigs: new Map([[environmentId, serverConfig()]]),
-        requiredEnvironmentId: null,
+        serverConfigs,
+        requiredEnvironmentId: environmentId,
+        requiredProviderInstanceId: "missing",
       }),
     ).toBeNull();
+  });
+
+  it("does not launch into a different environment when the selected one is unavailable", () => {
     expect(
       resolveHermesConversationTarget({
-        projects: [project("project:t3-work", "/private/t3-work")],
-        serverConfigs: new Map([[environmentId, serverConfig({ t3WorkDirectory: undefined })]]),
-        requiredEnvironmentId: null,
+        serverConfigs: new Map([[environmentId, serverConfig()]]),
+        requiredEnvironmentId: EnvironmentId.make("missing"),
+      }),
+    ).toBeNull();
+    const config = serverConfig();
+    expect(
+      resolveHermesConversationTarget({
+        serverConfigs: new Map([
+          [
+            environmentId,
+            {
+              ...config,
+              providers: config.providers.map((provider) => ({ ...provider, enabled: false })),
+            },
+          ],
+        ]),
+        requiredEnvironmentId: environmentId,
       }),
     ).toBeNull();
   });
