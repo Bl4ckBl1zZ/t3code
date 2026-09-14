@@ -193,6 +193,14 @@ export const hermesWorkInstallerLayer = Layer.effect(
                 message: `Hermes installation could not start the ${stage} stage. Check that bash is available.`,
               }),
           ),
+          Effect.timeoutOrElse({
+            duration: "15 minutes",
+            orElse: () =>
+              new HermesWorkError({
+                code: "unavailable",
+                message: `Hermes installation timed out during ${stage}. Check the installation prerequisites and network connection, then retry setup.`,
+              }),
+          }),
         );
         if (code.code !== 0)
           return yield* new HermesWorkError({

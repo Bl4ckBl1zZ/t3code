@@ -1,3 +1,4 @@
+import { WsHermesWorkModelAuthCancelRpc } from "../packages/contracts/src/rpc.ts";
 import { OrchestrationV2ProviderSession } from "../packages/contracts/src/orchestrationV2.ts";
 import { HermesWorkSetupState } from "../packages/contracts/src/hermesWorkSetup.ts";
 import {
@@ -1778,7 +1779,7 @@ const hermesWorkFixture = `${JSON.stringify(
       status: "approved",
       message: null,
     }),
-    modelAuthCancel: { ok: true },
+    modelAuthCancel: Schema.encodeSync(WsHermesWorkModelAuthCancelRpc.successSchema)({ ok: true }),
     modelSet: Schema.encodeSync(HermesWorkModelSetResult)({
       ok: true,
       confirmRequired: false,

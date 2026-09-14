@@ -88,16 +88,19 @@ export function HermesWorkGroups({
   async function saveDialog() {
     let command: Command;
     if (dialog === "create") {
+      const usedHandles = new Set<string>();
       command = {
         type: "create",
         roomId: randomUUID(),
         name: name.trim(),
-        members: members.map((member) => ({
-          id: randomUUID(),
-          profile: member,
-          handle: member.replace(/[^a-zA-Z0-9_-]/g, "_"),
-          name: member,
-        })),
+        members: members.map((member) => {
+          const base = member.replace(/[^a-zA-Z0-9_-]/g, "_") || "member";
+          let handle = base;
+          let suffix = 2;
+          while (usedHandles.has(handle.toLowerCase())) handle = `${base}_${suffix++}`;
+          usedHandles.add(handle.toLowerCase());
+          return { id: randomUUID(), profile: member, handle, name: member };
+        }),
       };
     } else if (dialog === "rename" && roomId) {
       command = { type: "rename", roomId, eventId: randomUUID(), name: name.trim() };

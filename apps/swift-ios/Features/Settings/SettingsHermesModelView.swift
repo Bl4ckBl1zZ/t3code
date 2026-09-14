@@ -12,6 +12,7 @@ struct SettingsHermesModelView: View {
     @State private var provider = ""
     @State private var model = ""
     @State private var busy = false
+    @State private var reloading = false
     @State private var errorMessage: String?
     @State private var authMessage: String?
     @State private var confirmExpensive = false
@@ -66,7 +67,7 @@ struct SettingsHermesModelView: View {
                     Text("Hermes must have an authenticated account for this model provider. Connecting does not send a paid test prompt.").font(.caption).foregroundStyle(.secondary)
                 }
             } else if errorMessage == nil { ProgressView("Loading model accounts…") }
-            Button("Refresh accounts") { Task { await reload() } }.disabled(busy)
+            Button("Refresh accounts") { Task { await reload() } }.disabled(busy || reloading)
         }
         .navigationTitle("Connect a model")
         .navigationBarTitleDisplayMode(.inline)
@@ -77,12 +78,16 @@ struct SettingsHermesModelView: View {
         } message: { Text(errorMessage ?? "Hermes asks you to confirm this model’s cost before selecting it.") }
     }
     private func reload() async {
+        guard !reloading else { return }
+        reloading = true
+        defer { reloading = false }
         do {
             let next = try await manager.workModelStatus(environmentID: environmentID, input: .object(scope))
+            try Task.checkCancellation()
             status = next
             if provider.isEmpty { provider = next.provider; model = next.model }
             errorMessage = nil
-        } catch { errorMessage = error.localizedDescription }
+        } catch { if !Task.isCancelled { errorMessage = error.localizedDescription } }
     }
     private func start(_ account: String) {
         busy = true; errorMessage = nil; authMessage = nil

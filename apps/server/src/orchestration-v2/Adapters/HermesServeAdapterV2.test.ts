@@ -4581,6 +4581,32 @@ describe("HermesServeAdapterV2 native gateway", () => {
     ).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("continues reconnecting other sessions when one session fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = nativeClient();
+        const runtime = yield* makeRuntime(fake);
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        yield* runtime.ensureThread({
+          threadId: ThreadId.make("another-hermes-thread"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const reconnect = fake.reconnectSession.bind(fake);
+        let attempts = 0;
+        fake.reconnectSession = async (params) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("session unavailable");
+          return reconnect(params);
+        };
+        yield* Effect.promise(() => fake.reconnect(false));
+        assert.equal(attempts, 2);
+        assert.lengthOf(fake.resumes, 1);
+        assert.lengthOf(fake.prompts, 0);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("recovers a saved response after replay truncation without duplicate messages", () =>
     Effect.scoped(
       Effect.gen(function* () {

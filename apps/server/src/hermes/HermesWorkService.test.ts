@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
-import { HermesWorkError } from "@t3tools/contracts";
+import { HermesWorkError, HermesWorkRun } from "@t3tools/contracts";
 import { HermesDashboardClient, type HermesDashboardRequest } from "./HermesDashboardClient.ts";
 import { HermesWorkRunRepository } from "./HermesWorkRunRepository.ts";
 import { HermesWorkConversationService } from "./HermesWorkConversationService.ts";
@@ -11,6 +11,7 @@ const make = Effect.fn("test.HermesWorkService.make")(function* (
   respond: (request: HermesDashboardRequest) => unknown,
   bound = false,
   createdIds: string[] = [],
+  savedRuns: ReadonlyArray<typeof HermesWorkRun.Type> = [],
 ) {
   const requests: HermesDashboardRequest[] = [];
   const service = yield* makeHermesWorkService.pipe(
@@ -40,7 +41,7 @@ const make = Effect.fn("test.HermesWorkService.make")(function* (
         }),
     }),
     Effect.provideService(HermesWorkRunRepository, {
-      list: () => Effect.succeed([]),
+      list: () => Effect.succeed(savedRuns),
       upsert: () => Effect.void,
       getResult: () => Effect.succeed(null),
       saveResult: () => Effect.void,
@@ -257,6 +258,38 @@ describe("Hermes Work management", () => {
       );
       const result = yield* service.query({ ...target, section: "memory" });
       expect(result).toMatchObject({ content: "", path: "/profiles/research/memories/MEMORY.md" });
+    }),
+  );
+  it.effect("preserves saved delivery state when native run metadata refreshes", () =>
+    Effect.gen(function* () {
+      const saved = {
+        id: "cron_job_1",
+        profile: "research",
+        title: "Hourly",
+        startedAt: 100,
+        endedAt: 120,
+        active: false,
+        jobId: "job",
+        status: "completed",
+        deliveryStatus: "delivered",
+        content: "saved output",
+        readAt: "2026-09-14T00:00:00Z",
+      };
+      const { service } = yield* make(
+        () => ({
+          runs: [{ id: "cron_job_1", ended_at: 123, is_active: false }],
+        }),
+        false,
+        [],
+        [saved],
+      );
+      const result = yield* service.query({ ...target, section: "runs", id: "job" });
+      expect(result.runs[0]).toMatchObject({
+        deliveryStatus: "delivered",
+        content: "saved output",
+        readAt: saved.readAt,
+        endedAt: 123,
+      });
     }),
   );
   it.effect("does not infer execution success from an ended timestamp", () =>

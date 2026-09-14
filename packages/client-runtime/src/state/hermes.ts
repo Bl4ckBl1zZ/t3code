@@ -10,7 +10,10 @@ import {
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
 
-import { createHermesThreadInvalidationFilter } from "./hermesInvalidation.ts";
+import {
+  batchHermesInvalidations,
+  createHermesThreadInvalidationFilter,
+} from "./hermesInvalidation.ts";
 
 export function createHermesEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -20,16 +23,13 @@ export function createHermesEnvironmentAtoms<R, E>(
     tag: ORCHESTRATION_V2_WS_METHODS.subscribeThread,
     idleTtlMs: 0,
     transform: (stream) =>
-      stream.pipe(
-        Stream.filter(createHermesThreadInvalidationFilter()),
-        Stream.debounce("200 millis"),
-      ),
+      stream.pipe(Stream.filter(createHermesThreadInvalidationFilter()), batchHermesInvalidations),
   });
   const workChanges = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
     label: "hermes-work:changes",
     tag: WS_METHODS.hermesWorkSubscribeChanges,
     idleTtlMs: 0,
-    transform: (stream) => stream.pipe(Stream.debounce("200 millis")),
+    transform: batchHermesInvalidations,
   });
   const scheduler = createAtomCommandScheduler();
   const providerConcurrency = (command: string) => ({

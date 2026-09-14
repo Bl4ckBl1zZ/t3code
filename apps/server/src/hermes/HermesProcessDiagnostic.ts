@@ -8,7 +8,7 @@ export function hermesProcessDiagnostic(output: string): string {
       "$1<redacted>",
     )
     .replace(
-      /((?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)\s*[:=]\s*)[^\r\n]+/giu,
+      /((?:authorization|api[_-]?key|[\p{L}\p{N}_-]*token|secret|password)\s*[:=]\s*)[^\r\n]+/giu,
       "$1<redacted>",
     )
     .replace(/\bBearer\s+[^\s]+/giu, "Bearer <redacted>")

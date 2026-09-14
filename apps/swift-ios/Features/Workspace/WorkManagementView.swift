@@ -300,7 +300,7 @@ struct WorkManagementView: View {
     }
     private func reload() async {
         result = nil
-        guard !environmentID.isEmpty, !connectionID.isEmpty else { return }
+        guard !environmentID.isEmpty, !connectionID.isEmpty else { loading = false; return }
         loading = true; failure = nil
         defer { if !Task.isCancelled { loading = false } }
         do {

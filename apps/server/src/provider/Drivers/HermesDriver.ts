@@ -442,9 +442,10 @@ export function hermesProviderSnapshot(input: {
         (provider.slug === modelInventory?.provider || provider.is_current === true) &&
         provider.authenticated === true,
     );
-  const modelSetupMessage = modelReady
-    ? undefined
-    : "Finish Hermes setup in Work: sign in to a model provider and select a model before starting a conversation.";
+  const modelSetupMessage =
+    modelInventory === undefined || modelReady
+      ? undefined
+      : "Finish Hermes setup in Work: sign in to a model provider and select a model before starting a conversation.";
   const isUnauthenticated =
     !input.enabled ||
     !hasGatewayToken ||

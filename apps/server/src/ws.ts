@@ -1795,19 +1795,56 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "scheduledTasks",
             "scheduled_task.id": input.id,
           }),
-        [WS_METHODS.hermesWorkSetupStart]: (input) => hermesSetup.start(input),
-        [WS_METHODS.hermesWorkSetupStatus]: (input) => hermesSetup.status(input),
-        [WS_METHODS.hermesWorkModelStatus]: (input) => hermesModelAuth.modelStatus(input),
-        [WS_METHODS.hermesWorkModelAuthStart]: (input) => hermesModelAuth.modelAuthStart(input),
-        [WS_METHODS.hermesWorkModelAuthPoll]: (input) => hermesModelAuth.modelAuthPoll(input),
-        [WS_METHODS.hermesWorkModelAuthCancel]: (input) => hermesModelAuth.modelAuthCancel(input),
-        [WS_METHODS.hermesWorkModelSet]: (input) => hermesModelAuth.modelSet(input),
+        [WS_METHODS.hermesWorkSetupStart]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesWorkSetupStart, hermesSetup.start(input), {
+            "rpc.aggregate": "hermesWork",
+          }),
+        [WS_METHODS.hermesWorkSetupStatus]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesWorkSetupStatus, hermesSetup.status(input), {
+            "rpc.aggregate": "hermesWork",
+          }),
+        [WS_METHODS.hermesWorkModelStatus]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesWorkModelStatus, hermesModelAuth.modelStatus(input), {
+            "rpc.aggregate": "hermesWork",
+          }),
+        [WS_METHODS.hermesWorkModelAuthStart]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.hermesWorkModelAuthStart,
+            hermesModelAuth.modelAuthStart(input),
+            {
+              "rpc.aggregate": "hermesWork",
+            },
+          ),
+        [WS_METHODS.hermesWorkModelAuthPoll]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.hermesWorkModelAuthPoll,
+            hermesModelAuth.modelAuthPoll(input),
+            {
+              "rpc.aggregate": "hermesWork",
+            },
+          ),
+        [WS_METHODS.hermesWorkModelAuthCancel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.hermesWorkModelAuthCancel,
+            hermesModelAuth.modelAuthCancel(input),
+            {
+              "rpc.aggregate": "hermesWork",
+            },
+          ),
+        [WS_METHODS.hermesWorkModelSet]: (input) =>
+          observeRpcEffect(WS_METHODS.hermesWorkModelSet, hermesModelAuth.modelSet(input), {
+            "rpc.aggregate": "hermesWork",
+          }),
         [WS_METHODS.hermesWorkConnections]: () =>
           observeRpcEffect(WS_METHODS.hermesWorkConnections, hermesDashboard.connections(), {
             "rpc.aggregate": "hermesWork",
           }),
         [WS_METHODS.hermesWorkSubscribeChanges]: (input) =>
-          subscribeHermesWorkChanges(hermesDashboard, input),
+          observeRpcStream(
+            WS_METHODS.hermesWorkSubscribeChanges,
+            subscribeHermesWorkChanges(hermesDashboard, input),
+            { "rpc.aggregate": "hermesWork" },
+          ),
         [WS_METHODS.hermesWorkQuery]: (input) =>
           observeRpcEffect(WS_METHODS.hermesWorkQuery, hermesWork.query(input), {
             "rpc.aggregate": "hermesWork",

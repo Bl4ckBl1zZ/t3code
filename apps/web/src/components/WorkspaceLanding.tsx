@@ -116,7 +116,11 @@ function HermesComposerLanding({
   const hermesChat = useHermesChat();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const startingRef = useRef(false);
-  const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
+  const [startState, setStartState] = useState({
+    failed: false,
+    pendingSync: false,
+    retryRequest: 0,
+  });
 
   useEffect(() => {
     // Readiness before the primary environment's config lands is "unknown",
@@ -130,6 +134,10 @@ function HermesComposerLanding({
       .start({ replace: true })
       .then((outcome) => {
         if (outcome === "started") return;
+        if (outcome === "created-pending-sync") {
+          setStartState((state) => ({ ...state, pendingSync: true }));
+          return;
+        }
         startingRef.current = false;
         setStartState((state) => ({ ...state, failed: true }));
       })
@@ -145,10 +153,21 @@ function HermesComposerLanding({
   if (!hermesChat.isReady) {
     return <HermesUnavailableHero workspaceName={workspaceName} />;
   }
+  if (startState.pendingSync) {
+    return (
+      <p className="p-6 text-center text-sm text-muted-foreground">
+        Conversation created. Open it from the sidebar once it finishes syncing.
+      </p>
+    );
+  }
   return startState.failed ? (
     <DraftStartError
       onRetry={() => {
-        setStartState((state) => ({ failed: false, retryRequest: state.retryRequest + 1 }));
+        setStartState((state) => ({
+          failed: false,
+          pendingSync: false,
+          retryRequest: state.retryRequest + 1,
+        }));
       }}
     />
   ) : null;

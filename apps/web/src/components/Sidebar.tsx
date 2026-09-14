@@ -1795,7 +1795,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       data-thread-item
       className={cn(
         "list-none py-0.5 [content-visibility:auto]",
-        isChat ? "[contain-intrinsic-size:auto_66px]" : "[contain-intrinsic-size:auto_96px]",
+        isChat || isWork
+          ? "[contain-intrinsic-size:auto_66px]"
+          : "[contain-intrinsic-size:auto_96px]",
         props.sortable?.isDragging && "relative z-20 opacity-80",
       )}
     >

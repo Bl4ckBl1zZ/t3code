@@ -137,6 +137,10 @@ export function AddProviderInstanceDialog({
     environmentId: EnvironmentId;
     id: string;
   } | null>(null);
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) setSetupInstance(null);
+    onOpenChange(nextOpen);
+  };
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
 
@@ -260,7 +264,7 @@ export function AddProviderInstanceDialog({
         title: "Provider instance added",
         description: `${driverOption.label} instance '${instanceId}' was added.`,
       });
-      onOpenChange(false);
+      handleOpenChange(false);
     } catch (error) {
       toastManager.add({
         type: "error",
@@ -272,7 +276,7 @@ export function AddProviderInstanceDialog({
 
   if (setupInstance) {
     return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogPopup className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Set up Hermes</DialogTitle>
@@ -286,7 +290,7 @@ export function AddProviderInstanceDialog({
             />
           </div>
           <DialogFooter>
-            <Button size="sm" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button size="sm" variant="outline" onClick={() => handleOpenChange(false)}>
               Close
             </Button>
           </DialogFooter>
@@ -299,7 +303,7 @@ export function AddProviderInstanceDialog({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!saving) onOpenChange(nextOpen);
+        if (!saving) handleOpenChange(nextOpen);
       }}
     >
       <DialogPopup className="max-w-xl overflow-hidden">
@@ -497,7 +501,7 @@ export function AddProviderInstanceDialog({
               disabled={saving}
               onClick={() => {
                 if (wizardStep === 0) {
-                  onOpenChange(false);
+                  handleOpenChange(false);
                   return;
                 }
                 setWizardStep((step) => Math.max(0, step - 1));

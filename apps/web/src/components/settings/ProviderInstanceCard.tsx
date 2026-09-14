@@ -952,8 +952,16 @@ export function ProviderInstanceCard({
         </div>
       ) : null}
       <Collapsible
-        open={driverKind === "hermes" ? showAdvancedHermes : mode === "editor" || isExpanded}
-        onOpenChange={driverKind === "hermes" ? setShowAdvancedHermes : onExpandedChange}
+        open={
+          driverKind === "hermes" && environmentId !== undefined
+            ? showAdvancedHermes
+            : mode === "editor" || isExpanded
+        }
+        onOpenChange={
+          driverKind === "hermes" && environmentId !== undefined
+            ? setShowAdvancedHermes
+            : onExpandedChange
+        }
       >
         <CollapsibleContent>
           <div className="space-y-5 px-3 pb-4 pt-2 sm:px-4">

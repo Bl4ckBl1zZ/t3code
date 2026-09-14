@@ -1,3 +1,4 @@
+import * as Stream from "effect/Stream";
 import {
   orchestrationV2TurnItemStatusIsTerminal,
   type OrchestrationV2ThreadStreamItem,
@@ -23,6 +24,8 @@ export function createHermesThreadInvalidationFilter() {
         ]);
         break;
       case "provider-session.detached":
+        signatures.delete(`session:${event.payload.providerSessionId}`);
+        return true;
       case "thread.provider-switched":
         return true;
       case "provider-thread.updated":
@@ -40,12 +43,12 @@ export function createHermesThreadInvalidationFilter() {
         signature = event.payload.status;
         break;
       case "turn-item.updated":
-        if (
-          event.payload.type !== "dynamic_tool" ||
-          !orchestrationV2TurnItemStatusIsTerminal(event.payload.status)
-        )
-          return false;
+        if (event.payload.type !== "dynamic_tool") return false;
         identity = `tool:${event.payload.id}`;
+        if (!orchestrationV2TurnItemStatusIsTerminal(event.payload.status)) {
+          signatures.delete(identity);
+          return false;
+        }
         signature = event.payload.status;
         break;
       default:
@@ -56,4 +59,12 @@ export function createHermesThreadInvalidationFilter() {
     if (signatures.size > 256) signatures.delete(signatures.keys().next().value!);
     return true;
   };
+}
+
+/** Flush bounded batches even when native activity never becomes quiet. */
+export function batchHermesInvalidations<A, E, R>(stream: Stream.Stream<A, E, R>) {
+  return stream.pipe(
+    Stream.groupedWithin(256, "200 millis"),
+    Stream.flatMap((events) => Stream.fromIterable(events.slice(-1))),
+  );
 }

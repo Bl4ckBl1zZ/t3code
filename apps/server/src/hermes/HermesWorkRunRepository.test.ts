@@ -62,7 +62,10 @@ test("Hermes run snapshots", (it) => {
         assert.strictEqual(yield* repository.getResult(scope), '{"messages": ["result"]}');
         yield* repository.saveResult({ ...scope, content: '{"messages": ["updated"]}' });
         const sql = yield* SqlClient.SqlClient;
-        const rows = yield* sql<{ read_at: string | null }>`SELECT read_at FROM hermes_work_runs`;
+        const rows = yield* sql<{
+          read_at: string | null;
+        }>`SELECT read_at FROM hermes_work_runs WHERE session_id = ${scope.id}`;
+        assert.strictEqual(rows.length, 1);
         assert.strictEqual(rows[0]?.read_at, null);
       }),
   );

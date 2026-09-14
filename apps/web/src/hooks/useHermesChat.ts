@@ -14,7 +14,7 @@ import { useHermesConnection } from "./useHermesConnection";
 import { useHermesProfile } from "./useHermesProfile";
 import { useWorkEnvironment } from "./useWorkEnvironment";
 
-export type StartHermesChatOutcome = "started" | "unavailable" | "failed";
+export type StartHermesChatOutcome = "started" | "created-pending-sync" | "unavailable" | "failed";
 export interface HermesChat {
   readonly isResolved: boolean;
   readonly isReady: boolean;
@@ -67,7 +67,7 @@ export function useHermesChat(): HermesChat {
           description:
             "Waiting for it to sync. Open the conversation from the sidebar once it appears.",
         });
-        return "failed";
+        return "created-pending-sync";
       }
       await navigate({
         to: "/$environmentId/$threadId",

@@ -750,7 +750,14 @@ export const HermesAcpSettings = makeProviderSettingsSchema(
 );
 export type HermesAcpSettings = typeof HermesAcpSettings.Type;
 
-const SENSITIVE_QUERY_KEYS = new Set(["access_token", "apikey", "api_key", "password", "token"]);
+const SENSITIVE_QUERY_KEYS = new Set([
+  "access_token",
+  "apikey",
+  "api_key",
+  "password",
+  "token",
+  "session_secret",
+]);
 const hasSensitiveQueryKey = (url: URL): boolean =>
   [...url.searchParams.keys()].some((key) => SENSITIVE_QUERY_KEYS.has(key.toLowerCase()));
 
@@ -1007,6 +1014,7 @@ const HermesGatewayEndpoint = TrimmedString.check(
         !endpoint.username &&
         !endpoint.password &&
         !endpoint.hash &&
+        (loopback || !endpoint.search) &&
         !hasToken) ||
       "Hermes endpoint must be credential-free ws:// on loopback or wss://; supply authentication through sensitive provider environment."
     );

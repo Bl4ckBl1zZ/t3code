@@ -333,7 +333,7 @@ export const makeHermesWorkService = Effect.gen(function* () {
             active: flag(run.is_active),
             jobId: input.id,
             status: nullableText(run.end_reason),
-            deliveryStatus: null,
+            deliveryStatus: previous?.deliveryStatus ?? null,
             content: previous?.content ?? nullableText(run.preview),
             readAt: previous?.readAt ?? null,
           });

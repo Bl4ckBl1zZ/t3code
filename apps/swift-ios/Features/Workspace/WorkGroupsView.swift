@@ -89,6 +89,7 @@ struct WorkGroupsView: View {
         do {
             var input = scope; input["roomId"] = .string(target.id); input["cursor"] = .number(append ? cursor : 0)
             let data = try await manager.workGroupsQuery(environmentID: environmentID, input: .object(input))
+            if let updated = data.groups.first(where: { $0.id == target.id }) { room = updated }
             if append { let seen = Set(events.map(\.id)); events += data.events.filter { !seen.contains($0.id) } } else { events = data.events }
             cursor = data.cursor; hasMore = data.hasMore; failure = nil
         } catch { failure = error.localizedDescription }
@@ -100,6 +101,7 @@ struct WorkGroupsView: View {
             do {
                 var input = scope; input["operationId"] = .string(UUID().uuidString); input["command"] = .object(command)
                 _ = try await manager.workGroupsMutate(environmentID: environmentID, input: .object(input))
+                if command["type"]?.stringValue == "create" { creating = false; name = ""; selected = [] }
                 if clearMessage { message = "" }
                 if command["type"]?.stringValue == "remove" { room = nil }
                 await load()

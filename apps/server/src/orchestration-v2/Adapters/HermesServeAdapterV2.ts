@@ -3969,17 +3969,25 @@ export function makeHermesServeAdapterV2(
           Effect.gen(function* () {
             for (const state of statesByProviderThread.values()) {
               if (!client.reconnectSession) continue;
-              const resumed = yield* gatewayEffect(() =>
-                client.reconnectSession!({
-                  session_id: state.binding.storedSessionKey,
-                  profile: state.binding.profileKey,
-                  lazy: true,
-                }),
+              yield* Effect.gen(function* () {
+                const resumed = yield* gatewayEffect(() =>
+                  client.reconnectSession!({
+                    session_id: state.binding.storedSessionKey,
+                    profile: state.binding.profileKey,
+                    lazy: true,
+                  }),
+                );
+                statesByLiveSession.delete(state.liveSessionId);
+                state.liveSessionId = resumed.session_id;
+                statesByLiveSession.set(state.liveSessionId, state);
+                if (epochChanged) yield* recoverReplayGap(state);
+              }).pipe(
+                Effect.catchCause(() =>
+                  Effect.logWarning("Hermes reconnect recovery failed", {
+                    providerThreadId: state.providerThread.id,
+                  }),
+                ),
               );
-              statesByLiveSession.delete(state.liveSessionId);
-              state.liveSessionId = resumed.session_id;
-              statesByLiveSession.set(state.liveSessionId, state);
-              if (epochChanged) yield* recoverReplayGap(state);
             }
           }),
         ),
@@ -3989,7 +3997,11 @@ export function makeHermesServeAdapterV2(
           Effect.gen(function* () {
             const state = statesByLiveSession.get(sessionId);
             if (state) yield* recoverReplayGap(state);
-          }),
+          }).pipe(
+            Effect.catchCause(() =>
+              Effect.logWarning("Hermes replay-gap recovery failed", { sessionId }),
+            ),
+          ),
         ),
       );
 

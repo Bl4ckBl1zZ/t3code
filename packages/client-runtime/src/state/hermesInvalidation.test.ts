@@ -1,6 +1,11 @@
+import { Effect, Fiber, Stream } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "@effect/vitest";
 import type { OrchestrationV2ThreadStreamItem } from "@t3tools/contracts";
-import { createHermesThreadInvalidationFilter } from "./hermesInvalidation.ts";
+import {
+  batchHermesInvalidations,
+  createHermesThreadInvalidationFilter,
+} from "./hermesInvalidation.ts";
 
 function event(type: string, payload: Record<string, unknown>) {
   return { kind: "event", event: { type, payload } } as OrchestrationV2ThreadStreamItem;
@@ -67,4 +72,39 @@ describe("Hermes thread detail invalidation", () => {
     );
     expect(invalidate({ kind: "synchronized" })).toBe(false);
   });
+});
+
+it.effect("flushes during continuous events and retains the final invalidation", () =>
+  Effect.gen(function* () {
+    const seen: number[] = [];
+    const fiber = yield* Stream.range(1, 10).pipe(
+      Stream.tap(() => Effect.sleep("50 millis")),
+      batchHermesInvalidations,
+      Stream.runForEach((value) =>
+        Effect.sync(() => {
+          seen.push(value);
+        }),
+      ),
+      Effect.forkChild,
+    );
+    yield* TestClock.adjust("250 millis");
+    expect(seen.length).toBeGreaterThan(0);
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(fiber);
+    expect(seen.at(-1)).toBe(10);
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it("refreshes reattached sessions and tools that become terminal again", () => {
+  const invalidate = createHermesThreadInvalidationFilter();
+  const session = { id: "session", providerInstanceId: "hermes", status: "ready", cwd: "/work" };
+  expect(invalidate(event("provider-session.attached", session))).toBe(true);
+  expect(invalidate(event("provider-session.detached", { providerSessionId: "session" }))).toBe(
+    true,
+  );
+  expect(invalidate(event("provider-session.attached", session))).toBe(true);
+  const tool = { id: "tool", type: "dynamic_tool", status: "completed" };
+  expect(invalidate(event("turn-item.updated", tool))).toBe(true);
+  expect(invalidate(event("turn-item.updated", { ...tool, status: "running" }))).toBe(false);
+  expect(invalidate(event("turn-item.updated", tool))).toBe(true);
 });
