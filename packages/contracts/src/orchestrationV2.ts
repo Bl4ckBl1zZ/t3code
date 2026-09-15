@@ -1655,6 +1655,58 @@ export function orchestrationV2ActiveAgentCount(
   ).length;
 }
 
+/**
+ * Providers whose runtime can end a thread's background work after the turn
+ * that started it has settled. Codex terminates the retained background
+ * terminals; Claude closes the CLI process that owns the tasks. Other
+ * providers only stop work inside a running turn.
+ */
+const SETTLED_BACKGROUND_WORK_STOP_DRIVERS: ReadonlySet<string> = new Set(["codex", "claudeAgent"]);
+
+/**
+ * The run a Stop targets once a thread's turn has settled but its background
+ * work — live background commands or delegated agents — keeps running. Stop
+ * interrupts that settled run, which asks the provider to end the work.
+ *
+ * Null while a run is still in flight (Stop targets that run instead), when
+ * nothing runs on, or when the provider cannot stop work after a turn settles.
+ */
+export function orchestrationV2BackgroundWorkStopRunId(projection: {
+  readonly runs: ReadonlyArray<{
+    readonly id: RunId;
+    readonly status: OrchestrationV2RunStatus;
+    readonly providerThreadId: ProviderThreadId | null;
+  }>;
+  readonly providerThreads: ReadonlyArray<{
+    readonly id: ProviderThreadId;
+    readonly driver: ProviderDriverKind;
+  }>;
+  readonly turnItems: Parameters<typeof orchestrationV2BackgroundProcessCount>[0];
+  readonly subagents: Parameters<typeof orchestrationV2ActiveAgentCount>[0];
+}): RunId | null {
+  // Queued runs have not started, so the work belongs to the last one that did.
+  const latestRun = projection.runs.findLast((run) => run.status !== "queued");
+  if (
+    latestRun === undefined ||
+    latestRun.status === "preparing" ||
+    latestRun.status === "starting" ||
+    latestRun.status === "running" ||
+    latestRun.status === "rolled_back"
+  ) {
+    return null;
+  }
+  const driver = projection.providerThreads.find(
+    (providerThread) => providerThread.id === latestRun.providerThreadId,
+  )?.driver;
+  if (driver === undefined || !SETTLED_BACKGROUND_WORK_STOP_DRIVERS.has(driver)) {
+    return null;
+  }
+  const backgroundWork =
+    orchestrationV2BackgroundProcessCount(projection.turnItems) +
+    orchestrationV2ActiveAgentCount(projection.subagents);
+  return backgroundWork > 0 ? latestRun.id : null;
+}
+
 export const OrchestrationV2ProjectedTurnItem = Schema.Struct({
   position: NonNegativeInt,
   visibility: Schema.Literals(["local", "inherited", "synthetic"]),

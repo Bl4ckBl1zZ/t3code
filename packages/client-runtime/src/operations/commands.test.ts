@@ -9,9 +9,12 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   PlanId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   RunId,
   ThreadId,
+  TurnItemId,
   WS_METHODS,
   type OrchestrationV2Command,
   type OrchestrationV2ThreadLaunchInput,
@@ -40,6 +43,7 @@ import {
   createProject,
   updateProject,
   forkThreadFromRun,
+  interruptThreadTurn,
   mergeThreadBack,
   cancelQueuedRun,
   editQueuedRun,
@@ -449,6 +453,103 @@ describe("V2 environment commands", () => {
       }
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
+
+  for (const [label, status, driver, stops] of [
+    ["completed", "completed", "codex", true],
+    ["waiting", "waiting", "claudeAgent", true],
+    ["interrupted", "interrupted", "codex", true],
+    ["rolled back", "rolled_back", "codex", false],
+    ["unsupported-provider", "completed", "grok", false],
+  ] as const) {
+    it.effect(`Stop on a settled ${label} run with background work: ${stops}`, () =>
+      Effect.gen(function* () {
+        const settledRunId = RunId.make("run-settled");
+        const providerThreadId = ProviderThreadId.make("provider-thread-settled");
+        const projection: OrchestrationV2ThreadProjection = {
+          ...v2Projection,
+          runs: [
+            {
+              id: settledRunId,
+              threadId: v2ThreadId,
+              ordinal: 1,
+              providerInstanceId: v2Projection.thread.providerInstanceId,
+              modelSelection: v2Projection.thread.modelSelection,
+              providerThreadId,
+              userMessageId: MessageId.make("message-settled"),
+              rootNodeId: null,
+              activeAttemptId: null,
+              status,
+              requestedAt: v2Now,
+              startedAt: v2Now,
+              completedAt: null,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          ],
+          providerThreads: [
+            {
+              id: providerThreadId,
+              driver: ProviderDriverKind.make(driver),
+              providerInstanceId: v2Projection.thread.providerInstanceId,
+              providerSessionId: null,
+              appThreadId: v2ThreadId,
+              ownerNodeId: null,
+              nativeThreadRef: null,
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: 1,
+              lastRunOrdinal: 1,
+              handoffIds: [],
+              forkedFrom: null,
+              createdAt: v2Now,
+              updatedAt: v2Now,
+            },
+          ],
+          turnItems: [
+            {
+              id: TurnItemId.make("background-command"),
+              threadId: v2ThreadId,
+              runId: settledRunId,
+              nodeId: null,
+              providerThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              status: "running",
+              title: null,
+              startedAt: v2Now,
+              completedAt: null,
+              updatedAt: v2Now,
+              type: "command_execution",
+              input: "vp run dev",
+              background: true,
+            },
+          ],
+        };
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
+
+        const result = yield* interruptThreadTurn({ threadId: v2ThreadId }).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        );
+
+        expect(result).toEqual({ sequence: stops ? 1 : 0 });
+        expect(commands).toEqual(
+          stops
+            ? [
+                {
+                  type: "run.interrupt",
+                  commandId: expect.any(String),
+                  threadId: v2ThreadId,
+                  runId: settledRunId,
+                },
+              ]
+            : [],
+        );
+      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    );
+  }
 
   it.effect(
     "dispatches V2-native relationship and queue commands without compatibility shaping",

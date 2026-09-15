@@ -2034,6 +2034,63 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
           });
 
+        const terminateBackgroundTerminal = Effect.fn("CodexAdapterV2.terminateBackgroundTerminal")(
+          function* (nativeThreadId: string, processId: string) {
+            const response = yield* client.raw.request("thread/backgroundTerminals/terminate", {
+              threadId: nativeThreadId,
+              processId,
+            });
+            const result = yield* decodeCodexBackgroundTerminalTerminateResponse(response);
+            if (result.terminated) return;
+            let cursor: string | null = null;
+            while (true) {
+              const response: unknown = yield* client.raw.request(
+                "thread/backgroundTerminals/list",
+                {
+                  threadId: nativeThreadId,
+                  ...(cursor === null ? {} : { cursor }),
+                },
+              );
+              const page: CodexBackgroundTerminalsListPage =
+                yield* decodeCodexBackgroundTerminalsListResponse(response);
+              if (page.data.some((terminal) => terminal.processId === processId)) {
+                return yield* toProtocolError(
+                  `Codex background terminal ${processId} remained active after termination.`,
+                );
+              }
+              if (page.nextCursor === null) return;
+              cursor = page.nextCursor;
+            }
+          },
+          Effect.timeout("10 seconds"),
+        );
+
+        const turnHasRetainedBackgroundWork = (nativeTurnId: string) =>
+          Effect.map(Ref.get(runningCommandItemsByTurn), (current) => {
+            const commands = current.get(nativeTurnId);
+            return commands !== undefined && commands.size > 0;
+          });
+
+        /** Drops a settled turn's retained context once its background commands are gone. */
+        const releaseSettledTurnIfIdle = (nativeTurnId: string) =>
+          Effect.gen(function* () {
+            if (yield* turnHasRetainedBackgroundWork(nativeTurnId)) {
+              return;
+            }
+            const forget = <V>(current: Map<string, V>) => {
+              if (!current.has(nativeTurnId)) {
+                return current;
+              }
+              const updated = new Map(current);
+              updated.delete(nativeTurnId);
+              return updated;
+            };
+            yield* Ref.update(settledTurns, forget);
+            yield* Ref.update(offeredContinuationItemsByTurn, forget);
+            yield* Ref.update(completedFinalAnswerTextsByTurn, forget);
+            yield* Ref.update(finalAnswerItemIdsByTurn, forget);
+          });
+
         /**
          * The turn has settled and these commands are still running, so relabel
          * their rows as background work now rather than at completion.
@@ -4129,7 +4186,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 turnItem: artifacts.turnItem,
               });
               if (settled) {
-                if (context.subagent === null && continuationRequests !== undefined) {
+                if (
+                  context.subagent === null &&
+                  continuationRequests !== undefined &&
+                  !(yield* Ref.get(interruptingNativeTurns)).has(payload.turnId)
+                ) {
                   const alreadyOffered = yield* Ref.modify(
                     offeredContinuationItemsByTurn,
                     (current) => {
@@ -4154,35 +4215,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   }
                 }
                 if (turnDrained) {
-                  yield* Ref.update(settledTurns, (current) => {
-                    const updated = new Map(current);
-                    updated.delete(payload.turnId);
-                    return updated;
-                  });
-                  yield* Ref.update(offeredContinuationItemsByTurn, (current) => {
-                    if (!current.has(payload.turnId)) {
-                      return current;
-                    }
-                    const updated = new Map(current);
-                    updated.delete(payload.turnId);
-                    return updated;
-                  });
-                  yield* Ref.update(completedFinalAnswerTextsByTurn, (current) => {
-                    if (!current.has(payload.turnId)) {
-                      return current;
-                    }
-                    const updated = new Map(current);
-                    updated.delete(payload.turnId);
-                    return updated;
-                  });
-                  yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
-                    if (!current.has(payload.turnId)) {
-                      return current;
-                    }
-                    const updated = new Map(current);
-                    updated.delete(payload.turnId);
-                    return updated;
-                  });
+                  yield* releaseSettledTurnIfIdle(payload.turnId);
                 }
               }
               return;
@@ -5257,6 +5290,27 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
             return false;
           }),
+          hasPendingBackgroundWorkForThread: (providerThread) =>
+            Effect.gen(function* () {
+              const contexts = [
+                ...(yield* Ref.get(activeTurns)).values(),
+                ...(yield* Ref.get(settledTurns)).values(),
+              ];
+              const roots = contexts.filter(
+                (context) => context.providerThread.id === providerThread.id,
+              );
+              for (const context of contexts) {
+                if (!roots.some((root) => context === root || isDescendantCodexTurn(context, root)))
+                  continue;
+                if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
+                if (
+                  context.subagent !== null &&
+                  (yield* Ref.get(activeTurns)).has(context.nativeTurnId)
+                )
+                  return true;
+              }
+              return false;
+            }),
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(
               Effect.andThen(
@@ -5425,10 +5479,24 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             ),
           interruptTurn: (turnInput) =>
             Effect.gen(function* () {
-              const activeTurnContexts = Array.from((yield* Ref.get(activeTurns)).values());
-              const activeTurn = activeTurnContexts.find(
-                (candidate) => candidate.providerTurnId === turnInput.providerTurnId,
-              );
+              const [activeTurnContexts, settledTurnContexts] =
+                yield* turnTerminalizationPermit.withPermits(1)(
+                  Effect.gen(function* () {
+                    return [
+                      Array.from((yield* Ref.get(activeTurns)).values()),
+                      Array.from((yield* Ref.get(settledTurns)).values()),
+                    ] as const;
+                  }),
+                );
+              const activeTurn =
+                activeTurnContexts.find(
+                  (candidate) => candidate.providerTurnId === turnInput.providerTurnId,
+                ) ??
+                (turnInput.requestRuntimeRestart === true
+                  ? settledTurnContexts.find(
+                      (candidate) => candidate.providerThread.id === turnInput.providerThread.id,
+                    )
+                  : undefined);
               if (activeTurn === undefined) {
                 return yield* toProtocolError(
                   `Provider turn ${turnInput.providerTurnId} is not active and cannot be interrupted.`,
@@ -5439,6 +5507,13 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 ...activeTurnContexts.filter(
                   (candidate) =>
                     candidate !== activeTurn && isDescendantCodexTurn(candidate, activeTurn),
+                ),
+                ...settledTurnContexts.filter(
+                  (candidate) =>
+                    candidate !== activeTurn &&
+                    ((turnInput.requestRuntimeRestart === true &&
+                      candidate.providerThread.id === turnInput.providerThread.id) ||
+                      isDescendantCodexTurn(candidate, activeTurn)),
                 ),
               ];
               const interruptTargets: Array<{
@@ -5487,6 +5562,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 yield* Ref.update(runningCommandItemsByTurn, (current) => {
                   const updated = new Map(current);
                   for (const target of interruptTargets) {
+                    if (settledTurnContexts.includes(target.context)) continue;
                     updated.delete(target.context.nativeTurnId);
                   }
                   return updated;
@@ -5660,31 +5736,6 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     }
                     return trackedTerminals;
                   });
-                const isBackgroundTerminalStillRunning = (
-                  nativeThreadId: string,
-                  processId: string,
-                ) =>
-                  Effect.gen(function* () {
-                    let cursor: string | null = null;
-                    while (true) {
-                      const response: unknown = yield* client.raw.request(
-                        "thread/backgroundTerminals/list",
-                        {
-                          threadId: nativeThreadId,
-                          ...(cursor === null ? {} : { cursor }),
-                        },
-                      );
-                      const page: CodexBackgroundTerminalsListPage =
-                        yield* decodeCodexBackgroundTerminalsListResponse(response);
-                      if (page.data.some((terminal) => terminal.processId === processId)) {
-                        return true;
-                      }
-                      if (page.nextCursor === null) {
-                        return false;
-                      }
-                      cursor = page.nextCursor;
-                    }
-                  });
                 const terminateTrackedTerminals = (targets: typeof interruptTargets) =>
                   Effect.gen(function* () {
                     const trackedTerminals = yield* collectTrackedTerminals(targets);
@@ -5700,23 +5751,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                       ([key, { nativeThreadId, processId }]) =>
                         Effect.gen(function* () {
                           attemptedTerminalKeys.add(key);
-                          const response = yield* client.raw.request(
-                            "thread/backgroundTerminals/terminate",
-                            {
-                              threadId: nativeThreadId,
-                              processId,
-                            },
-                          );
-                          const result =
-                            yield* decodeCodexBackgroundTerminalTerminateResponse(response);
-                          if (
-                            !result.terminated &&
-                            (yield* isBackgroundTerminalStillRunning(nativeThreadId, processId))
-                          ) {
-                            return yield* toProtocolError(
-                              `Codex background terminal ${processId} remained active after termination.`,
-                            );
-                          }
+                          yield* terminateBackgroundTerminal(nativeThreadId, processId);
                           containedTerminalKeys.add(key);
                         }).pipe(
                           Effect.as({ success: true as const }),
@@ -5761,6 +5796,29 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 if (failedTermination !== undefined && !failedTermination.success) {
                   return yield* Effect.fail(failedTermination.error);
                 }
+                // Stop the retained items without rewriting the completed root turn.
+                yield* turnTerminalizationPermit.withPermits(1)(
+                  Effect.gen(function* () {
+                    const completedAt = yield* DateTime.now;
+                    for (const target of interruptTargets) {
+                      const context = target.context;
+                      if ((yield* Ref.get(settledTurns)).get(context.nativeTurnId) !== context)
+                        continue;
+                      yield* terminalizeRunningCommandItems(
+                        context,
+                        context.nativeTurnId,
+                        "interrupted",
+                        completedAt,
+                      );
+                      yield* Ref.update(runningCommandItemsByTurn, (current) => {
+                        const updated = new Map(current);
+                        updated.delete(context.nativeTurnId);
+                        return updated;
+                      });
+                      yield* releaseSettledTurnIfIdle(context.nativeTurnId);
+                    }
+                  }),
+                );
               }).pipe(
                 Effect.onError(() => finalizeRemainingInterruptLineage),
                 Effect.ensuring(cleanupInterruptState),

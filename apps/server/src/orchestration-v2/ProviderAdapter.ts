@@ -523,6 +523,15 @@ export interface ProviderAdapterV2SessionRuntime {
    * here so the session manager defers idle release while it is pending.
    */
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
+  /**
+   * Whether this provider thread still owns live background work after its
+   * turn settled. Stop on a settled turn interrupts it (with
+   * `requestRuntimeRestart`) only while this reports true; adapters that omit
+   * it cannot stop work outside a running turn.
+   */
+  readonly hasPendingBackgroundWorkForThread?: (
+    providerThread: OrchestrationV2ProviderThread,
+  ) => Effect.Effect<boolean>;
   readonly ensureThread: (
     input: ProviderAdapterV2EnsureThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
