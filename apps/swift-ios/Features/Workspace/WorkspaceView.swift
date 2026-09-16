@@ -162,8 +162,16 @@ public struct WorkspaceView: View {
                 model: model,
                 submit: submitNewTask,
                 onCreated: { thread in
-                    openThread(thread.id)
+                    // Dismiss the creation sheet first. Opening the detail in
+                    // the same update can race the sheet teardown and briefly
+                    // render against a stale projection, producing the
+                    // misleading "selected thread is no longer available"
+                    // alert even though the optimistic thread was created.
                     showingNewTask = false
+                    Task { @MainActor in
+                        await Task.yield()
+                        openThread(thread.id)
+                    }
                 },
                 onCreateProject: openProjectCreation,
                 initialProjectID: newTaskInitialProjectID,
