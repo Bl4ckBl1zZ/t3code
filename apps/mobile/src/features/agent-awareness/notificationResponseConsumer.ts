@@ -14,6 +14,16 @@ export class NotificationNavigationError extends Schema.TaggedErrorClass<Notific
   }
 }
 
+function notificationIdentifier(response: unknown): string | undefined {
+  if (typeof response !== "object" || response === null) return undefined;
+  const notification = (response as { notification?: unknown }).notification;
+  if (typeof notification !== "object" || notification === null) return undefined;
+  const request = (notification as { request?: unknown }).request;
+  if (typeof request !== "object" || request === null) return undefined;
+  const identifier = (request as { identifier?: unknown }).identifier;
+  return typeof identifier === "string" ? identifier : undefined;
+}
+
 export async function consumeLastAgentNotificationResponse(input: {
   readonly getLastResponse: () => Promise<NotificationResponse | null>;
   readonly clearLastResponse: () => Promise<void>;
@@ -37,7 +47,7 @@ export async function consumeLastAgentNotificationResponse(input: {
     console.error(
       new NotificationNavigationError({
         operation: "route",
-        notificationId: response.notification.request.identifier,
+        notificationId: notificationIdentifier(response),
         cause,
       }),
     );
@@ -50,7 +60,7 @@ export async function consumeLastAgentNotificationResponse(input: {
     console.error(
       new NotificationNavigationError({
         operation: "clear",
-        notificationId: response.notification.request.identifier,
+        notificationId: notificationIdentifier(response),
         cause,
       }),
     );
