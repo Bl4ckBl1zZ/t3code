@@ -18,7 +18,7 @@ import { CursorDriver } from "./CursorDriver.ts";
 import { CursorAgentSdkRunner } from "../../orchestration-v2/Adapters/CursorAgentSdk.ts";
 import { layer as idAllocatorLayer } from "../../orchestration-v2/IdAllocator.ts";
 import { ProviderAdapterV2RuntimePolicy } from "../../orchestration-v2/ProviderAdapter.ts";
-import { Cursor } from "@cursor/sdk";
+import { Cursor } from "../cursorSdk.ts";
 
 const testLayer = ServerSecretStore.layer.pipe(
   Layer.provideMerge(

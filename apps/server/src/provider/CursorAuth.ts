@@ -16,7 +16,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { Cursor, InMemoryCredentialStore } from "@cursor/sdk";
+import { Cursor, InMemoryCredentialStore } from "./cursorSdk.ts";
 import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
 
 const AUTH_TIMEOUT_MS = 300_000;

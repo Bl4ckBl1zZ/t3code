@@ -1,13 +1,11 @@
 import "../../provider/cursorShellSpawnGuard.ts";
-import {
-  Agent,
-  createAgentPlatform,
-  type AgentMessage,
-  type AgentOptions,
-  type InteractionUpdate,
-  type RunResult,
-  type SDKUserMessage,
-  type SendOptions,
+import type {
+  AgentMessage,
+  AgentOptions,
+  InteractionUpdate,
+  RunResult,
+  SDKUserMessage,
+  SendOptions,
 } from "@cursor/sdk";
 import {
   type OrchestrationV2ProviderSession,
@@ -19,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+import { Agent, createAgentPlatform } from "../../provider/cursorSdk.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 

@@ -1,5 +1,6 @@
 import "../provider/cursorShellSpawnGuard.ts";
-import { Agent, type AgentOptions, type RunResult } from "@cursor/sdk";
+import type { AgentOptions, RunResult } from "@cursor/sdk";
+import { Agent } from "../provider/cursorSdk.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
