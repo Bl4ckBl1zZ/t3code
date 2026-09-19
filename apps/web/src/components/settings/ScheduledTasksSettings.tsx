@@ -5,6 +5,7 @@ import type {
   ModelSelection,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
+  ProviderInstanceId,
   ProviderInteractionMode,
   RuntimeMode,
   ScheduledTask,
@@ -13,7 +14,7 @@ import type {
   ScheduledTaskUpsertInput,
   ThreadId,
 } from "@t3tools/contracts";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -34,6 +35,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { TraitsPicker } from "../chat/TraitsPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -71,16 +73,14 @@ interface DraftState {
   readonly workspaceMode: WorkspaceMode;
   readonly baseRef: string;
   readonly existingWorktreePath: string;
-  readonly modelKey: string;
+  /**
+   * Model plus its provider options (reasoning effort, fast mode, …). Null
+   * until a default resolves; picking a new model resets its options.
+   */
+  readonly modelSelection: ModelSelection | null;
   /** Not editable in the dialog, but preserved so editing an agent-created task keeps its modes. */
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  /**
-   * The task's original model selection. The picker only edits
-   * `instanceId:model`; keeping the source object preserves provider options
-   * (reasoning, temperature, …) when the model itself is left unchanged.
-   */
-  readonly baseModelSelection: ModelSelection | null;
 }
 
 /** JS day-of-week (0 = Sunday) rendered Monday-first, matching how people read a week. */
@@ -109,10 +109,9 @@ const EMPTY_DRAFT: DraftState = {
   workspaceMode: "worktree",
   baseRef: "main",
   existingWorktreePath: "",
-  modelKey: "",
+  modelSelection: null,
   runtimeMode: "full-access",
   interactionMode: "default",
-  baseModelSelection: null,
 };
 
 /** Labelled field: a caption sitting above its control. */
@@ -141,19 +140,6 @@ function Field({
       {children}
     </div>
   );
-}
-
-function modelKey(selection: ModelSelection): string {
-  return `${selection.instanceId}:${selection.model}`;
-}
-
-function splitModelKey(value: string): ModelSelection | null {
-  const index = value.indexOf(":");
-  if (index <= 0 || index === value.length - 1) return null;
-  return {
-    instanceId: ProviderInstanceId.make(value.slice(0, index)),
-    model: value.slice(index + 1),
-  };
 }
 
 function scheduleFromDraft(draft: DraftState): ScheduledTaskSchedule {
@@ -233,10 +219,9 @@ function taskToDraft(task: ScheduledTask): DraftState {
       task.workspaceStrategy.type === "existing_worktree"
         ? task.workspaceStrategy.worktreePath
         : "",
-    modelKey: modelKey(task.modelSelection),
+    modelSelection: task.modelSelection,
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
-    baseModelSelection: task.modelSelection,
   };
 }
 
@@ -285,16 +270,21 @@ export function ScheduledTasksSettings() {
   const tasks = tasksQuery.data?.tasks ?? [];
   const selectedProjectTitle = projects.find((project) => project.id === draft.projectId)?.title;
 
-  // The real model picker is keyed by a `${instanceId}:${model}` string, which
-  // is exactly how the draft stores its selection.
-  const firstInstance = instanceEntries[0];
-  const defaultModelKey =
-    firstInstance && firstInstance.models[0]
-      ? `${firstInstance.instanceId}:${firstInstance.models[0].slug}`
-      : "";
-  const activeSelection = splitModelKey(draft.modelKey || defaultModelKey);
+  const firstInstanceId = instanceEntries[0]?.instanceId;
+  const firstModelSlug = instanceEntries[0]?.models[0]?.slug;
+  const defaultModelSelection = useMemo(
+    () =>
+      firstInstanceId && firstModelSlug
+        ? createModelSelection(firstInstanceId, firstModelSlug)
+        : null,
+    [firstInstanceId, firstModelSlug],
+  );
+  const activeSelection = draft.modelSelection ?? defaultModelSelection;
+  const activeEntry = instanceEntries.find(
+    (entry) => entry.instanceId === activeSelection?.instanceId,
+  );
   const activeInstanceId =
-    activeSelection?.instanceId ?? firstInstance?.instanceId ?? ("" as ProviderInstanceId);
+    activeSelection?.instanceId ?? firstInstanceId ?? ("" as ProviderInstanceId);
   const activeModel = activeSelection?.model ?? "";
   const modelOptionsByInstance = useMemo(
     () => getCustomModelOptionsByInstance(settings, providers, activeInstanceId, activeModel),
@@ -305,10 +295,10 @@ export function ScheduledTasksSettings() {
     setDraft({
       ...EMPTY_DRAFT,
       projectId: projects[0]?.id ?? "",
-      modelKey: defaultModelKey,
+      modelSelection: defaultModelSelection,
     });
     setDialogOpen(true);
-  }, [defaultModelKey, projects]);
+  }, [defaultModelSelection, projects]);
 
   const openForEdit = useCallback((task: ScheduledTask) => {
     setDraft(taskToDraft(task));
@@ -327,19 +317,16 @@ export function ScheduledTasksSettings() {
 
   const submit = useCallback(async () => {
     if (!environment || saving) return;
-    const selection = splitModelKey(draft.modelKey || defaultModelKey);
-    if (!draft.title.trim() || !draft.prompt.trim() || !draft.projectId || selection === null) {
+    const modelSelection = draft.modelSelection ?? defaultModelSelection;
+    if (
+      !draft.title.trim() ||
+      !draft.prompt.trim() ||
+      !draft.projectId ||
+      modelSelection === null
+    ) {
       reportFailure("Schedule task is incomplete", "Add a title, prompt, project, and model.");
       return;
     }
-    // Keep the original selection object (with provider options) when the
-    // picker still points at the same instance+model.
-    const modelSelection =
-      draft.baseModelSelection !== null &&
-      draft.baseModelSelection.instanceId === selection.instanceId &&
-      draft.baseModelSelection.model === selection.model
-        ? draft.baseModelSelection
-        : selection;
     const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
       draft.workspaceMode === "root"
         ? { type: "root" }
@@ -370,7 +357,7 @@ export function ScheduledTasksSettings() {
       return;
     }
     setDialogOpen(false);
-  }, [defaultModelKey, draft, environment, saving, upsertTask]);
+  }, [defaultModelSelection, draft, environment, saving, upsertTask]);
 
   const handleDelete = useCallback(
     async (task: ScheduledTask) => {
@@ -407,9 +394,9 @@ export function ScheduledTasksSettings() {
     setDraft((current) => ({
       ...current,
       projectId: projects[0]?.id ?? "",
-      modelKey: current.modelKey || defaultModelKey,
+      modelSelection: current.modelSelection ?? defaultModelSelection,
     }));
-  }, [defaultModelKey, draft.projectId, projects]);
+  }, [defaultModelSelection, draft.projectId, projects]);
 
   return (
     <SettingsPageContainer className="max-w-3xl">
@@ -603,18 +590,49 @@ export function ScheduledTasksSettings() {
             </Field>
 
             <Field label="Model">
-              <ProviderModelPicker
-                activeInstanceId={activeInstanceId}
-                model={activeModel}
-                lockedProvider={null}
-                instanceEntries={instanceEntries}
-                modelOptionsByInstance={modelOptionsByInstance}
-                triggerVariant="outline"
-                triggerClassName="w-full max-w-none justify-between text-foreground/90 hover:text-foreground"
-                onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
-                }
-              />
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="min-w-0 flex-1">
+                  <ProviderModelPicker
+                    activeInstanceId={activeInstanceId}
+                    model={activeModel}
+                    lockedProvider={null}
+                    instanceEntries={instanceEntries}
+                    modelOptionsByInstance={modelOptionsByInstance}
+                    triggerVariant="outline"
+                    triggerClassName="w-full max-w-none justify-between text-foreground/90 hover:text-foreground"
+                    onInstanceModelChange={(instanceId, model) =>
+                      setDraft((current) => ({
+                        ...current,
+                        modelSelection: createModelSelection(instanceId, model),
+                      }))
+                    }
+                  />
+                </div>
+                {activeSelection && activeEntry ? (
+                  <TraitsPicker
+                    provider={activeEntry.driverKind}
+                    models={activeEntry.models}
+                    model={activeSelection.model}
+                    prompt=""
+                    onPromptChange={() => {}}
+                    modelOptions={activeSelection.options ?? []}
+                    allowPromptInjectedEffort={false}
+                    planModeEnabled={settings.planModeEnabled}
+                    triggerVariant="outline"
+                    triggerClassName="shrink-0 text-foreground/90 hover:text-foreground"
+                    onModelOptionsChange={(options) =>
+                      setDraft((current) => ({
+                        ...current,
+                        modelSelection: createModelSelection(
+                          activeSelection.instanceId,
+                          activeSelection.model,
+                          options,
+                        ),
+                      }))
+                    }
+                  />
+                ) : null}
+              </div>
             </Field>
 
             <div className="space-y-3">

@@ -294,6 +294,27 @@ public enum ModelOptions {
 
     // MARK: - Provider options
 
+    /// Sets one provider option on a selection. A stored value for the same id
+    /// is replaced in place, so the saved list keeps its order and never
+    /// repeats an id.
+    public static func setting(
+        _ value: JSONValue,
+        forOption id: String,
+        on selection: ModelSelection
+    ) -> ModelSelection {
+        var options = selection.options ?? []
+        if let index = options.firstIndex(where: { $0.id == id }) {
+            options[index] = .init(id: id, value: value)
+        } else {
+            options.append(.init(id: id, value: value))
+        }
+        return ModelSelection(
+            instanceId: selection.instanceId,
+            model: selection.model,
+            options: options
+        )
+    }
+
     /// A stored selection can name options the model no longer offers, or miss
     /// ones it has gained. Re-resolving against the live descriptors keeps the
     /// picker from sending a value the provider would reject.
