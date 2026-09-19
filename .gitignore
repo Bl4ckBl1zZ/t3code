@@ -41,3 +41,6 @@ node_modules/
 !.env.example
 
 /native/browser-secret/build/
+
+# pnpm content-addressable store; never belongs in the repo.
+.pnpm-store/

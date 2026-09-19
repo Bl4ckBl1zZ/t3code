@@ -182,6 +182,7 @@ export function ThreadPullRequestsControl({
         open: "text-emerald-600 dark:text-emerald-300/90",
         merged: "text-violet-600 dark:text-violet-300/90",
         closed: "text-red-600 dark:text-red-300/90",
+        draft: "text-zinc-500 dark:text-zinc-400/80",
       }[badge.state]
     : "text-muted-foreground";
   const label = isStack

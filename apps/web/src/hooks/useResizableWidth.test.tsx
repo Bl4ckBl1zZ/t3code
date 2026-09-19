@@ -3,7 +3,11 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import * as Schema from "effect/Schema";
-import { getLocalStorageItem, removeLocalStorageItem } from "./useLocalStorage";
+import {
+  getLocalStorageItem,
+  removeLocalStorageItem,
+  setLocalStorageItem,
+} from "./useLocalStorage";
 import { useResizableWidth } from "./useResizableWidth";
 
 let renderer: ReactTestRenderer;
@@ -42,13 +46,21 @@ function pointer(clientX = 100) {
   } as unknown as PointerEvent<HTMLElement>;
 }
 
-function Panel() {
+function Panel({
+  edge = "left",
+  maxWidth = 800,
+  storageKey = "test-panel-width",
+}: {
+  edge?: "left" | "right";
+  maxWidth?: number;
+  storageKey?: string;
+}) {
   const resize = useResizableWidth({
-    storageKey: "test-panel-width",
+    storageKey,
     defaultWidth: 400,
     minWidth: 200,
-    maxWidth: 800,
-    edge: "left",
+    maxWidth,
+    edge,
   });
   useLayoutEffect(() => {
     result = resize;
@@ -58,6 +70,7 @@ function Panel() {
 
 beforeEach(async () => {
   removeLocalStorageItem("test-panel-width");
+  removeLocalStorageItem("thread-b");
   captured = false;
   frame = undefined;
   style.cursor = "";
@@ -110,10 +123,67 @@ describe("panel resize cleanup", () => {
       expect(style.userSelect).toBe("");
       expect(captured).toBe(false);
       expect(cancelAnimationFrame).toHaveBeenCalledWith(42);
-      expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBeNull();
-      if (reason !== "unmount") expect(result.width).toBe(400);
+      if (reason === "unmount") {
+        expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBeNull();
+      } else {
+        expect(result.width).toBe(475);
+        expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBe(475);
+      }
     },
   );
+
+  it.each(["left", "right"] as const)(
+    "uses the release position for a fast %s-edge drag",
+    async (edge) => {
+      await act(() => renderer.update(<Panel edge={edge} />));
+      await act(() => {
+        result.handlers.onPointerDown(pointer());
+        result.handlers.onPointerMove(pointer(edge === "left" ? 50 : 150));
+        result.handlers.onPointerUp(pointer(edge === "left" ? 25 : 175));
+      });
+      expect(result.width).toBe(475);
+      expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBe(475);
+      expect(cancelAnimationFrame).toHaveBeenCalledWith(42);
+    },
+  );
+
+  it.each([
+    [800, 450],
+    [450, 800],
+  ])("uses updated bounds during a drag from max %s to %s", async (initialMax, nextMax) => {
+    await act(() => renderer.update(<Panel maxWidth={initialMax} />));
+    await act(() => {
+      result.handlers.onPointerDown(pointer());
+      result.handlers.onPointerMove(pointer(-200));
+    });
+    await act(() => frame?.(0));
+    expect(result.width).toBe(Math.min(700, initialMax));
+    await act(() => renderer.update(<Panel maxWidth={nextMax} />));
+    await act(() => result.handlers.onPointerMove(pointer(-250)));
+    await act(() => frame?.(0));
+    expect(result.width).toBe(Math.min(750, nextMax));
+    await act(() => result.handlers.onPointerUp(pointer(-300)));
+    expect(result.width).toBe(nextMax);
+    expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBe(nextMax);
+  });
+
+  it("handles release before any move event", async () => {
+    await act(() => {
+      result.handlers.onPointerDown(pointer());
+      result.handlers.onPointerUp(pointer(25));
+    });
+    expect(result.width).toBe(475);
+    expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBe(475);
+  });
+
+  it("clamps the release position to the panel bounds", async () => {
+    await act(() => {
+      result.handlers.onPointerDown(pointer());
+      result.handlers.onPointerUp(pointer(-1000));
+    });
+    expect(result.width).toBe(800);
+    expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBe(800);
+  });
 
   it("saves the final width when release is followed by lost capture", async () => {
     await act(() => {
@@ -126,5 +196,55 @@ describe("panel resize cleanup", () => {
     expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBe(450);
     expect(style.cursor).toBe("");
     expect(captured).toBe(false);
+  });
+});
+
+describe("panel width storage changes", () => {
+  it("restores separate thread widths without remounting and retains them after reload", async () => {
+    await act(() => {
+      result.handlers.onPointerDown(pointer());
+      result.handlers.onPointerMove(pointer(50));
+      result.handlers.onPointerUp(pointer(50));
+    });
+    expect(result.width).toBe(450);
+    await act(() => renderer.update(<Panel storageKey="thread-b" />));
+    expect(result.width).toBe(400);
+    await act(() => {
+      result.handlers.onPointerDown(pointer());
+      result.handlers.onPointerMove(pointer(-100));
+      result.handlers.onPointerUp(pointer(-100));
+    });
+    expect(result.width).toBe(600);
+    await act(() => renderer.update(<Panel />));
+    expect(result.width).toBe(450);
+    await act(() => renderer.unmount());
+    await act(() => {
+      renderer = create(<Panel storageKey="thread-b" />);
+    });
+    expect(result.width).toBe(600);
+  });
+
+  it("cancels an unfinished drag on a thread switch without saving it to either thread", async () => {
+    setLocalStorageItem("thread-b", 650, Schema.Number);
+    await act(() => {
+      result.handlers.onPointerDown(pointer());
+      result.handlers.onPointerMove(pointer(50));
+    });
+    await act(() => frame?.(0));
+    expect(result.width).toBe(450);
+    await act(() => result.handlers.onPointerMove(pointer(25)));
+    await act(() => renderer.update(<Panel storageKey="thread-b" />));
+    expect(result.width).toBe(650);
+    expect(captured).toBe(false);
+    expect(style.cursor).toBe("");
+    await act(() => {
+      frame?.(0);
+      result.handlers.onPointerUp(pointer(25));
+    });
+    expect(result.width).toBe(650);
+    expect(getLocalStorageItem("test-panel-width", Schema.Number)).toBeNull();
+    expect(getLocalStorageItem("thread-b", Schema.Number)).toBe(650);
+    await act(() => renderer.update(<Panel />));
+    expect(result.width).toBe(400);
   });
 });

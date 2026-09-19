@@ -17,6 +17,7 @@ import type {
   ConnectionTransientError,
   PreparedConnection,
 } from "../connection/model.ts";
+import { environmentMismatchError } from "../connection/errors.ts";
 import {
   ConnectionBlockedError,
   ConnectionTransientError as ConnectionTransientErrorClass,
@@ -126,6 +127,18 @@ export const make = Effect.gen(function* () {
     const initialConfig = yield* Effect.cached(
       client[WS_METHODS.serverGetConfig]({}).pipe(
         Effect.mapError(mapRpcError),
+        // A reused address (dev worktree ports, reassigned tunnels) must not
+        // attach this environment's state to a different server.
+        Effect.flatMap((config) =>
+          config.environment.environmentId === connection.environmentId
+            ? Effect.succeed(config)
+            : Effect.fail(
+                environmentMismatchError({
+                  expected: connection.environmentId,
+                  actual: config.environment.environmentId,
+                }),
+              ),
+        ),
         Effect.withSpan("environment.initialSync"),
       ),
     );

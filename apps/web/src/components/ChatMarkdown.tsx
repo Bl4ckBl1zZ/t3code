@@ -54,8 +54,13 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
-import type { Components, Options as ReactMarkdownOptions } from "react-markdown";
+import type {
+  Components,
+  ExtraProps as ReactMarkdownExtraProps,
+  Options as ReactMarkdownOptions,
+} from "react-markdown";
 import ReactMarkdown from "react-markdown";
+import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -94,6 +99,7 @@ import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { GitHubIcon } from "./Icons";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
+import { createIncrementalHighlighter } from "../lib/incrementalHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useTheme } from "../hooks/useTheme";
 import { getClientSettings } from "../hooks/useSettings";
@@ -165,6 +171,10 @@ interface ChatMarkdownProps {
   lineBreaks?: boolean;
   /** Parse sanitized raw HTML instead of displaying its source text. */
   parseRawHtml?: boolean;
+  /** Levels added to each markdown heading in the accessibility tree so the
+      text nests under the heading that introduces it, such as a chat message's
+      author. Rendered tags and their styling are unchanged. */
+  headingLevelOffset?: number | undefined;
 }
 
 export function canUseMarkdownFileShellActions(
@@ -895,9 +905,15 @@ function UncachedShikiCodeBlock({
   isStreaming,
 }: UncachedShikiCodeBlockProps) {
   const highlighter = use(getSyntaxHighlighterPromise(language));
+  const incrementalHighlight = useMemo(
+    () => (isStreaming ? createIncrementalHighlighter(highlighter, language, themeName) : null),
+    [highlighter, isStreaming, language, themeName],
+  );
   const highlightedHtml = useMemo(() => {
     try {
-      return highlighter.codeToHtml(code, { lang: language, theme: themeName });
+      return incrementalHighlight
+        ? incrementalHighlight(code)
+        : highlighter.codeToHtml(code, { lang: language, theme: themeName });
     } catch (error) {
       // Log highlighting failures for debugging while falling back to plain text
       console.warn(
@@ -907,7 +923,7 @@ function UncachedShikiCodeBlock({
       // If highlighting fails for this language, render as plain text
       return highlighter.codeToHtml(code, { lang: "text", theme: themeName });
     }
-  }, [code, highlighter, language, themeName]);
+  }, [code, highlighter, incrementalHighlight, language, themeName]);
 
   useEffect(() => {
     if (!isStreaming) {
@@ -1632,6 +1648,7 @@ function areMarkdownFileLinkPropsEqual(
 }
 
 interface ChatMarkdownComponentsContext {
+  readonly headingLevelOffset: number;
   readonly hostFilePreviews: boolean;
   readonly imageBaseDir: string | undefined;
   readonly onUseArtifactTemplate: ChatMarkdownProps["onUseArtifactTemplate"];
@@ -1682,6 +1699,12 @@ interface ChatMarkdownComponentsContext {
 const ChatMarkdownComponentsImplContext = React.createContext<Components | null>(null);
 
 const CHAT_MARKDOWN_COMPONENT_TAGS = [
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
   "div",
   "p",
   "blockquote",
@@ -1722,6 +1745,7 @@ const STABLE_CHAT_MARKDOWN_COMPONENTS = Object.fromEntries(
 
 function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): Components {
   const {
+    headingLevelOffset,
     hostFilePreviews,
     text,
     cwd,
@@ -1801,7 +1825,30 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
     );
   };
 
+  // Screen readers take a heading's level from its tag, which would let a `#` in a
+  // message outrank the heading placed above it. Override only the exposed level:
+  // the tag keeps driving the stylesheet and copy-as-markdown.
+  const heading = (level: 1 | 2 | 3 | 4 | 5 | 6) => {
+    const Tag = `h${level}` as const;
+    return function MarkdownHeading({
+      node: _node,
+      ...props
+    }: React.ComponentProps<typeof Tag> & ReactMarkdownExtraProps) {
+      return (
+        <Tag
+          {...props}
+          aria-level={headingLevelOffset > 0 ? Math.min(level + headingLevelOffset, 6) : undefined}
+        />
+      );
+    };
+  };
   return {
+    h1: heading(1),
+    h2: heading(2),
+    h3: heading(3),
+    h4: heading(4),
+    h5: heading(5),
+    h6: heading(6),
     div({ node, children, ...props }) {
       const template = artifactTemplateFromHastProperties(node?.properties);
       return template ? (
@@ -2141,6 +2188,7 @@ function ChatMarkdown({
   className,
   lineBreaks = false,
   parseRawHtml = true,
+  headingLevelOffset = 0,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
@@ -2413,6 +2461,7 @@ function ChatMarkdown({
   const markdownComponents = useMemo<Components>(
     () =>
       createChatMarkdownComponents({
+        headingLevelOffset,
         hostFilePreviews,
         onUseArtifactTemplate,
         text,
@@ -2443,6 +2492,7 @@ function ChatMarkdown({
       canUseShellActions,
       cwd,
       imageBaseDir,
+      headingLevelOffset,
       hostFilePreviews,
       diffThemeName,
       fileLinkParentSuffixByPath,
@@ -2468,6 +2518,15 @@ function ChatMarkdown({
     ],
   );
 
+  const incrementalParsing = isStreaming && /(?:^|\n) {0,3}(?:`{3}|~{3})/.test(text);
+  const remarkPlugins = useMemo(
+    () => [
+      ...(lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS),
+      ...(incrementalParsing ? [createIncrementalMarkdownPlugin()] : []),
+    ],
+    [incrementalParsing, lineBreaks],
+  );
+
   return (
     <div
       className={cn(
@@ -2478,9 +2537,7 @@ function ChatMarkdown({
     >
       <ChatMarkdownComponentsImplContext.Provider value={markdownComponents}>
         <ReactMarkdown
-          remarkPlugins={
-            lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS
-          }
+          remarkPlugins={remarkPlugins}
           rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined}
           skipHtml={false}
           components={STABLE_CHAT_MARKDOWN_COMPONENTS}

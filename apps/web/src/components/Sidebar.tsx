@@ -4,10 +4,17 @@ import {
   planDurableThreadReorder,
 } from "@t3tools/client-runtime/state/thread-sort";
 import {
+  threadSearchMatchKey,
+  type EnvironmentThreadSearchMatch,
+} from "@t3tools/client-runtime/state/thread-search";
+import {
   useSidebarFileDropNavigation,
   useSidebarFileDropTarget,
 } from "../hooks/useSidebarFileDrop";
 import { ConnectedEnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { requestCustomSnooze } from "./CustomSnoozeDialog";
+import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
+import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import { useReducer, type SyntheticEvent } from "react";
 import {
   filterSidebarProjectScopeItems,
@@ -73,12 +80,14 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
+  MessageCircleQuestionIcon,
   MessageSquareIcon,
   PinIcon,
   PinOffIcon,
   PlusIcon,
   SearchIcon,
   SettingsIcon,
+  ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -125,6 +134,7 @@ import { readLocalApi } from "../localApi";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import {
   buildSidebarProjectSnapshots,
+  projectGroupsSpanEnvironments,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -150,6 +160,7 @@ import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../s
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
+import { useThreadSearch } from "../state/queries";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
   buildThreadRouteParams,
@@ -525,7 +536,7 @@ function SidebarThreadTooltip({
 function SnoozePopoverButton(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSnooze: (preset: SnoozePreset) => void;
+  onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
 }) {
   const { open, onOpenChange, onSnooze } = props;
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -575,6 +586,19 @@ function SnoozePopoverButton(props: {
             </span>
           </button>
         ))}
+        <div className="my-1 border-t border-border/60" />
+        <button
+          type="button"
+          className="flex w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
+          onClick={async (event) => {
+            event.stopPropagation();
+            onOpenChange(false);
+            const choice = await requestCustomSnooze();
+            if (choice) onSnooze(choice);
+          }}
+        >
+          Custom…
+        </button>
       </PopoverPopup>
     </Popover>
   );
@@ -694,7 +718,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         onClick={handleActivate}
         onKeyDown={handleKeyDown}
       >
-        <div className="relative z-10 px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
+        <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
             <SquarePenIcon
               aria-hidden
@@ -901,7 +925,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
-  onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
+  onSnooze: (threadRef: ScopedThreadRef, preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onTogglePin: (threadRef: ScopedThreadRef) => void;
   changeRequestSnapshot: ThreadChangeRequestSnapshot | null;
@@ -991,15 +1015,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke = wokeAtDate !== null && (lastVisitedDate === null || lastVisitedDate < wokeAtDate);
-  // In-flight rows (working, or waiting on approval/input) fade as a whole:
+  // In-flight rows (working, or waiting on approval) fade as a whole. A thread
+  // waiting on the user's input is the one in-flight state that needs a human
+  // now, so it stays prominent. For the rest
   // there is nothing for the user to do yet, so prominence is reserved for
   // rows that need a human — done (unread), read-but-unsettled, failed, and
   // freshly woken. The status label keeps its hue, so waiting rows stay
   // findable. In-flight rows recede the same as read-ready ones (inbox-zero:
   // working threads aren't your problem yet) — only the colored status label
   // stands out.
-  const isInFlight =
-    status === "working" || status === "background" || status === "approval" || status === "input";
+  const isInFlight = status === "working" || status === "background" || status === "approval";
   const shouldRecede =
     (status === "ready" || isInFlight) && !isUnread && !isWoke && !props.isActive && !isSelected;
   // Status hues follow the system-wide convention set by sidebar v1 and the
@@ -1016,19 +1041,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       : status === "approval"
         ? {
             label: "Approval",
-            icon: null,
+            icon: "approval" as const,
             className: "text-amber-700 dark:text-amber-300",
           }
         : status === "input"
           ? {
               label: "Input",
-              icon: null,
+              icon: "input" as const,
               className: "text-indigo-600 dark:text-indigo-300",
             }
           : status === "failed"
             ? {
                 label: "Failed",
-                icon: null,
+                icon: "failed" as const,
                 className: "text-red-700 dark:text-red-300",
               }
             : isWoke
@@ -1251,7 +1276,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [onUnsnooze, threadRef],
   );
   const handleSnoozePreset = useCallback(
-    (preset: SnoozePreset) => {
+    (preset: Pick<SnoozePreset, "snoozedUntil">) => {
       onSnooze(threadRef, preset);
     },
     [onSnooze, threadRef],
@@ -1343,7 +1368,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         variant === "card"
           ? cn(
               "truncate",
-              isUnread || isWoke
+              isUnread || isWoke || status === "input"
                 ? "text-foreground"
                 : hasUnsentDraft
                   ? "bg-amber-400/[0.04] text-sidebar-foreground hover:bg-amber-400/[0.08]"
@@ -1354,8 +1379,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       : "text-foreground/90",
             )
           : cn(
-              "truncate group-hover/sidebar-row:text-foreground",
-              props.isActive || isWoke
+              "truncate group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground",
+              props.isActive || isWoke || status === "input"
                 ? "text-foreground"
                 : isUnread
                   ? "text-muted-foreground"
@@ -1487,7 +1512,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               className={cn(
                 "shrink-0 transition-opacity",
                 !props.isActive &&
-                  "opacity-40 grayscale group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
+                  "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >
               {isHermes ? (
@@ -1640,6 +1665,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           >
             {headStatus.icon === "working" ? (
               <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
+            ) : headStatus.icon === "input" ? (
+              <MessageCircleQuestionIcon aria-hidden className="size-4 shrink-0" />
+            ) : headStatus.icon === "approval" ? (
+              <ShieldQuestionIcon aria-hidden className="size-4 shrink-0" />
+            ) : headStatus.icon === "failed" ? (
+              <CircleAlertIcon aria-hidden className="size-4 shrink-0" />
             ) : headStatus.icon === "done" ? (
               <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
             ) : headStatus.icon === "woke" ? (
@@ -1964,6 +1995,8 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   isHighlighted: boolean;
   isRouteActive: boolean;
   resultId: string;
+  searchMatch: EnvironmentThreadSearchMatch | null;
+  searchQuery: string;
   onHighlight: () => void;
   onSelect: () => void;
   onFileDropThreads: (threadRef: ScopedThreadRef, files: File[]) => void;
@@ -2029,7 +2062,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
               onClick={props.onSelect}
               className={cn(
                 fileDrop.active && "ring-1 ring-inset ring-primary/70 bg-sidebar-row-hover",
-                "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm outline-none",
+                "flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1 text-left text-sm outline-none",
                 props.isHighlighted || props.isRouteActive
                   ? "bg-sidebar-row-active text-sidebar-foreground"
                   : "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
@@ -2045,9 +2078,22 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             className="size-4 shrink-0"
             fallbackIcon={MessageSquareIcon}
           />
-          <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-          <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
-            {threadTimeLabel(thread)}
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex min-w-0 items-center gap-2.5">
+              <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+              <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
+                {threadTimeLabel(thread)}
+              </span>
+            </span>
+            {props.searchMatch ? (
+              <ThreadSearchMatchExcerpt
+                match={{
+                  source: props.searchMatch.source,
+                  snippet: props.searchMatch.snippet,
+                  query: props.searchQuery,
+                }}
+              />
+            ) : null}
           </span>
         </TooltipTrigger>
         <SidebarThreadTooltip
@@ -2467,6 +2513,13 @@ export default function Sidebar() {
     ],
     [projectGroups],
   );
+  // Same-named projects on two machines are only told apart by where they
+  // live, so rows on another machine carry its icon once the catalog spans
+  // more than one environment; a single-machine catalog stays as it was.
+  const showProjectEnvironments = useMemo(
+    () => projectGroupsSpanEnvironments(projectGroups),
+    [projectGroups],
+  );
   const projectGroupByScopeKey = useMemo(
     () => new Map(projectGroups.map((project) => [project.projectKey, project] as const)),
     [projectGroups],
@@ -2871,9 +2924,28 @@ export default function Sidebar() {
     () => [...activeThreads, ...snoozedThreads, ...settledThreads],
     [activeThreads, settledThreads, snoozedThreads],
   );
+  const searchEnvironmentIds = useMemo(
+    () =>
+      environments
+        .filter((environment) => environment.connection.phase === "connected")
+        .map((environment) => environment.environmentId),
+    [environments],
+  );
+  // useThreadSearch owns the debounce and the two-character floor.
+  const threadSearch = useThreadSearch(searchEnvironmentIds, threadSearchQuery);
+  const threadSearchMatchByKey = useMemo(
+    () =>
+      new Map(threadSearch.matches.map((match) => [threadSearchMatchKey(match), match] as const)),
+    [threadSearch.matches],
+  );
   const threadSearchResults = useMemo(
-    () => searchSidebarThreads(searchableThreads, threadSearchQuery),
-    [searchableThreads, threadSearchQuery],
+    () =>
+      searchSidebarThreads(
+        searchableThreads,
+        threadSearchQuery,
+        new Set(threadSearchMatchByKey.keys()),
+      ),
+    [searchableThreads, threadSearchQuery, threadSearchMatchByKey],
   );
   const threadSearchResultOrderKey = threadSearchResults
     .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
@@ -3397,7 +3469,7 @@ export default function Sidebar() {
   const attemptSnooze = useCallback(
     (
       threadRef: ScopedThreadRef,
-      preset: SnoozePreset,
+      preset: Pick<SnoozePreset, "snoozedUntil">,
       opts: { coSnoozingKeys?: ReadonlySet<string> } = {},
     ) => {
       void (async () => {
@@ -3508,10 +3580,13 @@ export default function Sidebar() {
                   {
                     id: "snooze",
                     label: `Snooze (${count})`,
-                    children: snoozePresets.map((preset) => ({
-                      id: `snooze:${preset.id}`,
-                      label: `${preset.label} (${preset.whenLabel})`,
-                    })),
+                    children: [
+                      ...snoozePresets.map((preset) => ({
+                        id: `snooze:${preset.id}`,
+                        label: `${preset.label} (${preset.whenLabel})`,
+                      })),
+                      { id: "snooze:custom", label: "Custom…", separatorBefore: true },
+                    ],
                   },
                 ]
               : []),
@@ -3524,9 +3599,10 @@ export default function Sidebar() {
       );
       if (clicked._tag === "Failure") return;
       if (clicked.value?.startsWith("snooze:")) {
-        const preset = snoozePresets.find(
-          (candidate) => `snooze:${candidate.id}` === clicked.value,
-        );
+        const preset =
+          clicked.value === "snooze:custom"
+            ? await requestCustomSnooze()
+            : snoozePresets.find((candidate) => `snooze:${candidate.id}` === clicked.value);
         if (preset) {
           // Post-snooze navigation must skip threads snoozing in this same
           // batch — they are all leaving the card block together.
@@ -3694,6 +3770,18 @@ export default function Sidebar() {
         });
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
+        // Project scoping only exists on the Code list; Work and Chat have no
+        // project filter behind the menu, so the item must not show there.
+        const threadProjectGroup =
+          workspace === "code"
+            ? (projectGroups.find((project) =>
+                project.memberProjectRefs.some(
+                  (projectRef) =>
+                    projectRef.environmentId === thread.environmentId &&
+                    projectRef.projectId === thread.projectId,
+                ),
+              ) ?? null)
+            : null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             [
@@ -3722,10 +3810,13 @@ export default function Sidebar() {
                           label: "Snooze",
                           icon: "clock",
                           disabled: !canSnooze(thread, { now: new Date().toISOString() }),
-                          children: snoozePresets.map((preset) => ({
-                            id: `snooze:${preset.id}`,
-                            label: `${preset.label} (${preset.whenLabel})`,
-                          })),
+                          children: [
+                            ...snoozePresets.map((preset) => ({
+                              id: `snooze:${preset.id}`,
+                              label: `${preset.label} (${preset.whenLabel})`,
+                            })),
+                            { id: "snooze:custom", label: "Custom…", separatorBefore: true },
+                          ],
                         },
                   ]
                 : []),
@@ -3762,6 +3853,18 @@ export default function Sidebar() {
                   ]
                 : []),
               { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
+              ...(threadProjectGroup
+                ? [
+                    {
+                      id: "filter-by-project",
+                      label:
+                        projectScopeKey === threadProjectGroup.projectKey
+                          ? "Show all projects"
+                          : `Filter by ${threadProjectGroup.displayName}`,
+                      icon: "folder-tree",
+                    },
+                  ]
+                : []),
               // One "Copy" entry with a submenu, instead of four sibling rows
               // that each said "Copy ...".
               {
@@ -3795,13 +3898,25 @@ export default function Sidebar() {
         );
         if (clicked._tag === "Failure") return;
         if (clicked.value?.startsWith("snooze:")) {
-          const preset = snoozePresets.find(
-            (candidate) => `snooze:${candidate.id}` === clicked.value,
-          );
+          const preset =
+            clicked.value === "snooze:custom"
+              ? await requestCustomSnooze()
+              : snoozePresets.find((candidate) => `snooze:${candidate.id}` === clicked.value);
           if (preset) attemptSnooze(threadRef, preset);
           return;
         }
         switch (clicked.value) {
+          case "filter-by-project":
+            // This item is the only scope control here, so picking the
+            // already-scoped project again is the way back to all projects.
+            if (threadProjectGroup) {
+              setProjectScopeKey(
+                projectScopeKey === threadProjectGroup.projectKey
+                  ? null
+                  : threadProjectGroup.projectKey,
+              );
+            }
+            return;
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
@@ -4006,11 +4121,14 @@ export default function Sidebar() {
       markThreadUnread,
       pinnedThreadKeySet,
       projectCwdByKey,
+      projectGroups,
+      projectScopeKey,
       providerDriverKindByInstance,
       serverConfigs,
       startThreadRename,
       toggleThreadPin,
       updateThreadMetadata,
+      workspace,
     ],
   );
 
@@ -4309,6 +4427,12 @@ export default function Sidebar() {
                     <span className="min-w-0 flex-1 truncate">
                       {scopedProjectGroup?.displayName ?? "All projects"}
                     </span>
+                    {scopedProjectGroup && showProjectEnvironments ? (
+                      <ProjectEnvironmentBadge
+                        group={scopedProjectGroup}
+                        primaryEnvironmentId={primaryEnvironmentId}
+                      />
+                    ) : null}
                     <ChevronDownIcon className="-mr-px size-4 shrink-0" />
                   </ComboboxTrigger>
                   <ComboboxPopup
@@ -4370,6 +4494,12 @@ export default function Sidebar() {
                               <FolderIcon className="size-4 shrink-0" />
                             )}
                             <span className="min-w-0 flex-1 truncate text-sm">{item.label}</span>
+                            {project && showProjectEnvironments ? (
+                              <ProjectEnvironmentBadge
+                                group={project}
+                                primaryEnvironmentId={primaryEnvironmentId}
+                              />
+                            ) : null}
                             {project ? (
                               <Button
                                 size="icon-xs"
@@ -4509,6 +4639,15 @@ export default function Sidebar() {
                         isHighlighted={activeSearchResultIndex === index}
                         isRouteActive={routeThreadKey === threadKey}
                         resultId={`sidebar-thread-search-result-${index}`}
+                        searchMatch={
+                          threadSearchMatchByKey.get(
+                            threadSearchMatchKey({
+                              environmentId: thread.environmentId,
+                              threadId: thread.id,
+                            }),
+                          ) ?? null
+                        }
+                        searchQuery={threadSearchQuery}
                         onHighlight={() => setActiveSearchResultIndex(index)}
                         onSelect={() => selectThreadSearchResult(thread)}
                         onFileDropThreads={handleThreadFileDrop}
@@ -4522,7 +4661,7 @@ export default function Sidebar() {
                 role="status"
                 className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
               >
-                No threads found
+                {threadSearch.isPending ? "Searching thread messages…" : "No threads found"}
               </p>
             )
           ) : null}

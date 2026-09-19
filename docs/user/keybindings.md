@@ -19,6 +19,16 @@ The file is a JSON array of rules.
 
 Invalid rules are ignored. An invalid file is ignored entirely, and the server logs a warning.
 
+## Send shortcut
+
+In **Settings → General → Send shortcut**, choose whether Enter sends, requires `mod+Enter` for
+multiline prompts, or always requires `mod+Enter`. `Shift+Enter` inserts a new line. This applies
+to the web and desktop composer.
+
+**Follow-up behavior** chooses Queue or Steer while the agent runs. Use `mod+Enter` to do the
+opposite for one message. When sending requires `mod+Enter`, use `mod+Shift+Enter` for the
+opposite action.
+
 ## Rule Shape
 
 - `key` (required): shortcut string, like `mod+j`, `ctrl+k`, `cmd+shift+d`
@@ -81,8 +91,9 @@ but the new thread does not reuse the worktree created for the thread that just 
 ## `when` Conditions
 
 A `when` expression is evaluated against context keys describing the current UI state. The keys
-the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`, and
-`modelPickerOpen`. The set is open and grows over time, so treat that as the current list rather
+the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`,
+`modelPickerOpen`, `isWeb`, and `isDesktop`. The default `mod+1`…`mod+9` thread and model jumps
+are limited to `isDesktop`, so a browser keeps those keys for switching tabs. The set is open and grows over time, so treat that as the current list rather
 than a fixed one. Any key the running app does not supply evaluates to `false`.
 
 Operators: `!` (not), `&&` (and), `||` (or), and parentheses.

@@ -16,6 +16,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
+import { OtlpProtocol } from "@t3tools/shared/observability";
 
 export const DEFAULT_PORT = 3773;
 
@@ -76,6 +77,8 @@ export class ServerConfig extends Context.Service<
     readonly otlpMetricsUrl: string | undefined;
     readonly otlpExportIntervalMs: number;
     readonly otlpServiceName: string;
+    readonly otlpHeaders: Readonly<Record<string, string>> | undefined;
+    readonly otlpProtocol: OtlpProtocol;
     readonly mode: RuntimeMode;
     readonly port: number;
     readonly host: string | undefined;
@@ -205,6 +208,8 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
+    otlpHeaders: undefined,
+    otlpProtocol: "http/json",
     cwd,
     baseDir,
     ...derivedPaths,

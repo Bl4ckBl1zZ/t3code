@@ -13,7 +13,7 @@ import {
 const instanceId = ProviderInstanceId.make("claude-test");
 
 describe("Claude manifest catalog", () => {
-  it("advertises Fable 5.1 only on a supported CLI and carries its badge and aliases", () => {
+  it("advertises Fable 5.1 only on a supported CLI and carries its aliases", () => {
     expect(
       resolveClaudeModelsForVersion(bundled, "2.1.256").some(
         (model) => model.slug === "claude-fable-5-1",
@@ -23,9 +23,9 @@ describe("Claude manifest catalog", () => {
       (model) => model.slug === "claude-fable-5-1",
     );
     expect(model).toMatchObject({
-      badge: "new",
       aliases: ["fable", "fable-5.1", "claude-fable-5.1"],
     });
+    expect(model?.badge).toBeUndefined();
     expect(resolveClaudeModelSlug(bundled, "FABLE")).toBe("claude-fable-5-1");
     expect(
       resolveClaudeModelsForVersion(bundled, null).some(
@@ -87,7 +87,7 @@ describe("Claude manifest catalog", () => {
 
   it("assigns a manifest default even when discovery did not supply a previous default", () => {
     const models = [
-      { slug: "claude-sonnet-5", name: "Sonnet", isCustom: false, capabilities: null },
+      { slug: "claude-fable-5-1", name: "Fable", isCustom: false, capabilities: null },
     ];
     expect(
       applyManifestDefault(

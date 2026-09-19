@@ -15,6 +15,11 @@ import {
 } from "./workGroupHistoryState";
 import { HammerIcon } from "lucide-react";
 import { resolveHistoricalWorkSummary } from "./MessagesTimeline.logic";
+import {
+  deriveTimelineMinimapItems,
+  resolveTimelineMinimapPreview,
+  type TimelineMinimapItem,
+} from "./timelineMinimapItems";
 import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
@@ -110,6 +115,8 @@ import { MessageAttachmentPlacement } from "./MessageAttachmentPlacement";
 import { MessageFileAttachmentTile } from "./MessageFileAttachmentTile";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
+import { useFileContextMenuHandler } from "../../fileContextMenu";
+import { useProject, useThreadShell } from "../../state/entities";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { keepTimelineEndVisibleAfterOverlayGrowth } from "./timelineScrollAnchoring";
@@ -120,6 +127,7 @@ import {
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  plainThoughtPreviewText,
   resolveTimelineToolPresentation,
   resolveAssistantMessageCopyState,
   resolveTimelineIsAtEnd,
@@ -802,64 +810,12 @@ function getItemType(item: MessagesTimelineRow) {
   return item.kind === "message" ? `message:${item.message.role}` : item.kind;
 }
 
-interface TimelineMinimapItem {
-  readonly id: string;
-  readonly rowIndex: number;
-  readonly userText: string | null;
-  readonly assistantText: string | null;
-}
-
 interface TimelinePositionState {
   readonly contentLength?: number;
   readonly scroll?: number;
   readonly scrollLength?: number;
   readonly positionAtIndex?: (index: number) => number | undefined;
   readonly sizeAtIndex?: (index: number) => number | undefined;
-}
-
-function deriveTimelineMinimapItems(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-): TimelineMinimapItem[] {
-  const items: TimelineMinimapItem[] = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row?.kind !== "message" || row.message.role !== "user") {
-      continue;
-    }
-
-    items.push({
-      id: row.id,
-      rowIndex: index,
-      userText: compactMinimapPreview(row.message.text),
-      assistantText: compactMinimapPreview(resolveFinalAssistantTextForTurn(rows, index)),
-    });
-  }
-  return items;
-}
-
-function resolveFinalAssistantTextForTurn(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-  userRowIndex: number,
-) {
-  let finalAssistantText: string | null = null;
-  for (let index = userRowIndex + 1; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row?.kind !== "message") {
-      continue;
-    }
-    if (row.message.role === "user") {
-      break;
-    }
-    if (row.message.role === "assistant") {
-      finalAssistantText = row.message.text ?? null;
-    }
-  }
-  return finalAssistantText;
-}
-
-function compactMinimapPreview(text: string | null | undefined) {
-  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
-  return compact.length > 0 ? compact : null;
 }
 
 function resolveTimelineRowTop(state: TimelinePositionState, rowIndex: number) {
@@ -895,7 +851,13 @@ function TimelineMinimap({
 
   const resolvedActiveIndex =
     activeIndex !== null && activeIndex < items.length ? activeIndex : null;
-  const activeItem = resolvedActiveIndex === null ? null : (items[resolvedActiveIndex] ?? null);
+  const activeItem = useMemo(
+    () =>
+      resolveTimelineMinimapPreview(
+        resolvedActiveIndex === null ? null : (items[resolvedActiveIndex] ?? null),
+      ),
+    [items, resolvedActiveIndex],
+  );
   const activeTopPercent =
     resolvedActiveIndex === null
       ? 0
@@ -1312,6 +1274,16 @@ function AgentUpdateLine(props: {
   );
 }
 
+// Screen readers skim a transcript by heading, so every message announces its
+// author as one. Visually hidden and excluded from selection so sighted users
+// and copied text are unaffected. Headings written inside a message are
+// exposed below this level.
+const MESSAGE_HEADING_LEVEL = 3;
+
+function MessageAuthorHeading({ children }: { children: string }) {
+  return <h3 className="sr-only select-none">{children}</h3>;
+}
+
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const userAttachments = row.message.attachments ?? [];
@@ -1363,6 +1335,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             : "rounded-2xl bg-accent",
         )}
       >
+        <MessageAuthorHeading>{isAgentMessage ? "Another agent" : "You"}</MessageAuthorHeading>
         {regularAttachments.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularAttachments.map(
@@ -1570,12 +1543,49 @@ function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
   );
 }
 
+/**
+ * Hover-revealed wall-clock time with a full-date tooltip — the same metadata
+ * presentation as message rows, for work entries and turn folds. The parent
+ * carries `group/timeline-row`; hover or focus on an existing control reveals
+ * the time without adding a tab stop. Hidden timestamps stay outside the row
+ * layout. Visibility changes immediately so leaving flow cannot overlap text
+ * during a fade-out. Place it before any trailing disclosure control so
+ * revealing the time does not move the chevron.
+ */
+function TimelineRowTimestamp({
+  createdAt,
+  timestampFormat,
+  className,
+}: {
+  createdAt: string;
+  timestampFormat: TimestampFormat;
+  className?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "pointer-events-none absolute me-1 shrink-0 whitespace-nowrap rounded-md text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:pointer-events-auto group-hover/timeline-row:static group-hover/timeline-row:opacity-100 group-focus-within/timeline-row:pointer-events-auto group-focus-within/timeline-row:static group-focus-within/timeline-row:opacity-100",
+              className,
+            )}
+          />
+        }
+      >
+        {formatDayAwareTimestamp(createdAt, timestampFormat)}
+      </TooltipTrigger>
+      <TooltipPopup>{formatChatTimestampTooltip(createdAt, timestampFormat)}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
   const Icon = row.expanded ? ChevronDownIcon : ChevronRightIcon;
 
   return (
-    <div className="border-b border-border/60 pb-2 pt-1">
+    <div className="group/timeline-row relative flex items-center gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
       <button
         type="button"
         aria-expanded={row.expanded}
@@ -1586,6 +1596,11 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         <span>{row.label}</span>
         <Icon className="size-3.5" />
       </button>
+      <TimelineRowTimestamp
+        createdAt={row.createdAt}
+        timestampFormat={ctx.timestampFormat}
+        className="ms-auto"
+      />
     </div>
   );
 }
@@ -1619,6 +1634,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
+        <MessageAuthorHeading>T3 Code</MessageAuthorHeading>
         <AssistantCitationSource
           messageId={row.message.id}
           threadRef={ctx.threadRef ?? undefined}
@@ -1634,6 +1650,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             isStreaming={Boolean(row.message.streaming)}
             lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
             skills={ctx.skills}
+            headingLevelOffset={MESSAGE_HEADING_LEVEL}
           />
         </AssistantCitationSource>
         {attachments.length > 0 ? <AssistantMessageAttachments attachments={attachments} /> : null}
@@ -2348,7 +2365,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }: {
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
-  const { workspaceRoot, alwaysExpandActivity } = use(TimelineRowCtx);
+  const { workspaceRoot, alwaysExpandActivity, timestampFormat } = use(TimelineRowCtx);
   const anchorKey = `group:${groupedEntries[0]?.id ?? "empty"}`;
   const [isExpanded, toggleHistoryExpanded] = useWorkHistoryExpansion(
     anchorKey,
@@ -2428,7 +2445,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
             type="button"
             aria-expanded={isExpanded}
             onClick={toggleHistoryExpanded}
-            className="flex min-h-7 w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+            className="group/timeline-row relative flex min-h-7 w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
           >
             <ToolSourceIcon
               icon={
@@ -2449,6 +2466,12 @@ const WorkGroupSection = memo(function WorkGroupSection({
               className="size-4 shrink-0 opacity-70"
             />
             <span className="min-w-0 flex-1 truncate">{historicalSummary}</span>
+            {nonEmptyEntries[0] ? (
+              <TimelineRowTimestamp
+                createdAt={nonEmptyEntries[0].createdAt}
+                timestampFormat={timestampFormat}
+              />
+            ) : null}
             <ChevronRightIcon
               aria-hidden
               className={cn(
@@ -2576,6 +2599,12 @@ function AssistantChangedFilesSectionInner({
   const [autoExpanded] = useState(() => shouldAutoExpandChangedFiles(checkpointFiles, isLatestRun));
   const [allDirectoriesExpanded, setAllDirectoriesExpanded] = useState(autoExpanded);
   const expanded = persistedExpanded ?? (isLatestRun && autoExpanded);
+  const ctx = use(TimelineRowCtx);
+  const thread = useThreadShell(ctx.threadRef);
+  const activeProject = useProject(
+    thread?.projectId ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
+  );
+  const showFileContextMenu = useFileContextMenuHandler(ctx.activeThreadEnvironmentId);
 
   return (
     <ChangedFilesCard
@@ -2590,6 +2619,20 @@ function AssistantChangedFilesSectionInner({
       }
       onToggleAllDirectories={() => setAllDirectoriesExpanded((current) => !current)}
       onOpenTurnDiff={onOpenTurnDiff}
+      onFileContextMenu={(filePath, event) =>
+        showFileContextMenu(
+          {
+            environmentId: ctx.activeThreadEnvironmentId,
+            filePath,
+            workspaceRoot: ctx.workspaceRoot,
+            repositoryRoot:
+              thread?.worktreePath == null
+                ? activeProject?.repositoryIdentity?.rootPath
+                : undefined,
+          },
+          event,
+        )
+      }
     />
   );
 }
@@ -2938,6 +2981,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       className="text-foreground"
       lineBreaks
       parseRawHtml={false}
+      headingLevelOffset={MESSAGE_HEADING_LEVEL}
     />
   );
 });
@@ -3209,6 +3253,10 @@ function workEntryPreview(
         : inputPreview.value;
     }
   }
+  if (workEntry.itemType === "reasoning" && workEntry.detail?.trim()) {
+    // The row truncates to one line; never reformat a whole streaming trace.
+    return plainThoughtPreviewText(workEntry.detail.trim().slice(0, 600)) || null;
+  }
   // Prefer stdout/detail so completed shell/monitor results are visible collapsed
   // (command alone hid ls listings behind expand-only inspector JSON).
   if (workEntry.detail?.trim()) {
@@ -3442,7 +3490,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   return (
     <div
       className={cn(
-        "flex flex-col rounded-md px-0.5 py-0.5 transition-colors",
+        "group/timeline-row relative flex flex-col rounded-md px-0.5 py-0.5 transition-colors",
+        expanded && canExpand && "mb-1",
         canExpand &&
           "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
       )}
@@ -3504,6 +3553,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 className="pe-1 text-[11px]"
               />
             ) : null}
+            <TimelineRowTimestamp
+              createdAt={workEntry.createdAt}
+              timestampFormat={ctx.timestampFormat}
+            />
             <span
               className="flex size-4 shrink-0 items-center justify-center"
               aria-hidden={!canExpand}

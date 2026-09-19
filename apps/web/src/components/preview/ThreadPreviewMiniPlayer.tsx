@@ -5,6 +5,10 @@ import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
 import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
+import {
+  findActiveBrowserRecordingRuntimeTabId,
+  useActiveBrowserRecordingTabIds,
+} from "~/browser/browserRecording";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 import type { BrowserViewportResizeDirection } from "~/browser/browserViewportLayout";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
@@ -44,6 +48,8 @@ interface Props {
   readonly bottomInset: number;
 }
 
+const PREVIEW_MINI_PLAYER_CORNER_RADIUS = 12;
+
 // Invisible grab zones straddling each edge; the cursor is the only affordance.
 const RESIZE_HANDLES: ReadonlyArray<{
   readonly direction: BrowserViewportResizeDirection;
@@ -59,6 +65,10 @@ const RESIZE_HANDLES: ReadonlyArray<{
   { direction: "southeast", className: "-bottom-2 -right-2 size-4 cursor-nwse-resize" },
 ];
 
+/**
+ * Floats the thread's browser surface over chat. Native clipping and the DOM
+ * frame use the same radius so their separately composited edges stay aligned.
+ */
 export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gestureRef = useRef<PointerGesture | null>(null);
@@ -69,6 +79,10 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
   const previewState = useThreadPreviewState(threadRef);
   const snapshot = previewState.sessions[tabId] ?? null;
   const runtimeTabId = previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId);
+  const recordingTabIds = useActiveBrowserRecordingTabIds();
+  const recording =
+    recordingTabIds.has(runtimeTabId) ||
+    findActiveBrowserRecordingRuntimeTabId(threadRef, tabId) !== null;
   const desktopOverlay = previewState.desktopByTabId[tabId] ?? null;
   const fittedSourceContent = useBrowserSurfaceStore(
     (state) => state.byTabId[runtimeTabId]?.fittedSourceContent ?? null,
@@ -193,13 +207,28 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
           aria-label="Floating browser preview"
           data-preview-mini-player={tabId}
           className="pointer-events-none absolute select-none"
-          style={{ left: frame.x, top: frame.y, width: frame.width, height: frame.height }}
+          style={{
+            left: frame.x,
+            top: frame.y,
+            width: frame.width,
+            height: frame.height,
+            borderRadius: PREVIEW_MINI_PLAYER_CORNER_RADIUS,
+          }}
         >
           <div className="group pointer-events-auto absolute right-2 top-2 z-[49] size-3">
             <div
-              aria-hidden="true"
-              className="absolute right-0 top-0 size-2 rounded-full bg-foreground/25 shadow-sm ring-1 ring-background/70 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
-            />
+              role={recording ? "status" : undefined}
+              aria-label={recording ? "Recording preview" : undefined}
+              aria-hidden={!recording}
+              className="absolute right-0 top-0 size-2 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+            >
+              <span
+                className={cn(
+                  "block size-2 rounded-full shadow-sm ring-1 ring-background/70",
+                  recording ? "bg-red-500 motion-safe:animate-status-pulse" : "bg-foreground/25",
+                )}
+              />
+            </div>
             <div
               className="pointer-events-none absolute right-0 top-0 flex h-8 cursor-grab items-center gap-0.5 rounded-lg border border-border/80 bg-popover/92 p-0.5 opacity-0 shadow-lg/20 backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 active:cursor-grabbing"
               onPointerDown={(event) => beginGesture(event, null)}
@@ -207,6 +236,11 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
               onPointerUp={endGesture}
               onPointerCancel={endGesture}
             >
+              {recording ? (
+                <span aria-hidden className="flex size-6 shrink-0 items-center justify-center">
+                  <span className="size-2 rounded-full bg-red-500 motion-safe:animate-status-pulse" />
+                </span>
+              ) : null}
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -267,19 +301,19 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
             </div>
           </div>
 
-          <div className="absolute inset-0 z-[47] rounded-xl bg-muted shadow-2xl/35" />
+          <div className="absolute inset-0 z-[47] rounded-[inherit] bg-muted shadow-2xl/35" />
           <BrowserSurfaceSlot
             tabId={runtimeTabId}
             visible={Boolean(desktopOverlay?.hasWebContents)}
-            cornerRadius={12}
+            cornerRadius={PREVIEW_MINI_PLAYER_CORNER_RADIUS}
             zIndex={PREVIEW_MINI_PLAYER_WEBVIEW_Z_INDEX}
             fitSourceContent
             layoutVersion={`${frame.x}:${frame.y}`}
             className="absolute inset-0"
           />
-          <div className="pointer-events-none absolute inset-0 z-[49] rounded-xl ring-1 ring-inset ring-border/80" />
+          <div className="pointer-events-none absolute inset-0 z-[49] rounded-[inherit] ring-1 ring-inset ring-border/80" />
           {!desktopOverlay?.hasWebContents ? (
-            <div className="pointer-events-none absolute inset-0 z-[49] flex items-center justify-center rounded-xl bg-muted text-xs text-muted-foreground">
+            <div className="pointer-events-none absolute inset-0 z-[49] flex items-center justify-center rounded-[inherit] bg-muted text-xs text-muted-foreground">
               Reconnecting preview…
             </div>
           ) : null}

@@ -64,6 +64,7 @@ const adapter = {
 
 interface HarnessOptions {
   readonly createWorktree?: GitWorkflow.GitWorkflowService["Service"]["createWorktree"];
+  readonly isRepository?: GitWorkflow.GitWorkflowService["Service"]["isRepository"];
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
   readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
@@ -113,6 +114,8 @@ function makeHarness(options: HarnessOptions = {}) {
     Layer.mock(GitWorkflow.GitWorkflowService)({
       createWorktree,
       renameBranch,
+      isRepository: options.isRepository ?? (() => Effect.succeed(true)),
+      hasCommit: () => Effect.succeed(true),
       fetchRemote: () => Effect.void,
       removeWorktree: () => Effect.void,
       resolveRemoteTrackingCommit: () =>
@@ -244,6 +247,26 @@ it.effect("registers a created worktree with its owning thread", () =>
           state: "present",
         } as const),
       );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("falls back to the project root when a worktree cannot be provisioned", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ isRepository: () => Effect.succeed(false) });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.launch(
+        launchInput({
+          command: "command:launch:worktree-fallback",
+          thread: "thread:launch:worktree-fallback",
+          message: "Work without Git",
+          workspace: { type: "worktree", baseRef: "main", branch: "feature" },
+        }),
+      );
+      yield* waitUntil(() => Effect.sync(() => harness.runSetup.mock.calls.length === 1));
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
+      assert.equal(harness.runSetup.mock.calls[0]?.[0].worktreePath, "/repo");
     }).pipe(Effect.provide(harness.layer));
   }),
 );

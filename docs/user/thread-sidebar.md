@@ -30,6 +30,30 @@ If reordering is unavailable for one environment, update the T3 Code server runn
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
+On web and desktop, pinning or unpinning a thread keeps the sidebar at your current scroll
+position instead of following the thread to its new place in the list.
+
+## Snooze until later
+
+On web and desktop, choose **Snooze → Custom…** from a thread's menu, the chat header menu, or a
+multi-thread selection to pick a date and time in your local time zone, or a duration in minutes,
+hours, or days. Durations start when you confirm; one day means 24 hours. Choose **Wake thread**
+to bring a thread back early.
+
+## Search and filter on web and desktop
+
+Sidebar search matches message content as well as titles. Title matches come first; content
+matches show a short excerpt. Right-click a thread and choose **Filter by project** to show only
+that project's threads, and **Show all projects** to clear the filter.
+
+## Thread notifications on web and desktop
+
+**Settings → General → Thread notifications** is off by default. Choose notifications, sound, or
+both to hear about a thread that finishes, fails, or needs input or approval while T3 Code is
+open. System notifications need a secure browser context or the desktop app, and your permission.
+**In-app notifications** shows a toast for other threads while the app has focus. Both settings
+apply to the current device.
+
 ## Environment artwork
 
 Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in

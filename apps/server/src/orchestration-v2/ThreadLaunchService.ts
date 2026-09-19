@@ -278,7 +278,20 @@ export const make = Effect.gen(function* () {
       input.workspaceStrategy.type === "existing_worktree"
         ? input.workspaceStrategy.worktreePath
         : null;
-    if (input.workspaceStrategy.type === "worktree") {
+    // A project that is not a Git repository, or whose base ref has no commit
+    // yet, cannot host a worktree. Fall back to the project root instead of
+    // failing the launch on a stored "new worktree" default.
+    const canProvisionWorktree =
+      input.workspaceStrategy.type === "worktree" &&
+      (yield* git.isRepository(project.workspaceRoot).pipe(Effect.orElseSucceed(() => true))) &&
+      (input.workspaceStrategy.startFromOrigin === true ||
+        (yield* git
+          .hasCommit({ cwd: project.workspaceRoot, refName: input.workspaceStrategy.baseRef })
+          .pipe(Effect.orElseSucceed(() => true))));
+    if (input.workspaceStrategy.type === "worktree" && !canProvisionWorktree) {
+      branch = null;
+    }
+    if (input.workspaceStrategy.type === "worktree" && canProvisionWorktree) {
       if (runId !== null) {
         yield* threads
           .dispatch({

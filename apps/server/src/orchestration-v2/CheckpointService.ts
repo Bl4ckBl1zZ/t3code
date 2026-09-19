@@ -430,10 +430,22 @@ export const layer: Layer.Layer<
             });
           }
 
-          const previousExists = yield* checkpointStore.hasCheckpointRef({
-            cwd: input.scope.cwd,
-            checkpointRef: previousCheckpointRef,
-          });
+          // A failed baseline lookup must not discard the checkpoint that was just
+          // captured; keep it for future runs and skip only this run's diff summary.
+          const previousExists = yield* checkpointStore
+            .hasCheckpointRef({
+              cwd: input.scope.cwd,
+              checkpointRef: previousCheckpointRef,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("orchestration V2 checkpoint baseline lookup failed", {
+                  scopeId: input.scope.id,
+                  checkpointRef: previousCheckpointRef,
+                  category: error._tag,
+                }).pipe(Effect.as(false)),
+              ),
+            );
           const files = previousExists
             ? yield* checkpointStore
                 .diffCheckpoints({
