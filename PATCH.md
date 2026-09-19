@@ -287,10 +287,10 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   checks. Settlement uses the same cached PR identity and age policy as the sidebar. Rename
   state is scoped to both environment and thread. Compact headers keep project tools in the
   details panel, preserving room for the fork's linked-PR and panel controls.
-- Runs CI as one self-hosted `verify` job, so upstream's test sharding, split Rust job, and
+- Runs CI as one `verify` job on GitHub-hosted `ubuntu-24.04`, so upstream's test sharding, split Rust job, and
   macOS-gated `apps/mobile` native lint (`d7b9a689f`, `8f7da3b99`) have no fork counterpart. The
   PR-assets guard from `9f12eab38` is carried. `release.yml` adopts upstream's split
-  `quality` job (`25dcee00a`) on the fork's runner and its resource-monitor cache, but keeps the
+  `quality` job (`25dcee00a`) on GitHub-hosted runners with its resource-monitor cache, but keeps the
   fork's full `run-install` in the build matrix. Upstream's release parallelization (`a3a8cbd605`)
   is carried without its cron shift — the fork has no `schedule:` trigger — and its move of
   `relay_public_config` / `build_wsl_node_pty` off `preflight` restates the
