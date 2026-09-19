@@ -401,7 +401,7 @@
           "question": "Which one?",
           "options": [
             {
-              "value": "choice: opaque",
+              "value": " choice: opaque ",
               "label": "A",
               "description": "First"
             }
@@ -1046,7 +1046,7 @@
             "question": "Which one?",
             "options": [
               {
-                "value": "choice: opaque",
+                "value": " choice: opaque ",
                 "label": "A",
                 "description": "First"
               }
