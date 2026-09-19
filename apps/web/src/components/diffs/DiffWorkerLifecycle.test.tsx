@@ -153,6 +153,8 @@ function renderViews(count: number) {
   );
 }
 
+const animationFrames = new Set<ReturnType<typeof setImmediate>>();
+
 describe("code-view worker lifecycle", () => {
   let renderer: ReactTestRenderer | undefined;
 
@@ -170,10 +172,18 @@ describe("code-view worker lifecycle", () => {
     vi.stubGlobal("navigator", { hardwareConcurrency: 2 });
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
-      setImmediate(() => callback(0)),
-    );
-    vi.stubGlobal("cancelAnimationFrame", clearImmediate);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      const frame = setImmediate(() => {
+        animationFrames.delete(frame);
+        callback(0);
+      });
+      animationFrames.add(frame);
+      return frame;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (frame: ReturnType<typeof setImmediate>) => {
+      animationFrames.delete(frame);
+      clearImmediate(frame);
+    });
     const initialize = WorkerPoolManager.prototype.initialize;
     vi.spyOn(WorkerPoolManager.prototype, "initialize").mockImplementation(function (
       this: WorkerPoolManager,
@@ -190,6 +200,9 @@ describe("code-view worker lifecycle", () => {
     renderer = undefined;
     await vi.runOnlyPendingTimersAsync();
     await Promise.all(testState.terminations);
+    // Pool termination can queue a final broadcast after its workers have exited.
+    for (const frame of animationFrames) clearImmediate(frame);
+    animationFrames.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
