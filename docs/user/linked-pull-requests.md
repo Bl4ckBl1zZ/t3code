@@ -39,6 +39,10 @@ The web pull-request list remembers your filters and sort order when reopened fr
 The default **Ready to merge** order puts approved, passing work first, then passing work awaiting
 review. Conflicts stay last. Smaller measured diffs sort first within each readiness group.
 Searching keeps relevance ordering, and changing a filter leaves your current review open.
+**Blocked on me** puts your own open requests with conflicts first, then requested changes,
+failing checks, drafts, work waiting on others, and approved, passing work. Reviews requested
+from you show open requests first. Each tier lists the most recently updated first. It is
+available on web, desktop and iOS.
 Project choices combine checkouts of the same repository on one machine and distinguish
 matching names across machines.
 

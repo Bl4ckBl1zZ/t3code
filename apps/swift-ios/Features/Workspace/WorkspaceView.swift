@@ -69,6 +69,9 @@ public struct WorkspaceView: View {
     @State private var isBatchRunning = false
     @State private var confirmsBatchDelete = false
     @State private var confirmsBatchUnpin = false
+    @State private var customSnoozeTargets: CustomSnoozeTargets?
+    /// The last message-search answer and the query it answers.
+    @State private var contentSearch: (query: String, matches: [String: FeatureThreadSearchMatch])?
     @State private var draftToDiscard: FeatureThread?
     @State private var pendingUnpinThread: FeatureThread?
     @FocusState private var isSearchFocused: Bool
@@ -142,10 +145,10 @@ public struct WorkspaceView: View {
             } catch { noticeAlert = ThreadListActionAlert(title: "Drafts unavailable", message: error.localizedDescription) }
         }
         .confirmationDialog("Delete \(batchSelection.count) selected threads?", isPresented: $confirmsBatchDelete, titleVisibility: .visible) {
-            Button("Delete threads", role: .destructive) { runBatch(delete: true) }
+            Button("Delete threads", role: .destructive) { runBatch { await model.deleteThread($0) } }
         } message: { Text("Thread history will be deleted. Worktree files stay on the environment. Failed threads remain selected.") }
         .confirmationDialog("Unpin selected threads?", isPresented: $confirmsBatchUnpin, titleVisibility: .visible) {
-            Button("Unpin") { runBatch(delete: false) }
+            Button("Unpin") { runBatch { await model.setPinned($0, pinned: false) } }
         }
         .confirmationDialog("Discard unsent draft?", isPresented: Binding(get: { draftToDiscard != nil }, set: { if !$0 { draftToDiscard = nil } }), titleVisibility: .visible) {
             Button("Discard draft", role: .destructive) {
@@ -246,6 +249,15 @@ public struct WorkspaceView: View {
             }
         }
         .sheet(isPresented: $showingHermesSetup) { WorkSetupSheet(model: model) }
+        .sheet(item: $customSnoozeTargets) { targets in
+            CustomSnoozeSheet(threadCount: targets.threadIDs.count) { until in
+                if targets.isBatch {
+                    snoozeSelection(until: until)
+                } else if let id = targets.threadIDs.first {
+                    Task { await model.setSnoozed(id, until: until) }
+                }
+            }
+        }
         .sheet(isPresented: $showingSettings) {
             SettingsView(model: model)
         }
@@ -366,6 +378,33 @@ public struct WorkspaceView: View {
         .onChange(of: storedWorkspace) {
             settledLimit = 12
         }
+        .task(id: searchText) { await searchThreadContent() }
+    }
+
+    /// Debounced, and cancelled by the next keystroke through `.task(id:)`.
+    private func searchThreadContent() async {
+        guard let query = ThreadContentSearch.normalizedQuery(searchText),
+              let searcher = model.client as? any FeatureThreadContentSearching else {
+            contentSearch = nil
+            return
+        }
+        do { try await Task.sleep(for: ThreadContentSearch.debounce) } catch { return }
+        let matches = await searcher.searchThreadContent(query: query)
+        guard !Task.isCancelled else { return }
+        contentSearch = (query, matches)
+    }
+
+    /// Matches count only for the query they answer, so a previous answer never
+    /// decorates rows while the next query is still debouncing.
+    private var currentContentMatches: [String: FeatureThreadSearchMatch] {
+        guard let contentSearch, contentSearch.query == ThreadContentSearch.normalizedQuery(searchText) else { return [:] }
+        return contentSearch.matches
+    }
+
+    private var isSearchingContent: Bool {
+        guard let query = ThreadContentSearch.normalizedQuery(searchText),
+              model.client is any FeatureThreadContentSearching else { return false }
+        return contentSearch?.query != query
     }
 
     private var threadList: some View {
@@ -376,7 +415,8 @@ public struct WorkspaceView: View {
             query: searchText,
             projectID: activeProjectFilterID,
             now: sidebarBoundaryNow,
-            changeRequests: model.changeRequestsByThreadID
+            changeRequests: model.changeRequestsByThreadID,
+            contentMatchIDs: Set(currentContentMatches.keys)
         )
 
         let changeRequestThreadIDs = changeRequestThreadIDs(in: presentation)
@@ -465,7 +505,10 @@ public struct WorkspaceView: View {
                     if !batchSelection.insert(id).inserted { batchSelection.remove(id) }
                 },
                 onDiscardDraft: { draftToDiscard = $0 },
-                onDropFiles: receiveThreadFileDrop
+                onDropFiles: receiveThreadFileDrop,
+                onCustomSnooze: { customSnoozeTargets = CustomSnoozeTargets(threadIDs: [$0.id], isBatch: false) },
+                contentMatches: currentContentMatches,
+                isSearchingContent: isSearchingContent
             )
         }
         .background(T3Colors.background)
@@ -544,9 +587,26 @@ public struct WorkspaceView: View {
         HStack {
             Text("\(batchSelection.count) selected").font(.caption)
             Spacer()
+            if workspace != .chat {
+                Menu("Snooze") {
+                    ForEach(SnoozePresets.resolve()) { preset in
+                        Button("\(preset.label) (\(preset.whenLabel))") {
+                            // Recomputed at tap time, like the row menu.
+                            guard let until = SnoozePresets.snoozedUntil(actionID: SnoozePresets.actionID(for: preset)) else { return }
+                            snoozeSelection(until: until)
+                        }
+                    }
+                    Divider()
+                    Button("Custom…", systemImage: "calendar") {
+                        customSnoozeTargets = CustomSnoozeTargets(threadIDs: batchSelection.sorted(), isBatch: true)
+                    }
+                }
+                .disabled(batchSelection.isEmpty || isBatchRunning)
+                .accessibilityIdentifier("workspace-batch-snooze")
+            }
             Button("Unpin") {
                 if model.snapshot.settings.confirmThreadUnpin { confirmsBatchUnpin = true }
-                else { runBatch(delete: false) }
+                else { runBatch { await model.setPinned($0, pinned: false) } }
             }.disabled(batchSelection.isEmpty || isBatchRunning)
             Button("Delete", role: .destructive) { confirmsBatchDelete = true }
                 .disabled(batchSelection.isEmpty || isBatchRunning)
@@ -558,18 +618,33 @@ public struct WorkspaceView: View {
         .accessibilityIdentifier("workspace-batch-actions")
     }
 
-    private func runBatch(delete: Bool) {
+    /// Applies one action to every selected thread in turn. Threads it
+    /// succeeds on leave the selection, so a retry only touches the rest.
+    private func runBatch(
+        failureMessage: String = "Failed threads remain selected. Check the connection and try again.",
+        _ operation: @escaping (String) async -> Bool
+    ) {
         guard !isBatchRunning else { return }
         isBatchRunning = true
         let ids = batchSelection.sorted()
         Task {
             for id in ids {
-                let succeeded = delete ? await model.deleteThread(id) : await model.setPinned(id, pinned: false)
-                if succeeded { batchSelection.remove(id) }
+                if await operation(id) { batchSelection.remove(id) }
             }
             isBatchRunning = false
             if batchSelection.isEmpty { isSelecting = false }
-            else { noticeAlert = ThreadListActionAlert(title: "Some threads could not be updated", message: "Failed threads remain selected. Check the connection and try again.") }
+            else { noticeAlert = ThreadListActionAlert(title: "Some threads could not be updated", message: failureMessage) }
+        }
+    }
+
+    /// Threads whose server cannot snooze them, or that are queued or Work's
+    /// Main thread, stay selected rather than being sent a command the server
+    /// would refuse.
+    private func snoozeSelection(until: Date) {
+        let snoozable = Set(model.snapshot.threads.filter { $0.canShelveSnoozed && $0.state != .queued }.map(\.id))
+        runBatch(failureMessage: "Threads that cannot be snoozed, or failed to update, remain selected.") { id in
+            guard snoozable.contains(id) else { return false }
+            return await model.setSnoozed(id, until: until)
         }
     }
 
@@ -1165,6 +1240,13 @@ private extension FeatureDraftAttachment {
     }
 }
 
+/// Who a custom snooze applies to: one row's thread, or the batch selection.
+private struct CustomSnoozeTargets: Identifiable {
+    let id = UUID()
+    let threadIDs: [String]
+    let isBatch: Bool
+}
+
 struct HomePresentation {
     let pinned: [FeatureThread]
     let active: [FeatureThread]
@@ -1180,7 +1262,8 @@ struct HomePresentation {
         query: String,
         projectID: String?,
         now: Date,
-        changeRequests: [String: FeaturePullRequest] = [:]
+        changeRequests: [String: FeaturePullRequest] = [:],
+        contentMatchIDs: Set<String> = []
     ) {
         // The two workspaces share one thread list; which rows belong to which
         // is decided here, before the shelves are built, so every shelf below
@@ -1246,7 +1329,8 @@ struct HomePresentation {
             : DailyUXSidebarIndex.matchingThreads(
                 index.pinned + index.active + index.snoozed + index.settled + archived,
                 snapshot: snapshot,
-                query: normalizedQuery
+                query: normalizedQuery,
+                contentMatchIDs: contentMatchIDs
             )
         rowContexts = HomeThreadRowContext.index(snapshot: snapshot)
     }
@@ -1268,6 +1352,7 @@ final class HomePresentationCache {
         /// key, a PR merging would not re-sort the list until something else
         /// changed.
         let changeRequests: [String: FeaturePullRequest]
+        let contentMatchIDs: Set<String>
     }
 
     private var cachedKey: Key?
@@ -1280,7 +1365,8 @@ final class HomePresentationCache {
         query: String,
         projectID: String?,
         now: Date,
-        changeRequests: [String: FeaturePullRequest] = [:]
+        changeRequests: [String: FeaturePullRequest] = [:],
+        contentMatchIDs: Set<String> = []
     ) -> HomePresentation {
         let key = Key(
             revision: revision,
@@ -1288,7 +1374,8 @@ final class HomePresentationCache {
             query: query,
             projectID: projectID,
             now: now,
-            changeRequests: changeRequests
+            changeRequests: changeRequests,
+            contentMatchIDs: contentMatchIDs
         )
         if cachedKey == key, let cachedPresentation {
             return cachedPresentation
@@ -1300,7 +1387,8 @@ final class HomePresentationCache {
             query: query,
             projectID: projectID,
             now: now,
-            changeRequests: changeRequests
+            changeRequests: changeRequests,
+            contentMatchIDs: contentMatchIDs
         )
         cachedKey = key
         cachedPresentation = presentation
@@ -1357,6 +1445,8 @@ struct HomeThreadRowContext: Equatable {
     /// after the fact by whoever builds the rows: it arrives on its own
     /// subscription, long after the snapshot this context is indexed from.
     var pullRequest: FeaturePullRequest?
+    /// Set only on a search result found by message content rather than title.
+    var searchExcerpt: HomeThreadSearchExcerpt?
 
     static let fallback = HomeThreadRowContext(
         projectName: "Project",

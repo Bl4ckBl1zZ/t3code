@@ -15,6 +15,7 @@ import {
 } from "../packages/contracts/src/hermesWork.ts";
 import { HermesWorkGroupsQueryResult } from "../packages/contracts/src/hermesWorkGroups.ts";
 import { ChatImageAttachment } from "../packages/contracts/src/chatAttachment.ts";
+import { OrchestrationSearchThreadsResult } from "../packages/contracts/src/threadSearch.ts";
 import { TerminalSummary, TerminalWriteInput } from "../packages/contracts/src/terminal.ts";
 import {
   AgentSessionScanResult,
@@ -723,6 +724,39 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(projectIconsPath, projectIconsSerialized);
+
+const threadSearchPath = NodePath.join(NodePath.dirname(outputPath), "threadSearch.json");
+const threadSearchSerialized = `${JSON.stringify(
+  Schema.encodeSync(OrchestrationSearchThreadsResult)({
+    matches: [
+      {
+        threadId: ThreadId.make("thread-search-user"),
+        projectId: ProjectId.make("project-search"),
+        source: "user",
+        snippet: "why is the relay column still varchar(191)?",
+        messageCreatedAt: "2026-09-19T10:00:00.000Z",
+      },
+      {
+        threadId: ThreadId.make("thread-search-agent"),
+        projectId: ProjectId.make("project-search"),
+        source: "assistant",
+        snippet: "…widen thread_id to varchar(512) in both relay tables…",
+        messageCreatedAt: null,
+      },
+    ],
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(threadSearchPath) ||
+    NodeFS.readFileSync(threadSearchPath, "utf8") !== threadSearchSerialized
+  ) {
+    console.error("[swift-fixtures] threadSearch.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(threadSearchPath, threadSearchSerialized);
 
 const pullRequestWorkspacePath = NodePath.join(
   NodePath.dirname(outputPath),

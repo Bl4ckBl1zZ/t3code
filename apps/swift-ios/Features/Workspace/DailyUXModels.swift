@@ -329,10 +329,13 @@ struct DailyUXSidebarIndex {
         return lhs.id < rhs.id
     }
 
+    /// Title, preview, project and pull request matches first, then threads the
+    /// server matched by message content (`contentMatchIDs`), each in list order.
     static func matchingThreads(
         _ candidates: [FeatureThread],
         snapshot: FeatureSnapshot,
-        query: String
+        query: String,
+        contentMatchIDs: Set<String> = []
     ) -> [FeatureThread] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedQuery.isEmpty else { return [] }
@@ -342,16 +345,24 @@ struct DailyUXSidebarIndex {
         let projectByID = snapshot.projects.reduce(into: [String: FeatureProject]()) {
             $0[$1.id] = $1
         }
-        return candidates.filter { thread in
+        var titleMatches: [FeatureThread] = []
+        var contentMatches: [FeatureThread] = []
+        for thread in candidates {
             let project = projectByID[thread.projectID]
-            return ([
+            let matchesLocally = ([
                 thread.title,
                 thread.preview ?? "",
                 project?.name ?? "",
                 project?.path ?? "",
             ] + thread.allLinkedPullRequests.flatMap { ["#\($0.number)", "\($0.repository)#\($0.number)", $0.url] })
             .contains { $0.localizedCaseInsensitiveContains(normalizedQuery) }
+            if matchesLocally {
+                titleMatches.append(thread)
+            } else if contentMatchIDs.contains(thread.id) {
+                contentMatches.append(thread)
+            }
         }
+        return titleMatches + contentMatches
     }
 }
 

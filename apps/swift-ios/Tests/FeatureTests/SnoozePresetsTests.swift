@@ -89,4 +89,27 @@ final class SnoozePresetsTests: XCTestCase {
             SnoozePresets.snoozedUntil(actionID: "snooze:never", now: now, calendar: calendar)
         )
     }
+
+    func testCustomDurationsCountFromConfirmationAndRejectEmptyAmounts() {
+        let now = date(2026, 8, 12, hour: 10)
+
+        XCTAssertEqual(CustomSnooze.wake(amount: 45, unit: .minutes, now: now), now.addingTimeInterval(45 * 60))
+        XCTAssertEqual(CustomSnooze.wake(amount: 3, unit: .hours, now: now), date(2026, 8, 12, hour: 13))
+        // A day is 24 hours, not a calendar day.
+        XCTAssertEqual(CustomSnooze.wake(amount: 2, unit: .days, now: now), now.addingTimeInterval(48 * 60 * 60))
+        XCTAssertNil(CustomSnooze.wake(amount: 0, unit: .hours, now: now))
+        XCTAssertNil(CustomSnooze.wake(amount: -1, unit: .days, now: now))
+    }
+
+    func testCustomDatesMustBeInTheFutureAndDropSeconds() {
+        let now = date(2026, 8, 12, hour: 10)
+
+        XCTAssertNil(CustomSnooze.wake(date: now, now: now, calendar: calendar))
+        XCTAssertNil(CustomSnooze.wake(date: date(2026, 8, 11, hour: 9), now: now, calendar: calendar))
+        XCTAssertEqual(
+            CustomSnooze.wake(date: date(2026, 8, 13, hour: 9).addingTimeInterval(42), now: now, calendar: calendar),
+            date(2026, 8, 13, hour: 9)
+        )
+        XCTAssertEqual(CustomSnooze.initialDate(now: now, calendar: calendar), date(2026, 8, 13, hour: 9))
+    }
 }
