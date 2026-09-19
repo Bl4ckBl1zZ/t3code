@@ -27,6 +27,7 @@ function PopoverPopup({
   alignOffset = 0,
   collisionAvoidance,
   tooltipStyle = false,
+  bare = false,
   anchor,
   ...props
 }: PopoverPrimitive.Popup.Props & {
@@ -38,6 +39,13 @@ function PopoverPopup({
   alignOffset?: PopoverPrimitive.Positioner.Props["alignOffset"];
   collisionAvoidance?: PopoverPrimitive.Positioner.Props["collisionAvoidance"];
   tooltipStyle?: boolean;
+  /**
+   * Drops the popup's own glass surface so the child is the only card on
+   * screen. `dropdown-glass` is a Tailwind `@utility`, so it is emitted after
+   * `bg-transparent`/`border-0` and no `className` can cancel it — callers
+   * that paint their own panel have to opt out here.
+   */
+  bare?: boolean;
   anchor?: PopoverPrimitive.Positioner.Props["anchor"];
 }) {
   return (
@@ -57,10 +65,13 @@ function PopoverPopup({
       >
         <PopoverPrimitive.Popup
           className={cn(
-            "dropdown-glass relative flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) rounded-lg text-popover-foreground outline-none transition-[width,height,scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] has-data-[slot=calendar]:rounded-xl has-data-[slot=calendar]:before:rounded-[calc(var(--radius-xl)-1px)] data-starting-style:scale-98 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+            "relative flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) text-popover-foreground outline-none transition-[width,height,scale,opacity] data-starting-style:scale-98 data-starting-style:opacity-0",
+            !bare &&
+              "dropdown-glass rounded-lg before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] has-data-[slot=calendar]:rounded-xl has-data-[slot=calendar]:before:rounded-[calc(var(--radius-xl)-1px)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
             tooltipStyle &&
               "w-fit text-balance rounded-md text-xs shadow-md/5 before:rounded-[calc(var(--radius-md)-1px)]",
             !tooltipStyle &&
+              !bare &&
               "shadow-[0_16px_40px_-18px_rgb(0_0_0/55%)] dark:shadow-[0_18px_44px_-18px_rgb(0_0_0/80%)]",
             className,
           )}

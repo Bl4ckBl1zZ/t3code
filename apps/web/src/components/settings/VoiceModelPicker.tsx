@@ -367,11 +367,7 @@ export const VoiceModelPicker = memo(function VoiceModelPicker(props: {
         </span>
         <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       </PopoverTrigger>
-      <PopoverPopup
-        align="end"
-        className="border-0 bg-transparent p-0 shadow-none before:hidden [-webkit-backdrop-filter:none]! [--viewport-inline-padding:0] [backdrop-filter:none]!"
-        viewportClassName="rounded-lg !overflow-hidden p-0"
-      >
+      <PopoverPopup bare align="end" viewportClassName="rounded-lg !overflow-hidden p-0">
         <VoiceModelPickerContent
           models={props.models}
           value={props.value}
