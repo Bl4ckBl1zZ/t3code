@@ -103,6 +103,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
           >
             {threadPanelTooltip(<PopoverTrigger render={threadPanelToggle} />)}
             <PopoverPopup
+              bare
               anchor={threadPanelPopoverAnchor}
               align="end"
               alignOffset={0}
@@ -110,7 +111,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               side="bottom"
               sideOffset={0}
               positionerClassName="w-[min(var(--thread-details-panel-width),var(--anchor-width))] !transition-none"
-              className="w-full !overflow-visible rounded-none border-0 bg-transparent shadow-none before:hidden [--viewport-inline-padding:0] [-webkit-backdrop-filter:none] [backdrop-filter:none]"
+              className="w-full !overflow-visible"
               viewportClassName="!overflow-visible p-2"
             >
               {threadPanelPopoverContent}
