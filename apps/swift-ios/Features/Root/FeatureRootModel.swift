@@ -343,9 +343,10 @@ public final class FeatureRootModel {
         }
     }
 
-    public func setSnoozed(_ id: String, until: Date?) async {
+    @discardableResult
+    public func setSnoozed(_ id: String, until: Date?) async -> Bool {
         let environment = currentEnvironmentIdentity
-        await perform {
+        return await perform {
             try await client.setThreadSnoozed(id: id, until: until)
             guard currentEnvironmentIdentity == environment else { return }
             let snoozedAt = until.map { _ in Date.now }

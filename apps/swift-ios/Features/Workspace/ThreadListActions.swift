@@ -193,7 +193,14 @@ public enum ThreadRowMenuActions {
                                     title: preset.label,
                                     subtitle: preset.whenLabel
                                 )
-                            }
+                            } + [
+                                ThreadRowMenuAction(
+                                    id: CustomSnooze.actionID,
+                                    title: "Custom…",
+                                    symbol: "calendar",
+                                    separatorBefore: true
+                                ),
+                            ]
                         )
                 )
             }

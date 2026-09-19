@@ -1,0 +1,18 @@
+{
+  "matches": [
+    {
+      "threadId": "thread-search-user",
+      "projectId": "project-search",
+      "source": "user",
+      "snippet": "why is the relay column still varchar(191)?",
+      "messageCreatedAt": "2026-09-19T10:00:00.000Z"
+    },
+    {
+      "threadId": "thread-search-agent",
+      "projectId": "project-search",
+      "source": "assistant",
+      "snippet": "…widen thread_id to varchar(512) in both relay tables…",
+      "messageCreatedAt": null
+    }
+  ]
+}

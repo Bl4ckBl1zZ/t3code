@@ -45,6 +45,12 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     var onToggleSelection: (String) -> Void = { _ in }
     var onDiscardDraft: (FeatureThread) -> Void = { _ in }
     var onDropFiles: ((FeatureThread, [NSItemProvider]) -> Bool)? = nil
+    var onCustomSnooze: (FeatureThread) -> Void = { _ in }
+    /// Message-content matches for the current query, by thread id. Title
+    /// matching already happened in `presentation`; these add the excerpt.
+    var contentMatches: [String: FeatureThreadSearchMatch] = [:]
+    /// True while message search for the current query has not answered yet.
+    var isSearchingContent = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -356,6 +362,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     ? [.button, .selected]
                     : .button
                 cell.accessibilityLabel = thread.title + (hasDraft(item) ? ", unsent draft" : "")
+                    + (context.searchExcerpt.map { ", \($0.speaker) \($0.match.snippet)" } ?? "")
                 cell.accessibilityValue = threadAccessibilityValue(thread, context: context)
                 cell.accessibilityHint = parent.isSelecting ? "Toggles selection" : "Opens task"
                 cell.onAccessibilityActivate = { [weak self] in
@@ -406,10 +413,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 cell.accessibilityValue = nil
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = nil
-            case .searchEmpty:
+            case let .searchEmpty(_, isSearchingContent):
                 cell.isAccessibilityElement = true
                 cell.accessibilityTraits = .staticText
-                cell.accessibilityLabel = "No matching tasks"
+                cell.accessibilityLabel = isSearchingContent ? "Searching thread messages" : "No matching tasks"
                 cell.accessibilityValue = nil
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = nil
@@ -530,7 +537,13 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 return UIMenu(
                     title: action.title,
                     image: action.symbol.flatMap { UIImage(systemName: $0) },
-                    children: action.children.map { menuElement(for: $0, on: thread) }
+                    children: ThreadRowMenu.sections(action.children).map { section in
+                        UIMenu(
+                            title: "",
+                            options: .displayInline,
+                            children: section.map { menuElement(for: $0, on: thread) }
+                        )
+                    }
                 )
             }
             let element = UIAction(
@@ -568,6 +581,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 // snoozes to the stale clock its labels were built from.
                 guard let until = SnoozePresets.snoozedUntil(actionID: presetID) else { break }
                 parent.onSnooze(thread, until)
+            case CustomSnooze.actionID:
+                parent.onCustomSnooze(thread)
             case ThreadRowMenuActions.unsnoozeActionID:
                 parent.onSnooze(thread, nil)
             case ThreadRowMenuActions.copyHandoffScriptActionID:
@@ -658,14 +673,18 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalizedQuery.isEmpty {
             if presentation.searchResults.isEmpty {
-                return [.searchEmpty(normalizedQuery)]
+                return [.searchEmpty(normalizedQuery, isSearchingContent)]
             }
-            return presentation.searchResults.map {
-                .thread(
-                    $0,
-                    rowContext(for: $0),
+            return presentation.searchResults.map { thread -> HomeCollectionItem in
+                var context = rowContext(for: thread)
+                context.searchExcerpt = contentMatches[thread.id].map {
+                    HomeThreadSearchExcerpt(match: $0, query: normalizedQuery)
+                }
+                return .thread(
+                    thread,
+                    context,
                     primaryRowStyle,
-                    $0.isArchived,
+                    thread.isArchived,
                     forceRichRows
                 )
             }
@@ -820,7 +839,8 @@ enum HomeCollectionItem: Equatable {
     case workSectionHeader(WorkInboxSectionHeader)
     case empty(HomeShelf)
     case showMoreSettled(Int)
-    case searchEmpty(String)
+    /// The query, and whether message search may still add results.
+    case searchEmpty(String, Bool)
     case pinnedDivider
 
     var id: ID {
@@ -870,6 +890,12 @@ private struct HomeCollectionCellContent: View {
                 allowsMultilineTitle: allowsMultilineTitle
             )
             .equatable()
+                    if let excerpt = context.searchExcerpt {
+                        HomeThreadSearchExcerptText(excerpt: excerpt)
+                            .padding(.leading, 34)
+                            .padding(.trailing, 18)
+                            .padding(.bottom, 8)
+                    }
                 }
             }
         case let .shelfHeader(shelf, count, isExpanded):
@@ -898,10 +924,16 @@ private struct HomeCollectionCellContent: View {
             .foregroundStyle(T3Colors.textSecondary)
             .padding(.horizontal, 34)
             .frame(minHeight: T3Metrics.minimumTapTarget)
-        case .searchEmpty:
-            ContentUnavailableView("No matching tasks", systemImage: "magnifyingglass")
-                .foregroundStyle(T3Colors.textSecondary)
-                .frame(maxWidth: .infinity, minHeight: 160)
+        case let .searchEmpty(_, isSearchingContent):
+            Group {
+                if isSearchingContent {
+                    ProgressView("Searching thread messages…")
+                } else {
+                    ContentUnavailableView("No matching tasks", systemImage: "magnifyingglass")
+                }
+            }
+            .foregroundStyle(T3Colors.textSecondary)
+            .frame(maxWidth: .infinity, minHeight: 160)
         case .pinnedDivider:
             Rectangle()
                 .fill(T3Colors.textTertiary.opacity(0.18))
@@ -914,4 +946,31 @@ private struct HomeCollectionCellContent: View {
 
 private extension Optional where Wrapped == [IndexPath] {
     var orEmpty: [IndexPath] { self ?? [] }
+}
+
+/// "You:" or "Agent:" plus the matched message, the query in bold.
+private struct HomeThreadSearchExcerptText: View {
+    let excerpt: HomeThreadSearchExcerpt
+
+    var body: some View {
+        Text(attributed)
+            .font(T3Typography.supporting)
+            .foregroundStyle(T3Colors.textSecondary)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var attributed: AttributedString {
+        var speaker = AttributedString(excerpt.speaker + " ")
+        speaker.foregroundColor = excerpt.match.source == .user ? T3Colors.accent : T3Colors.success
+        speaker.font = T3Typography.supportingStrong
+        var snippet = AttributedString(excerpt.match.snippet)
+        for range in excerpt.highlightedRanges {
+            guard let lower = AttributedString.Index(range.lowerBound, within: snippet),
+                  let upper = AttributedString.Index(range.upperBound, within: snippet) else { continue }
+            snippet[lower..<upper].font = T3Typography.supportingStrong
+            snippet[lower..<upper].foregroundColor = T3Colors.textPrimary
+        }
+        return speaker + snippet
+    }
 }

@@ -249,7 +249,7 @@ private struct PullRequestWorkspaceFilters: View {
     let projects: [FeatureProject]
     let hosts: [String]
     @SwiftUI.Environment(\.dismiss) private var dismiss
-    static let sorts = [("ready", "Merge readiness"), ("updated", "Recently updated"), ("newest", "Newest"), ("oldest", "Oldest"), ("largest", "Largest changes"), ("smallest", "Smallest changes")]
+    static let sorts = [("ready", "Merge readiness"), ("blocked", "Blocked on me"), ("updated", "Recently updated"), ("newest", "Newest"), ("oldest", "Oldest"), ("largest", "Largest changes"), ("smallest", "Smallest changes")]
 
     var body: some View {
         NavigationStack {
