@@ -8,12 +8,14 @@ T3 Code keeps that visible instead of letting the conversation look finished.
 
 ## While a command runs
 
-The command keeps its own row in the conversation, reporting:
+The command keeps its own row in the conversation, shaped like any other tool call, reporting:
 
 - **how long it has been running**, and for a paused command, that it is paused
 - **the last line it printed**, plus how long ago that was — the difference between a command that is
   working and one that is stuck
-- **its exit code** when it finishes, or why it never got to finish
+- **why it failed or never got to finish**, once it ends
+
+Open the row to read the command's full output and exit code.
 
 A row stays visible even when the surrounding tool calls collapse, so a long-running command is never
 hidden behind "+3 previous tool calls".
@@ -32,24 +34,25 @@ instead of as a separate process, because you are waiting on one thing, not two.
 
 ## While you are elsewhere
 
-A strip above the composer shows how many background commands are running for the open conversation,
-with the elapsed time of the oldest. Expand it for the full detail of each. In the sidebar, a
+A strip tucked above the composer shows how many background commands are running for the open
+conversation, with the elapsed time of the oldest. Click it for the latest output of each. In the sidebar, a
 conversation with background work shows a hollow, breathing dot — distinct from the filled dot of a
 conversation that is generating right now, and from no dot at all. It means: idle at the moment, but
 this one will speak again by itself.
 
 ## How commands end
 
-| What you see                                     | What happened                                                                      |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `finished exit 0`                                | The command completed successfully.                                                |
-| `failed exit 1`                                  | The command failed. This appears whether or not the agent mentions it.             |
-| `stopped when the session ended`                 | The provider shut down and took the command with it. Not a failure of the command. |
-| `outcome unknown, server restarted while it ran` | The T3 Code server restarted, so the result can no longer be observed.             |
-| `gave up waiting`                                | A wait reached its deadline without the thing it wanted happening.                 |
+| What you see                            | What happened                                                                      |
+| --------------------------------------- | ---------------------------------------------------------------------------------- |
+| Only the run time                       | The command completed successfully.                                                |
+| `Failed with exit code 1`               | The command failed. This appears whether or not the agent mentions it.             |
+| `Stopped when the session ended`        | The provider shut down and took the command with it. Not a failure of the command. |
+| `Result unknown after a server restart` | The T3 Code server restarted, so the result can no longer be observed.             |
+| `Timed out`                             | A wait reached its deadline without the thing it wanted happening.                 |
+| `Stopped`                               | The command was cancelled before it finished.                                      |
 
 Stopping a turn does not stop a command that has been detached from it. The turn stops; the command
-keeps running and stays visible, and you can stop it from its own row.
+keeps running and stays visible. To end it, ask the agent to stop it.
 
 ## What each provider can show
 

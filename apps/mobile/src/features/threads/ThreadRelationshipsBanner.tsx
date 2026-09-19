@@ -9,9 +9,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AgentOrb } from "../../components/AgentOrb";
 import { AgentWorkflowProgress } from "./AgentWorkflowProgress";
 import { AppText as Text } from "../../components/AppText";
+import { relatedThreadStatus } from "../../lib/threadLifecycle";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { WorkRowStatusGlyph } from "./thread-work-log";
 import {
   relationshipLabel,
   relationshipSymbol,
@@ -113,11 +115,14 @@ export function ThreadRelationshipsBanner(props: {
           </View>
         )}
         <View className="min-w-0 flex-1">
-          <Text className="text-3xs uppercase tracking-wide text-foreground-muted">
-            {relationshipLabel(edge, props.threadId)}
-          </Text>
-          <Text className="font-t3-medium text-sm text-foreground" numberOfLines={1}>
-            {node?.thread?.title ?? threadId}
+          <Text className="text-sm text-foreground" numberOfLines={1}>
+            <Text className="font-t3-medium text-foreground">
+              {node?.thread?.title ?? threadId}
+            </Text>
+            <Text className="text-xs text-foreground-muted">
+              {" "}
+              {relationshipLabel(edge, props.threadId)}
+            </Text>
           </Text>
           {edge.kind === "subagent" ? (
             <AgentWorkflowProgress
@@ -126,6 +131,12 @@ export function ThreadRelationshipsBanner(props: {
             />
           ) : null}
         </View>
+        {edge.kind === "subagent" ? (
+          <WorkRowStatusGlyph
+            iconSubtleColor={iconColor}
+            status={relatedThreadStatus(edge.status)}
+          />
+        ) : null}
         {availability ? (
           <Text className="text-2xs text-foreground-muted">{availability}</Text>
         ) : (

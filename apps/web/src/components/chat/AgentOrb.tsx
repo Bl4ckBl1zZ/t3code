@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { agentHue } from "@t3tools/shared/agentIdentity";
 
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { cn } from "../../lib/utils";
 
 /**
@@ -66,6 +67,9 @@ export function AgentOrb(props: {
   return (
     <span
       aria-hidden="true"
+      // A subagent can run for many minutes; the drift pauses off screen, in a
+      // hidden tab, and under reduced motion.
+      ref={state === "active" ? observeVisibleAnimation : undefined}
       data-agent-orb-state={state}
       data-agent-orb-texture={textureIndex}
       className={cn("agent-orb relative shrink-0 overflow-hidden rounded-full", props.className)}

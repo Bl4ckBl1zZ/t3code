@@ -19,6 +19,7 @@ import type { SFSymbol } from "expo-symbols";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentOrbState } from "../../components/AgentOrb";
+import { relatedThreadStatus } from "../../lib/threadLifecycle";
 import { useThreadShells } from "../../state/entities";
 import { useThreadProjection } from "../../state/use-thread-detail";
 import { useArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
@@ -39,9 +40,9 @@ export function relationshipSymbol(edge: ThreadRelationshipEdge): SFSymbol {
 }
 
 export function subagentEdgeOrbState(status: string | null): AgentOrbState {
-  if (status === "failed") return "failed";
-  if (status === "running") return "active";
-  return "done";
+  const state = relatedThreadStatus(status);
+  if (state === "failed") return "failed";
+  return state === "running" ? "active" : "done";
 }
 
 export function threadAvailability(

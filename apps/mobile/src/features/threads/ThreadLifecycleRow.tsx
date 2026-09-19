@@ -7,8 +7,6 @@ import { Pressable, View } from "react-native";
 import { AgentOrb } from "../../components/AgentOrb";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
-import { ShimmerText } from "../../components/ShimmerText";
-import { cn } from "../../lib/cn";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
 import {
   resolveLifecyclePresentation,
@@ -19,112 +17,114 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { useThreadProjection } from "../../state/use-thread-detail";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { WorkRowStatusGlyph } from "./thread-work-log";
 
 type LifecycleEntry = Extract<ThreadFeedEntry, { type: "lifecycle" }>;
 
-const BADGE_TONE_CLASS = {
-  neutral: "text-foreground-muted",
-  success: "text-emerald-700 dark:text-emerald-300",
-  danger: "text-red-600 dark:text-red-400",
-} as const;
-
-export type RelatedThreadCardChrome = "card" | "bare";
+/**
+ * Spacing around related-thread rows in the feed. A merged run shares one
+ * wrapper so its rows stack as tightly as a work log's.
+ */
+export const RELATED_THREAD_ROWS_CLASS = "-mx-1 mb-3 gap-px px-1";
 
 /**
- * Shared by the standalone card and the grouped container so a merged run keeps
- * exactly the radius and fill a single card would have had.
+ * A subagent or created thread, drawn as an ordinary tool row: orb or icon,
+ * the agent's name with its task muted after it, the latest progress or result
+ * underneath, and a status glyph. Tapping opens the thread.
  */
-export const RELATED_THREAD_CARD_SURFACE_CLASS =
-  "mb-4 overflow-hidden rounded-[16px] border-continuous bg-card";
-
-function RelatedThreadCard(props: {
+function RelatedThreadRow(props: {
   readonly presentation: Extract<LifecyclePresentation, { kind: "related-thread" }>;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
-  readonly chrome: RelatedThreadCardChrome;
 }) {
   const navigation = useNavigation();
   const iconSubtle = useThemeColor("--color-icon-subtle");
+  const pressedBackground = String(useThemeColor("--color-subtle"));
   const presentation = props.presentation;
   const canOpen = props.threadId !== null;
+  const description = [
+    presentation.title,
+    presentation.preview,
+    presentation.meta,
+    presentation.status,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return (
-    <View className={props.chrome === "bare" ? undefined : RELATED_THREAD_CARD_SURFACE_CLASS}>
-      <Pressable
-        accessibilityLabel={
-          canOpen ? `Open ${presentation.title}` : `${presentation.title} details`
-        }
-        accessibilityRole="button"
-        className="flex-row items-center gap-3 px-3.5 py-3"
-        disabled={!canOpen}
-        onPress={() => {
-          if (props.threadId === null) return;
-          void Haptics.selectionAsync();
-          navigation.navigate("Thread", {
-            environmentId: props.environmentId,
-            threadId: props.threadId,
-          });
-        }}
-      >
-        {presentation.orbSeed !== null ? (
-          <AgentOrb seed={presentation.orbSeed} size={26} state={presentation.orbState ?? "done"} />
-        ) : (
-          <SymbolView
-            name={presentation.symbol}
-            size={16}
-            tintColor={iconSubtle}
-            type="monochrome"
-          />
-        )}
-        <View className="min-w-0 flex-1">
-          <View className="flex-row items-center gap-2">
-            <Text
-              className="min-w-0 shrink font-t3-medium text-base text-foreground"
-              numberOfLines={1}
-            >
-              {presentation.title}
-            </Text>
-            <Text
-              className={cn(
-                "font-t3-bold text-2xs tracking-wide",
-                BADGE_TONE_CLASS[presentation.badgeTone],
-              )}
-            >
-              {presentation.badge.toUpperCase()}
-            </Text>
-          </View>
-          {/* Strictly one line: a fan-out of agents is scanned, not read, and a
-              card that grows a second line for one agent breaks the column. */}
-          {presentation.detail ? (
-            presentation.orbState === "active" ? (
-              <ShimmerText className="mt-0.5 text-sm text-foreground-muted" numberOfLines={1}>
-                {presentation.detail}
-              </ShimmerText>
-            ) : (
-              <Text className="mt-0.5 text-sm text-foreground-muted" numberOfLines={1}>
-                {presentation.detail}
-              </Text>
-            )
+    <Pressable
+      accessibilityLabel={canOpen ? `Open ${description}` : description}
+      accessibilityRole={canOpen ? "button" : undefined}
+      className="rounded-md px-0.5 py-0.5"
+      disabled={!canOpen}
+      hitSlop={4}
+      onPress={() => {
+        if (props.threadId === null) return;
+        void Haptics.selectionAsync();
+        navigation.navigate("Thread", {
+          environmentId: props.environmentId,
+          threadId: props.threadId,
+        });
+      }}
+      style={({ pressed }) => ({ backgroundColor: pressed ? pressedBackground : "transparent" })}
+    >
+      <View className="min-h-9 flex-row items-center gap-1.5">
+        <View className="h-5 w-5 shrink-0 items-center justify-center">
+          {presentation.orbSeed !== null ? (
+            <AgentOrb
+              seed={presentation.orbSeed}
+              size={16}
+              state={presentation.orbState ?? "done"}
+            />
+          ) : (
+            <SymbolView
+              name={presentation.symbol}
+              size={14}
+              tintColor={iconSubtle}
+              type="monochrome"
+              weight="medium"
+            />
+          )}
+        </View>
+        <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
+          <Text className="font-t3-medium text-foreground">{presentation.title}</Text>
+          {presentation.preview ? (
+            <Text className="text-foreground-muted opacity-60"> {presentation.preview}</Text>
+          ) : null}
+        </Text>
+        <View className="shrink-0 flex-row items-center gap-px">
+          {presentation.meta ? (
+            <Text className="pr-1 text-2xs text-foreground-muted">{presentation.meta}</Text>
+          ) : null}
+          <WorkRowStatusGlyph iconSubtleColor={iconSubtle} status={presentation.status} />
+          {canOpen ? (
+            <View className="h-4 w-4 items-center justify-center">
+              <SymbolView name="chevron.right" size={11} tintColor={iconSubtle} type="monochrome" />
+            </View>
           ) : null}
         </View>
-        {canOpen ? (
-          <SymbolView name="chevron.right" size={12} tintColor={iconSubtle} type="monochrome" />
-        ) : null}
-      </Pressable>
-    </View>
+      </View>
+      {/* Strictly one line: a fan-out of agents is scanned, not read. Plain
+          text even while the agent runs, since that can be minutes. */}
+      {presentation.detail ? (
+        <Text className="-mt-1.5 pb-1 pl-6.5 text-2xs text-foreground-muted" numberOfLines={1}>
+          {presentation.detail}
+        </Text>
+      ) : null}
+    </Pressable>
   );
 }
 
 /**
  * First-class timeline row for a V2 lifecycle item: system dividers (interrupt
- * request/result, compaction, handoff, fork) and related-thread cards (thread
+ * request/result, compaction, handoff, fork) and related-thread rows (thread
  * created, subagent). Mobile counterpart to the web timeline's V2LifecycleRow.
  */
 export function ThreadLifecycleRow(props: {
   readonly entry: LifecycleEntry;
   readonly environmentId: EnvironmentId;
-  /** `bare` drops the card surface so a merged group can supply its own. */
-  readonly chrome?: RelatedThreadCardChrome;
+  /** Drops the row's own spacing so a merged run can supply it once. */
+  readonly grouped?: boolean;
 }) {
   const navigation = useNavigation();
   const row = props.entry.row;
@@ -183,12 +183,16 @@ export function ThreadLifecycleRow(props: {
     row.item.type === "subagent"
       ? (support.subagent?.childThreadId ?? presentation.threadId)
       : presentation.threadId;
-  return (
-    <RelatedThreadCard
-      chrome={props.chrome ?? "card"}
+  const relatedRow = (
+    <RelatedThreadRow
       environmentId={props.environmentId}
       presentation={presentation}
       threadId={threadId}
     />
+  );
+  return props.grouped === true ? (
+    relatedRow
+  ) : (
+    <View className={RELATED_THREAD_ROWS_CLASS}>{relatedRow}</View>
   );
 }

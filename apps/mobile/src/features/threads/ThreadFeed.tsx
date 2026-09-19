@@ -146,7 +146,7 @@ import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
 import { isScheduledTaskMessageId } from "./scheduledTaskMessageBadge";
-import { RELATED_THREAD_CARD_SURFACE_CLASS, ThreadLifecycleRow } from "./ThreadLifecycleRow";
+import { RELATED_THREAD_ROWS_CLASS, ThreadLifecycleRow } from "./ThreadLifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { formatOrchestrationV2TimelineDayLabel } from "@t3tools/shared/orchestrationV2Timeline";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
@@ -1395,20 +1395,21 @@ function renderFeedEntry(
   );
 }
 
-// Agents fanned out side by side read as one list, not as a stack of separate
-// boxes: a run of adjacent related-thread cards shares a single card surface,
-// with a hairline between each agent.
+// Agents fanned out side by side read as one list: a run of adjacent
+// related-thread rows stacks as tightly as a work log.
 function LifecycleGroup(props: {
   readonly entries: ReadonlyArray<Extract<ThreadFeedEntry, { type: "lifecycle" }>>;
   readonly environmentId: EnvironmentId;
 }) {
   return (
-    <View className={RELATED_THREAD_CARD_SURFACE_CLASS}>
-      {props.entries.map((entry, index) => (
-        <View key={entry.id}>
-          {index > 0 ? <View className="h-px bg-border" /> : null}
-          <ThreadLifecycleRow chrome="bare" entry={entry} environmentId={props.environmentId} />
-        </View>
+    <View className={RELATED_THREAD_ROWS_CLASS}>
+      {props.entries.map((entry) => (
+        <ThreadLifecycleRow
+          key={entry.id}
+          entry={entry}
+          environmentId={props.environmentId}
+          grouped
+        />
       ))}
     </View>
   );

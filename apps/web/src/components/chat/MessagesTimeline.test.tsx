@@ -1262,7 +1262,7 @@ describe("MessagesTimeline", () => {
     expect(bareMarkup).not.toContain("Full conversation context");
   });
 
-  it("renders created threads as linked cards outside the work log", async () => {
+  it("renders created threads as linked rows outside the work log", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1311,7 +1311,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work Log");
   });
 
-  it("renders live subagent progress on the persistent linked card", async () => {
+  it("renders live subagent progress on the persistent linked row", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1365,7 +1365,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work Log");
   });
 
-  it("renders consecutive subagent cards inside one divided group card", async () => {
+  it("stacks consecutive subagent rows in one group", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const subagentEntry = (index: number) => ({
       id: `subagent-${index}`,
@@ -1410,12 +1410,9 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-v2-event-group-count="2"');
     expect(markup).toContain('aria-label="Open Map surface 1"');
     expect(markup).toContain('aria-label="Open Map surface 2"');
-    // The group owns the single border; the cards inside it draw dividers only.
-    expect(markup.match(/border-border\/60/g)?.length).toBe(1);
-    expect(markup).toContain("divide-border/60");
   });
 
-  it("shows the final Codex subagent result on a card that opens the child thread", async () => {
+  it("shows the final Codex subagent result on a row that opens the child thread", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline

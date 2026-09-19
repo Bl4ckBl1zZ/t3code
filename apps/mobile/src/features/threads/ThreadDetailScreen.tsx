@@ -86,6 +86,7 @@ import { ThreadFeed } from "./ThreadFeed";
 import { ThreadAutomationsSection } from "./ThreadAutomationsSection";
 import { ThreadRelationshipsBanner } from "./ThreadRelationshipsBanner";
 import { ThreadQueueControl } from "./ThreadQueueControl";
+import { ThreadWorkingAgentsPill } from "./ThreadWorkingAgentsPill";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
@@ -766,6 +767,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               </Animated.View>
             ) : null}
             <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+              <ThreadWorkingAgentsPill
+                environmentId={props.environmentId}
+                threadId={props.selectedThread.id}
+              />
               <ThreadQueueControl
                 environmentId={props.environmentId}
                 threadId={props.selectedThread.id}

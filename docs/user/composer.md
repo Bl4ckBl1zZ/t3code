@@ -206,7 +206,8 @@ into the stash first. Removing a saved draft asks for confirmation. Existing sin
 stashes remain available after updating.
 
 Completed web conversations keep the final response visible. Expand **Worked for…** to read
-interim responses and completed tools. Resource cards remain visible outside that fold.
+interim responses and completed tools. Subagents, forks, threads the agent created and
+commands still running remain visible outside that fold.
 
 On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same eight-attachment limit applies to the picker and dropped files.
 

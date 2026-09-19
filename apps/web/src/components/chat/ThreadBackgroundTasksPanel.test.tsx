@@ -91,7 +91,7 @@ describe("ThreadBackgroundTasksPanel", () => {
   });
 
   it("says so honestly when a running command has printed nothing", () => {
-    expect(render([projected(commandItem())])).toContain("no output yet");
+    expect(render([projected(commandItem())])).toContain("No output yet");
   });
 
   it("folds a monitor into the command it watches instead of listing it twice", () => {
@@ -109,8 +109,8 @@ describe("ThreadBackgroundTasksPanel", () => {
       ),
     ]);
     expect(markup.match(/<li /gu)).toHaveLength(1);
-    expect(markup).toContain("the agent is waiting on it");
-    expect(markup).not.toContain("Waiting on a condition");
+    expect(markup).toContain("Agent is waiting on this");
+    expect(markup).not.toContain("Waiting for a condition");
   });
 
   it("gives an orphan monitor its own row with the deadline it gives up at", () => {
@@ -123,9 +123,9 @@ describe("ThreadBackgroundTasksPanel", () => {
         }),
       ),
     ]);
-    expect(markup).toContain("Waiting on a condition");
-    expect(markup).toContain("the agent is asleep until this passes");
-    expect(markup).toContain("left");
+    expect(markup).toContain("Waiting for a condition");
+    expect(markup).toContain("Agent is asleep until this passes");
+    expect(markup).toContain("gives up in");
   });
 
   it("caps the list and reports what it left out", () => {

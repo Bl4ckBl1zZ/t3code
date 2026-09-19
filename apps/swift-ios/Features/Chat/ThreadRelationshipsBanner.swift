@@ -277,18 +277,20 @@ struct ThreadRelationshipsBanner: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(
-                        ThreadRelationships.label(
-                            row.edge, currentThreadID: model.currentThreadID
-                        )
-                        .uppercased()
-                    )
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textTertiary)
-
-                    Text(model.title(for: row.threadID))
+                    // The thread's name leads, and how it relates to this one
+                    // follows as muted meta, the way a work row names a tool
+                    // and then its target.
+                    (Text(verbatim: model.title(for: row.threadID))
                         .font(T3Typography.control)
                         .foregroundStyle(T3Colors.textPrimary)
+                        + Text(
+                            verbatim: " "
+                                + ThreadRelationships.label(
+                                    row.edge, currentThreadID: model.currentThreadID
+                                )
+                        )
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textTertiary))
                         .lineLimit(1)
                         .truncationMode(.tail)
 
@@ -300,6 +302,10 @@ struct ThreadRelationshipsBanner: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                if row.edge.kind == .subagent {
+                    WorkRowStatusGlyph(status: WorkRowStatus(agentStatus: row.edge.status))
+                }
 
                 if let availability {
                     Text(availability)
@@ -321,6 +327,11 @@ struct ThreadRelationshipsBanner: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .opacity(disabled ? 0.55 : 1)
+        .accessibilityValue(
+            row.edge.kind == .subagent
+                ? WorkRowStatus(agentStatus: row.edge.status)?.accessibilityLabel ?? ""
+                : ""
+        )
     }
 
     private var rowShape: RoundedRectangle {

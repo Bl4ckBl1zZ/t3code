@@ -1713,7 +1713,7 @@ private struct ThreadTimelineEntryView: View {
 
         case let .lifecycle(lifecycle):
             if lifecycle.rows.count > 1 {
-                ThreadLifecycleCardGroup(
+                ThreadLifecycleRowGroup(
                     rows: lifecycle.rows,
                     runs: lifecycle.runs,
                     liveChildThreadIDs: lifecycle.childThreadIDs,

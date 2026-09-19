@@ -23,10 +23,12 @@ final class ThreadActivityInspectorTests: XCTestCase {
         _ model: ThreadActivityInspectorModel,
         _ label: String
     ) -> ThreadActivityInspectorBlock? {
-        model.blocks.first { $0.label == label }
+        (model.blocks + model.detailBlocks).first { $0.label == label }
     }
 
-    func testCommandExecutionPresentsLifecycleSupportOutputAndExitState() {
+    /// Leads with what the command did — one terminal-style block and how it
+    /// ended — and keeps the lifecycle metadata for the Details disclosure.
+    func testCommandExecutionLeadsWithOutputAndExitAndKeepsMetadataAsDetails() {
         let item = V2Fixture.turnItem(
             id: "command",
             type: "command_execution",
@@ -68,12 +70,66 @@ final class ThreadActivityInspectorTests: XCTestCase {
             XCTAssertTrue(model.fields.contains(expected), "missing field \(expected.label)")
         }
 
-        XCTAssertEqual(block(model, "Command")?.value, "vp check")
-        XCTAssertEqual(block(model, "Output")?.value, "all checks passed")
-        XCTAssertEqual(block(model, "Exit")?.value, "Process exited with code 0")
+        XCTAssertEqual(
+            model.blocks,
+            [.init(label: nil, value: "$ vp check\n\nall checks passed", monospaced: true)]
+        )
+        XCTAssertEqual(model.ending, .init(label: "Exited with code 0 · 2.0s", tone: .neutral))
+        XCTAssertEqual(
+            model.detailBlocks.map(\.label),
+            ["Attempt history"]
+        )
         XCTAssertEqual(
             block(model, "Attempt history")?.value,
             "Attempt 1 · superseded · initial\nAttempt 2 · completed · steering restart"
+        )
+    }
+
+    func testANonzeroExitEndsInDanger() {
+        let item = V2Fixture.turnItem(
+            id: "failing-command",
+            type: "command_execution",
+            status: "failed",
+            extra: [
+                "input": .string("vp test"),
+                "output": .string("1 failed\n"),
+                "exitCode": .number(1),
+                "startedAt": .string("2026-06-20T00:00:00.000Z"),
+                "completedAt": .string("2026-06-20T00:00:02.000Z"),
+            ]
+        )
+        let model = ThreadActivityInspector.build(
+            row: inheritedRow(item),
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
+        )
+        XCTAssertEqual(model.blocks.first?.value, "$ vp test\n\n1 failed")
+        XCTAssertEqual(model.ending, .init(label: "Exited with code 1 · 2.0s", tone: .danger))
+    }
+
+    /// A background command that never got to finish has an ending, not an
+    /// exit code, and that is what its inspector says.
+    func testABackgroundCommandThatNeverFinishedEndsWithItsEnding() {
+        let item = V2Fixture.turnItem(
+            id: "background-command",
+            type: "command_execution",
+            status: "cancelled",
+            extra: [
+                "input": .string("vp run dev"),
+                "output": .string("ready on :3000"),
+                "background": .bool(true),
+                "exitReason": .string("killed"),
+                "startedAt": .string("2026-06-20T00:00:00.000Z"),
+                "completedAt": .string("2026-06-20T00:10:00.000Z"),
+            ]
+        )
+        let model = ThreadActivityInspector.build(
+            row: inheritedRow(item),
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
+        )
+        XCTAssertEqual(
+            model.ending, .init(label: "Stopped when the session ended", tone: .warning)
         )
     }
 

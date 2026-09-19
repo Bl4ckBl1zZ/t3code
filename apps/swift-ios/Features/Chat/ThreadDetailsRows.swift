@@ -90,8 +90,6 @@ struct ThreadDetailsRow<Leading: View, Detail: View, Trailing: View>: View {
     var systemImage: String?
     var iconTint: Color = T3Colors.textSecondary
     let title: String
-    /// A shell command is the one title that has to keep its own spacing.
-    var titleIsMonospaced = false
     var subtitle: String?
     var isDisabled = false
     var showsChevron = true
@@ -134,7 +132,7 @@ struct ThreadDetailsRow<Leading: View, Detail: View, Trailing: View>: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(titleIsMonospaced ? T3Typography.tool : T3Typography.control)
+                    .font(T3Typography.control)
                     .foregroundStyle(T3Colors.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -170,7 +168,6 @@ extension ThreadDetailsRow where Leading == EmptyView, Detail == EmptyView, Trai
         systemImage: String? = nil,
         iconTint: Color = T3Colors.textSecondary,
         title: String,
-        titleIsMonospaced: Bool = false,
         subtitle: String? = nil,
         isDisabled: Bool = false,
         showsChevron: Bool = true,
@@ -180,7 +177,6 @@ extension ThreadDetailsRow where Leading == EmptyView, Detail == EmptyView, Trai
             systemImage: systemImage,
             iconTint: iconTint,
             title: title,
-            titleIsMonospaced: titleIsMonospaced,
             subtitle: subtitle,
             isDisabled: isDisabled,
             showsChevron: showsChevron,
@@ -197,7 +193,6 @@ extension ThreadDetailsRow where Leading == EmptyView, Trailing == EmptyView {
         systemImage: String? = nil,
         iconTint: Color = T3Colors.textSecondary,
         title: String,
-        titleIsMonospaced: Bool = false,
         subtitle: String? = nil,
         isDisabled: Bool = false,
         showsChevron: Bool = true,
@@ -208,7 +203,6 @@ extension ThreadDetailsRow where Leading == EmptyView, Trailing == EmptyView {
             systemImage: systemImage,
             iconTint: iconTint,
             title: title,
-            titleIsMonospaced: titleIsMonospaced,
             subtitle: subtitle,
             isDisabled: isDisabled,
             showsChevron: showsChevron,
@@ -225,7 +219,6 @@ extension ThreadDetailsRow where Leading == EmptyView, Detail == EmptyView {
         systemImage: String? = nil,
         iconTint: Color = T3Colors.textSecondary,
         title: String,
-        titleIsMonospaced: Bool = false,
         subtitle: String? = nil,
         isDisabled: Bool = false,
         showsChevron: Bool = true,
@@ -236,7 +229,6 @@ extension ThreadDetailsRow where Leading == EmptyView, Detail == EmptyView {
             systemImage: systemImage,
             iconTint: iconTint,
             title: title,
-            titleIsMonospaced: titleIsMonospaced,
             subtitle: subtitle,
             isDisabled: isDisabled,
             showsChevron: showsChevron,
@@ -251,7 +243,6 @@ extension ThreadDetailsRow where Leading == EmptyView, Detail == EmptyView {
 extension ThreadDetailsRow where Detail == EmptyView, Trailing == EmptyView {
     init(
         title: String,
-        titleIsMonospaced: Bool = false,
         subtitle: String? = nil,
         isDisabled: Bool = false,
         showsChevron: Bool = true,
@@ -261,7 +252,6 @@ extension ThreadDetailsRow where Detail == EmptyView, Trailing == EmptyView {
         self.init(
             systemImage: nil,
             title: title,
-            titleIsMonospaced: titleIsMonospaced,
             subtitle: subtitle,
             isDisabled: isDisabled,
             showsChevron: showsChevron,
@@ -276,7 +266,6 @@ extension ThreadDetailsRow where Detail == EmptyView, Trailing == EmptyView {
 extension ThreadDetailsRow where Trailing == EmptyView {
     init(
         title: String,
-        titleIsMonospaced: Bool = false,
         subtitle: String? = nil,
         isDisabled: Bool = false,
         showsChevron: Bool = true,
@@ -287,7 +276,6 @@ extension ThreadDetailsRow where Trailing == EmptyView {
         self.init(
             systemImage: nil,
             title: title,
-            titleIsMonospaced: titleIsMonospaced,
             subtitle: subtitle,
             isDisabled: isDisabled,
             showsChevron: showsChevron,

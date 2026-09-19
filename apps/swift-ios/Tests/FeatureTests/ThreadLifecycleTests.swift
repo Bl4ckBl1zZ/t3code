@@ -158,18 +158,61 @@ final class ThreadLifecycleTests: XCTestCase {
 
         guard case let .relatedThread(running)? =
             ThreadLifecycle.resolvePresentation(item("subagent", status: "running", extra: extra))
-        else { return XCTFail("expected a related-thread card") }
+        else { return XCTFail("expected a related-thread row") }
         XCTAssertEqual(running.detail, "halfway")
+        // The task rides muted after the name rather than filling the detail line.
+        XCTAssertEqual(running.preview, "Investigate")
+        XCTAssertEqual(running.status, .running)
         XCTAssertEqual(running.orbState, .active)
         // Child thread id keeps one agent the same colour across surfaces.
         XCTAssertEqual(running.orbSeed, "thread-child")
 
         guard case let .relatedThread(finished)? =
             ThreadLifecycle.resolvePresentation(item("subagent", status: "completed", extra: extra))
-        else { return XCTFail("expected a related-thread card") }
+        else { return XCTFail("expected a related-thread row") }
         XCTAssertEqual(finished.detail, "done")
         XCTAssertEqual(finished.orbState, .done)
-        XCTAssertEqual(finished.badgeTone, .success)
+        // Done is the default and draws no glyph.
+        XCTAssertNil(finished.status)
+    }
+
+    func testAMultiLineSubagentResultCollapsesToOneLine() {
+        let extra: [String: JSONValue] = [
+            "subagentId": .string("node-sub"),
+            "origin": .string("app_owned"),
+            "driver": .string("codex"),
+            "providerInstanceId": .string("codex"),
+            "prompt": .string("Investigate\n  the flake"),
+            "result": .string("Found it.\n\nThe retry races the socket."),
+        ]
+        guard case let .relatedThread(failed)? =
+            ThreadLifecycle.resolvePresentation(item("subagent", status: "failed", extra: extra))
+        else { return XCTFail("expected a related-thread row") }
+        XCTAssertEqual(failed.preview, "Investigate the flake")
+        XCTAssertEqual(failed.detail, "Found it. The retry races the socket.")
+        XCTAssertEqual(failed.status, .failed)
+    }
+
+    /// "Created" says what the row is, not how it is doing, so it is muted
+    /// meta rather than a status.
+    func testACreatedThreadCarriesMetaRatherThanAStatus() {
+        let created = item(
+            "thread_created",
+            title: "Follow-up",
+            extra: [
+                "targetThreadId": .string("thread-new"),
+                "targetProviderInstanceId": .string("codex"),
+                "targetModel": .string("gpt-5.4"),
+            ]
+        )
+        guard case let .relatedThread(row)? = ThreadLifecycle.resolvePresentation(created)
+        else { return XCTFail("expected a related-thread row") }
+        XCTAssertEqual(row.title, "Follow-up")
+        XCTAssertEqual(row.preview, "codex · gpt-5.4")
+        XCTAssertEqual(row.meta, "Created")
+        XCTAssertNil(row.status)
+        XCTAssertNil(row.detail)
+        XCTAssertEqual(row.threadID, "thread-new")
     }
 
     func testForkOffersToOpenItsSourceConversation() {

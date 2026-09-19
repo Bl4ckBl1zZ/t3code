@@ -35,7 +35,7 @@ import {
  * system: pulsing sky means "working on it", solid emerald means "ready".
  */
 const STATUS_DOT_CLASS: Record<ThreadEndpoint["status"], string> = {
-  starting: "animate-pulse bg-sky-500",
+  starting: "animate-status-pulse bg-sky-500",
   live: "bg-emerald-500",
   stale: "bg-muted-foreground/40",
   idle: "bg-muted-foreground/30",

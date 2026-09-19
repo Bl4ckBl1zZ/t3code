@@ -266,17 +266,15 @@ final class ThreadDetailsSectionsTests: XCTestCase {
     func testACommandRowNamesTheCommandAndAMonitorRowNamesTheWait() {
         let command = view(backgroundCommand(id: "a", output: "compiling…\n"))
         XCTAssertEqual(ThreadDetailsBackgroundTasks.title(command), "pnpm vitest run apps/web")
-        XCTAssertTrue(ThreadDetailsBackgroundTasks.titleIsMonospaced(command))
 
         let monitor = view(backgroundCommand(id: "b", waitKind: "monitor"))
-        XCTAssertEqual(ThreadDetailsBackgroundTasks.title(monitor), "Waiting on a condition")
-        XCTAssertFalse(ThreadDetailsBackgroundTasks.titleIsMonospaced(monitor))
+        XCTAssertEqual(ThreadDetailsBackgroundTasks.title(monitor), "Waiting for a condition")
     }
 
     func testASubtitleReportsOutputTruncationAndWhetherTheAgentIsAsleepOnIt() {
         let quiet = view(backgroundCommand(id: "a"))
         XCTAssertEqual(
-            ThreadDetailsBackgroundTasks.subtitle(quiet, hasMonitor: false), "no output yet"
+            ThreadDetailsBackgroundTasks.subtitle(quiet, hasMonitor: false), "No output yet"
         )
 
         let capped = view(
@@ -284,13 +282,45 @@ final class ThreadDetailsSectionsTests: XCTestCase {
         )
         XCTAssertEqual(
             ThreadDetailsBackgroundTasks.subtitle(capped, hasMonitor: true),
-            "line two · output capped · the agent is waiting on it"
+            "line two · output capped · Agent is waiting on this"
         )
 
         let monitor = view(backgroundCommand(id: "c", waitKind: "monitor"))
         XCTAssertEqual(
             ThreadDetailsBackgroundTasks.subtitle(monitor, hasMonitor: false),
-            "the agent is asleep until this passes"
+            "Agent is asleep until this passes"
+        )
+    }
+
+    /// Once settled, the line under a row only explains an ending worth
+    /// explaining; a clean exit says nothing, like any finished tool call.
+    func testASettledRowSpellsOutABadEndingAndSaysNothingForACleanOne() {
+        let killed = view(
+            backgroundCommand(
+                id: "a", status: "failed", completedAt: Self.completedTimestamp,
+                exitCode: 137, exitReason: "killed"
+            )
+        )
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.subtitle(killed, hasMonitor: false),
+            "Stopped when the session ended"
+        )
+
+        let clean = view(
+            backgroundCommand(
+                id: "b", status: "completed", completedAt: Self.completedTimestamp, exitCode: 0
+            )
+        )
+        XCTAssertNil(ThreadDetailsBackgroundTasks.subtitle(clean, hasMonitor: false))
+    }
+
+    func testAPausedCommandSaysSoBesideItsClock() {
+        let paused = view(backgroundCommand(id: "a", paused: true))
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.detailLabel(
+                paused, nowMilliseconds: Self.startedAtMilliseconds + 62_000
+            ),
+            "Paused · 1m 02s"
         )
     }
 
@@ -377,12 +407,15 @@ final class ThreadDetailsSectionsTests: XCTestCase {
         )
         XCTAssertTrue(lingering.reportsOutcome)
         XCTAssertEqual(lingering.outcome?.tone, .danger)
+        // The capsule has room for the short form; the row behind it does not
+        // need to economise.
         XCTAssertEqual(
             ThreadDetailsBackgroundTasks.capsuleLabel(
                 lingering, nowMilliseconds: Self.startedAtMilliseconds + 2_000
             ),
-            "exit 1"
+            "Exit code 1"
         )
+        XCTAssertEqual(lingering.outcome?.label, "Failed with exit code 1")
         // The row behind the capsule is the command that failed, so the tap has
         // somewhere to land.
         XCTAssertEqual(
@@ -419,7 +452,13 @@ final class ThreadDetailsSectionsTests: XCTestCase {
         )
         let capsule = summary([killed], after: 1_000)
         XCTAssertEqual(capsule.outcome?.tone, .warning)
-        XCTAssertEqual(capsule.outcome?.label, "stopped")
+        XCTAssertEqual(capsule.outcome?.label, "Stopped when the session ended")
+        XCTAssertEqual(
+            ThreadDetailsBackgroundTasks.capsuleLabel(
+                capsule, nowMilliseconds: Self.startedAtMilliseconds + 1_000
+            ),
+            "Stopped"
+        )
     }
 
     func testLiveWorkOutranksAFailureThatHasAlreadyBeenSuperseded() {

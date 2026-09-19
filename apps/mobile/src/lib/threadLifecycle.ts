@@ -1,9 +1,13 @@
-import type { OrchestrationV2TurnItem, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2TurnItem,
+  ThreadId,
+} from "@t3tools/contracts";
 import { formatOrchestrationV2RollbackDetail } from "@t3tools/shared/orchestrationV2Timeline";
 
 /**
  * Turn items that render as first-class timeline rows (dividers or related-
- * thread cards) instead of work-log activities. Mirrors the web timeline's
+ * thread rows) instead of work-log activities. Mirrors the web timeline's
  * LIFECYCLE_TYPES; checkpoints intentionally stay in the work log.
  */
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
@@ -69,15 +73,73 @@ export type LifecyclePresentation =
   | {
       readonly kind: "related-thread";
       readonly symbol: "message" | "sparkles";
+      /** The agent's or thread's name. */
       readonly title: string;
+      /** Its task, muted after the name. */
+      readonly preview: string | null;
+      /** Latest progress or result: the one line under the row. */
       readonly detail: string | null;
-      readonly badge: string;
-      readonly badgeTone: "neutral" | "success" | "danger";
+      /** Muted note for what is not a status, such as "Created". */
+      readonly meta: string | null;
+      readonly status: RelatedThreadStatus | null;
       readonly threadId: ThreadId | null;
-      /** Stable per-agent seed; when present the card renders an AgentOrb. */
+      /** Stable per-agent seed; when present the row leads with an AgentOrb. */
       readonly orbSeed: string | null;
       readonly orbState: "active" | "done" | "failed" | null;
     };
+
+/** A related agent's state as a row's trailing glyph. Done draws nothing. */
+export type RelatedThreadStatus = "running" | "failed" | "stopped";
+
+/**
+ * Reads turn-item and subagent statuses alike, so the feed row and the lineage
+ * sheet agree on what a running, failed or stopped agent looks like.
+ */
+export function relatedThreadStatus(status: string | null): RelatedThreadStatus | null {
+  switch (status) {
+    case "pending":
+    case "running":
+    case "waiting":
+      return "running";
+    case "failed":
+      return "failed";
+    case "cancelled":
+    case "interrupted":
+      return "stopped";
+    default:
+      return null;
+  }
+}
+
+export type SubagentTurnItem = Extract<OrchestrationV2TurnItem, { type: "subagent" }>;
+
+/**
+ * Subagents this thread has working right now, in timeline order. Reads the
+ * same visible items the feed renders, so the pill above the composer and the
+ * rows it summarizes cannot disagree about what is running.
+ */
+export function workingSubagents(
+  items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): ReadonlyArray<SubagentTurnItem> {
+  const working: SubagentTurnItem[] = [];
+  for (const { item } of items) {
+    if (item.type === "subagent" && relatedThreadStatus(item.status) === "running") {
+      working.push(item);
+    }
+  }
+  return working;
+}
+
+/** The orb seed the feed row and the lineage sheet also use. */
+export function subagentOrbSeed(item: SubagentTurnItem): string {
+  return item.childThreadId ?? item.subagentId;
+}
+
+/** Collapses a prompt or streamed result to the single line a row has room for. */
+function oneLine(value: string | null | undefined): string | null {
+  const compact = value?.replace(/\s+/g, " ").trim();
+  return compact ? compact : null;
+}
 
 function subagentDisplayTitle(title: string): string {
   const trimmed = title.trim();
@@ -107,18 +169,10 @@ function subagentOrbState(status: OrchestrationV2TurnItem["status"]): "active" |
   return TERMINAL_SUBAGENT_STATUSES.has(status) ? "done" : "active";
 }
 
-function subagentBadgeTone(
-  status: OrchestrationV2TurnItem["status"],
-): "neutral" | "success" | "danger" {
-  if (status === "completed") return "success";
-  if (status === "failed") return "danger";
-  return "neutral";
-}
-
 /**
  * Pure presentation for a lifecycle turn item. Ports the web V2LifecycleRow
  * semantics: interrupt requests/results, compactions, handoffs and forks are
- * dividers, thread creation and subagents are related-thread cards.
+ * dividers, thread creation and subagents are related-thread rows.
  */
 export function resolveLifecyclePresentation(
   item: OrchestrationV2TurnItem,
@@ -239,29 +293,31 @@ export function resolveLifecyclePresentation(
         kind: "related-thread",
         symbol: "message",
         title: item.title ?? "Created thread",
-        detail: `${item.targetProviderInstanceId} · ${item.targetModel}`,
-        badge: "created",
-        badgeTone: "neutral",
+        preview: `${item.targetProviderInstanceId} · ${item.targetModel}`,
+        detail: null,
+        meta: "Created",
+        status: null,
         threadId: item.targetThreadId,
         orbSeed: null,
         orbState: null,
       };
     case "subagent": {
-      const streamedResult = item.result?.trim() ? item.result : null;
-      const detail = TERMINAL_SUBAGENT_STATUSES.has(item.status)
-        ? (streamedResult ?? item.progress ?? item.prompt)
-        : (item.progress ?? streamedResult ?? item.prompt);
+      const progress = oneLine(item.progress);
+      const result = oneLine(item.result);
       return {
         kind: "related-thread",
         symbol: "sparkles",
         title: subagentDisplayTitle(item.title ?? "Subagent"),
-        detail: detail ?? null,
-        badge: item.status,
-        badgeTone: subagentBadgeTone(item.status),
+        preview: oneLine(item.prompt),
+        detail: TERMINAL_SUBAGENT_STATUSES.has(item.status)
+          ? (result ?? progress)
+          : (progress ?? result),
+        meta: null,
+        status: relatedThreadStatus(item.status),
         threadId: item.childThreadId ?? null,
         // Child thread id first: the relationships surfaces only know thread
         // ids, so this keeps one agent the same color everywhere.
-        orbSeed: item.childThreadId ?? item.subagentId,
+        orbSeed: subagentOrbSeed(item),
         orbState: subagentOrbState(item.status),
       };
     }

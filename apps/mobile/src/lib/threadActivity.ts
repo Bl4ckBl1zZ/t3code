@@ -23,8 +23,16 @@ import type {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
-import { orchestrationV2TurnItemStatusIsTerminal } from "@t3tools/contracts";
+import {
+  orchestrationV2CommandExecutionIsLiveInBackground,
+  orchestrationV2TurnItemStatusIsTerminal,
+} from "@t3tools/contracts";
 import { presentProviderError } from "@t3tools/client-runtime/errors";
+import {
+  backgroundProcessOutcome,
+  backgroundProcessTail,
+  isBackgroundProcessItem,
+} from "@t3tools/shared/backgroundProcess";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import {
@@ -70,7 +78,6 @@ export interface ThreadFeedActivity {
     | "zap";
   readonly logo: T3McpToolLogo | null;
   readonly toolLike: boolean;
-  readonly prominent: boolean;
   readonly status: "success" | "failure" | "neutral" | null;
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
 }
@@ -270,8 +277,24 @@ function itemIsToolLike(item: OrchestrationV2TurnItem): boolean {
   );
 }
 
-function itemIsProminent(item: OrchestrationV2TurnItem): boolean {
-  return item.type === "fork" || item.type === "thread_created" || item.type === "subagent";
+/**
+ * A background command still running after the turn that started it never
+ * shares a group, so it survives that turn's fold.
+ */
+function activityStandsAlone(activity: ThreadFeedActivity): boolean {
+  return orchestrationV2CommandExecutionIsLiveInBackground(activity.projectedItem.item);
+}
+
+/**
+ * Whether an activity earns a work-log row. A tool call without a settled
+ * outcome carries no signal, except a background command: running, or stopped
+ * before it finished, is exactly when its row has something to say.
+ */
+export function threadFeedActivityHasRow(activity: ThreadFeedActivity): boolean {
+  return (
+    !(activity.toolLike && activity.status === "neutral") ||
+    isBackgroundProcessItem(activity.projectedItem.item)
+  );
 }
 
 function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"] {
@@ -280,6 +303,18 @@ function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"]
     return item.status === "completed" ? "success" : "neutral";
   }
   if (!itemIsToolLike(item)) return null;
+  if (isBackgroundProcessItem(item)) {
+    // A background command's status is how it ended, which the item status
+    // alone misreads: a nonzero exit can arrive as "completed", and a timeout
+    // is a stop, not a failure. Live reads as neutral, like any running tool.
+    const outcome = backgroundProcessOutcome(item);
+    if (outcome === null) return "neutral";
+    return outcome.tone === "danger"
+      ? "failure"
+      : outcome.tone === "success"
+        ? "success"
+        : "neutral";
+  }
   if (item.status === "failed") return "failure";
   return item.status === "completed" ? "success" : "neutral";
 }
@@ -399,17 +434,6 @@ function itemSummary(
   }
 }
 
-/** Last line a background command printed, which is its only live signal. */
-function backgroundCommandTail(output: string | undefined): string | null {
-  if (output === undefined) return null;
-  const lines = output.split("\n");
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = (lines[index] ?? "").trim();
-    if (line.length > 0) return line;
-  }
-  return null;
-}
-
 function itemPreview(item: OrchestrationV2TurnItem): string | null {
   switch (item.type) {
     case "reasoning":
@@ -418,7 +442,7 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
       // While a background command runs, what it is printing beats what it was
       // asked to do — the command text is already in the summary line.
       if (item.background === true && !orchestrationV2TurnItemStatusIsTerminal(item.status)) {
-        return backgroundCommandTail(item.output) ?? (item.input || null);
+        return backgroundProcessTail(item.output) ?? (item.input || null);
       }
       return item.input || null;
     }
@@ -504,7 +528,6 @@ function toFeedActivity(row: OrchestrationV2ProjectedTurnItem): ThreadFeedActivi
     icon: itemIcon(item),
     logo: toolPresentation?.logo ?? null,
     toolLike: itemIsToolLike(item),
-    prominent: itemIsProminent(item),
     status: itemStatus(item),
     projectedItem: row,
   };
@@ -526,7 +549,7 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
   let openGroupActivities: ThreadFeedActivity[] | null = null;
   let openGroupRunId: string | null = null;
   let openGroupAttemptId: string | null = null;
-  let openGroupHasProminent = false;
+  let openGroupStandsAlone = false;
 
   for (const entry of entries) {
     if (isEmptyMessage(entry)) continue;
@@ -543,8 +566,8 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
       // merging a superseded attempt's work into the live one would make the
       // fold either hide too much or nothing at all.
       openGroupAttemptId === (entry.attempt?.id ?? null) &&
-      !entry.activity.prominent &&
-      !openGroupHasProminent
+      !activityStandsAlone(entry.activity) &&
+      !openGroupStandsAlone
     ) {
       openGroupActivities.push(entry.activity);
       continue;
@@ -553,7 +576,7 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
     openGroupActivities = [entry.activity];
     openGroupRunId = entry.runId;
     openGroupAttemptId = entry.attempt?.id ?? null;
-    openGroupHasProminent = entry.activity.prominent === true;
+    openGroupStandsAlone = activityStandsAlone(entry.activity);
     grouped.push({
       type: "activity-group",
       id: entry.id,
@@ -613,8 +636,8 @@ export function mergeAgentUpdateRuns(entries: ThreadFeedEntry[]): ThreadFeedEntr
 
 type LifecycleFeedEntry = Extract<ThreadFeedEntry, { readonly type: "lifecycle" }>;
 
-// The lifecycle items ThreadLifecycleRow renders as a bordered "related thread"
-// card — see RelatedThreadCard. Dividers and interrupt lines are not cards and
+// The lifecycle items ThreadLifecycleRow renders as a "related thread" row —
+// see RelatedThreadRow. Dividers and interrupt lines are not such rows and
 // never join a group.
 const RELATED_THREAD_CARD_ITEM_TYPES = new Set(["subagent", "thread_created"]);
 
@@ -622,10 +645,9 @@ function isRelatedThreadCardEntry(entry: ThreadFeedEntry): entry is LifecycleFee
   return entry.type === "lifecycle" && RELATED_THREAD_CARD_ITEM_TYPES.has(entry.row.item.type);
 }
 
-// Consecutive related-thread cards (a fan-out of subagents, say) are identically
-// shaped boxes stacked with a gap between them. They read as one list, so a run
-// collapses into a single card whose entries are separated by dividers. Singles
-// keep their ordinary standalone card.
+// Consecutive related-thread rows (a fan-out of subagents, say) read as one
+// list, so a run becomes a single entry whose rows stack as tightly as a work
+// log's instead of each carrying its own spacing. Singles stay ordinary entries.
 export function mergeRelatedThreadCardRuns(entries: ThreadFeedEntry[]): ThreadFeedEntry[] {
   const result: ThreadFeedEntry[] = [];
   let index = 0;
@@ -647,8 +669,8 @@ export function mergeRelatedThreadCardRuns(entries: ThreadFeedEntry[]): ThreadFe
     } else {
       result.push({
         type: "lifecycle-group",
-        // Anchored to the first card so the group id stays stable as later
-        // cards join it.
+        // Anchored to the first row so the group id stays stable as later
+        // rows join it.
         id: `lifecycle-group:${entry.id}`,
         createdAt: entry.createdAt,
         entries: run,
@@ -746,10 +768,7 @@ function deriveThreadFeedRunFolds(
         .filter(
           (entry) =>
             entry.id !== terminalAssistantId &&
-            !(
-              entry.type === "activity-group" &&
-              entry.activities.some((activity) => activity.prominent)
-            ),
+            !(entry.type === "activity-group" && entry.activities.some(activityStandsAlone)),
         )
         .map((entry) => entry.id),
     );
@@ -1008,9 +1027,7 @@ function appendPresentedFeedEntry(
     return;
   }
 
-  const activities = entry.activities.filter(
-    (activity) => !(activity.toolLike && activity.status === "neutral"),
-  );
+  const activities = entry.activities.filter(threadFeedActivityHasRow);
   if (activities.length === 0) {
     return;
   }

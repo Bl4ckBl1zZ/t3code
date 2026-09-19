@@ -949,7 +949,7 @@ export function deriveMessagesTimelineRows(input: {
     lastRow.liveEntry = liveEntry;
     lastRow.liveStartedAt = input.activeTurnStartedAt;
   }
-  const mergedRows = insertDayDividers(mergeRelatedThreadCardRuns(mergeAgentUpdateRuns(nextRows)));
+  const mergedRows = insertDayDividers(mergeRelatedThreadRuns(mergeAgentUpdateRuns(nextRows)));
 
   if (input.isWorking && liveEntry === null) {
     mergedRows.push({
@@ -1029,24 +1029,23 @@ function mergeAgentUpdateRuns(rows: MessagesTimelineRow[]): MessagesTimelineRow[
 
 type EventRow = Extract<MessagesTimelineRow, { kind: "event" }>;
 
-// The lifecycle items V2LifecycleRow renders as a bordered "related thread"
-// card (subagent, thread_created) — see RelatedThreadCard.
-const RELATED_THREAD_CARD_ITEM_TYPES = new Set(["subagent", "thread_created"]);
+// The lifecycle items V2LifecycleRow renders as a row that opens another thread
+// (subagent, thread_created) — see RelatedThreadRow.
+const RELATED_THREAD_ITEM_TYPES = new Set(["subagent", "thread_created"]);
 
-function isRelatedThreadCardRow(row: MessagesTimelineRow): row is EventRow {
-  return row.kind === "event" && RELATED_THREAD_CARD_ITEM_TYPES.has(row.projectedItem.item.type);
+function isRelatedThreadRow(row: MessagesTimelineRow): row is EventRow {
+  return row.kind === "event" && RELATED_THREAD_ITEM_TYPES.has(row.projectedItem.item.type);
 }
 
-// Consecutive related-thread cards (a fan-out of subagents, say) are identically
-// shaped boxes stacked with a gap between them. They read as one list, so a run
-// collapses into a single bordered card whose entries are separated by dividers.
-// Singles keep their ordinary standalone card.
-function mergeRelatedThreadCardRuns(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
+// Consecutive related-thread rows (a fan-out of subagents, say) read as one
+// list, so a run collapses into a single group stacked as tightly as tool calls
+// instead of spaced apart like separate events. Singles keep their own row.
+function mergeRelatedThreadRuns(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
   const result: MessagesTimelineRow[] = [];
   let index = 0;
   while (index < rows.length) {
     const row = rows[index]!;
-    if (!isRelatedThreadCardRow(row)) {
+    if (!isRelatedThreadRow(row)) {
       result.push(row);
       index += 1;
       continue;
@@ -1054,7 +1053,7 @@ function mergeRelatedThreadCardRuns(rows: MessagesTimelineRow[]): MessagesTimeli
     const run: EventRow[] = [row];
     while (index + run.length < rows.length) {
       const candidate = rows[index + run.length]!;
-      if (!isRelatedThreadCardRow(candidate)) break;
+      if (!isRelatedThreadRow(candidate)) break;
       run.push(candidate);
     }
     if (run.length < 2) {
@@ -1062,8 +1061,8 @@ function mergeRelatedThreadCardRuns(rows: MessagesTimelineRow[]): MessagesTimeli
     } else {
       result.push({
         kind: "event-group",
-        // Anchored to the first card so the group id stays stable as later
-        // cards join it.
+        // Anchored to the first row so the group id stays stable as later
+        // rows join it.
         id: `event-group:${row.id}`,
         createdAt: row.createdAt,
         events: run,

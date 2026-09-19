@@ -147,6 +147,8 @@ import {
 import { type LegendListRef } from "@legendapp/list/react";
 import { WorkingTreeStatusBadge } from "./chat/WorkingTreeStatusBadge";
 import { deriveWorkingTreeBadgeState } from "./chat/WorkingTreeStatusBadge.logic";
+import { SubagentsStatusBadge } from "./chat/SubagentsStatusBadge";
+import { workingSubagentsFromTimeline } from "./chat/SubagentsStatusBadge.logic";
 import {
   getAnchoredTurnMetrics,
   isTimelineUserScrollUp,
@@ -3168,6 +3170,12 @@ function ChatViewContent(props: ChatViewProps) {
       }),
     [activePlan, gitStatusQuery.data],
   );
+  const workingSubagents = useMemo(
+    () => workingSubagentsFromTimeline(timelineEntries),
+    [timelineEntries],
+  );
+  const showStatusPills =
+    (workingTreeBadgeState !== null || workingSubagents.length > 0) && !isDraftHeroState;
   // The broadcaster only recomputes the working tree when something asks it to
   // — nothing does while a run is in flight — so poll it directly here. This
   // has to be the refresh command rather than `gitStatusQuery.refresh()`:
@@ -8397,8 +8405,8 @@ function ChatViewContent(props: ChatViewProps) {
                 topFadeEnabled={!hasTimelineTopBanner}
               />
 
-              {/* floating pills above the composer: scroll-to-end + working-tree status */}
-              {((workingTreeBadgeState !== null && !isDraftHeroState) || showScrollToBottom) && (
+              {/* floating pills above the composer: scroll-to-end, working-tree status, working subagents */}
+              {(showStatusPills || showScrollToBottom) && (
                 <div
                   className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex flex-col items-center gap-1.5 py-1.5"
                   style={{ bottom: composerOverlayHeight + 4 }}
@@ -8415,8 +8423,18 @@ function ChatViewContent(props: ChatViewProps) {
                       Scroll to end
                     </Button>
                   )}
-                  {workingTreeBadgeState !== null && !isDraftHeroState && (
-                    <WorkingTreeStatusBadge state={workingTreeBadgeState} isWorking={isWorking} />
+                  {showStatusPills && (
+                    <div className="flex flex-wrap items-center justify-center gap-1.5">
+                      {workingTreeBadgeState !== null && (
+                        <WorkingTreeStatusBadge
+                          state={workingTreeBadgeState}
+                          isWorking={isWorking}
+                        />
+                      )}
+                      {workingSubagents.length > 0 && (
+                        <SubagentsStatusBadge subagents={workingSubagents} />
+                      )}
+                    </div>
                   )}
                 </div>
               )}
