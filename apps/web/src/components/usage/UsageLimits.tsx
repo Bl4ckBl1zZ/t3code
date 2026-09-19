@@ -2,11 +2,12 @@ import { UsageLimitSources } from "./UsageLimitSources";
 import { ResetCredits } from "./ResetCredits";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ServerProviderUsageWindow } from "@t3tools/contracts";
-import { GaugeIcon } from "lucide-react";
+import { AlertTriangleIcon, GaugeIcon } from "lucide-react";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { isElectron } from "../../env";
 import { environmentPresentations } from "../../state/presentation";
@@ -165,8 +166,10 @@ export function UsageLimits({
           return `${value.entry.target.label} is offline.`;
         if (refreshAccess.get(environmentId) !== "granted")
           return `${value.entry.target.label} does not allow refreshing providers.`;
-        const result = await refreshProviders({ environmentId, input: {} });
-        return result._tag === "Failure"
+        const result = await refreshUsageLimits(environmentId, () =>
+          refreshProviders({ environmentId, input: {} }),
+        );
+        return result?._tag === "Failure"
           ? `${value.entry.target.label} could not refresh its limits.`
           : null;
       }),
@@ -176,6 +179,36 @@ export function UsageLimits({
     setPending(false);
     busy.current = false;
   };
+  // Opening Limits checks quota once per environment; the shared single-flight and
+  // five-minute floor keep tab switches and reconnects from re-probing providers.
+  const refreshableEnvironments = targets
+    .filter(
+      ([id, value]) =>
+        value.connection.phase === "connected" &&
+        value.serverConfig !== null &&
+        refreshAccess.get(id) === "granted",
+    )
+    .map(([id]) => id)
+    .sort()
+    .join(",");
+  const autoRefresh = useEffectEvent(() => {
+    for (const [environmentId, value] of targets) {
+      if (
+        value.connection.phase !== "connected" ||
+        value.serverConfig === null ||
+        refreshAccess.get(environmentId) !== "granted"
+      )
+        continue;
+      void refreshUsageLimits(
+        environmentId,
+        () => refreshProviders({ environmentId, input: {} }),
+        true,
+      );
+    }
+  });
+  useEffect(() => {
+    if (refreshableEnvironments) autoRefresh();
+  }, [refreshableEnvironments]);
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground">
       <WorkspacePageHeader electron={isElectron}>
@@ -329,11 +362,17 @@ export function UsageLimits({
                     No limits reported. Refresh to check.
                   </p>
                 ) : account.limits.unavailable ? (
-                  <p className="text-xs text-muted-foreground">
-                    {account.limits.unavailable.message ??
-                      (account.limits.unavailable.reason === "unsupported"
-                        ? "Limits are not supported for this account."
-                        : "Limits could not be checked.")}
+                  <p className="flex items-start gap-1.5 text-xs break-words text-warning-foreground">
+                    <AlertTriangleIcon
+                      aria-hidden
+                      className="mt-0.5 size-3.5 shrink-0 text-warning"
+                    />
+                    <span className="min-w-0">
+                      {account.limits.unavailable.message ??
+                        (account.limits.unavailable.reason === "unsupported"
+                          ? "Limits are not supported for this account."
+                          : "Limits could not be checked.")}
+                    </span>
                   </p>
                 ) : account.limits.windows.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No quota windows reported.</p>

@@ -21,6 +21,8 @@ it("zooms, pans with arrow keys, returns to fit and resets on gallery navigation
     scrollTop: 0,
     clientWidth: 400,
     clientHeight: 300,
+    scrollWidth: 600,
+    offsetWidth: 400,
     getBoundingClientRect: () => ({ left: 0, top: 0 }),
   });
   const preview = {
@@ -64,6 +66,8 @@ it("clamps zoom and only captures arrow navigation while zoomed", async () => {
     scrollTop: 0,
     clientWidth: 400,
     clientHeight: 300,
+    scrollWidth: 600,
+    offsetWidth: 400,
     getBoundingClientRect: () => ({ left: 0, top: 0 }),
   });
   await act(async () => {
@@ -78,6 +82,11 @@ it("clamps zoom and only captures arrow navigation while zoomed", async () => {
   });
   expect(renderer!.root.findByProps({ "aria-live": "polite" }).children.join("")).toBe("800% zoom");
   expect(ref.current?.pan("Escape")).toBe(false);
+  expect(ref.current?.pan("ArrowRight")).toBe(true);
+  // A vertical scrollbar alone leaves horizontal arrows to gallery navigation.
+  viewport.scrollWidth = 400;
+  expect(ref.current?.pan("ArrowRight")).toBe(false);
+  expect(ref.current?.pan("ArrowDown")).toBe(true);
   await act(async () => {
     for (let i = 0; i < 20; i++) region.props.onKeyDown({ key: "-", preventDefault() {} });
   });

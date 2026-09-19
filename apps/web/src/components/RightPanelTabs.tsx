@@ -121,7 +121,7 @@ const LAUNCHER_SHORTCUT_BLOCKING_LAYERS = [
   '[data-slot="autocomplete-popup"]',
 ].join(",");
 
-/** One-line unavailability hints for the empty-state cards. */
+/** One-line unavailability hints for the empty-state rows. */
 const SURFACE_UNAVAILABLE_HINTS = {
   browser: "Only available in the desktop app.",
   terminal: "Available when a project is open.",
@@ -245,7 +245,7 @@ function SurfaceMenuItem(props: {
 }
 
 /**
- * Card launcher shown when the right panel has no surfaces. Keyboard-first
+ * List launcher shown when the right panel has no surfaces. Keyboard-first
  * without palette chrome: a surface's letter opens it directly from anywhere
  * outside a typing context, and arrows plus Enter work while the launcher is
  * focused. The highlight only appears on hover or arrow use. Unavailable
@@ -272,7 +272,6 @@ function RightPanelEmptyState(props: {
   const actions = [
     {
       label: "Browser",
-      description: "Open a local app or URL.",
       icon: Globe2,
       shortcut: "B",
       available: props.browserAvailable,
@@ -282,7 +281,6 @@ function RightPanelEmptyState(props: {
     },
     {
       label: "Terminal",
-      description: "Start a shell in this workspace.",
       icon: TerminalSquare,
       shortcut: "T",
       available: props.terminalAvailable,
@@ -292,7 +290,6 @@ function RightPanelEmptyState(props: {
     },
     {
       label: "Files",
-      description: "Browse and read workspace files.",
       icon: Files,
       shortcut: "F",
       available: props.filesAvailable,
@@ -302,7 +299,6 @@ function RightPanelEmptyState(props: {
     },
     {
       label: "Diff",
-      description: "Review changes in this thread.",
       icon: FileDiff,
       shortcut: "D",
       available: props.diffAvailable,
@@ -312,7 +308,6 @@ function RightPanelEmptyState(props: {
     },
     {
       label: "Pull request",
-      description: "Open this branch's pull request.",
       icon: GitPullRequest,
       shortcut: "P",
       available: props.pullRequestAvailable,
@@ -322,7 +317,6 @@ function RightPanelEmptyState(props: {
     },
     {
       label: "Agents",
-      description: "Watch delegated agents and background work.",
       icon: Bot,
       shortcut: "A",
       available: props.agentsAvailable,
@@ -379,9 +373,8 @@ function RightPanelEmptyState(props: {
       return;
     }
     if (event.key === "Enter") {
-      // A focused card button owns its own activation; only open from the
-      // highlight when the container itself has focus.
-      if (event.target instanceof HTMLElement && event.target.closest("button")) return;
+      // Only activate the highlight when the launcher itself has focus.
+      if (event.target !== event.currentTarget) return;
       const action = availableActions[highlightIndex];
       if (!action) return;
       event.preventDefault();
@@ -415,10 +408,6 @@ function RightPanelEmptyState(props: {
     );
   };
 
-  const cardShellClass =
-    "rounded-lg border border-border/80 bg-card dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5";
-  const highlightedCardClass = "bg-accent/60 dark:inset-ring-white/20";
-
   return (
     <div
       ref={focusOnMount}
@@ -429,18 +418,13 @@ function RightPanelEmptyState(props: {
       className={cn(
         "flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 pt-6 outline-none",
         // The panel topbar sits above this container; matching bottom padding
-        // keeps the cards centered against the full panel, not the leftover.
+        // keeps the list centered against the full panel, not the leftover.
         "pb-[calc(var(--workspace-topbar-height)+--spacing(6))]",
       )}
     >
-      <div className="relative w-full max-w-lg">
-        <div className="absolute inset-x-0 bottom-full mb-5 text-center">
-          <h3 className="font-medium text-foreground text-sm">Open a surface</h3>
-          <p className="mt-1 text-muted-foreground text-xs">
-            Choose what to show in the right panel.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
+      <div className="w-full max-w-xs">
+        <h3 className="mb-3 text-center font-medium text-foreground text-sm">Open a surface</h3>
+        <div className="flex flex-col gap-0.5">
           {actions.map((action) =>
             action.available ? (
               <button
@@ -454,37 +438,30 @@ function RightPanelEmptyState(props: {
                   )
                 }
                 className={cn(
-                  "relative flex w-full cursor-pointer flex-col items-start p-4 text-left transition hover:border-border hover:bg-accent/60",
-                  cardShellClass,
-                  isHighlighted(action) && highlightedCardClass,
+                  "flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-[var(--control-radius)] px-2.5 text-left text-sm transition-colors hover:bg-accent/60",
+                  isHighlighted(action) && "bg-accent/60",
                 )}
               >
-                <Kbd className="absolute top-3 right-3">{action.shortcut}</Kbd>
-                <span className="flex items-center gap-2 pe-8">
-                  {actionIcon(action)}
-                  <span className="font-medium text-sm">{action.label}</span>
-                </span>
-                <span className="mt-1.5 text-muted-foreground text-xs leading-relaxed">
-                  {action.description}
-                </span>
+                {actionIcon(action)}
+                <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                <Kbd>{action.shortcut}</Kbd>
               </button>
             ) : (
-              <div
+              <DisabledReasonTooltip
                 key={action.label}
-                className={cn(
-                  "relative flex w-full flex-col items-start p-4 opacity-40",
-                  cardShellClass,
-                )}
-              >
-                <Kbd className="absolute top-3 right-3">{action.shortcut}</Kbd>
-                <span className="flex items-center gap-2 pe-8">
-                  {actionIcon(action)}
-                  <span className="font-medium text-sm">{action.label}</span>
-                </span>
-                <span className="mt-1.5 text-muted-foreground text-xs leading-relaxed">
-                  {action.disabledReason}
-                </span>
-              </div>
+                reason={action.disabledReason}
+                trigger={
+                  <div
+                    tabIndex={0}
+                    aria-disabled="true"
+                    className="flex h-8 w-full cursor-default items-center gap-2.5 rounded-[var(--control-radius)] px-2.5 text-left text-sm opacity-50"
+                  >
+                    {actionIcon(action)}
+                    <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                    <Kbd>{action.shortcut}</Kbd>
+                  </div>
+                }
+              />
             ),
           )}
         </div>

@@ -39,10 +39,12 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  ChartNoAxesColumnIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  GitPullRequestIcon,
   LinkIcon,
   MessageSquareIcon,
   MessagesSquareIcon,
@@ -118,6 +120,7 @@ import {
   ADDON_ICON_CLASS,
   browseInputEndPaddingClass,
   buildBrowseGroups,
+  buildCommandPaletteProjectMetadata,
   buildProjectActionItems,
   buildRootGroups,
   buildThreadActionItems,
@@ -137,6 +140,7 @@ import {
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import type { Project } from "../types";
+import { readPullRequestListPreferences } from "./pullRequest/pullRequestListPreferences";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -186,6 +190,35 @@ import {
 } from "../sidebarProjectGrouping";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
+
+function ProjectSearchDescription(props: {
+  readonly environmentId: EnvironmentId;
+  readonly environmentLabels: ReadonlyArray<string>;
+  readonly grouped: boolean;
+  readonly location: { readonly kind: string; readonly label: string };
+  readonly workspaceRoot: string;
+}) {
+  if (props.grouped) {
+    return <span className="truncate">{props.environmentLabels.join(" · ")}</span>;
+  }
+
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <span className="inline-flex min-w-0 items-center gap-1">
+        {props.location.kind === "remote" ? (
+          <ConnectedEnvironmentMachineIcon
+            environmentId={props.environmentId}
+            aria-hidden
+            className={COMMAND_PALETTE_META_ICON_CLASS}
+          />
+        ) : null}
+        <span className="truncate">{props.location.label}</span>
+      </span>
+      <CommandPaletteMetaDot />
+      <span className="truncate">{props.workspaceRoot}</span>
+    </span>
+  );
+}
 
 function getEnvironmentBrowsePlatform(os: string | null | undefined): string {
   if (os === "windows") {
@@ -1035,15 +1068,44 @@ function OpenCommandPaletteDialog(props: {
         projects: pickerProjects,
         valuePrefix: "project",
         searchTerms: (project) => {
-          const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+          const members = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)
+            ?.memberProjects ?? [project];
+          return buildCommandPaletteProjectMetadata({
+            projects: members,
+            locationByEnvironmentId: projectEnvironmentLocationById,
+          }).searchTerms;
+        },
+        renderDescription: (project) => {
+          const members = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)
+            ?.memberProjects ?? [project];
+          const metadata = buildCommandPaletteProjectMetadata({
+            projects: members,
+            locationByEnvironmentId: projectEnvironmentLocationById,
+          });
           return (
-            group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
+            <ProjectSearchDescription
+              environmentId={project.environmentId}
+              environmentLabels={metadata.environmentLabels}
+              grouped={members.length > 1}
+              location={
+                projectEnvironmentLocationById.get(project.environmentId) ?? {
+                  kind: "remote",
+                  label: "Remote",
+                }
+              }
+              workspaceRoot={project.workspaceRoot}
+            />
           );
         },
         icon: projectActionItemIcon,
         runProject: openProjectFromSearch,
       }),
-    [openProjectFromSearch, pickerProjects, projectGroupByTargetKey],
+    [
+      openProjectFromSearch,
+      pickerProjects,
+      projectEnvironmentLocationById,
+      projectGroupByTargetKey,
+    ],
   );
 
   const startFreshHermesChat = useCallback(async () => {
@@ -1090,20 +1152,13 @@ function OpenCommandPaletteDialog(props: {
               label: "Remote",
             };
             return (
-              <span className="flex min-w-0 items-center gap-1">
-                <span className="inline-flex min-w-0 items-center gap-1">
-                  {location.kind === "remote" ? (
-                    <ConnectedEnvironmentMachineIcon
-                      environmentId={project.environmentId}
-                      aria-hidden
-                      className={COMMAND_PALETTE_META_ICON_CLASS}
-                    />
-                  ) : null}
-                  <span className="truncate">{location.label}</span>
-                </span>
-                <CommandPaletteMetaDot />
-                <span className="truncate">{project.workspaceRoot}</span>
-              </span>
+              <ProjectSearchDescription
+                environmentId={project.environmentId}
+                environmentLabels={[location.label]}
+                grouped={false}
+                location={location}
+                workspaceRoot={project.workspaceRoot}
+              />
             );
           },
           icon: projectActionItemIcon,
@@ -1155,6 +1210,9 @@ function OpenCommandPaletteDialog(props: {
               projectCwd={projectCwdById.get(thread.projectId) ?? null}
               projectFaviconPath={projectFaviconPathById.get(thread.projectId) ?? null}
               projectTitle={projectTitle ?? null}
+              environmentLabel={
+                projectEnvironmentLocationById.get(thread.environmentId)?.label ?? "Remote"
+              }
               branch={thread.branch}
               worktreePath={thread.worktreePath}
               isCurrent={thread.id === activeThreadId}
@@ -1191,6 +1249,7 @@ function OpenCommandPaletteDialog(props: {
       navigate,
       projectCwdById,
       projectFaviconPathById,
+      projectEnvironmentLocationById,
       projectTitleById,
       providerEntryByEnvironmentAndInstanceId,
       threadContentMatchByKey,
@@ -1684,6 +1743,34 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  if (
+    environments.some(
+      (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
+    )
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:pull-requests",
+      searchTerms: ["pull requests", "prs", "pr", "github", "review", "merge", "branch"],
+      title: "Open pull requests",
+      icon: <GitPullRequestIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
+      },
+    });
+  }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:usage",
+    searchTerms: ["usage", "use", "tokens", "cost", "spend", "limits", "stats", "analytics"],
+    title: "Open usage",
+    icon: <ChartNoAxesColumnIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/usage" });
+    },
+  });
+
   actionItems.push({
     kind: "action",
     value: "action:settings",
@@ -1800,7 +1887,7 @@ function OpenCommandPaletteDialog(props: {
           existing.id,
           clientSettings.sidebarThreadSortOrder,
         );
-        if (latestThread) {
+        if (latestThread && latestThread.settledOverride !== "settled") {
           await navigate({
             to: "/$environmentId/$threadId",
             params: buildThreadRouteParams(

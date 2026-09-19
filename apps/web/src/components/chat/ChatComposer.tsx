@@ -53,6 +53,8 @@ import {
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { ATTACHMENT_COPY } from "@t3tools/shared/composerAttachments";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { folderDropTarget, resolveDroppedFolderPath } from "./folderDrop";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -72,6 +74,7 @@ import {
   type ComposerSubmissionIntent,
   type ComposerTrigger,
   collapseExpandedComposerCursor,
+  composerSendRequiresModifier,
   composerSubmissionIntentForEnter,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
@@ -133,6 +136,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
+import { ComposerImageThumbnail } from "./ComposerImageThumbnail";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
@@ -494,6 +498,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
   steerShortcutLabel: string;
+  alternateFollowUpAction: "queue" | "steer";
   preserveComposerFocusOnPointerDown?: boolean;
   showSendWhileRunning?: boolean;
   onPreviousPendingQuestion: () => void;
@@ -512,7 +517,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
       ) : null}
       {props.isRunning && props.hasSendableContent ? (
         <span className="hidden text-[11px] text-muted-foreground/70 sm:inline">
-          <kbd className="font-mono">{props.steerShortcutLabel}</kbd> to steer
+          <kbd className="font-mono">{props.steerShortcutLabel}</kbd> to{" "}
+          {props.alternateFollowUpAction}
         </span>
       ) : null}
       <ComposerPrimaryActions
@@ -549,6 +555,7 @@ export interface ChatComposerHandle {
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
   addDroppedFiles: (files: File[]) => void;
+  addDroppedFolders: (folders: File[]) => void;
   insertTextAtEnd: (text: string, options?: { ensureLeadingBoundary?: boolean }) => boolean;
   openModelPicker: () => void;
   toggleModelPicker: () => void;
@@ -833,6 +840,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
   // ------------------------------------------------------------------
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
@@ -2328,7 +2336,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           providerInputRejectedRef.current = false;
           onSend(sendEvent, {
             dispatchMode:
-              options?.dispatchMode ?? resolveComposerDispatchMode({ phase, steerModifier: false }),
+              options?.dispatchMode ??
+              resolveComposerDispatchMode({
+                phase,
+                alternateModifier: false,
+                activeTurnDefault: settings.followUpBehavior,
+              }),
             ...(options?.submissionIntent === undefined
               ? {}
               : { submissionIntent: options.submissionIntent }),
@@ -2488,7 +2501,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     // Mod+Enter means two things depending on where the composer is: on a
     // draft it starts the thread in the background, and on a live thread it
-    // steers the running turn. A draft has no run to steer, so the two never
+    // takes the non-default follow-up action (steer when follow-ups queue,
+    // queue when they steer). A draft has no run to steer, so the two never
     // apply at once.
     const submissionIntent =
       key === "Enter"
@@ -2497,15 +2511,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             shiftKey: event.shiftKey,
             modifierKey: event.metaKey || event.ctrlKey,
             isDraftThread: routeKind === "draft",
+            isRunning: phase === "running",
+            sendShortcut: settings.sendShortcut,
+            prompt: promptRef.current,
           })
         : null;
     if (submissionIntent) {
       submitComposer(undefined, {
         dispatchMode: resolveComposerDispatchMode({
           phase,
-          steerModifier: event.metaKey || event.ctrlKey,
+          alternateModifier: submissionIntent === "alternate",
+          activeTurnDefault: settings.followUpBehavior,
         }),
-        submissionIntent,
+        // "alternate" only picks the dispatch mode; the send itself is an
+        // ordinary foreground submit.
+        submissionIntent: submissionIntent === "alternate" ? "foreground" : submissionIntent,
       });
       return true;
     }
@@ -3211,6 +3231,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         void addComposerImages(files);
         focusComposer();
       },
+      addDroppedFolders: (folders: File[]) => {
+        if (folderDropTarget({ environmentId, primaryEnvironmentId }) === "remote") {
+          toastManager.add({
+            type: "error",
+            title: "Folders can't be dropped into remote environments",
+          });
+          return;
+        }
+        for (const folder of folders) {
+          const path = resolveDroppedFolderPath(folder, window.desktopBridge?.getPathForFile);
+          if (path === null) {
+            toastManager.add({
+              type: "error",
+              title: `Couldn't get the path of "${folder.name}"`,
+              description: "Type the folder path with @ instead.",
+            });
+            continue;
+          }
+          insertComposerTextAtEnd(`${serializeComposerFileLink(path)} `, {
+            ensureLeadingBoundary: true,
+          });
+        }
+        focusComposer();
+      },
       insertTextAtEnd: insertComposerTextAtEnd,
       citeAssistantText: (citation, sourceAnchor) => {
         if (
@@ -3338,6 +3382,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerPreviewAnnotations,
       composerReviewComments,
       focusComposer,
+      environmentId,
+      primaryEnvironmentId,
       isConnecting,
       isComposerApprovalState,
       pendingUserInputs.length,
@@ -3960,7 +4006,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         }}
                       >
                         {image.previewUrl ? (
-                          <img src={image.previewUrl} alt="" className="size-full object-cover" />
+                          <ComposerImageThumbnail
+                            file={image.file}
+                            alt=""
+                            className="size-full object-cover"
+                            fallback={<PaperclipIcon className="m-auto size-4" />}
+                          />
                         ) : (
                           <PaperclipIcon className="m-auto size-4" />
                         )}
@@ -4170,7 +4221,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
-                  steerShortcutLabel={isMacPlatform(navigator.platform) ? "⌘↵" : "Ctrl+Enter"}
+                  steerShortcutLabel={
+                    composerSendRequiresModifier(settings.sendShortcut, prompt)
+                      ? isMacPlatform(navigator.platform)
+                        ? "⇧⌘↵"
+                        : "Ctrl+Shift+Enter"
+                      : isMacPlatform(navigator.platform)
+                        ? "⌘↵"
+                        : "Ctrl+Enter"
+                  }
+                  alternateFollowUpAction={
+                    settings.followUpBehavior === "steer" ? "queue" : "steer"
+                  }
                   preserveComposerFocusOnPointerDown={isMobileViewport || isComposerResting}
                   showSendWhileRunning={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}

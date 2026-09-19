@@ -444,6 +444,30 @@ describe("shortcutLabelForCommand", () => {
 });
 
 describe("thread navigation helpers", () => {
+  it("lets a binding opt out of the web so the browser keeps its tab shortcuts", () => {
+    const bindings = compile([
+      {
+        shortcut: modShortcut("1"),
+        command: "thread.jump.1",
+        whenAst: whenIdentifier("isDesktop"),
+      },
+    ]);
+    const input = event({ key: "1", metaKey: true });
+    assert.isNull(
+      resolveShortcutCommand(input, bindings, {
+        platform: "MacIntel",
+        context: { isDesktop: false },
+      }),
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(input, bindings, {
+        platform: "MacIntel",
+        context: { isDesktop: true },
+      }),
+      "thread.jump.1",
+    );
+  });
+
   it("maps jump commands to visible thread indices", () => {
     assert.strictEqual(threadJumpCommandForIndex(0), "thread.jump.1");
     assert.strictEqual(threadJumpCommandForIndex(2), "thread.jump.3");

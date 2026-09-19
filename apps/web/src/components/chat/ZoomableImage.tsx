@@ -59,6 +59,12 @@ export function ZoomableImage({
       pan(key) {
         const viewport = viewportRef.current;
         if (!viewport || zoomRef.current <= 1) return false;
+        // A vertical scrollbar alone must not swallow gallery navigation.
+        if (
+          (key === "ArrowLeft" || key === "ArrowRight") &&
+          viewport.scrollWidth <= viewport.offsetWidth
+        )
+          return false;
         switch (key) {
           case "ArrowLeft":
             viewport.scrollLeft -= 40;

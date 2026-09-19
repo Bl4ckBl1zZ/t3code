@@ -55,6 +55,7 @@
     "defaultThemeSetAt": "",
     "environmentIcon": null,
     "defaultModelSelection": null,
+    "defaultRuntimeMode": "full-access",
     "defaultThreadEnvMode": "local",
     "newWorktreesStartFromOrigin": true,
     "worktreeRetention": {

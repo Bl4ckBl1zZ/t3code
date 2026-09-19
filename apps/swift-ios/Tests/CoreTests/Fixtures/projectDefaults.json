@@ -38,6 +38,7 @@
         }
       ]
     },
+    "defaultRuntimeMode": "full-access",
     "defaultThreadEnvMode": "worktree",
     "newWorktreesStartFromOrigin": true,
     "worktreeRetention": {

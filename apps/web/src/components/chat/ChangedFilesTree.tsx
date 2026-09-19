@@ -1,5 +1,5 @@
 import { type RunId } from "@t3tools/contracts";
-import { memo, useCallback, useMemo, useState } from "react";
+import { type MouseEvent, memo, useCallback, useMemo, useState } from "react";
 import { type TurnDiffFileChange } from "../../types";
 import {
   buildTurnDiffTree,
@@ -27,6 +27,9 @@ import {
 
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 
+/** Opens the OS-level context menu for a changed file (reveal in file manager, open in editor). */
+export type ChangedFileContextMenuHandler = (filePath: string, event: MouseEvent) => void;
+
 export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   runId: RunId;
   files: ReadonlyArray<TurnDiffFileChange>;
@@ -37,6 +40,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   onExpandedChange: (expanded: boolean) => void;
   onToggleAllDirectories: () => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
 }) {
   const {
     runId,
@@ -48,6 +52,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
     onExpandedChange,
     onToggleAllDirectories,
     onOpenTurnDiff,
+    onFileContextMenu,
   } = props;
   const summaryStat = useMemo(() => summarizeTurnDiffStats(files), [files]);
   const scopeSummary = useMemo(() => summarizeChangedFileScopes(files), [files]);
@@ -158,6 +163,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
           allDirectoriesExpanded={allDirectoriesExpanded}
           resolvedTheme={resolvedTheme}
           onOpenTurnDiff={onOpenTurnDiff}
+          onFileContextMenu={onFileContextMenu}
         />
       ) : compactPreviewVisible ? (
         <div className="px-2 pb-1.5 pt-1">
@@ -181,6 +187,14 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                       type="button"
                       className="inline-flex max-w-48 items-center gap-1 rounded-md border border-border/70 bg-background/45 px-1.5 py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onClick={() => onOpenTurnDiff(runId, file.path)}
+                      onContextMenu={
+                        onFileContextMenu
+                          ? (event) => {
+                              event.preventDefault();
+                              onFileContextMenu(file.path, event);
+                            }
+                          : undefined
+                      }
                     />
                   }
                 >
@@ -215,8 +229,10 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
 }) {
-  const { files, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, runId } = props;
+  const { files, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, runId, onFileContextMenu } =
+    props;
   const treeNodes = useMemo(() => buildTurnDiffTree(files), [files]);
   const directoryPathsKey = useMemo(
     () => collectDirectoryPaths(treeNodes).join("\u0000"),
@@ -302,6 +318,14 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
         className="group flex w-full items-center gap-1.5 rounded-xl py-1 pr-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         style={{ paddingLeft: `${leftPadding}px` }}
         onClick={() => onOpenTurnDiff(runId, node.path)}
+        onContextMenu={
+          onFileContextMenu
+            ? (event) => {
+                event.preventDefault();
+                onFileContextMenu(node.path, event);
+              }
+            : undefined
+        }
       >
         {hasDirectoryNodes || depth > 0 ? (
           <span aria-hidden="true" className="size-3.5 shrink-0" />

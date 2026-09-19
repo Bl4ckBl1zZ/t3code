@@ -383,6 +383,89 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   ownership, ordinary failures do not abort the batch, and failed/unprocessed threads stay
   selected. Navigation and worktree-cleanup failures are reported separately from a completed
   deletion, including the fork's archived-thread deletion path.
+- The 2026-09-19 sync (`0f602b3372..dfbb11bdd7`, 411 upstream commits) manually carries
+  independent fixes and small features, and retains the boundaries above:
+  - Server: checkpoint capture reuses index metadata, stays on the fast path for large sparse
+    checkouts, flushes objects and refs before publishing, tolerates empty nested repositories,
+    and retries transient Git exits (`b12c92f695`, `c1738f131d`, `8130a9f13a`, `1455cb5c35`,
+    `869347bc26`). Default-timeout Git processes are bounded to eight (`5b377e2a04`). Worktree
+    creation uses parallel checkout; `fetchRemote` accepts a scoped ref, but V2 callers keep
+    unscoped fetches because `resolveRemoteTrackingCommit` may follow a differently named
+    upstream (`a37b85279d`). "Capture when baseline lookup fails" (`67993623af`) lives in V2
+    `CheckpointService`; "fall back when worktrees are unavailable" (`dd6ba84dc9`) lives in V2
+    `ThreadLaunchService` via `GitWorkflowService.isRepository`/`hasCommit`. Codex images travel
+    by path through `CodexAdapterV2` (`3fd21df62d`). Review diffs detect renames and serve
+    per-file patches with complete counts (`26894dda7b`, `aae361c4ef`); web's progressive
+    consumer is not wired yet. Preview hosts recover after unanswered requests on both halves
+    (`7235701de0`, `5378f87f99`). Terminal output windows, provider-refresh-on-subscribe,
+    bounded provider event logs, secrets restore, OTLP headers/protocol, editor detection
+    outside PATH, usage account homes, Antigravity temp directories, new default models and
+    qualified Codex model ids are carried as written.
+  - `defaultRuntimeMode` (`cf1ba3d7da`) exists as a server setting and is used by the startup
+    auto-bootstrap thread only. Web keeps the fork's `carryRuntimeMode` for new threads and has
+    no settings row; choosing between carry and default is a product decision.
+  - Web: send shortcut and queue/steer follow-ups (`719a76ca1d`, `f4ef5155fb`) ride the fork's
+    V2 `dispatchMode`; there is no client queue (`cc839c42b1`) and no
+    `thread.steerQueuedMessage` command. Thread notifications, sounds, in-app toasts and the
+    desktop badge (`0e0ddaeedf`, `42b6bcc6f5`, `6e5e986f15`) are rebuilt on V2 thread shells in
+    `ThreadNotificationCoordinator.logic.ts`, keyed by `latestRun.runId` because the fork
+    synthesises `completedAt`. Custom snooze (`3be02ae579`) uses native date/time inputs rather
+    than `react-day-picker` and V2 `snoozedUntil`. Tool-row timestamps, plain-text thought
+    previews and message headings are translated onto the V2 timeline; thinking traces and
+    thought grouping were already covered by V2 `reasoning` items. "Filter by project" is an
+    inline `Sidebar.tsx` menu item. Proactive diff thresholds (`52ad70ec43`) live in
+    `resolveProactiveRunDiffAction`. Streaming Markdown prefix reuse and resumed highlighting
+    (`a9dabbf100`, `d7d7f8f3eb`) are carried without new dependencies; completed-line DOM
+    preservation (`8078c532ce`) needs `hast-util-*` and is not.
+  - `mod+1…9` thread/model jumps default to `isDesktop` (`3fd5d6439d`); native clients do not
+    evaluate `when`.
+  - Desktop: preview automation paste (`e816064945`) uses Electron 43's synchronous clipboard
+    readers (text, HTML, RTF, PNG) instead of Electron 44's `clipboard.read()`; restore
+    upstream's version when Electron is bumped. "Startup runs twice" (`b20d29dc43`) and
+    "paste as text doubles" (`96bddf8125`) fix bugs the fork does not have.
+  - Dependency pins stay (Effect `beta.103`, Electron 43, no TypeScript 7); the Effect rc.115 /
+    Alchemy beta.78 upgrade (`d547e3b12a`, `e3c85ead63`) is not carried.
+- That range leaves the following for human-reviewed ports; advancing the marker does not
+  advertise them, and none of their contracts, RPCs or capability flags were imported:
+  - Stacks: devices/simulators/emulators (`dca7b59bea` and follow-ups); self-contained CLI
+    archives, npm platform packages and `t3 update`/`uninstall`/`service restart` (`eb8f6f42a5`
+    … `91cd91c087`; the fork publishes no CLI archives); per-project setting overrides and
+    scope picker (`2c0e891740`, `e22040dfc1`, `8b2c0465de`) and storage cleanup (`c4ca1b0f94`),
+    which collide with the fork's sparse project overrides; multi-model thread start
+    (`0150c6a53b`); rewind keeping files and prompt restore (`efccda9ac9`, `fd5553f1af`,
+    `b4620d5955`, `eed974c122`); paragraph streaming mode (`c07575f573`, `1bbca0e782`), which
+    replaces `enableLegacyTokenStreaming` that V2, web and Swift read; inline file previews,
+    context chips and large-paste folding (`4fed6cfb35`, `68c2277f50`); worktree setup steps,
+    cancel and async scripts (`73b206f4bf`, `5ea6439816`, `2c19283afe`); background clone
+    (`8d7c700c17`); Forgejo/Gitea (`6fd68f5c3e`), whose new provider kind the hand-written Swift
+    enum cannot decode; PR account routing, viewed files, quota reduction, private media and
+    immediate linked-PR settlement (`db6e0531e4`, `03950089ff`, `f4600d77dd`, `e84f23a97d`,
+    `32e8b25845`, `19ee856ec0`); the PR summary/comment redesigns; saved environments on/off,
+    the flattened Connections page, local-environment disable and incompatible-server blocking
+    (`2587c8060c`, `5e961d3d7f`, `cba7dd7781`, `2c16c1d264`); optimistic thread lifecycle
+    (`9ea892e3b3`, built on V1 commands); project monograms (`438465d6b7`); native slash
+    commands (`0b83045d00`); Codex app permission requests (`efb96939fb`); title generation
+    rewrite (`7cafe52bb8`); new usage limit sources (`eff44be433`); device-grant connect login
+    (`dc0869b605`); reusable dev auth token (`3b75e607eb`); OTLP log export and desktop
+    telemetry (`3bb06ad910`, `82059df152`); macOS permission onboarding (`36668dbe4f`); license
+    notices (`4a4c6dd2ad`); new composer/PR/theme keybinding commands (`9130d932f4`,
+    `9686cd9afe`); the Tiptap rich-text composer (`d359e94cab`); Unicode currency skill aliases
+    (`2a47fc905a`), which need `SkillNode` to keep its source prefix.
+  - Decisions: `e26af33b22` (keep PR panel actions in the current thread) reverses a tested
+    fork behaviour; `394af73e02` (diff panel defaults to working tree) changes the V2 proactive
+    run-diff design; `5735693d4a` (Claude launch args override the permission mode) needs a
+    rule for read-only and plan sessions in `ClaudeAdapterV2`.
+  - Scroll work (`211618fd9f`, `f17165a76b`) assumes upstream's live-follow model and needs a
+    port against the fork's at-end/programmatic-scroll handling with a browser pass. Answered
+    questions in tool activity (`27eb79dc71`, `3486451525`) need an answers field on the V2
+    `user_input_request` item, which Swift also decodes.
+  - Relay `thread_id` columns stay `varchar(191)` while the router accepts 512 (`80c1f771b3`);
+    widening needs a migration generated against the fork's drizzle snapshot. V2
+    `RunFinalizationService` still awaits workspace/VCS refreshes inline; the V2 analogue of
+    `901db89669`/`d17f46d763` is unverified.
+  - V1 engine/projector/ingestion changes, the compact sidebar rail (added and reverted
+    upstream), Expo, Android, WSL, release bumps, upstream release/review-bot machinery, the
+    Alchemy relay deploy and marketing changes are dropped under the standing rules.
 - The 2026-09-10 sync (`e16b8b059c..0f602b3372`, 13 upstream commits) carries seven
   independent changes and retains the following boundaries:
   - Linked-PR search (`f0401c6290`) runs on the existing V2 `linkedPullRequest` in web's

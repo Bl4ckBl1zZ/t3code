@@ -4,15 +4,20 @@ import type { SessionPhase } from "../../types";
 export type ComposerDispatchMode = "auto" | "queue" | "steer" | "restart";
 export type ActiveTurnComposerAction = Exclude<ComposerDispatchMode, "auto">;
 
-/** One policy seam for the future configurable active-turn default action. */
+/**
+ * One policy seam for the active-turn action. `activeTurnDefault` is the
+ * user's `followUpBehavior`; the alternate shortcut picks the other of
+ * queue/steer, so both stay one keystroke away whichever is the default.
+ */
 export function resolveComposerDispatchMode(input: {
   readonly phase: SessionPhase;
-  readonly steerModifier: boolean;
+  readonly alternateModifier: boolean;
   readonly activeTurnDefault?: ActiveTurnComposerAction;
 }): ComposerDispatchMode {
   if (input.phase !== "running") return "auto";
-  if (input.steerModifier) return "steer";
-  return input.activeTurnDefault ?? "queue";
+  const activeTurnDefault = input.activeTurnDefault ?? "queue";
+  if (input.alternateModifier) return activeTurnDefault === "steer" ? "queue" : "steer";
+  return activeTurnDefault;
 }
 
 /**

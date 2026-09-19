@@ -90,6 +90,7 @@ export function makeQuitHoldHandler(
         if (!quitOnRelease) {
           release();
         } else {
+          clearWatchdog();
           watchdog = setTimeout(quitNow, QUIT_HOLD_RELEASE_GRACE_MS);
         }
       }
@@ -99,7 +100,11 @@ export function makeQuitHoldHandler(
 
     if (quitOnRelease && input.isAutoRepeat && key === "q") {
       event.preventDefault();
+      // A Q repeat proves the key is still down, so it only pushes the quiet
+      // period back. macOS can drop the final Q keyUp; the quit must then land
+      // on its own once repeats stop instead of sitting armed indefinitely.
       clearWatchdog();
+      watchdog = setTimeout(quitNow, QUIT_HOLD_RELEASE_GRACE_MS);
       return;
     }
 

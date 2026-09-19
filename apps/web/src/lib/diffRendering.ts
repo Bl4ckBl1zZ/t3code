@@ -163,9 +163,13 @@ export function resolveFileDiffPreviousPath(fileDiff: FileDiffMetadata): string 
   return raw;
 }
 
+/**
+ * Distinct for every block in a patch. A type change (regular file to symlink) arrives as a
+ * deletion and an addition of the same path, so the change type is part of the fallback key.
+ */
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   const cacheKey = fileDiff.cacheKey;
-  if (!cacheKey) return `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
+  if (!cacheKey) return `${fileDiff.prevName ?? "none"}:${fileDiff.name}:${fileDiff.type}`;
 
   return cacheKey.endsWith(":hydrated") ? cacheKey.slice(0, -":hydrated".length) : cacheKey;
 }

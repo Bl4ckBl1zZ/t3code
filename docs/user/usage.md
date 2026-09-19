@@ -20,6 +20,11 @@ Open **Limits** from Usage (or **Settings → Usage limits** on iPhone and iPad)
 quota remaining, reset times, and when each report was checked. Choose which environments to
 include, then use **Refresh limits** to request fresh reports.
 
+On web and desktop, Usage opens on Limits, and opening Limits checks the selected connected
+environments automatically. Each client waits at least five minutes between automatic checks of
+an environment, including after a failed check. Models without known rates show **Unpriced**
+instead of a zero cost.
+
 The same known account on multiple environments appears once, using its freshest report.
 Accounts without a reported identity stay separate. Pooled bars weight each reporting account
 equally; they do not claim that different subscription plans have equal token allowances.

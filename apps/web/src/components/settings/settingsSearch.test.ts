@@ -84,6 +84,20 @@ describe("searchSettings", () => {
     });
   });
 
+  it("finds keybinding commands by label, command id, and default key", () => {
+    expect(searchSettings("toggle sidebar")[0]?.id).toBe("keybinding-sidebar.toggle");
+    expect(searchSettings("sidebar.toggle")[0]?.id).toBe("keybinding-sidebar.toggle");
+    expect(searchSettings("mod+b")[0]?.id).toBe("keybinding-sidebar.toggle");
+  });
+
+  it("ranks keybinding commands after other settings", () => {
+    const ids = searchSettings("model").map((item) => item.id);
+    expect(ids[0]?.startsWith("keybinding-")).toBe(false);
+    expect(ids.findLast((id) => !id.startsWith("keybinding-"))).toBeDefined();
+    const firstKeybinding = ids.findIndex((id) => id.startsWith("keybinding-"));
+    expect(ids.slice(firstKeybinding).every((id) => id.startsWith("keybinding-"))).toBe(true);
+  });
+
   it("keeps catalog result ids unique", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);

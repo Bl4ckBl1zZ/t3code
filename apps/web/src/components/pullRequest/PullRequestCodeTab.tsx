@@ -41,7 +41,6 @@ import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
-  getDiffLineStat,
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
@@ -481,7 +480,11 @@ export function PullRequestCodeTab({
           groupAt(anchor.side, anchor.line).draft = true;
         }
 
-        const collapsed = isFileDiffCollapsed(fileKey, foldOverride, toggledFiles);
+        const collapsed = isFileDiffCollapsed(
+          fileKey,
+          foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded"),
+          toggledFiles,
+        );
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
           side: toViewerSide(group.side),
@@ -534,10 +537,10 @@ export function PullRequestCodeTab({
       foldOverride,
       pendingComments,
       placedThreadIds,
+      settings.diffFilesCollapsed,
       toggledFiles,
     ],
   );
-  const lineStat = useMemo(() => getDiffLineStat(files), [files]);
   const omittedFileStats = useMemo(
     () =>
       new Map(
@@ -1030,7 +1033,7 @@ export function PullRequestCodeTab({
         {orderedCommits.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger
-              className="inline-flex h-6 max-w-64 items-center gap-1 rounded-md bg-accent px-2 text-xs font-medium text-accent-foreground outline-none transition-colors hover:bg-accent/80 focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex h-6 min-w-0 max-w-64 items-center gap-1 rounded-md bg-accent px-2 text-xs font-medium text-accent-foreground outline-none transition-colors hover:bg-accent/80 focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={`Diff scope: ${scopeLabel}`}
             >
               <span className="truncate">{scopeLabel}</span>
@@ -1079,7 +1082,7 @@ export function PullRequestCodeTab({
         ) : null}
         {/* One count, and the caveats as icons that carry their own words. Spelled out they
             competed for a strip this narrow and every one of them truncated to nothing. */}
-        <PullRequestMetaLine>
+        <PullRequestMetaLine className="shrink-0">
           <span className="shrink-0 tabular-nums">
             {files.length} {files.length === 1 ? "file" : "files"}
             {nextCursor === null ? "" : "+"}
@@ -1114,11 +1117,6 @@ export function PullRequestCodeTab({
         </PullRequestMetaLine>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <PullRequestDiffStat
-          additions={lineStat.additions}
-          deletions={lineStat.deletions}
-          className="mr-1"
-        />
         {fileKeys.length > 0 ? (
           <Tooltip>
             <TooltipTrigger

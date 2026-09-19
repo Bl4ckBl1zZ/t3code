@@ -459,6 +459,21 @@ export function computeMessageDurationStart(
   return result;
 }
 
+/**
+ * One-line plain text for a collapsed thought row. Reasoning arrives as
+ * markdown, and a truncated preview should read as prose, not as `**` syntax.
+ */
+export function plainThoughtPreviewText(markdown: string): string {
+  return markdown
+    .replace(/```[^\n]*/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, "")
+    .replace(/\*\*|__|~~|`/g, "")
+    .replace(/(^|\s)\*(\S(?:[^*]*\S)?)\*/g, "$1$2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }

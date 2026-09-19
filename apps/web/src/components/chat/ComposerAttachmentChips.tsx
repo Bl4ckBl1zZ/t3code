@@ -24,6 +24,7 @@ import { useTheme } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ComposerImageThumbnail } from "./ComposerImageThumbnail";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import {
   attachmentKindLabel,
@@ -42,6 +43,8 @@ export interface ComposerAttachmentChip {
   readonly sizeBytes: number;
   readonly source?: SnapShotSource;
   readonly previewUrl?: string | undefined;
+  /** Original bytes; lets square image tiles render a cached thumbnail instead of the full image. */
+  readonly file?: File | undefined;
   readonly upload?: AttachmentUploadState | undefined;
 }
 
@@ -130,11 +133,24 @@ export function ComposerAttachmentChips(props: {
                     removeAt(attachment.id, true);
                   }}
                 >
-                  <img
-                    src={attachment.previewUrl}
-                    alt={attachment.name}
-                    className="h-full w-full object-cover"
-                  />
+                  {attachment.file && !attachment.source ? (
+                    <ComposerImageThumbnail
+                      file={attachment.file}
+                      alt={attachment.name}
+                      className="h-full w-full object-cover"
+                      fallback={
+                        <span className="flex h-full items-center justify-center px-1 text-[10px] text-muted-foreground">
+                          {attachment.name}
+                        </span>
+                      }
+                    />
+                  ) : (
+                    <img
+                      src={attachment.previewUrl}
+                      alt={attachment.name}
+                      className="h-full w-full object-cover"
+                    />
+                  )}
                 </button>
               ) : isMedia ? (
                 <video

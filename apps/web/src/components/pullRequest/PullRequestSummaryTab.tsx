@@ -12,7 +12,6 @@ import {
   GitPullRequestClosedIcon,
   HammerIcon,
   MessageSquareIcon,
-  PencilIcon,
   RotateCcwIcon,
   SendIcon,
   TagIcon,
@@ -27,6 +26,7 @@ import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
+import { PullRequestEditButton } from "./PullRequestEditButton";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
@@ -136,15 +136,7 @@ function CommentBody({
         environmentId={editing.environmentId}
       />
       {editing.canEdit(comment) ? (
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
-          aria-label="Edit comment"
-          onClick={() => editing.onEdit(comment)}
-        >
-          <PencilIcon className="size-3" />
-        </Button>
+        <PullRequestEditButton aria-label="Edit comment" onClick={() => editing.onEdit(comment)} />
       ) : null}
     </div>
   );
@@ -368,7 +360,7 @@ function CommentComposer({
   };
 
   return (
-    <div className="mt-3 space-y-2">
+    <div className="space-y-2">
       <Textarea
         // Locked while posting: the body is cleared on success, which would otherwise throw
         // away a new draft typed while the request was still in flight.
@@ -378,6 +370,19 @@ function CommentComposer({
         placeholder="Leave a comment"
         aria-label="Comment on this pull request"
         onChange={(event) => setBody(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+          if (
+            event.key === "Enter" &&
+            (event.metaKey || event.ctrlKey) &&
+            !event.shiftKey &&
+            !event.altKey
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!event.repeat) void submit("comment");
+          }
+        }}
       />
       <div className="flex justify-end gap-2">
         {followUpAction === null ? null : (
@@ -743,26 +748,13 @@ export function PullRequestSummaryTab({
                 environmentId={environmentId}
               />
               {canEditPullRequestChangeRequest(detail) ? (
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                <PullRequestEditButton
                   aria-label="Edit description"
                   onClick={() => setBodyScope(detail.url)}
-                >
-                  <PencilIcon className="size-3" />
-                </Button>
+                />
               ) : null}
             </div>
           )}
-          <PullRequestReactionBar
-            className="mt-2"
-            reactions={detail.reactions ?? []}
-            canReact={detail.capabilities.reactions === true}
-            environmentId={environmentId}
-            reference={reference}
-            onRefresh={onRefresh}
-          />
         </div>
       </Section>
 
@@ -787,7 +779,7 @@ export function PullRequestSummaryTab({
                     onClick={() => check.url && openCheck(check.url)}
                     className={cn(
                       "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
-                      check.url ? undefined : "cursor-default",
+                      check.url ? "cursor-pointer" : "cursor-default",
                     )}
                   >
                     <PullRequestCheckStatusIcon status={check.status} />
@@ -974,7 +966,9 @@ export function PullRequestSummaryTab({
             )}
           </>
         )}
-        {/* Posting is a core capability and remains usable even if the activity read failed. */}
+      </Section>
+      <div className="px-4 pb-4">
+        {/* Posting stays available when the conversation is folded or its activity read failed. */}
         {detail.capabilities.comment && detail.viewerPermissions.comment ? (
           <CommentComposer
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
@@ -986,7 +980,7 @@ export function PullRequestSummaryTab({
             onCommented={onRefresh}
           />
         ) : null}
-      </Section>
+      </div>
     </div>
   );
 }

@@ -832,9 +832,16 @@ export class ServerSelfUpdateError extends Schema.TaggedErrorClass<ServerSelfUpd
   }
 }
 
-/** User override, host detection, then a generic server while disconnected. */
+/**
+ * User override, host detection, then a generic server while disconnected.
+ * Settings only exist once connected; a descriptor alone (relay discovery,
+ * before any connection) still yields the detected kind.
+ */
 export function resolveEnvironmentMachineKind(
-  config: Pick<ServerConfig, "environment" | "settings"> | null,
+  config: {
+    readonly environment: Pick<ExecutionEnvironmentDescriptor, "platform">;
+    readonly settings?: Pick<ServerSettings, "environmentIcon">;
+  } | null,
 ): EnvironmentMachineKind {
-  return config?.settings.environmentIcon ?? config?.environment.platform.machine ?? "server";
+  return config?.settings?.environmentIcon ?? config?.environment.platform.machine ?? "server";
 }

@@ -7,6 +7,7 @@ import {
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  plainThoughtPreviewText,
   resolveLiveWorkEntry,
   resolveHistoricalWorkSummary,
   resolveAssistantMessageCopyState,
@@ -2206,5 +2207,20 @@ describe("V2 historical tool summaries", () => {
   });
   it("leaves non-tool bookkeeping visible", () => {
     expect(resolveHistoricalWorkSummary([entry(), entry({ tone: "info" })])).toBeNull();
+  });
+});
+
+describe("plainThoughtPreviewText", () => {
+  it("reads markdown thoughts as one line of prose", () => {
+    expect(
+      plainThoughtPreviewText(
+        "**Planning the fix**\n\n- Check `session-logic.ts`\n- See [the docs](https://example.com) and *retry*",
+      ),
+    ).toBe("Planning the fix Check session-logic.ts See the docs and retry");
+  });
+  it("keeps identifiers and arithmetic untouched", () => {
+    expect(plainThoughtPreviewText("snake_case_name is 2 * 3 * 4")).toBe(
+      "snake_case_name is 2 * 3 * 4",
+    );
   });
 });
