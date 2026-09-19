@@ -283,6 +283,81 @@ public struct AutomationEditSheet: View {
                 )
             }
             .accessibilityLabel("Model, \(selectedModelLabel)")
+
+            // Effort, fast mode, and whatever else the chosen model publishes.
+            if let selected = selectedModelOption {
+                ForEach(
+                    Array((selected.capabilities?.optionDescriptors ?? []).enumerated()),
+                    id: \.offset
+                ) { _, descriptor in
+                    optionRow(descriptor, on: selected.selection)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func optionRow(
+        _ descriptor: ServerProviderOptionDescriptor,
+        on selection: ModelSelection
+    ) -> some View {
+        switch descriptor {
+        case let .select(select):
+            // Prompt-injected values apply to a single turn and are never saved.
+            let choices = select.options.filter {
+                select.promptInjectedValues?.contains($0.id) != true
+            }
+            if !choices.isEmpty {
+                let current = selection.options?.first { $0.id == select.id }?.value.stringValue
+                let currentLabel = choices.first { $0.id == current }?.label ?? current ?? "Default"
+                SettingsRowDivider()
+                Menu {
+                    ForEach(choices) { choice in
+                        Button {
+                            draft.modelSelection = ModelOptions.setting(
+                                .string(choice.id),
+                                forOption: select.id,
+                                on: selection
+                            )
+                        } label: {
+                            if choice.id == current {
+                                Label(choice.label, systemImage: "checkmark")
+                            } else {
+                                Text(choice.label)
+                            }
+                        }
+                    }
+                } label: {
+                    SettingsValueNavigationRow(
+                        title: select.label,
+                        systemImage: "slider.horizontal.3",
+                        value: currentLabel
+                    )
+                }
+                .accessibilityLabel("\(select.label), \(currentLabel)")
+            }
+        case let .boolean(boolean):
+            SettingsRowDivider()
+            SettingsToggleRow(
+                title: boolean.label,
+                systemImage: "switch.2",
+                isOn: Binding(
+                    get: {
+                        if case let .bool(value)? = selection.options?
+                            .first(where: { $0.id == boolean.id })?.value {
+                            return value
+                        }
+                        return boolean.currentValue ?? false
+                    },
+                    set: { value in
+                        draft.modelSelection = ModelOptions.setting(
+                            .bool(value),
+                            forOption: boolean.id,
+                            on: selection
+                        )
+                    }
+                )
+            )
         }
     }
 
@@ -438,12 +513,19 @@ public struct AutomationEditSheet: View {
         )
     }
 
-    private var selectedModelLabel: String {
-        guard let selection = draft.modelSelection else { return "Choose a model" }
+    /// The catalog entry for the draft's model. Its `selection` is the draft's
+    /// own, normalized against the model's live option descriptors.
+    private var selectedModelOption: ModelOption? {
+        guard let selection = draft.modelSelection else { return nil }
         return modelOptions.first {
             $0.selection.instanceId == selection.instanceId
                 && $0.selection.model == selection.model
-        }?.label ?? selection.model
+        }
+    }
+
+    private var selectedModelLabel: String {
+        guard let selection = draft.modelSelection else { return "Choose a model" }
+        return selectedModelOption?.label ?? selection.model
     }
 
     // MARK: - Requests

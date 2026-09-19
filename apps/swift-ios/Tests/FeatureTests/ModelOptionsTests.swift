@@ -152,6 +152,26 @@ final class ModelOptionsTests: XCTestCase {
         XCTAssertEqual(option?.selection.options?.first?.value, JSONValue.string("default"))
     }
 
+    func testSettingAnOptionReplacesItsStoredValueInPlace() {
+        let selection = ModelSelection(
+            instanceId: "codex",
+            model: "gpt-test",
+            options: [
+                .init(id: "reasoningEffort", value: .string("medium")),
+                .init(id: "fastMode", value: .bool(false)),
+            ]
+        )
+
+        let effort = ModelOptions.setting(.string("high"), forOption: "reasoningEffort", on: selection)
+        XCTAssertEqual(effort.options?.map(\.id), ["reasoningEffort", "fastMode"])
+        XCTAssertEqual(effort.options?.first?.value, JSONValue.string("high"))
+
+        let added = ModelOptions.setting(.string("1m"), forOption: "contextWindow", on: effort)
+        XCTAssertEqual(added.options?.map(\.id), ["reasoningEffort", "fastMode", "contextWindow"])
+        XCTAssertEqual(added.instanceId, "codex")
+        XCTAssertEqual(added.model, "gpt-test")
+    }
+
     func testFallbackSelectionForAMissingModelIsListedUnderItsBareIdentifiers() throws {
         let config = try config(
             providers: """
