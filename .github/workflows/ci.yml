@@ -17,7 +17,7 @@ concurrency:
 jobs:
   verify:
     name: Verify
-    runs-on: halifax-bl4ckbl1zz-t3code-db2e22d1
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -53,13 +53,8 @@ jobs:
       - name: Install Linux browser import build dependencies
         if: runner.os == 'Linux'
         run: |
-          if command -v sudo >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y pkg-config libsecret-1-dev
-          else
-            apt-get update
-            apt-get install -y pkg-config libsecret-1-dev
-          fi
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libsecret-1-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@nightly
@@ -81,28 +76,12 @@ jobs:
       - name: Typecheck
         run: vpr typecheck
 
-      - name: Prepare unprivileged test user
-        run: |
-          if ! id -u t3ci >/dev/null 2>&1; then
-            useradd --create-home --shell /bin/bash t3ci
-          fi
-          chown -R t3ci:t3ci "$GITHUB_WORKSPACE"
-          parent="$GITHUB_WORKSPACE"
-          while [[ "$parent" != "/" ]]; do
-            chmod o+x "$parent"
-            parent="$(dirname "$parent")"
-          done
-          runuser --user t3ci -- test -x "$GITHUB_WORKSPACE/node_modules/.bin/vp"
-
+      # GitHub-hosted runners already run as an unprivileged user, which the
+      # permission-sensitive tests need.
       - name: Test
         env:
           CI: "true"
-        run: |
-          runuser --user t3ci -- env \
-            CI="$CI" \
-            PATH="$PATH" \
-            TMPDIR="$TMPDIR" \
-            "$GITHUB_WORKSPACE/node_modules/.bin/vp" run test
+        run: vp run test
 
       - name: Check resource monitor
         run: |
