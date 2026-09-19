@@ -46,10 +46,18 @@ be selected again. The option is hidden when the connected environment needs a s
 Threads with unsent text or attachments show a **Draft** badge. Long-press a thread and choose
 **Discard draft** to clear it after confirmation, including when its composer is open.
 
-Tap **Select threads** or choose **Select thread** from a row’s menu, then select rows to unpin
-or delete together. Delete asks for confirmation; unpin follows your confirmation preference.
+Tap **Select threads** or choose **Select thread** from a row’s menu, then select rows to snooze,
+unpin or delete together. Delete asks for confirmation; unpin follows your confirmation preference.
 Successful rows leave the selection. Failed rows stay selected so you can retry. Deleting thread
-history does not remove worktree files from the environment.
+history does not remove worktree files from the environment. Threads that cannot be snoozed,
+such as queued threads or Work's Main thread, stay selected when you snooze a selection.
+
+On iOS, **Snooze → Custom…** in a thread's menu or in the selection bar opens a sheet for a
+date and time in your device's time zone, or a duration in minutes, hours or days. Durations
+start when you tap **Snooze**.
+
+Home search on iOS also matches message content on connected environments. Title, project and
+pull request matches come first; message matches follow with the matching line under the row.
 
 ## Arrange active threads on native iOS
 

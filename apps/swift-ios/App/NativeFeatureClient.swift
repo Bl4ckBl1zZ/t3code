@@ -7272,3 +7272,30 @@ extension NativeFeatureClient: FeatureWorkManaging {
         return try await client.workMutate(input)
     }
 }
+
+extension NativeFeatureClient: FeatureThreadContentSearching {
+    func searchThreadContent(query: String) async -> [String: FeatureThreadSearchMatch] {
+        let clients = environmentClients.filter { environmentConnectionStates[$0.key] != .disconnected }
+        return await withTaskGroup(of: [(String, FeatureThreadSearchMatch)].self) { group in
+            for (environmentID, client) in clients {
+                group.addTask {
+                    guard let matches = try? await client.searchThreads(query: query) else { return [] }
+                    return matches.map { match in
+                        (
+                            FeatureScopedID.thread(environmentID: environmentID, wireID: match.threadId),
+                            FeatureThreadSearchMatch(source: match.source, snippet: match.snippet)
+                        )
+                    }
+                }
+            }
+            var merged: [String: FeatureThreadSearchMatch] = [:]
+            for await pairs in group {
+                // The server returns newest messages first; keep a thread's first match.
+                for (id, match) in pairs where merged[id] == nil {
+                    merged[id] = match
+                }
+            }
+            return merged
+        }
+    }
+}

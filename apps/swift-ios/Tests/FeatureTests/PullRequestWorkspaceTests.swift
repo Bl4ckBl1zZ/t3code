@@ -8,10 +8,10 @@ final class PullRequestWorkspaceTests: XCTestCase {
         FeatureProject(id: FeatureScopedID.project(environmentID: environment, wireID: wireID), wireID: wireID,
             environmentID: environment, name: "Project", path: "/work/project", repositoryCanonicalKey: canonical)
     }
-    private func entry(_ number: Int, host: String = "github.com", projectID: String = "project", title: String = "Change", author: String = "other", reviewRequested: Bool = false, checks: String? = nil, review: String? = nil, conflict: Bool = false, additions: Int = 0, date: String = "2026-09-10T12:00:00.000Z") -> PullRequestListEntry {
+    private func entry(_ number: Int, host: String = "github.com", projectID: String = "project", title: String = "Change", author: String = "other", reviewRequested: Bool = false, checks: String? = nil, review: String? = nil, conflict: Bool = false, additions: Int = 0, date: String = "2026-09-10T12:00:00.000Z", state: PullRequestState = .open, draft: Bool = false) -> PullRequestListEntry {
         PullRequestListEntry(provider: "github", host: host, projectId: projectID, projectTitle: "Project", repository: "owner/repo", number: number,
             title: title, url: "https://\(host)/owner/repo/pull/\(number)", author: PullRequestActor(login: author, name: nil, avatarUrl: nil),
-            headBranch: "feature-\(number)", baseBranch: "main", state: .open, isDraft: false, mergeability: conflict ? .conflicting : .mergeable,
+            headBranch: "feature-\(number)", baseBranch: "main", state: state, isDraft: draft, mergeability: conflict ? .conflicting : .mergeable,
             additions: additions, deletions: 0, createdAt: date, updatedAt: date, viewerReviewRequested: reviewRequested, labels: [], reviewDecision: review, checksState: checks)
     }
     private func page(_ entries: [PullRequestListEntry], cursor: String? = nil) -> PullRequestListResult {
@@ -46,6 +46,43 @@ final class PullRequestWorkspaceTests: XCTestCase {
         preferences.query = ""
         let authored = NativePullRequestRow(environmentID: "one", entry: entry(3, author: "ME", conflict: true), viewer: "me")
         XCTAssertEqual(NativePullRequestWorkspaceLogic.sort(rows + [authored], preferences: preferences).first?.entry.number, 3)
+    }
+
+    func testBlockedOnMeRanksAuthoredWorkByWhoseMoveItIs() {
+        var preferences = NativePullRequestPreferences(); preferences.sort = "blocked"
+        let mine: [PullRequestListEntry] = [
+            entry(6, author: "me"),
+            entry(7, author: "me", date: "2026-08-01T00:00:00.000Z", state: .merged),
+            entry(2, author: "me", checks: "failing", date: "2026-08-01T00:00:00.000Z"),
+            entry(5, author: "me", checks: "passing", draft: true),
+            entry(4, author: "me", checks: "passing", review: "approved"),
+            entry(3, author: "me", checks: "failing", review: "changes-requested", date: "2026-08-02T00:00:00.000Z"),
+            entry(8, author: "me", date: "2026-08-03T00:00:00.000Z", state: .closed),
+            entry(1, author: "me", checks: "failing", conflict: true, date: "2026-08-01T00:00:00.000Z"),
+            entry(9, author: "me", checks: "failing", date: "2026-08-03T00:00:00.000Z"),
+        ]
+        let rows = mine.map { NativePullRequestRow(environmentID: "one", entry: $0, viewer: "me") }
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.sort(rows, preferences: preferences).map(\.entry.number), [1, 3, 9, 2, 5, 6, 4, 8, 7])
+    }
+
+    func testBlockedOnMeRanksReviewsOpenFirstAndOthersByInvolvement() {
+        var preferences = NativePullRequestPreferences(); preferences.sort = "blocked"
+        let reviews = [
+            entry(4, reviewRequested: true, date: "2026-08-03T00:00:00.000Z", state: .closed),
+            entry(2, reviewRequested: true, date: "2026-08-02T00:00:00.000Z"),
+            entry(3, reviewRequested: true, date: "2026-08-01T00:00:00.000Z", state: .merged),
+            entry(1, reviewRequested: true, date: "2026-08-01T00:00:00.000Z"),
+        ].map { NativePullRequestRow(environmentID: "one", entry: $0, viewer: "me") }
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.sort(reviews, preferences: preferences).map(\.entry.number), [2, 1, 4, 3])
+
+        // Rows the viewer neither wrote nor was asked to review keep recency order under
+        // "all", and take the filtered role's ranking otherwise.
+        let others = [entry(5, date: "2026-08-02T00:00:00.000Z"), entry(6, date: "2026-08-01T00:00:00.000Z", draft: true)]
+            .map { NativePullRequestRow(environmentID: "one", entry: $0, viewer: "me") }
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.sort(others, preferences: preferences).map(\.entry.number), [5, 6])
+        preferences.involvement = "authored"
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.sort(others, preferences: preferences).map(\.entry.number), [6, 5])
+        XCTAssertEqual(NativePullRequestPreferences.read(preferences.serialized).sort, "blocked")
     }
 
     func testSavedPreferencesAreStableAndBoundWireValues() throws {

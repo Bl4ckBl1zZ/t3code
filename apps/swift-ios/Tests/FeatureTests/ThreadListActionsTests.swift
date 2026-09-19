@@ -161,13 +161,17 @@ final class ThreadListActionsTests: XCTestCase {
 
         XCTAssertEqual(
             snooze?.children.map(\.id),
-            SnoozePresets.resolve(now: now).map(SnoozePresets.actionID(for:))
+            SnoozePresets.resolve(now: now).map(SnoozePresets.actionID(for:)) + [CustomSnooze.actionID]
         )
         // The wake-time column rides subtitle, not the label.
         XCTAssertEqual(
-            snooze?.children.map(\.subtitle),
+            snooze?.children.dropLast().map(\.subtitle),
             SnoozePresets.resolve(now: now).map(\.whenLabel)
         )
+        // Custom… opens its own section below the presets, and never routes
+        // through preset resolution.
+        XCTAssertEqual(snooze.map { ThreadRowMenu.sections($0.children).count }, 2)
+        XCTAssertNil(SnoozePresets.snoozedUntil(actionID: CustomSnooze.actionID, now: now))
         // Unsnooze stays a plain action: there is only one way back.
         let unsnoozed = ThreadRowMenuActions.homeRowActions(
             ThreadRowMenuContext(isSnoozed: true),

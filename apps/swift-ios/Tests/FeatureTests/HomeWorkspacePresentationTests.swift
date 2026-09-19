@@ -80,13 +80,14 @@ final class HomeWorkspacePresentationTests: XCTestCase {
     private func collectionView(
         _ presentation: HomePresentation,
         workspace: MobileWorkspace,
-        changeRequests: [String: FeaturePullRequest] = [:]
+        changeRequests: [String: FeaturePullRequest] = [:],
+        query: String = ""
     ) -> HomeThreadCollectionView {
         HomeThreadCollectionView(
             presentation: presentation,
             changeRequests: changeRequests,
             workspace: workspace,
-            query: "",
+            query: query,
             selectedThreadID: nil,
             forceRichRows: false,
             isSnoozedExpanded: false,
@@ -109,6 +110,50 @@ final class HomeWorkspacePresentationTests: XCTestCase {
             onCopy: { _, _ in },
             onRegenerateTitle: { _ in }
         )
+    }
+
+    // MARK: - Message search
+
+    /// Title matches lead; threads found only by message content follow with the
+    /// matched message as an excerpt, so the user can see why a row is there.
+    func testMessageMatchesFollowTitleMatchesWithAnExcerpt() {
+        let snapshot = snapshot(threads: [
+            thread(id: "alpha", providerID: "claude"),
+            thread(id: "beta", providerID: "claude"),
+            thread(id: "gamma", providerID: "claude"),
+        ])
+        let presentation = HomePresentation(
+            snapshot: snapshot,
+            workspace: .code,
+            query: "alp",
+            projectID: nil,
+            now: .now,
+            contentMatchIDs: ["beta"]
+        )
+        var view = collectionView(presentation, workspace: .code, query: "alp")
+        let match = FeatureThreadSearchMatch(source: .assistant, snippet: "The ALPha build passed")
+        view.contentMatches = ["beta": match]
+
+        let rows = view.collectionItems.compactMap { item -> (String, HomeThreadSearchExcerpt?)? in
+            guard case let .thread(thread, context, _, _, _) = item else { return nil }
+            return (thread.id, context.searchExcerpt)
+        }
+        XCTAssertEqual(rows.map(\.0), ["alpha", "beta"])
+        XCTAssertNil(rows[0].1)
+        XCTAssertEqual(rows[1].1, HomeThreadSearchExcerpt(match: match, query: "alp"))
+        XCTAssertEqual(rows[1].1?.speaker, "Agent:")
+    }
+
+    /// With nothing matched locally, the empty state waits for message search
+    /// instead of claiming there are no results.
+    func testEmptySearchWaitsForMessageSearch() {
+        let snapshot = snapshot(threads: [thread(id: "alpha", providerID: "claude")])
+        let presentation = HomePresentation(snapshot: snapshot, workspace: .code, query: "zzz", projectID: nil, now: .now)
+        var view = collectionView(presentation, workspace: .code, query: "zzz")
+        view.isSearchingContent = true
+        XCTAssertEqual(view.collectionItems, [.searchEmpty("zzz", true)])
+        view.isSearchingContent = false
+        XCTAssertEqual(view.collectionItems, [.searchEmpty("zzz", false)])
     }
 
     // MARK: - Change requests on rows

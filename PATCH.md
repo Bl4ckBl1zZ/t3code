@@ -577,6 +577,15 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   exports keep original bytes, and workspace media uses freshly signed URLs on presentation/export.
   These native ports do not unfreeze Expo or adopt the upstream V1 commands. Capability fields,
   JSON projections and hand-maintained Swift models are covered by the generated contract fixture.
+- The 2026-09-19 native parity follow-up ports three upstream web features to Swift. Custom
+  snooze (`3be02ae579`) adds **Custom…** to the row Snooze menu and a Snooze menu to the batch
+  bar, resolving `CustomSnooze` date/duration wakes onto the existing V2 `snoozedUntil`; batch
+  snooze skips threads that cannot be shelved. Message-content search (`c557bb10aa`) calls the
+  existing V2 `orchestration.searchThreads` on every reachable environment after a 200 ms
+  debounce, appends content matches after local title/project/PR matches, and shows a
+  speaker-labelled excerpt; failures and older servers contribute nothing, so no capability flag
+  is needed. `ThreadSearchResult` is covered by the generated `threadSearch.json` fixture.
+  "Blocked on me" (`d99bc5a4d7`) ranks authored, review-requested and other rows the way web does.
 - Gives the SwiftUI client three features upstream only built for web and the Expo client, because
   it is the fork's primary client and upstream has no SwiftUI half to merge:
   - **Linked pull requests.** Web links one from a right-click on a transcript link, which has no

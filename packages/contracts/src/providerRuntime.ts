@@ -447,7 +447,8 @@ const RequestResolvedPayload = Schema.Struct({
 export type RequestResolvedPayload = typeof RequestResolvedPayload.Type;
 
 const UserInputQuestionOption = Schema.Struct({
-  value: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Opaque provider identifier, returned verbatim when answering, so never trimmed.
+  value: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   label: TrimmedNonEmptyStringSchema,
   description: TrimmedNonEmptyStringSchema,
 });

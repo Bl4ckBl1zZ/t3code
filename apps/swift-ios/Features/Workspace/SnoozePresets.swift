@@ -129,3 +129,54 @@ public enum SnoozePresets {
         date.formatted(Date.FormatStyle().weekday(.abbreviated))
     }
 }
+
+// Ported from packages/client-runtime/src/state/threadSettled.ts
+// (`resolveCustomSnooze`).
+//
+// The "Custom…" row under Snooze. A date is a local wall-clock choice; a
+// duration counts from the moment the user confirms, and a day is 24 hours.
+public enum CustomSnooze {
+    /// Outside `SnoozePresets.actionIDPrefix`, so preset routing never tries to
+    /// resolve it to a wake time.
+    public static let actionID = "snooze-custom"
+
+    public enum Mode: String, CaseIterable, Sendable {
+        case date
+        case duration
+    }
+
+    public enum Unit: String, CaseIterable, Sendable {
+        case minutes
+        case hours
+        case days
+
+        var seconds: TimeInterval {
+            switch self {
+            case .minutes: 60
+            case .hours: 60 * 60
+            case .days: 24 * 60 * 60
+            }
+        }
+    }
+
+    /// Wake time for a duration, or nil when it would not be in the future.
+    public static func wake(amount: Int, unit: Unit, now: Date = .now) -> Date? {
+        guard amount > 0 else { return nil }
+        return now.addingTimeInterval(Double(amount) * unit.seconds)
+    }
+
+    /// Wake time for a picked date, trimmed to the minute the picker shows so a
+    /// confirmation never lands a few seconds past what the user read.
+    public static func wake(date: Date, now: Date = .now, calendar: Calendar = .current) -> Date? {
+        let wake = calendar.dateInterval(of: .minute, for: date)?.start ?? date
+        return wake > now ? wake : nil
+    }
+
+    /// The date picker's starting value: tomorrow morning, the most common
+    /// reason to reach past the presets.
+    public static func initialDate(now: Date = .now, calendar: Calendar = .current) -> Date {
+        calendar.date(byAdding: .day, value: 1, to: now)
+            .flatMap { calendar.date(bySettingHour: 9, minute: 0, second: 0, of: $0) }
+            ?? now.addingTimeInterval(24 * 60 * 60)
+    }
+}

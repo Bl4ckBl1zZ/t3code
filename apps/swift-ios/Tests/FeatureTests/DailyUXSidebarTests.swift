@@ -23,6 +23,22 @@ struct DailyUXSidebarTests {
         #expect(DailyUXSidebarIndex.matchingThreads([item], snapshot: FeatureSnapshot(threads: [item]), query: "#43").isEmpty)
     }
 
+    @Test func messageMatchesFollowLocalMatchesInListOrder() {
+        let candidates = [
+            thread(id: "second", title: "Docs", created: -100, updated: -100),
+            thread(id: "titled", title: "Relay schema", created: -300, updated: -300),
+            thread(id: "first", title: "Fix routes", created: -200, updated: -200),
+            thread(id: "unrelated", title: "Other", created: -50, updated: -50),
+        ]
+        let ids = DailyUXSidebarIndex.matchingThreads(
+            candidates,
+            snapshot: FeatureSnapshot(threads: candidates),
+            query: "relay",
+            contentMatchIDs: ["first", "second", "titled", "not-listed"]
+        ).map(\.id)
+        #expect(ids == ["titled", "second", "first"])
+    }
+
     @Test func branchCandidatesAreObservedWithoutBecomingExplicitLinks() {
         var item = thread(id: "candidate", created: -500, updated: -100)
         let candidate = FeatureLinkedPullRequest(projectID: item.projectID, repository: "example/repo", number: 41, url: "https://github.com/example/repo/pull/41")

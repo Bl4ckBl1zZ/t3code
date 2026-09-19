@@ -32,7 +32,7 @@ struct NativePullRequestPreferences: Codable, Equatable, Sendable {
         guard let data = value.data(using: .utf8), let decoded = try? JSONDecoder().decode(Self.self, from: data),
               ["all", "open", "closed", "merged"].contains(decoded.state),
               ["all", "authored", "reviewing"].contains(decoded.involvement),
-              ["ready", "updated", "newest", "oldest", "largest", "smallest"].contains(decoded.sort),
+              ["ready", "blocked", "updated", "newest", "oldest", "largest", "smallest"].contains(decoded.sort),
               decoded.draft.map({ ["only", "hide"].contains($0) }) ?? true,
               decoded.review.map({ ["approved", "changes-requested", "review-required", "none"].contains($0) }) ?? true,
               decoded.checks.map({ ["passing", "failing"].contains($0) }) ?? true else { return Self() }
@@ -98,6 +98,9 @@ enum NativePullRequestWorkspaceLogic {
                     if tier(a) != tier(b) { return tier(a) < tier(b) }
                     if left.sizeKnown != right.sizeKnown { return left.sizeKnown }
                     if a.additions + a.deletions != b.additions + b.deletions { return a.additions + a.deletions < b.additions + b.deletions }
+                case "blocked":
+                    let tiers = (blockedTier(left, involvement: preferences.involvement), blockedTier(right, involvement: preferences.involvement))
+                    if tiers.0 != tiers.1 { return tiers.0 < tiers.1 }
                 case "newest": if a.createdAt != b.createdAt { return a.createdAt > b.createdAt }
                 case "oldest": if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
                 case "largest", "smallest":
@@ -117,6 +120,29 @@ enum NativePullRequestWorkspaceLogic {
         if entry.isDraft { return 2 }
         if entry.checksState == "passing", entry.reviewDecision == "approved" { return 0 }
         return entry.checksState == "passing" ? 1 : 2
+    }
+
+    /// "Blocked on me" order, newest first within a tier. Your own changes rank by how surely
+    /// the next move is yours: conflicts, requested changes, failing checks, drafts, then
+    /// changes waiting on others, with approved-and-passing and finished work last. Requested
+    /// reviews put open changes first. Everyone else's changes follow the involvement filter,
+    /// and keep recency order when it is "all".
+    static func blockedTier(_ row: NativePullRequestRow, involvement: String) -> Int {
+        let entry = row.entry
+        switch row.group == 0 ? "authored" : row.group == 1 ? "reviewing" : involvement {
+        case "authored":
+            if entry.state != .open { return 6 }
+            if entry.mergeability == .conflicting { return 0 }
+            if entry.reviewDecision == "changes-requested" { return 1 }
+            if entry.checksState == "failing" { return 2 }
+            if entry.isDraft { return 3 }
+            if entry.checksState == "passing", entry.reviewDecision == "approved" { return 5 }
+            return 4
+        case "reviewing":
+            return entry.state == .open ? 0 : 1
+        default:
+            return 0
+        }
     }
 
     static func matchScore(_ entry: PullRequestListEntry, _ query: String) -> Int {

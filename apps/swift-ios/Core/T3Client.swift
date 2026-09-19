@@ -91,6 +91,20 @@ public actor T3Client {
         )
     }
 
+    /// Searches active threads' user messages and assistant output on the
+    /// server. The query must be 2–200 characters after trimming; the server
+    /// caps results at 50.
+    public func searchThreads(query: String, limit: Int = 50) async throws -> [ThreadSearchMatch] {
+        try await rpc.request(
+            RPCMethod.searchThreads.rawValue,
+            payload: .object([
+                "query": .string(query),
+                "limit": .number(Double(limit)),
+            ]),
+            as: ThreadSearchResult.self
+        ).matches
+    }
+
     public func threadSnapshot(
         id: String,
         maxVisibleItems: Int? = nil
@@ -2117,6 +2131,7 @@ public enum RPCMethod: String, Sendable {
     case getTurnDiff = "orchestration.getTurnDiff"
     case getFullThreadDiff = "orchestration.getFullThreadDiff"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
+    case searchThreads = "orchestration.searchThreads"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"
     case projectsMutate = "projects.mutate"

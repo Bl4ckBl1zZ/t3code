@@ -908,7 +908,8 @@ export const OrchestrationV2UserInputQuestion = Schema.Struct({
   question: TrimmedNonEmptyString,
   options: Schema.Array(
     Schema.Struct({
-      value: Schema.optional(TrimmedNonEmptyString),
+      // Opaque provider identifier, returned verbatim when answering, so never trimmed.
+      value: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
       label: TrimmedNonEmptyString,
       description: TrimmedNonEmptyString,
     }),
