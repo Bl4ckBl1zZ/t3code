@@ -114,10 +114,28 @@ final class ThreadWorkLogTests: XCTestCase {
     }
 
     func testInFlightRowsShimmerAndTerminalOnesDoNot() {
-        XCTAssertTrue(row(command(id: "a", input: "ls", status: "running")).inProgress)
-        XCTAssertTrue(row(command(id: "b", input: "ls", status: "waiting")).inProgress)
-        XCTAssertFalse(row(command(id: "c", input: "ls")).inProgress)
-        XCTAssertFalse(row(command(id: "d", input: "ls", status: "cancelled")).inProgress)
+        XCTAssertTrue(row(command(id: "a", input: "ls", status: "running")).shimmers)
+        XCTAssertTrue(row(command(id: "b", input: "ls", status: "waiting")).shimmers)
+        XCTAssertFalse(row(command(id: "c", input: "ls")).shimmers)
+        XCTAssertFalse(row(command(id: "d", input: "ls", status: "cancelled")).shimmers)
+    }
+
+    /// A background command can stay in flight for an hour; a sweep that long
+    /// pegs the GPU, so it reads as running without animating.
+    func testALiveBackgroundCommandIsInFlightWithoutShimmering() {
+        let live = row(command(id: "a", input: "pnpm dev", status: "running", background: true))
+        XCTAssertTrue(live.inProgress)
+        XCTAssertFalse(live.shimmers)
+        // Neutral only because it has not finished, so it carries no stopped dash.
+        XCTAssertNil(live.trailingStatus)
+    }
+
+    func testTheTrailingGlyphMarksOnlyDeviations() {
+        XCTAssertNil(row(command(id: "a", input: "ls")).trailingStatus)
+        XCTAssertEqual(row(command(id: "b", input: "ls", status: "failed")).trailingStatus, .failed)
+        XCTAssertEqual(
+            row(command(id: "c", input: "ls", status: "cancelled")).trailingStatus, .stopped
+        )
     }
 
     // MARK: - Summary and preview

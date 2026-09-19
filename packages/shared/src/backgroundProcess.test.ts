@@ -142,30 +142,27 @@ describe("backgroundProcessOutcome", () => {
   it("separates a failure from work that never got to finish", () => {
     expect(backgroundProcessOutcome(commandItem({ status: "failed", exitCode: 1 }))).toEqual({
       tone: "danger",
-      label: "failed exit 1",
+      label: "Failed with exit code 1",
     });
     expect(
       backgroundProcessOutcome(commandItem({ status: "cancelled", exitReason: "killed" })),
-    ).toEqual({ tone: "warning", label: "stopped when the session ended" });
+    ).toEqual({ tone: "warning", label: "Stopped when the session ended" });
     expect(
       backgroundProcessOutcome(commandItem({ status: "cancelled", exitReason: "unknown" })),
-    ).toEqual({
-      tone: "warning",
-      label: "outcome unknown, server restarted while it ran",
-    });
+    ).toEqual({ tone: "warning", label: "Result unknown after a server restart" });
   });
 
-  it("reports a clean exit with its code", () => {
+  it("reports a clean exit without restating its code", () => {
     expect(backgroundProcessOutcome(commandItem({ status: "completed", exitCode: 0 }))).toEqual({
       tone: "success",
-      label: "finished exit 0",
+      label: "Finished",
     });
   });
 
   it("treats a nonzero exit as a failure even when the item says completed", () => {
     expect(backgroundProcessOutcome(commandItem({ status: "completed", exitCode: 2 }))).toEqual({
       tone: "danger",
-      label: "failed exit 2",
+      label: "Failed with exit code 2",
     });
   });
 

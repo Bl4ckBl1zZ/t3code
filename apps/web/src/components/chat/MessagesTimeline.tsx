@@ -164,16 +164,22 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
-import { isBackgroundProcessItem } from "@t3tools/shared/backgroundProcess";
-import { BackgroundProcessCard } from "./BackgroundProcessCard";
+import {
+  isBackgroundProcessItem,
+  resolveBackgroundProcessView,
+} from "@t3tools/shared/backgroundProcess";
+import {
+  BackgroundProcessDetail,
+  BackgroundProcessElapsed,
+  backgroundProcessHeading,
+} from "./BackgroundProcessRow";
 import { V2ItemInspector } from "./V2ItemInspector";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import {
   isV2LifecycleItem,
-  RELATED_THREAD_CARD_SURFACE_CLASS,
+  TimelineRowStatusSlot,
   V2LifecycleRow,
   type HandoffTimelineRun,
-  type RelatedThreadCardChrome,
 } from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
@@ -1182,8 +1188,9 @@ function DayDividerTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "day
 }
 
 // A run of consecutive agent-authored prompts (delegated-task wakes) collapses
-// into one quiet group: header + latest line, expandable to every update. All
-// text, no badges — the task_status boilerplate never renders.
+// into one toggle row, drawn like a completed work group's summary, with the
+// latest update as its preview. All text — the task_status boilerplate never
+// renders.
 function AgentUpdatesTimelineRow({
   row,
 }: {
@@ -1196,8 +1203,8 @@ function AgentUpdatesTimelineRow({
   }));
   const latest = updates[updates.length - 1];
   return (
-    <div
-      className="overflow-hidden rounded-xl border border-border/60 bg-card/30"
+    <section
+      className="min-w-0"
       data-agent-updates-group
       data-agent-updates-count={row.updates.length}
     >
@@ -1205,70 +1212,62 @@ function AgentUpdatesTimelineRow({
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/40"
+        className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
-        <span aria-hidden="true" className="text-xs text-muted-foreground">
-          ↳
+        <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
+          <BotIcon className="block size-3.5 shrink-0 stroke-[1.8] opacity-80" aria-hidden />
         </span>
-        <span className="text-xs font-medium text-foreground/80">Agent updates</span>
-        <span className="text-xs tabular-nums text-muted-foreground">· {row.updates.length}</span>
-        <ChevronDownIcon
+        <span className="min-w-0 shrink truncate font-medium text-foreground/82">
+          Agent updates
+        </span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground/55">
+          {latest === undefined ? null : (latest.wake?.title ?? latest.update.message.text)}
+        </span>
+        <span className="shrink-0 pe-1 text-[11px] tabular-nums text-muted-foreground/55">
+          {row.updates.length}
+        </span>
+        <ChevronRightIcon
+          aria-hidden
           className={cn(
-            "ms-auto size-3 shrink-0 text-muted-foreground transition-transform",
-            expanded && "rotate-180",
+            "size-3.5 shrink-0 text-muted-foreground/55 transition-transform motion-reduce:transition-none",
+            expanded && "rotate-90",
           )}
         />
       </button>
       {expanded ? (
-        <ul className="m-0 list-none border-t border-border/50 p-0">
+        <ul className="mt-1 ms-7 list-none space-y-1 border-s border-border/45 ps-3 pt-0.5">
           {updates.map(({ update, wake }) => (
-            <li key={update.id} className="border-t border-border/40 px-3 py-2 first:border-t-0">
-              <AgentUpdateLine wake={wake} text={update.message.text} clamp={false} />
+            <li key={update.id}>
+              <AgentUpdateLine wake={wake} text={update.message.text} />
             </li>
           ))}
         </ul>
-      ) : latest !== undefined ? (
-        <div className="border-t border-border/50 px-3 py-2">
-          <AgentUpdateLine wake={latest.wake} text={latest.update.message.text} clamp />
-        </div>
       ) : null}
-    </div>
+    </section>
   );
 }
 
 function AgentUpdateLine(props: {
   readonly wake: ReturnType<typeof parseDelegatedTaskWakeMessage>;
   readonly text: string;
-  readonly clamp: boolean;
 }) {
   if (props.wake !== null) {
-    const completed = props.wake.status === "completed";
     return (
-      <p className="flex min-w-0 items-baseline gap-2 text-xs">
-        <span aria-hidden="true" className={completed ? "text-success" : "text-muted-foreground"}>
-          {completed ? "✓" : "○"}
-        </span>
-        <span className={cn("min-w-0 flex-1 text-foreground/80", props.clamp && "truncate")}>
-          {props.wake.title}
-        </span>
+      <p className="flex min-w-0 items-baseline gap-1.5 text-[12px] leading-5">
+        <span className="min-w-0 flex-1 text-foreground/82">{props.wake.title}</span>
         <span
           className={cn(
             "shrink-0 text-[11px]",
-            props.wake.status === "failed" ? "text-destructive" : "text-muted-foreground",
+            props.wake.status === "failed" ? "text-destructive" : "text-muted-foreground/55",
           )}
         >
-          {props.wake.status}
+          {capitalizePhrase(props.wake.status)}
         </span>
       </p>
     );
   }
   return (
-    <p
-      className={cn(
-        "whitespace-pre-wrap break-words text-xs text-foreground/80",
-        props.clamp && "line-clamp-2",
-      )}
-    >
+    <p className="whitespace-pre-wrap break-words text-[12px] leading-5 text-foreground/82">
       {props.text}
     </p>
   );
@@ -2029,29 +2028,26 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
   }
 }
 
-// A run of consecutive related-thread cards (subagents, created threads) shares
-// one bordered card, split by dividers, instead of stacking separate boxes.
+// A run of consecutive related-thread rows (subagents, created threads) stacks
+// as tightly as a list of tool calls instead of spacing out like separate events.
 function V2EventGroupTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event-group" }> }) {
   return (
-    <div
-      className={cn("divide-y divide-border/60 overflow-hidden", RELATED_THREAD_CARD_SURFACE_CLASS)}
-      data-v2-event-group
-      data-v2-event-group-count={row.events.length}
-    >
+    <div className="space-y-px" data-v2-event-group data-v2-event-group-count={row.events.length}>
       {row.events.map((event) => (
-        <V2EventTimelineRow key={event.id} row={event} chrome="bare" />
+        <V2EventTimelineRow key={event.id} row={event} />
       ))}
     </div>
   );
 }
 
-function V2EventTimelineRow({
-  row,
-  chrome,
-}: {
-  row: Extract<TimelineRow, { kind: "event" }>;
-  chrome?: RelatedThreadCardChrome | undefined;
-}) {
+const V2_EVENT_TONE_ICON_CLASS: Record<V2EventTone, string> = {
+  muted: "text-muted-foreground/65",
+  success: "text-muted-foreground/65",
+  warning: "text-warning",
+  danger: "text-destructive",
+};
+
+function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
   const { item, visibility, sourceThreadId } = row.projectedItem;
   if (isV2LifecycleItem(item)) {
@@ -2061,83 +2057,74 @@ function V2EventTimelineRow({
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}
-        chrome={chrome}
       />
     );
   }
   const presentation = v2EventPresentation(item);
   const Icon = presentation.icon;
+  const danger = presentation.tone === "danger";
   return (
     <section
-      className={cn(
-        "rounded-lg border px-3 py-2",
-        presentation.tone === "warning" && "border-amber-500/25 bg-amber-500/5",
-        presentation.tone === "danger" && "border-destructive/25 bg-destructive/5",
-        presentation.tone === "success" && "border-emerald-500/20 bg-emerald-500/5",
-        presentation.tone === "muted" && "border-border/60 bg-card/30",
-      )}
+      className="flex min-w-0 flex-col rounded-md px-0.5 py-0.5"
       data-v2-item-type={item.type}
       data-v2-item-visibility={visibility}
     >
-      <div className="flex items-start gap-2.5">
-        <Icon
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span
           className={cn(
-            "mt-0.5 size-3.5 shrink-0",
-            presentation.tone === "warning" && "text-amber-600 dark:text-amber-400",
-            presentation.tone === "danger" && "text-destructive",
-            presentation.tone === "success" && "text-emerald-600 dark:text-emerald-400",
-            presentation.tone === "muted" && "text-muted-foreground",
+            "flex size-5 shrink-0 items-center justify-center",
+            V2_EVENT_TONE_ICON_CLASS[presentation.tone],
           )}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-xs font-medium text-foreground/90">{presentation.label}</span>
-            {item.status !== "completed" ? (
-              <span
-                className={cn(
-                  "rounded-full border px-1.5 py-0.5 font-mono text-[10px]",
-                  item.status === "failed"
-                    ? "border-destructive/40 text-destructive"
-                    : "border-border/70 text-muted-foreground",
-                )}
-              >
-                {item.status}
-              </span>
-            ) : null}
-            {visibility !== "local" ? (
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                {visibility === "inherited" ? "Inherited" : "Synthetic"}
-              </span>
-            ) : null}
-          </div>
-          {presentation.detail ? (
-            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              <ChatMarkdown
-                onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-                text={presentation.detail}
-                cwd={ctx.markdownCwd}
-                threadRef={ctx.threadRef ?? undefined}
-                skills={ctx.skills}
-                lineBreaks
-              />
-            </div>
+        >
+          <Icon className="block size-3.5 shrink-0 stroke-[1.8] opacity-80" aria-hidden />
+        </span>
+        <p className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[12px] leading-5">
+          <span
+            className={cn(
+              "min-w-0 shrink truncate font-medium",
+              danger ? "text-destructive" : "text-foreground/82",
+            )}
+          >
+            {presentation.label}
+          </span>
+          {visibility !== "local" ? (
+            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] leading-none text-muted-foreground">
+              {visibility === "inherited" ? "Inherited" : "Synthetic"}
+            </span>
           ) : null}
-          {visibility === "inherited" ? (
-            <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">
-              From {sourceThreadId}
-            </p>
-          ) : null}
-          <div className="mt-2">
-            <V2ItemInspector
-              projectedItem={row.projectedItem}
-              environmentId={ctx.activeThreadEnvironmentId}
+        </p>
+        <span className="flex shrink-0 items-center text-muted-foreground/55">
+          <TimelineRowStatusSlot status={item.status} destructive={danger} />
+        </span>
+      </div>
+      <div className="min-w-0 ps-6.5">
+        {presentation.detail ? (
+          <div className="text-xs leading-relaxed text-muted-foreground">
+            <ChatMarkdown
+              onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+              text={presentation.detail}
               cwd={ctx.markdownCwd}
-              workspaceRoot={ctx.workspaceRoot}
-              onOpenThread={ctx.onOpenThread}
-              onOpenTurnDiff={ctx.onOpenTurnDiff}
-              onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+              threadRef={ctx.threadRef ?? undefined}
+              skills={ctx.skills}
+              lineBreaks
             />
           </div>
+        ) : null}
+        {visibility === "inherited" ? (
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">
+            From {sourceThreadId}
+          </p>
+        ) : null}
+        <div className="mt-2">
+          <V2ItemInspector
+            projectedItem={row.projectedItem}
+            environmentId={ctx.activeThreadEnvironmentId}
+            cwd={ctx.markdownCwd}
+            workspaceRoot={ctx.workspaceRoot}
+            onOpenThread={ctx.onOpenThread}
+            onOpenTurnDiff={ctx.onOpenTurnDiff}
+            onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+          />
         </div>
       </div>
     </section>
@@ -3413,12 +3400,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     `entry:${workEntry.id}`,
     ctx.alwaysExpandActivity,
   );
+  // A command detached from its turn keeps reporting after the turn that
+  // started it has settled, so its status comes from the command, not the tool call.
   const backgroundItem = backgroundProcessItemFromWorkEntry(workEntry);
-  if (backgroundItem !== null) {
-    // A command detached from its turn cannot be a one-line tool row: the row
-    // has to keep reporting after the turn that started it has settled.
-    return <BackgroundProcessCard item={backgroundItem} />;
-  }
+  const backgroundView =
+    backgroundItem === null ? null : resolveBackgroundProcessView(backgroundItem, Date.now());
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = false;
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
@@ -3428,8 +3414,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     workEntry.toolLifecycleStatus,
     item?.type === "dynamic_tool" ? item.input : undefined,
   );
-  const heading = toolPresentation?.displayName ?? toolWorkEntryHeading(workEntry);
-  const rawPreview = workEntryPreview(workEntry, workspaceRoot);
+  const heading =
+    backgroundView !== null
+      ? backgroundProcessHeading(backgroundView)
+      : (toolPresentation?.displayName ?? toolWorkEntryHeading(workEntry));
+  const rawPreview =
+    backgroundView !== null ? backgroundView.command : workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
     normalizeCompactToolLabel(rawPreview).toLowerCase() ===
@@ -3439,7 +3429,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
   const canExpand = expandedBody !== null || workEntry.projectedItem !== undefined;
-  const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
+  const showFailedIndicator =
+    backgroundView !== null
+      ? backgroundView.outcome?.tone === "danger"
+      : workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle = showFailedIndicator && !workLogEntryIsToolLike(workEntry);
   const iconWrapperClass = cn(
     "flex size-5 shrink-0 items-center justify-center",
@@ -3458,15 +3451,25 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       : "font-medium text-foreground/82";
   const turnSettled = !activity.activeTurnInProgress;
   const lifecycleStatus = workEntry.toolLifecycleStatus;
-  const showRunningIndicator = lifecycleStatus === "inProgress";
-  const showStoppedIndicator = lifecycleStatus === "stopped" || lifecycleStatus === "declined";
+  const showRunningIndicator =
+    backgroundView !== null
+      ? backgroundView.live && !backgroundView.paused
+      : lifecycleStatus === "inProgress";
+  const showStoppedIndicator =
+    backgroundView !== null
+      ? backgroundView.outcome?.tone === "warning"
+      : lifecycleStatus === "stopped" || lifecycleStatus === "declined";
+  // A background command can run for an hour; a shimmer that long pegs the GPU.
+  const shimmerText = showRunningIndicator && backgroundView === null;
   const showNeutralIndicator =
     lifecycleStatus === undefined && !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
   // Completed tool calls render no glyph — this row is diffstat-first, so a
   // checkmark on every finished call is noise. Screen readers still need the
   // outcome, so the empty indicator slot carries the label instead.
   const completedIndicatorLabel =
-    lifecycleStatus === "completed" ? "Tool call completed" : undefined;
+    lifecycleStatus === "completed" && !showFailedIndicator && !showStoppedIndicator
+      ? "Tool call completed"
+      : undefined;
   const projected = workEntry.projectedItem?.item;
   const fileDiffStat =
     projected?.type === "file_change"
@@ -3521,7 +3524,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 className={cn(
                   "min-w-0 shrink truncate",
                   headingClass,
-                  showRunningIndicator && "text-shimmer",
+                  shimmerText && "text-shimmer",
                 )}
               >
                 {heading}
@@ -3536,7 +3539,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-muted-foreground/55",
-                    showRunningIndicator && "text-shimmer",
+                    shimmerText && "text-shimmer",
                   )}
                 >
                   {preview}
@@ -3550,6 +3553,13 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 additions={fileDiffStat.additions}
                 deletions={fileDiffStat.deletions}
                 layout="inline"
+                className="pe-1 text-[11px]"
+              />
+            ) : null}
+            {backgroundItem !== null && backgroundView !== null ? (
+              <BackgroundProcessElapsed
+                item={backgroundItem}
+                view={backgroundView}
                 className="pe-1 text-[11px]"
               />
             ) : null}
@@ -3645,6 +3655,13 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           </div>
         </div>
       </div>
+      {backgroundItem !== null && backgroundView !== null ? (
+        <BackgroundProcessDetail
+          item={backgroundItem}
+          view={backgroundView}
+          className="ps-6.5 pe-9"
+        />
+      ) : null}
       {expanded && canExpand ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"

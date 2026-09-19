@@ -683,6 +683,8 @@ public struct ThreadDetailsBackgroundView: Equatable, Sendable {
     /// counting up for as long as its row stays on screen.
     public let endedAtMilliseconds: Int?
     public let waitingOnTaskID: String?
+    /// How it ended, once it has. Nil while live, and for a clean exit.
+    public let outcome: ThreadBackgroundOutcome?
 }
 
 /// Why a stopped background command is worth holding on screen for a moment.
@@ -698,13 +700,22 @@ public enum ThreadBackgroundOutcomeTone: Equatable, Sendable {
 
 public struct ThreadBackgroundOutcome: Equatable, Sendable {
     public let tone: ThreadBackgroundOutcomeTone
+    /// The whole ending, for a row with room to explain it.
     public let label: String
+    /// The same ending in the few characters the transcript-bar capsule can spare.
+    public let shortLabel: String
     /// Epoch milliseconds it settled, which is when the linger window opens.
     public let endedAtMilliseconds: Int
 
-    public init(tone: ThreadBackgroundOutcomeTone, label: String, endedAtMilliseconds: Int) {
+    public init(
+        tone: ThreadBackgroundOutcomeTone,
+        label: String,
+        shortLabel: String,
+        endedAtMilliseconds: Int
+    ) {
         self.tone = tone
         self.label = label
+        self.shortLabel = shortLabel
         self.endedAtMilliseconds = endedAtMilliseconds
     }
 }
@@ -893,7 +904,8 @@ public enum ThreadDetailsBackgroundTasks {
             endedAtMilliseconds: ThreadDetailsTimestamp.epochMilliseconds(
                 command.item.base.completedAt
             ),
-            waitingOnTaskID: command.liveness.waitingOnTaskId
+            waitingOnTaskID: command.liveness.waitingOnTaskId,
+            outcome: outcome(command)
         )
     }
 
@@ -908,23 +920,24 @@ public enum ThreadDetailsBackgroundTasks {
     /// A monitor is named by what it is doing, not by the shell it runs; the
     /// command it watches already occupies the row above it.
     public static func title(_ view: ThreadDetailsBackgroundView) -> String {
-        view.variant == .monitor ? "Waiting on a condition" : view.command
+        view.variant == .monitor ? "Waiting for a condition" : view.command
     }
 
-    /// Monospaced only for a real command line. "Waiting on a condition" is
-    /// prose and would read as code.
-    public static func titleIsMonospaced(_ view: ThreadDetailsBackgroundView) -> Bool {
-        view.variant != .monitor
-    }
-
+    /// The line under a row, mirroring `BackgroundProcessDetail` on the web.
+    /// While it runs, this is what it is doing right now. Once settled, it is
+    /// only an ending worth explaining — a clean exit says nothing, like every
+    /// other finished tool call.
     public static func subtitle(
         _ view: ThreadDetailsBackgroundView,
         hasMonitor: Bool
-    ) -> String {
-        if view.variant == .monitor { return "the agent is asleep until this passes" }
-        var parts = [view.tail ?? "no output yet"]
+    ) -> String? {
+        guard view.live else { return view.outcome?.label }
+        if view.variant == .monitor { return "Agent is asleep until this passes" }
+        var parts = [
+            view.variant == .deadline ? "No output until it exits" : (view.tail ?? "No output yet"),
+        ]
         if view.outputTruncated { parts.append("output capped") }
-        if hasMonitor { parts.append("the agent is waiting on it") }
+        if hasMonitor { parts.append("Agent is waiting on this") }
         return parts.joined(separator: " · ")
     }
 
@@ -935,10 +948,12 @@ public enum ThreadDetailsBackgroundTasks {
         nowMilliseconds: Int
     ) -> String {
         let elapsed = elapsedMilliseconds(view, nowMilliseconds: nowMilliseconds)
-        if view.variant == .monitor, let timeout = view.timeoutMilliseconds {
-            return "\(formatElapsed(max(0, timeout - elapsed))) left"
+        let label = if view.variant == .monitor, let timeout = view.timeoutMilliseconds {
+            "\(formatElapsed(max(0, timeout - elapsed))) left"
+        } else {
+            formatElapsed(elapsed)
         }
-        return formatElapsed(elapsed)
+        return view.live && view.paused ? "Paused · \(label)" : label
     }
 
     /// Coarse on purpose. Under ten minutes a reader wants seconds; past that
@@ -970,8 +985,9 @@ public enum ThreadDetailsBackgroundTasks {
     /// its permanent home in the transcript either way.
     public static let outcomeLingerMilliseconds = 6000
 
-    /// A command's ending in the terms a reader would act on, mirroring
-    /// `backgroundProcessOutcome` in packages/shared/src/backgroundProcess.ts.
+    /// A command's ending in the terms a reader would act on. The full label
+    /// matches `backgroundProcessOutcome` in packages/shared/src/backgroundProcess.ts;
+    /// the short one is what fits on the transcript-bar capsule.
     ///
     /// Returns nil for a clean exit. The distinction that matters most is
     /// between a command that failed and one that never got to finish — those
@@ -981,34 +997,31 @@ public enum ThreadDetailsBackgroundTasks {
               let endedAt = ThreadDetailsTimestamp.epochMilliseconds(command.item.base.completedAt)
         else { return nil }
 
+        func ending(
+            _ tone: ThreadBackgroundOutcomeTone, _ label: String, short: String? = nil
+        ) -> ThreadBackgroundOutcome {
+            ThreadBackgroundOutcome(
+                tone: tone, label: label, shortLabel: short ?? label, endedAtMilliseconds: endedAt
+            )
+        }
+
         switch command.liveness.exitReason {
         case "unknown":
-            return ThreadBackgroundOutcome(
-                tone: .warning, label: "outcome unknown", endedAtMilliseconds: endedAt
-            )
+            return ending(.warning, "Result unknown after a server restart", short: "Result unknown")
         case "killed":
-            return ThreadBackgroundOutcome(
-                tone: .warning, label: "stopped", endedAtMilliseconds: endedAt
-            )
+            return ending(.warning, "Stopped when the session ended", short: "Stopped")
         case "timeout":
-            return ThreadBackgroundOutcome(
-                tone: .warning, label: "timed out", endedAtMilliseconds: endedAt
-            )
+            return ending(.warning, "Timed out")
         default:
             break
         }
 
         if command.item.status == .cancelled || command.item.status == .interrupted {
-            return ThreadBackgroundOutcome(
-                tone: .warning, label: "stopped", endedAtMilliseconds: endedAt
-            )
+            return ending(.warning, "Stopped")
         }
         if command.item.status == .failed || (command.exitCode ?? 0) != 0 {
-            return ThreadBackgroundOutcome(
-                tone: .danger,
-                label: command.exitCode.map { "exit \($0)" } ?? "failed",
-                endedAtMilliseconds: endedAt
-            )
+            guard let exitCode = command.exitCode else { return ending(.danger, "Failed") }
+            return ending(.danger, "Failed with exit code \(exitCode)", short: "Exit code \(exitCode)")
         }
         return nil
     }
@@ -1132,7 +1145,7 @@ public enum ThreadDetailsBackgroundTasks {
         _ summary: ThreadBackgroundSummary,
         nowMilliseconds: Int
     ) -> String {
-        if summary.reportsOutcome, let outcome = summary.outcome { return outcome.label }
+        if summary.reportsOutcome, let outcome = summary.outcome { return outcome.shortLabel }
         guard let solitary = summary.solitary else { return "\(summary.count)" }
         if let remaining = remainingMilliseconds(solitary, nowMilliseconds: nowMilliseconds) {
             return formatElapsed(remaining)
@@ -1141,19 +1154,20 @@ public enum ThreadDetailsBackgroundTasks {
     }
 
     /// Spoken form. The visible label is a bare duration or digit, which reads as
-    /// nonsense without the noun the glyph is carrying.
+    /// nonsense without the noun the glyph is carrying. An ending is spoken in
+    /// full, because a listener has none of the capsule's width limit.
     public static func capsuleAccessibilityLabel(
         _ summary: ThreadBackgroundSummary,
         nowMilliseconds: Int
     ) -> String {
         if summary.reportsOutcome, let outcome = summary.outcome {
-            return "Background task \(outcome.label). Show background tasks"
+            return "Background task: \(outcome.label). Show background tasks"
         }
         let label = capsuleLabel(summary, nowMilliseconds: nowMilliseconds)
         var lead: String
         if let solitary = summary.solitary {
             // A monitor is named by what it is doing, the same way its row is.
-            lead = solitary.variant == .monitor ? "Waiting on a condition" : "1 background task"
+            lead = solitary.variant == .monitor ? "Waiting for a condition" : "1 background task"
             lead += remainingMilliseconds(solitary, nowMilliseconds: nowMilliseconds) == nil
                 ? ", running \(label)"
                 : ", \(label) left"
@@ -1271,9 +1285,9 @@ private let threadDetailsFractionalFormatter: ISO8601DateFormatter = {
 
 private let threadDetailsPlainFormatter = ISO8601DateFormatter()
 
-private extension String {
-    /// `trimEnd` — the tail rule trims only the right-hand side, so a line's
-    /// leading indentation survives into the row.
+extension String {
+    /// `trimEnd` — trims only the right-hand side, so a line's leading
+    /// indentation survives into the row or the inspector.
     func replacingTrailingWhitespace() -> String {
         var result = Substring(self)
         while let last = result.last, last.isWhitespace { result = result.dropLast() }

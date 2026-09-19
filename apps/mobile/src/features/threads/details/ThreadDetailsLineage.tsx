@@ -7,6 +7,7 @@ import { ActivityIndicator, Pressable, View } from "react-native";
 import { AgentOrb } from "../../../components/AgentOrb";
 import { SymbolView } from "../../../components/AppSymbol";
 import { AppText as Text } from "../../../components/AppText";
+import { relatedThreadStatus } from "../../../lib/threadLifecycle";
 import { useThemeColor } from "../../../lib/useThemeColor";
 import { threadEnvironment } from "../../../state/threads";
 import { useAtomCommand } from "../../../state/use-atom-command";
@@ -18,6 +19,7 @@ import {
   useThreadRelationshipRows,
   type ThreadRelationshipRow,
 } from "../useThreadRelationshipRows";
+import { WorkRowStatusGlyph } from "../thread-work-log";
 import { DetailsDivider, DetailsRow, DetailsSection } from "./detailsRows";
 
 /**
@@ -100,6 +102,11 @@ export function ThreadDetailsLineage(props: {
         detail={
           availability ? (
             <Text className="text-2xs text-foreground-muted">{availability}</Text>
+          ) : edge.kind === "subagent" ? (
+            <WorkRowStatusGlyph
+              iconSubtleColor={iconColor}
+              status={relatedThreadStatus(edge.status)}
+            />
           ) : undefined
         }
         disabled={disabled}

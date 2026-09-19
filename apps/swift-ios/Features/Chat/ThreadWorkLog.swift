@@ -17,6 +17,32 @@ public struct ThreadWorkLogDiffStat: Equatable, Sendable {
     }
 }
 
+/// A work row's state as its trailing glyph. Done has no case: success is the
+/// default, and only a deviation earns a mark.
+public enum WorkRowStatus: Equatable, Sendable {
+    case running, failed, stopped
+
+    /// Reads turn-item and subagent statuses alike, so a subagent's feed row,
+    /// its lineage rows and the agents sheet agree on what it is doing.
+    /// Mirrors `relatedThreadStatus` in apps/mobile/src/lib/threadLifecycle.ts.
+    public init?(agentStatus: String?) {
+        switch agentStatus {
+        case "pending", "running", "waiting": self = .running
+        case "failed", "error": self = .failed
+        case "cancelled", "interrupted": self = .stopped
+        default: return nil
+        }
+    }
+
+    public var accessibilityLabel: String {
+        switch self {
+        case .running: "Running"
+        case .failed: "Failed"
+        case .stopped: "Stopped"
+        }
+    }
+}
+
 /// One line of the work log: what a turn item did, in the terms a reader scans.
 public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public enum Icon: String, Equatable, Sendable {
@@ -58,7 +84,8 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     /// Rows that open a related thread and therefore earn a card surface.
     public let prominent: Bool
     public let status: Status?
-    /// In-flight rows shimmer; terminal ones do not.
+    /// The item has not reached a terminal status. See `shimmers` for which of
+    /// these rows animate.
     public let inProgress: Bool
     public let projectedItem: OrchestrationV2ProjectedTurnItem
 
@@ -83,6 +110,22 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public var isLiveBackgroundCommand: Bool {
         guard case let .commandExecution(_, _, _, liveness) = item.payload else { return false }
         return liveness.background == true && !item.status.isTerminal
+    }
+
+    /// In-flight rows sweep a highlight, except a background command: it can
+    /// stay in flight for an hour, and a sweep that long pegs the GPU. Its
+    /// changing last line of output is the live signal instead.
+    public var shimmers: Bool { inProgress && !isLiveBackgroundCommand }
+
+    /// The row's trailing glyph. Success is the default outcome, so only
+    /// deviations earn one — and a live background command, neutral only
+    /// because it has not finished, is not stopped.
+    var trailingStatus: WorkRowStatus? {
+        switch status {
+        case .failure: .failed
+        case .neutral: isLiveBackgroundCommand ? nil : .stopped
+        case .success, nil: nil
+        }
     }
 
     var liveFocusItem: ThreadLiveWorkItem {
@@ -832,6 +875,33 @@ struct WorkRowDiffStat: View {
     }
 }
 
+/// The trailing mark for a work row that did not simply finish. Static on
+/// purpose: a row can sit in any of these states for minutes.
+struct WorkRowStatusGlyph: View {
+    let status: WorkRowStatus?
+    /// Red belongs to rows whose failure is the headline; a failed tool call
+    /// inside a turn that carried on stays quiet.
+    var failureTint: Color = T3Colors.danger
+
+    var body: some View {
+        if let status {
+            Image(systemName: symbolName(status))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(status == .failed ? failureTint : T3Colors.textTertiary)
+                .frame(width: 16, height: 16)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func symbolName(_ status: WorkRowStatus) -> String {
+        switch status {
+        case .running: "ellipsis"
+        case .failed: "exclamationmark.circle"
+        case .stopped: "minus"
+        }
+    }
+}
+
 /// The work log under a turn: what the agent actually did, one line per step.
 struct ThreadWorkLog: View {
     let rows: [ThreadWorkLogRow]
@@ -898,7 +968,7 @@ struct ThreadWorkLog: View {
                         HStack(spacing: 8) {
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
                             ThreadToolActivityIcon(icon: focus.activityIcon, fallback: focus.icon.symbolName)
-                            Text(focus.summary).lineLimit(1).shimmering(focus.inProgress).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(focus.summary).lineLimit(1).shimmering(focus.shimmers).frame(maxWidth: .infinity, alignment: .leading)
                             Text("\(visibleCandidates.count)").monospacedDigit().foregroundStyle(T3Colors.textTertiary)
                         }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
                     }.buttonStyle(.plain).accessibilityLabel("\(focus.summary), \(visibleCandidates.count) tool calls")
@@ -1109,7 +1179,7 @@ private struct WorkLogRowButton: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .shimmering(row.inProgress)
+                    .shimmering(row.shimmers)
 
                 HStack(spacing: 1) {
                     if let stat = row.diffStat {
@@ -1125,15 +1195,10 @@ private struct WorkLogRowButton: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(T3Colors.textTertiary)
                         .frame(width: 16, height: 16)
-                    // Success is the default outcome — only surface deviations.
-                    if row.status == .failure || row.status == .neutral {
-                        Image(systemName: row.status == .failure ? "exclamationmark.circle" : "minus")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(
-                                row.status == .failure && isDestructive ? T3Colors.danger : T3Colors.textTertiary
-                            )
-                            .frame(width: 16, height: 16)
-                    }
+                    WorkRowStatusGlyph(
+                        status: row.trailingStatus,
+                        failureTint: isDestructive ? T3Colors.danger : T3Colors.textTertiary
+                    )
                 }
             }
             .frame(minHeight: 36)

@@ -1,14 +1,15 @@
-import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { Fragment } from "react";
-import type {
-  OrchestrationV2Run,
-  OrchestrationV2TurnItem,
-  ProviderInstanceId,
-  ServerProvider,
-  ThreadId,
+import {
+  orchestrationV2TurnItemStatusIsTerminal,
+  type OrchestrationV2Run,
+  type OrchestrationV2TurnItem,
+  type ProviderInstanceId,
+  type ServerProvider,
+  type ThreadId,
 } from "@t3tools/contracts";
 import {
   ArrowRightIcon,
+  CircleAlertIcon,
   ExternalLinkIcon,
   GitForkIcon,
   LoaderCircleIcon,
@@ -25,6 +26,7 @@ import { formatOrchestrationV2RollbackDetail } from "@t3tools/shared/orchestrati
 
 import { getProviderInstanceEntry } from "../../providerInstances";
 import { cn } from "../../lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
 import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
@@ -52,15 +54,6 @@ const HANDOFF_IN_FLIGHT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
   "waiting",
 ]);
 
-// Once a subagent stops, its last streamed result says more than the stale
-// progress line; while it runs, live progress comes first.
-const TERMINAL_SUBAGENT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
-  "completed",
-  "failed",
-  "cancelled",
-  "interrupted",
-]);
-
 /**
  * The subset of a projection run that handoff rows read. Kept minimal so the
  * timeline can hold a content-stable snapshot: run status/timestamps churn on
@@ -76,9 +69,6 @@ export function V2LifecycleRow(props: {
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
   readonly onOpenThread: (threadId: ThreadId) => void;
-  // "bare" drops the card's own border/background so a run of consecutive cards
-  // can share one bordered container with dividers between them.
-  readonly chrome?: RelatedThreadCardChrome | undefined;
 }) {
   const { item } = props;
   if (item.type === "run_interrupt_request") {
@@ -209,26 +199,27 @@ export function V2LifecycleRow(props: {
   }
   if (item.type === "thread_created") {
     return (
-      <RelatedThreadCard
+      <RelatedThreadRow
         itemType={item.type}
         icon={MessageSquareIcon}
         title={item.title ?? "Created thread"}
-        detail={`${item.targetProviderInstanceId} · ${item.targetModel}`}
-        badge="created"
+        preview={`${item.targetProviderInstanceId} · ${item.targetModel}`}
+        meta="Created"
         threadId={item.targetThreadId}
         onOpenThread={props.onOpenThread}
-        chrome={props.chrome}
       />
     );
   }
   if (item.type === "subagent") {
-    const active = !TERMINAL_SUBAGENT_STATUSES.has(item.status);
+    // Once a subagent stops, its last streamed result says more than the stale
+    // progress line; while it runs, live progress comes first.
+    const active = !orchestrationV2TurnItemStatusIsTerminal(item.status);
     const streamedResult = item.result?.trim() ? item.result : null;
     const detail = active
       ? (item.progress ?? streamedResult ?? item.prompt)
       : (streamedResult ?? item.progress ?? item.prompt);
     return (
-      <RelatedThreadCard
+      <RelatedThreadRow
         itemType={item.type}
         orb={{
           // Seed by child thread id when it exists so the relationships panel
@@ -238,93 +229,135 @@ export function V2LifecycleRow(props: {
         }}
         title={subagentDisplayTitle(item.title ?? "Subagent")}
         detail={detail}
-        detailShimmer={active}
-        badge={item.status}
-        badgeTone={subagentBadgeTone(item.status)}
+        status={item.status}
         threadId={item.childThreadId}
         onOpenThread={props.onOpenThread}
-        chrome={props.chrome}
       />
     );
   }
   return null;
 }
 
-function subagentBadgeTone(status: OrchestrationV2TurnItem["status"]): RelatedThreadBadgeTone {
-  if (status === "failed") return "danger";
-  if (status === "completed") return "success";
-  return TERMINAL_SUBAGENT_STATUSES.has(status) ? "neutral" : "info";
+/**
+ * The 16px slot that ends a timeline row, drawn as the tool row draws it:
+ * pulsing dots while the item is in flight, an alert once it failed, a dash
+ * when it stopped short. Success draws nothing and only names the outcome for
+ * screen readers. `destructive` matches a row whose heading is already red.
+ */
+export function TimelineRowStatusSlot(props: {
+  readonly status: OrchestrationV2TurnItem["status"];
+  readonly destructive?: boolean;
+}) {
+  const { status } = props;
+  const label = `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
+  if (status === "completed") {
+    return (
+      // role is required for the label to be exposed: ARIA ignores aria-label
+      // on a generic, role-less element.
+      <span
+        role="img"
+        aria-label={label}
+        className="flex size-4 shrink-0 items-center justify-center"
+      />
+    );
+  }
+  return (
+    <span className="flex size-4 shrink-0 items-center justify-center">
+      <Tooltip>
+        <TooltipTrigger
+          render={<span className="flex size-4 items-center justify-center" aria-label={label} />}
+        >
+          {status === "failed" ? (
+            <CircleAlertIcon
+              className={cn(
+                "block size-3 shrink-0",
+                props.destructive ? "text-destructive" : "text-muted-foreground",
+              )}
+              aria-hidden
+            />
+          ) : orchestrationV2TurnItemStatusIsTerminal(status) ? (
+            <MinusIcon className="block size-3 shrink-0 opacity-70" aria-hidden />
+          ) : (
+            <span className="inline-flex items-center gap-px" aria-hidden>
+              <span className="size-1 rounded-full bg-current animate-status-pulse" />
+              <span className="size-1 rounded-full bg-current animate-status-pulse [animation-delay:200ms]" />
+              <span className="size-1 rounded-full bg-current animate-status-pulse [animation-delay:400ms]" />
+            </span>
+          )}
+        </TooltipTrigger>
+        <TooltipPopup>{label}</TooltipPopup>
+      </Tooltip>
+    </span>
+  );
 }
 
-type RelatedThreadBadgeTone = "neutral" | "info" | "success" | "danger";
-
-export type RelatedThreadCardChrome = "card" | "bare";
-
-// Shared by both the standalone card and the grouped container so a merged run
-// keeps exactly the border, radius and fill a single card would have had.
-export const RELATED_THREAD_CARD_SURFACE_CLASS = "rounded-xl border border-border/60 bg-card/30";
-
-const RELATED_THREAD_BADGE_TONE_CLASS: Record<RelatedThreadBadgeTone, string> = {
-  neutral: "text-muted-foreground",
-  info: "text-info",
-  success: "text-success",
-  danger: "text-destructive",
-};
-
-function RelatedThreadCard(props: {
+/**
+ * A subagent or a thread this one created, drawn as a tool row that opens the
+ * other thread. The heading names the thread; `detail` is the one line under it
+ * (a subagent's live progress, then its result). `meta` is a trailing word that
+ * is not a status, such as "Created".
+ */
+function RelatedThreadRow(props: {
   readonly itemType: "subagent" | "thread_created";
   readonly icon?: LucideIcon;
   readonly orb?: { readonly seed: string; readonly state: AgentOrbState };
   readonly title: string;
-  readonly detail: string;
-  readonly detailShimmer?: boolean;
-  readonly badge: string;
-  readonly badgeTone?: RelatedThreadBadgeTone;
+  readonly preview?: string;
+  readonly detail?: string;
+  readonly meta?: string;
+  readonly status?: OrchestrationV2TurnItem["status"];
   readonly threadId: ThreadId | null;
   readonly onOpenThread: (threadId: ThreadId) => void;
-  readonly chrome?: RelatedThreadCardChrome | undefined;
 }) {
   const Icon = props.icon;
   const threadId = props.threadId;
-  const surface = props.chrome === "bare" ? null : RELATED_THREAD_CARD_SURFACE_CLASS;
+  const detail = props.detail?.trim() ? props.detail : null;
   const content = (
     <>
-      {props.orb !== undefined ? (
-        <AgentOrb seed={props.orb.seed} state={props.orb.state} size={22} />
-      ) : Icon !== undefined ? (
-        <span className="flex size-[22px] shrink-0 items-center justify-center">
-          <Icon className="size-3.5 text-muted-foreground" />
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
+          {props.orb !== undefined ? (
+            <AgentOrb seed={props.orb.seed} state={props.orb.state} size={16} />
+          ) : Icon !== undefined ? (
+            <Icon className="block size-3.5 shrink-0 stroke-[1.8] opacity-80" aria-hidden />
+          ) : null}
         </span>
-      ) : null}
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-xs font-medium">{props.title}</span>
-          <span
-            className={cn(
-              "shrink-0 text-[10px] font-bold uppercase tracking-wide",
-              RELATED_THREAD_BADGE_TONE_CLASS[props.badgeTone ?? "neutral"],
-            )}
-          >
-            {props.badge}
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[12px] leading-5">
+          <span className="min-w-0 shrink truncate font-medium text-foreground/82">
+            {props.title}
           </span>
+          {props.preview ? (
+            <span className="min-w-0 flex-1 truncate text-muted-foreground/55">
+              {props.preview}
+            </span>
+          ) : null}
         </span>
-        <span
-          className={cn(
-            "mt-0.5 block truncate text-xs text-muted-foreground",
-            props.detailShimmer && "text-shimmer",
+        <span className="flex shrink-0 items-center gap-px text-muted-foreground/55">
+          {props.meta ? <span className="pe-1 text-[11px]">{props.meta}</span> : null}
+          <span className="flex size-4 shrink-0 items-center justify-center">
+            {threadId !== null ? (
+              <ExternalLinkIcon className="size-3 shrink-0 opacity-70" aria-hidden />
+            ) : null}
+          </span>
+          {props.status !== undefined ? (
+            <TimelineRowStatusSlot status={props.status} />
+          ) : (
+            <span className="size-4 shrink-0" aria-hidden />
           )}
-          ref={props.detailShimmer ? observeVisibleAnimation : undefined}
-        >
-          {props.detail}
         </span>
       </span>
+      {detail !== null ? (
+        <span className="block min-w-0 truncate ps-6.5 pe-9 text-[11px] leading-4 text-muted-foreground/55">
+          {detail}
+        </span>
+      ) : null}
     </>
   );
 
   return threadId === null ? (
     <div
       data-v2-item-type={props.itemType}
-      className={cn("flex min-w-0 items-center gap-2.5 px-3 py-2.5", surface)}
+      className="flex min-w-0 flex-col rounded-md px-0.5 py-0.5"
     >
       {content}
     </div>
@@ -334,18 +367,14 @@ function RelatedThreadCard(props: {
       data-v2-item-type={props.itemType}
       aria-label={`Open ${props.title}`}
       onClick={() => props.onOpenThread(threadId)}
-      className={cn(
-        "flex w-full min-w-0 items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/50",
-        surface,
-      )}
+      className="flex w-full min-w-0 cursor-pointer flex-col rounded-md px-0.5 py-0.5 text-left transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
     >
       {content}
-      <ExternalLinkIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
     </button>
   );
 }
 
-function subagentDisplayTitle(title: string): string {
+export function subagentDisplayTitle(title: string): string {
   return title.replace(/^Subagent:\s*/i, "");
 }
 

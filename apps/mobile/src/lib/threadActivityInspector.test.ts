@@ -59,7 +59,7 @@ function activityFor(item: OrchestrationV2TurnItem): ThreadFeedActivity {
 }
 
 describe("buildThreadActivityInspector", () => {
-  it("presents command lifecycle, execution support, output, and exit state", () => {
+  it("leads a command with its output and exit, keeping lifecycle metadata as details", () => {
     const item: OrchestrationV2TurnItem = {
       ...itemBase("command"),
       type: "command_execution",
@@ -102,14 +102,49 @@ describe("buildThreadActivityInspector", () => {
         { label: "Visibility", value: "inherited" },
       ]),
     );
-    expect(model.blocks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ label: "Command", value: "vp check" }),
-        expect.objectContaining({ label: "Output", value: "all checks passed" }),
-        expect.objectContaining({ label: "Exit", value: "Process exited with code 0" }),
-        expect.objectContaining({ label: "Attempt history" }),
-      ]),
+    expect(model.blocks).toEqual([
+      { label: null, value: "$ vp check\n\nall checks passed", monospaced: true },
+    ]);
+    expect(model.ending).toEqual({ label: "Exited with code 0 · 2.0s", tone: "neutral" });
+    expect(model.detailBlocks).toEqual([expect.objectContaining({ label: "Attempt history" })]);
+  });
+
+  it("ends a background command that never finished with its ending, not an exit code", () => {
+    const item: OrchestrationV2TurnItem = {
+      ...itemBase("background-command"),
+      type: "command_execution",
+      status: "cancelled",
+      background: true,
+      exitReason: "killed",
+      input: "vp run dev",
+      output: "ready on :3000",
+    };
+
+    const model = buildThreadActivityInspector(
+      activityFor(item),
+      EMPTY_V2_ITEM_SUPPORT,
+      sourceThreadId,
     );
+    expect(model.ending).toEqual({ label: "Stopped when the session ended", tone: "warning" });
+  });
+
+  it("marks a nonzero exit as a failure", () => {
+    const item: OrchestrationV2TurnItem = {
+      ...itemBase("failing-command"),
+      type: "command_execution",
+      status: "failed",
+      input: "vp test",
+      output: "1 failed\n",
+      exitCode: 1,
+    };
+
+    const model = buildThreadActivityInspector(
+      activityFor(item),
+      EMPTY_V2_ITEM_SUPPORT,
+      sourceThreadId,
+    );
+    expect(model.blocks[0]?.value).toBe("$ vp test\n\n1 failed");
+    expect(model.ending).toEqual({ label: "Exited with code 1 · 2.0s", tone: "danger" });
   });
 
   it("exposes file and web result provenance plus dynamic structured data", () => {

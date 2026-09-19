@@ -1,16 +1,9 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import { useMemo } from "react";
 
-import {
-  formatBackgroundElapsed,
-  liveBackgroundProcesses,
-  resolveBackgroundProcessView,
-  type LiveBackgroundProcess,
-} from "@t3tools/shared/backgroundProcess";
-import { cn } from "../../lib/utils";
+import { liveBackgroundProcesses } from "@t3tools/shared/backgroundProcess";
 import { useThreadVisibleTurnItems } from "../../state/entities";
-import { LiveDuration } from "./BackgroundProcessCard";
+import { BackgroundProcessRow } from "./BackgroundProcessRow";
 
 /**
  * Same ceiling as the ports section: past a handful of rows the panel stops
@@ -58,9 +51,11 @@ export function ThreadBackgroundTasksPanel(props: {
         </h3>
       </div>
 
-      <ul className="m-0 list-none p-0">
+      <ul className="m-0 list-none px-1.5 py-0">
         {processes.slice(0, VISIBLE_TASK_LIMIT).map((process) => (
-          <BackgroundTaskRow key={process.item.id} process={process} />
+          <li key={process.item.id} className="py-0.5">
+            <BackgroundProcessRow item={process.item} monitor={process.monitor} />
+          </li>
         ))}
       </ul>
 
@@ -70,90 +65,5 @@ export function ThreadBackgroundTasksPanel(props: {
         </p>
       ) : null}
     </section>
-  );
-}
-
-function BackgroundTaskRow(props: { readonly process: LiveBackgroundProcess }) {
-  const item = props.process.item;
-  const nowMs = Date.now();
-  const view = resolveBackgroundProcessView(item, nowMs);
-  const startedAtMs = item.startedAt === null ? nowMs : DateTime.toEpochMillis(item.startedAt);
-  const isMonitorRow = view.variant === "monitor";
-  const monitor = props.process.monitor;
-
-  return (
-    <li className="flex min-w-0 flex-col gap-0.5 rounded-lg px-2.5 py-1.5">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span
-          aria-hidden="true"
-          // `bg-info` rather than the ports section's emerald: this is the same
-          // "a command is running" state the timeline card and the composer
-          // strip already paint, and one thing should have one colour.
-          className={cn(
-            "size-1.5 shrink-0 rounded-full bg-info",
-            view.paused ? "opacity-50" : "animate-pulse",
-          )}
-        />
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground/80">
-          {isMonitorRow ? "Waiting on a condition" : view.command}
-        </span>
-        <RowDeadline
-          item={item}
-          view={view}
-          startedAtMs={startedAtMs}
-          isMonitorRow={isMonitorRow}
-        />
-      </div>
-
-      <p className="min-w-0 truncate pl-4 text-[10.5px] text-muted-foreground/55">
-        {isMonitorRow ? (
-          "the agent is asleep until this passes"
-        ) : (
-          <>
-            {view.tail ?? "no output yet"}
-            {view.outputTruncated ? " · output capped" : ""}
-            {monitor === null ? "" : " · the agent is waiting on it"}
-          </>
-        )}
-      </p>
-    </li>
-  );
-}
-
-/**
- * A monitor's deadline is the only number it makes claims about, so it wins the
- * slot; everything else reports how long it has been going.
- */
-function RowDeadline(props: {
-  readonly item: LiveBackgroundProcess["item"];
-  readonly view: ReturnType<typeof resolveBackgroundProcessView>;
-  readonly startedAtMs: number;
-  readonly isMonitorRow: boolean;
-}) {
-  const timeoutMs = props.item.timeoutMs;
-  const className = "shrink-0 text-[10.5px] text-muted-foreground/60";
-  if (props.isMonitorRow && timeoutMs !== undefined) {
-    return (
-      <LiveDuration
-        className={className}
-        format={(elapsedMs) =>
-          `${formatBackgroundElapsed(Math.max(0, timeoutMs - elapsedMs))} left`
-        }
-        startedAtMs={props.startedAtMs}
-        pausedMs={0}
-        paused={false}
-      />
-    );
-  }
-  // Self-ticking: the live set does not change while a command runs, so this
-  // component does not re-render and a value rendered once would sit frozen.
-  return (
-    <LiveDuration
-      className={className}
-      format={formatBackgroundElapsed}
-      startedAtMs={props.startedAtMs}
-      pausedMs={props.item.pausedMs ?? 0}
-      paused={props.view.paused}
-    />
   );
 }

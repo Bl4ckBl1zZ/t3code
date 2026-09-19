@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function TimelineSystemDivider(props: {
@@ -11,7 +12,7 @@ export function TimelineSystemDivider(props: {
   readonly icon?: LucideIcon;
   /** Stacked puts the detail on its own centered line under the label. */
   readonly layout?: "inline" | "stacked";
-  /** In-flight system work: spins the icon and pulses the label. */
+  /** In-flight system work: spins the icon while it is on screen. */
   readonly busy?: boolean;
   readonly actionLabel?: string;
   readonly onAction?: () => void;
@@ -22,11 +23,7 @@ export function TimelineSystemDivider(props: {
 }) {
   const Icon = props.icon;
   const stacked = props.layout === "stacked";
-  const label = (
-    <span className={cn("font-medium", props.busy && "animate-pulse motion-reduce:animate-none")}>
-      {props.label}
-    </span>
-  );
+  const label = <span className="font-medium">{props.label}</span>;
   const detail = props.detail ? (
     <span className="max-w-80 truncate opacity-70">
       {stacked ? props.detail : <>· {props.detail}</>}
@@ -34,7 +31,8 @@ export function TimelineSystemDivider(props: {
   ) : null;
   const icon = Icon ? (
     <Icon
-      className={cn("size-3 shrink-0", props.busy && "animate-spin motion-reduce:animate-none")}
+      ref={props.busy ? observeVisibleAnimation : undefined}
+      className={cn("size-3 shrink-0", props.busy && "motion-safe:visible-animate-spin")}
     />
   ) : null;
   const content = stacked ? (

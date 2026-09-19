@@ -32,27 +32,21 @@ struct ThreadActivityInspectorView: View {
     var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
 
     @State private var isRollingBack = false
+    @State private var showsDetails = false
 
+    /// Leads with what the tool did; orchestration metadata waits behind the
+    /// collapsed "Details" disclosure at the end.
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !model.fields.isEmpty {
-                fieldsCard
+            ForEach(Array(model.blocks.enumerated()), id: \.offset) { _, block in
+                blockView(block, maxHeight: 240)
             }
 
-            ForEach(Array(model.blocks.enumerated()), id: \.offset) { _, block in
-                section(block.label) {
-                    ScrollView(.vertical) {
-                        Text(verbatim: block.value)
-                            .font(block.monospaced
-                                ? ChatTimelineStyle.smallMono
-                                : ChatTimelineStyle.small)
-                            .foregroundStyle(T3Colors.textSecondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.trailing, 8)
-                    }
-                    .frame(maxHeight: 240)
-                }
+            if let ending = model.ending {
+                Text(verbatim: ending.label)
+                    .font(ChatTimelineStyle.small)
+                    .foregroundStyle(endingColor(ending.tone))
+                    .padding(.top, -6)
             }
 
             if let diff = model.diff, !diff.isEmpty {
@@ -91,13 +85,83 @@ struct ThreadActivityInspectorView: View {
                 rollbackButton(target)
             }
 
-            structuredDetails
+            details
         }
     }
 
-    // MARK: - Fields
+    // MARK: - Blocks
 
-    private var fieldsCard: some View {
+    @ViewBuilder
+    private func blockView(_ block: ThreadActivityInspectorBlock, maxHeight: CGFloat) -> some View {
+        let text = ScrollView(.vertical) {
+            Text(verbatim: block.value)
+                .font(block.monospaced ? ChatTimelineStyle.smallMono : ChatTimelineStyle.small)
+                .foregroundStyle(T3Colors.textSecondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 8)
+        }
+        .frame(maxHeight: maxHeight)
+
+        if let label = block.label {
+            section(label) { text }
+        } else {
+            text
+        }
+    }
+
+    private func endingColor(_ tone: ThreadActivityInspectorEnding.Tone) -> Color {
+        switch tone {
+        case .neutral: T3Colors.textTertiary
+        case .warning: T3Colors.warning
+        case .danger: T3Colors.danger
+        }
+    }
+
+    // MARK: - Details
+
+    /// Orchestration metadata (item, status, run, node, session, raw JSON).
+    /// Useful when debugging, noise when reading, so it starts collapsed.
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Rectangle()
+                .fill(ChatTimelineStyle.hairline)
+                .frame(height: 1)
+
+            Button {
+                showsDetails.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: showsDetails ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(T3Colors.textTertiary)
+                        .frame(width: 12)
+                    sectionLabel("Details")
+                }
+                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(showsDetails ? "Expanded" : "Collapsed")
+
+            if showsDetails {
+                if !model.fields.isEmpty {
+                    fieldsGrid
+                }
+                ForEach(Array(model.detailBlocks.enumerated()), id: \.offset) { _, block in
+                    blockView(block, maxHeight: 240)
+                }
+                blockView(
+                    ThreadActivityInspectorBlock(
+                        label: "Raw item", value: model.structuredDetails, monospaced: true
+                    ),
+                    maxHeight: 280
+                )
+            }
+        }
+    }
+
+    private var fieldsGrid: some View {
         LazyVGrid(
             columns: [
                 GridItem(.flexible(), spacing: 16, alignment: .topLeading),
@@ -108,7 +172,9 @@ struct ThreadActivityInspectorView: View {
         ) {
             ForEach(Array(model.fields.enumerated()), id: \.offset) { _, field in
                 VStack(alignment: .leading, spacing: 2) {
-                    eyebrow(field.label)
+                    Text(verbatim: field.label)
+                        .font(ChatTimelineStyle.small)
+                        .foregroundStyle(T3Colors.textTertiary)
                     Text(verbatim: field.value)
                         .font(ChatTimelineStyle.small)
                         .foregroundStyle(T3Colors.textPrimary)
@@ -118,15 +184,6 @@ struct ThreadActivityInspectorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(T3Colors.subtle)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(T3Colors.border, lineWidth: 1)
-                )
-        )
     }
 
     // MARK: - Rows
@@ -259,31 +316,11 @@ struct ThreadActivityInspectorView: View {
         .accessibilityLabel("Roll back to this checkpoint")
     }
 
-    private var structuredDetails: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Rectangle()
-                .fill(ChatTimelineStyle.hairline)
-                .frame(height: 1)
-                .padding(.bottom, 4)
-            eyebrow("Structured details")
-            ScrollView(.vertical) {
-                Text(verbatim: model.structuredDetails)
-                    .font(ChatTimelineStyle.smallMono)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.trailing, 8)
-            }
-            .frame(maxHeight: 280)
-        }
-    }
-
     // MARK: - Chrome
 
-    private func eyebrow(_ label: String) -> some View {
-        Text(verbatim: label.uppercased())
-            .font(ChatTimelineStyle.microStrong)
-            .tracking(0.5)
+    private func sectionLabel(_ label: String) -> some View {
+        Text(verbatim: label)
+            .font(ChatTimelineStyle.smallStrong)
             .foregroundStyle(T3Colors.textTertiary)
     }
 
@@ -292,7 +329,7 @@ struct ThreadActivityInspectorView: View {
         @ViewBuilder content: () -> some View
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            eyebrow(label)
+            sectionLabel(label)
             content()
         }
     }

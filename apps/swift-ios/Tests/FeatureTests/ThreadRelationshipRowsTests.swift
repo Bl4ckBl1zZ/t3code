@@ -211,14 +211,21 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         XCTAssertEqual(ThreadRelationships.symbol(fork), "arrow.triangle.branch")
     }
 
-    func testOnlyRunningSubagentsGetALiveOrb() {
+    /// The orb and the trailing glyph read one status mapping, so a parked
+    /// agent is outstanding on both.
+    func testSubagentOrbStateFollowsTheRowStatus() {
         XCTAssertEqual(ThreadRelationships.subagentOrbState("failed"), .failed)
         XCTAssertEqual(ThreadRelationships.subagentOrbState("running"), .active)
+        XCTAssertEqual(ThreadRelationships.subagentOrbState("pending"), .active)
+        XCTAssertEqual(ThreadRelationships.subagentOrbState("waiting"), .active)
         XCTAssertEqual(ThreadRelationships.subagentOrbState("completed"), .done)
-        // Parked, not working: pending and waiting must not animate.
-        XCTAssertEqual(ThreadRelationships.subagentOrbState("pending"), .done)
-        XCTAssertEqual(ThreadRelationships.subagentOrbState("waiting"), .done)
+        XCTAssertEqual(ThreadRelationships.subagentOrbState("cancelled"), .done)
         XCTAssertEqual(ThreadRelationships.subagentOrbState(nil), .done)
+
+        XCTAssertEqual(WorkRowStatus(agentStatus: "waiting"), .running)
+        XCTAssertEqual(WorkRowStatus(agentStatus: "error"), .failed)
+        XCTAssertEqual(WorkRowStatus(agentStatus: "interrupted"), .stopped)
+        XCTAssertNil(WorkRowStatus(agentStatus: "completed"))
     }
 
     func testAvailabilityPrefersTheMostFinalReason() {
@@ -652,16 +659,10 @@ final class ThreadRelationshipRowsTests: XCTestCase {
     }
 
     func testSubagentSummaryCountsParkedAgentsAsWorking() {
-        // Looser than `subagentOrbState`, which will not animate a parked
-        // agent: the count answers whether anyone is still outstanding.
+        // The count answers whether anyone is still outstanding.
         let parked = summary(["pending", "waiting"])
         XCTAssertEqual(parked.workingCount, 2)
         XCTAssertEqual(parked.primaryLabel, "2 working")
-        XCTAssertEqual(
-            ThreadRelationships.subagentOrbState("pending"),
-            .done,
-            "orb state and the working count deliberately disagree here"
-        )
     }
 
     func testSubagentSummaryCollapsesDuplicateFailureCounts() {

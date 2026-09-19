@@ -2535,10 +2535,12 @@ code {
   user-select: none;
 }
 /* Only in-flight work animates: a settled panel can hold dozens of orbs, and
-   compositing them all is a measurable GPU cost for no information. */
+   compositing them all is a measurable GPU cost for no information. Active orbs
+   also pause while off screen (AgentOrb attaches observeVisibleAnimation). */
 .agent-orb[data-agent-orb-state="active"] .agent-orb-texture {
-  will-change: transform;
+  will-change: var(--visible-animation-will-change, auto);
   animation: agent-orb-drift 6.4s ease-in-out infinite alternate;
+  animation-play-state: var(--visible-animation-state, paused);
 }
 .agent-orb[data-agent-orb-texture="1"] .agent-orb-texture,
 .agent-orb[data-agent-orb-texture="4"] .agent-orb-texture,

@@ -19,6 +19,7 @@ import {
   threadFeedRunIsUnsettled,
   isPendingUserInputOptionSelected,
   setPendingUserInputCustomAnswer,
+  threadFeedActivityHasRow,
   togglePendingUserInputOptionSelection,
   type ThreadFeedActivity,
   type ThreadFeedEntry,
@@ -623,7 +624,6 @@ describe("buildThreadFeed", () => {
       icon: "command",
       logo: null,
       toolLike: true,
-      prominent: false,
       status,
       projectedItem: projected(command(createdAt), 0),
     });
@@ -695,6 +695,101 @@ describe("buildThreadFeed", () => {
     expect(activity?.summary).toBe("Read a T3 thread");
     expect(activity?.logo).toBe("t3-code");
     expect(activity?.getCopyText().split("\n")[0]).toBe("Read a T3 thread");
+  });
+});
+
+function backgroundCommand(
+  status: OrchestrationV2TurnItem["status"],
+  overrides: Partial<Extract<OrchestrationV2TurnItem, { type: "command_execution" }>> = {},
+): OrchestrationV2TurnItem {
+  return {
+    ...base("item-background", "2026-06-20T00:00:02.000Z", 1),
+    type: "command_execution",
+    status,
+    completedAt: null,
+    background: true,
+    taskId: "task-1",
+    input: "vp run dev",
+    output: "compiling\n  ready on :3000  \n\n",
+    ...overrides,
+  };
+}
+
+function onlyActivity(item: OrchestrationV2TurnItem): ThreadFeedActivity {
+  const group = buildThreadFeed([projected(item, 0)])[0];
+  if (group?.type !== "activity-group" || !group.activities[0]) {
+    throw new Error("Expected an activity group");
+  }
+  return group.activities[0];
+}
+
+describe("background commands", () => {
+  it("keeps a running background command visible after its turn folds", () => {
+    const foreground = { ...command(), id: TurnItemId.make("item-foreground"), ordinal: 2 };
+    const feed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(backgroundCommand("running"), 1),
+      projected(foreground, 2),
+      projected(assistantMessage(), 3),
+    ]);
+    const presented = deriveThreadFeedPresentation(
+      feed,
+      {
+        runId,
+        status: "completed",
+        startedAt: "2026-06-20T00:00:01.000Z",
+        completedAt: "2026-06-20T00:00:03.000Z",
+      },
+      new Set(),
+    );
+
+    const rows = presented.flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities : [],
+    );
+    // The finished foreground command folds away with its turn; the command
+    // still running stays, previewing what it last printed.
+    expect(presented.map((entry) => entry.type)).toEqual([
+      "message",
+      "run-fold",
+      "activity-group",
+      "message",
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      summary: "Background command",
+      detail: "  ready on :3000",
+      status: "neutral",
+    });
+  });
+
+  it("gives a row to a background command that never finished, unlike a stopped tool", () => {
+    const stopped = onlyActivity(
+      backgroundCommand("cancelled", {
+        exitReason: "killed",
+        completedAt: DateTime.makeUnsafe("2026-06-20T00:00:03.000Z"),
+      }),
+    );
+    expect(stopped.status).toBe("neutral");
+    expect(threadFeedActivityHasRow(stopped)).toBe(true);
+
+    const runningForeground = onlyActivity({ ...command(), status: "running", completedAt: null });
+    expect(threadFeedActivityHasRow(runningForeground)).toBe(false);
+  });
+
+  it("reads a background command's status from how it ended", () => {
+    const settled = (overrides: Parameters<typeof backgroundCommand>[1]) =>
+      onlyActivity(
+        backgroundCommand("completed", {
+          completedAt: DateTime.makeUnsafe("2026-06-20T00:00:03.000Z"),
+          ...overrides,
+        }),
+      ).status;
+
+    expect(settled({ exitCode: 0 })).toBe("success");
+    // A nonzero exit is a failure even when the task reports "completed".
+    expect(settled({ exitCode: 2 })).toBe("failure");
+    // A timeout never got to finish; it is a stop, not a failure.
+    expect(settled({ status: "failed", exitReason: "timeout" })).toBe("neutral");
   });
 });
 

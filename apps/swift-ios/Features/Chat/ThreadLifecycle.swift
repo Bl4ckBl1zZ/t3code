@@ -41,24 +41,30 @@ public enum LifecyclePresentation: Equatable, Sendable {
         public let openThreadID: String?
     }
 
+    /// A subagent or created thread, drawn as an ordinary tool row.
     public struct RelatedThread: Equatable, Sendable {
-        public enum BadgeTone: Equatable, Sendable { case neutral, success, danger }
         public enum OrbState: Equatable, Sendable { case active, done, failed }
 
         public let symbol: String
+        /// The agent's or thread's name.
         public let title: String
+        /// Its task, muted after the name.
+        public let preview: String?
+        /// Latest progress or result: the one line under the row.
         public let detail: String?
-        public let badge: String
-        public let badgeTone: BadgeTone
+        /// Muted note for what is not a status, such as "Created".
+        public let meta: String?
+        /// The trailing glyph; nil once it is simply done.
+        public let status: WorkRowStatus?
         public let threadID: String?
-        /// Stable per-agent seed; present means the card renders an orb.
+        /// Stable per-agent seed; present means the row leads with an orb.
         public let orbSeed: String?
         public let orbState: OrbState?
     }
 }
 
 public enum ThreadLifecycle {
-    /// Turn items that become dividers or related-thread cards.
+    /// Turn items that become dividers or related-thread rows.
     static let lifecycleTypes: Set<String> = [
         "run_interrupt_request",
         "run_interrupt_result",
@@ -124,14 +130,10 @@ public enum ThreadLifecycle {
         return status.isTerminal ? .done : .active
     }
 
-    private static func subagentBadgeTone(
-        _ status: OrchestrationV2TurnItemStatus
-    ) -> LifecyclePresentation.RelatedThread.BadgeTone {
-        switch status {
-        case .completed: .success
-        case .failed: .danger
-        default: .neutral
-        }
+    /// Collapses a prompt or streamed result to the single line a row has room for.
+    private static func oneLine(_ value: String?) -> String? {
+        let compact = value?.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return compact?.isEmpty == false ? compact : nil
     }
 
     public static func resolvePresentation(
@@ -269,9 +271,10 @@ public enum ThreadLifecycle {
                 .init(
                     symbol: "message",
                     title: item.base.title ?? "Created thread",
-                    detail: "\(targetProviderInstanceID) · \(targetModel)",
-                    badge: "created",
-                    badgeTone: .neutral,
+                    preview: "\(targetProviderInstanceID) · \(targetModel)",
+                    detail: nil,
+                    meta: "Created",
+                    status: nil,
                     threadID: targetThreadID,
                     orbSeed: nil,
                     orbState: nil
@@ -279,22 +282,21 @@ public enum ThreadLifecycle {
             )
 
         case let .subagent(subagentID, _, _, _, childThreadID, prompt, progress, result):
-            let streamedResult = result?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                ? result
-                : nil
-            // Once it stops, the last streamed result says more than a stale
-            // progress line; while it runs, live progress comes first.
-            let detail = item.status.isTerminal
-                ? (streamedResult ?? progress ?? prompt)
-                : (progress ?? streamedResult ?? prompt)
+            let latestProgress = oneLine(progress)
+            let latestResult = oneLine(result)
             let title = (item.base.title ?? "Subagent").trimmingCharacters(in: .whitespacesAndNewlines)
             return .relatedThread(
                 .init(
                     symbol: "sparkles",
                     title: title.isEmpty ? "Subagent" : title,
-                    detail: detail,
-                    badge: item.status.rawValue,
-                    badgeTone: subagentBadgeTone(item.status),
+                    preview: oneLine(prompt),
+                    // Once it stops, the last streamed result says more than a
+                    // stale progress line; while it runs, live progress comes first.
+                    detail: item.status.isTerminal
+                        ? (latestResult ?? latestProgress)
+                        : (latestProgress ?? latestResult),
+                    meta: nil,
+                    status: WorkRowStatus(agentStatus: item.status.rawValue),
                     threadID: childThreadID,
                     // Child thread id first: the relationship surfaces only know
                     // thread ids, so this keeps one agent the same colour

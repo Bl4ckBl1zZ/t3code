@@ -450,18 +450,18 @@ public enum ThreadRelationships {
         edge.kind == .transfer ? "arrow.left.arrow.right" : "arrow.triangle.branch"
     }
 
-    /// Orb state for a subagent edge.
-    ///
-    /// Deliberately not `ThreadLifecycle`'s terminal test: an edge status is a
-    /// thread/subagent status, where `pending` and `waiting` mean the agent is
-    /// parked rather than working, and a parked agent reading as "active" would
-    /// keep an orb animating with nothing behind it.
+    /// Orb state for a subagent edge, read through the same status mapping as
+    /// its trailing glyph so the orb and the glyph cannot disagree. A parked
+    /// (`pending`, `waiting`) agent is still outstanding, so it reads as active;
+    /// the orb is static, so that costs nothing.
     public static func subagentOrbState(
         _ status: String?
     ) -> LifecyclePresentation.RelatedThread.OrbState {
-        if status == "failed" { return .failed }
-        if status == "running" { return .active }
-        return .done
+        switch WorkRowStatus(agentStatus: status) {
+        case .failed: .failed
+        case .running: .active
+        case .stopped, nil: .done
+        }
     }
 
     /// Why a related thread cannot be opened, or nil when it can.
@@ -615,9 +615,8 @@ public extension ThreadSubagentSummary {
             case "failed", "error":
                 failed.append(row)
             default:
-                // Deliberately looser than `subagentOrbState`, which will not
-                // animate a parked agent: `pending` and `waiting` still mean
-                // this thread is outstanding on someone.
+                // `pending` and `waiting` still mean this thread is outstanding
+                // on someone.
                 working.append(row)
             }
         }

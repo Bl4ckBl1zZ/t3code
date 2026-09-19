@@ -15,14 +15,28 @@ public struct ThreadActivityInspectorField: Equatable, Sendable {
 }
 
 public struct ThreadActivityInspectorBlock: Equatable, Sendable {
-    public let label: String
+    /// Nil when the content explains itself, like a command and its output.
+    public let label: String?
     public let value: String
     public let monospaced: Bool
 
-    public init(label: String, value: String, monospaced: Bool) {
+    public init(label: String?, value: String, monospaced: Bool) {
         self.label = label
         self.value = value
         self.monospaced = monospaced
+    }
+}
+
+/// How a command ended: the line under its output.
+public struct ThreadActivityInspectorEnding: Equatable, Sendable {
+    public enum Tone: Equatable, Sendable { case neutral, warning, danger }
+
+    public let label: String
+    public let tone: Tone
+
+    public init(label: String, tone: Tone) {
+        self.label = label
+        self.tone = tone
     }
 }
 
@@ -60,9 +74,15 @@ public struct ThreadActivityRollbackTarget: Equatable, Sendable {
     }
 }
 
+/// What a tool row opens to. It leads with what the tool did (`blocks`, then
+/// `ending`, diffs and links); the orchestration metadata a reader rarely needs
+/// (`fields`, `detailBlocks`, `structuredDetails`) sits behind a collapsed
+/// "Details" disclosure.
 public struct ThreadActivityInspectorModel: Equatable, Sendable {
     public let fields: [ThreadActivityInspectorField]
     public let blocks: [ThreadActivityInspectorBlock]
+    public let ending: ThreadActivityInspectorEnding?
+    public let detailBlocks: [ThreadActivityInspectorBlock]
     public let fileLinks: [ThreadActivityFileLink]
     public let webLinks: [ThreadActivityWebLink]
     /// Unified diff for file changes, rendered by the diff viewer instead of a
@@ -317,14 +337,16 @@ public enum ThreadActivityInspector {
         }
 
         var blocks: [ThreadActivityInspectorBlock] = []
+        var detailBlocks: [ThreadActivityInspectorBlock] = []
         var fileLinks: [ThreadActivityFileLink] = []
         var webLinks: [ThreadActivityWebLink] = []
+        var ending: ThreadActivityInspectorEnding?
 
         // A single attempt is already summarised by the `Attempt` field; the
         // history only earns its space once the run was restarted.
         if support.attempts.count > 1 {
             addBlock(
-                &blocks,
+                &detailBlocks,
                 "Attempt history",
                 support.attempts
                     .map { "Attempt \($0.attemptOrdinal) · \($0.status) · \(spaced($0.reason))" }
@@ -337,11 +359,15 @@ public enum ThreadActivityInspector {
             addBlock(&blocks, "Reasoning", text, monospaced: false)
 
         case let .commandExecution(input, output, exitCode, _):
-            addBlock(&blocks, "Command", input)
-            addBlock(&blocks, "Output", output)
-            if let exitCode {
-                addBlock(&blocks, "Exit", "Process exited with code \(exitCode)")
-            }
+            // One block, the way a terminal shows it: the command, then its output.
+            addBlock(
+                &blocks,
+                nil,
+                ["$ \(input)", output?.replacingTrailingWhitespace()]
+                    .compactMap { $0?.isEmpty == false ? $0 : nil }
+                    .joined(separator: "\n\n")
+            )
+            ending = commandEnding(item, exitCode: exitCode, now: now)
 
         case let .fileChange(fileName, additions, deletions, diffStr, oldStr, newStr):
             fileLinks.append(.init(label: fileName, path: fileName))
@@ -499,6 +525,8 @@ public enum ThreadActivityInspector {
         return ThreadActivityInspectorModel(
             fields: fields,
             blocks: blocks,
+            ending: ending,
+            detailBlocks: detailBlocks,
             fileLinks: fileLinks,
             webLinks: webLinks,
             diff: diff,
@@ -516,9 +544,32 @@ public enum ThreadActivityInspector {
         value.replacingOccurrences(of: "_", with: " ")
     }
 
+    /// "Exited with code 0 · 2.0s", or for a background command that never got
+    /// to finish, its ending: that, not an exit code, is what it has.
+    private static func commandEnding(
+        _ item: OrchestrationV2TurnItem,
+        exitCode: Int?,
+        now: Date
+    ) -> ThreadActivityInspectorEnding? {
+        if let command = ThreadDetailsBackgroundCommand(item),
+           ThreadDetailsBackgroundTasks.isBackgroundProcessItem(command),
+           let outcome = ThreadDetailsBackgroundTasks.outcome(command) {
+            return .init(label: outcome.label, tone: outcome.tone == .danger ? .danger : .warning)
+        }
+        guard let exitCode else { return nil }
+        let duration = item.base.completedAt == nil
+            ? nil
+            : durationLabel(startedAt: item.base.startedAt, completedAt: item.base.completedAt, now: now)
+        return .init(
+            label: duration.map { "Exited with code \(exitCode) · \($0)" }
+                ?? "Exited with code \(exitCode)",
+            tone: exitCode == 0 ? .neutral : .danger
+        )
+    }
+
     private static func addBlock(
         _ blocks: inout [ThreadActivityInspectorBlock],
-        _ label: String,
+        _ label: String?,
         _ value: String?,
         monospaced: Bool = true
     ) {

@@ -59,27 +59,24 @@ export function backgroundProcessOutcome(
   }
   const exitCode = item.exitCode;
   if (item.exitReason === "unknown") {
-    return { tone: "warning", label: "outcome unknown, server restarted while it ran" };
+    return { tone: "warning", label: "Result unknown after a server restart" };
   }
   if (item.exitReason === "killed") {
-    return { tone: "warning", label: "stopped when the session ended" };
+    return { tone: "warning", label: "Stopped when the session ended" };
   }
   if (item.exitReason === "timeout") {
-    return { tone: "warning", label: "gave up waiting" };
+    return { tone: "warning", label: "Timed out" };
   }
   if (item.status === "cancelled" || item.status === "interrupted") {
-    return { tone: "warning", label: "stopped" };
+    return { tone: "warning", label: "Stopped" };
   }
   if (item.status === "failed" || (exitCode !== undefined && exitCode !== 0)) {
     return {
       tone: "danger",
-      label: exitCode === undefined ? "failed" : `failed exit ${exitCode}`,
+      label: exitCode === undefined ? "Failed" : `Failed with exit code ${exitCode}`,
     };
   }
-  return {
-    tone: "success",
-    label: exitCode === undefined ? "finished" : `finished exit ${exitCode}`,
-  };
+  return { tone: "success", label: "Finished" };
 }
 
 function backgroundProcessVariant(

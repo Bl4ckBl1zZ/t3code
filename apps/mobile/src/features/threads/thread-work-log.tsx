@@ -1,8 +1,11 @@
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
-import type { EnvironmentId, OrchestrationV2TurnItem, ThreadId } from "@t3tools/contracts";
-import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import {
+  isBackgroundProcessItem,
+  resolveBackgroundProcessView,
+} from "@t3tools/shared/backgroundProcess";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { useNavigation } from "@react-navigation/native";
 import { LayoutAnimation, Pressable, View } from "react-native";
@@ -28,11 +31,13 @@ import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import {
   activityFileDiffStats,
   sumActivityFileDiffStats,
+  threadFeedActivityHasRow,
   type ThreadFeedActivity,
 } from "../../lib/threadActivity";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useThemeColor } from "../../lib/useThemeColor";
 import Animated, { FadeIn } from "react-native-reanimated";
+import { BackgroundProcessElapsed } from "./BackgroundProcessElapsed";
 import { ThreadActivityInspector } from "./ThreadActivityInspector";
 import { threadWorkLogOverflowNoun } from "./thread-work-log-labels";
 
@@ -49,18 +54,6 @@ const WORK_LOG_LAYOUT_ANIMATION = {
     property: LayoutAnimation.Properties.opacity,
   },
 } as const;
-
-function keepRowsWithLiveBackgroundCommands<
-  Row extends { readonly projectedItem: { readonly item: OrchestrationV2TurnItem } },
->(rows: ReadonlyArray<Row>, limit: number): ReadonlyArray<Row> {
-  const kept = new Set(rows.slice(-limit));
-  for (const row of rows) {
-    if (orchestrationV2CommandExecutionIsLiveInBackground(row.projectedItem.item)) {
-      kept.add(row);
-    }
-  }
-  return rows.filter((row) => kept.has(row));
-}
 
 function triggerDisclosureFeedback() {
   LayoutAnimation.configureNext(WORK_LOG_LAYOUT_ANIMATION);
@@ -148,6 +141,33 @@ function WorkRowDiffStat(props: { readonly additions: number; readonly deletions
           −{props.deletions}
         </Text>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * A row's trailing status. Success is the default outcome, so done draws
+ * nothing. Static on purpose: what it marks can run for minutes.
+ */
+export function WorkRowStatusGlyph(props: {
+  readonly status: "running" | "failed" | "stopped" | null;
+  readonly iconSubtleColor: import("react-native").ColorValue;
+}) {
+  if (props.status === null) return null;
+  return (
+    <View className="h-4 w-4 items-center justify-center">
+      <SymbolView
+        name={
+          props.status === "failed"
+            ? { ios: "xmark", android: "close" }
+            : props.status === "stopped"
+              ? { ios: "minus", android: "remove" }
+              : "ellipsis"
+        }
+        size={11}
+        tintColor={props.status === "failed" ? "#e11d48" : props.iconSubtleColor}
+        type="monochrome"
+      />
     </View>
   );
 }
@@ -377,49 +397,6 @@ function WorkRowIcon(props: {
   );
 }
 
-function ThreadActivityThreadLink(props: {
-  readonly activity: ThreadFeedActivity;
-  readonly environmentId: EnvironmentId;
-  readonly iconColor: import("react-native").ColorValue;
-}) {
-  const row = props.activity.projectedItem;
-  const navigation = useNavigation();
-  const item = row.item;
-  let targetThreadId: ThreadId | null = null;
-  let label = "Open related thread";
-
-  if (item.type === "thread_created") {
-    targetThreadId = item.targetThreadId;
-    label = "Open created thread";
-  } else if (item.type === "fork") {
-    targetThreadId =
-      item.targetThreadId === row.sourceThreadId && item.source.type === "run"
-        ? item.source.threadId
-        : item.targetThreadId;
-    label = targetThreadId === item.targetThreadId ? "Open forked thread" : "Open parent thread";
-  }
-
-  if (targetThreadId === null) return null;
-
-  return (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityLabel={label}
-      onPress={() => {
-        void Haptics.selectionAsync();
-        navigation.navigate("Thread", {
-          environmentId: props.environmentId,
-          threadId: targetThreadId,
-        });
-      }}
-      className="mx-2 mb-2 min-h-9 flex-row items-center justify-center gap-1.5 rounded-lg border border-neutral-300/50 px-2 dark:border-white/[0.08]"
-    >
-      <Text className="font-t3-medium text-2xs text-foreground">{label}</Text>
-      <SymbolView name="arrow.right" size={11} tintColor={props.iconColor} type="monochrome" />
-    </Pressable>
-  );
-}
-
 // Entering fades only for rows created moments ago: rows remount whenever the
 // list scrolls them back into view, and old rows must not replay an entrance.
 const FRESH_ROW_WINDOW_MS = 3_000;
@@ -428,11 +405,10 @@ function isFreshRow(createdAt: string): boolean {
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ROW_WINDOW_MS;
 }
 
-// Tool-like activities with a neutral status carry no signal worth a row.
 export function visibleWorkLogActivities(
   activities: ReadonlyArray<ThreadFeedActivity>,
 ): ReadonlyArray<ThreadFeedActivity> {
-  return activities.filter((activity) => !(activity.toolLike && activity.status === "neutral"));
+  return activities.filter(threadFeedActivityHasRow);
 }
 
 // Pre-measurement heights for the feed's getFixedItemSize. Collapsed work-log
@@ -493,16 +469,8 @@ export function ThreadWorkLog(props: {
 
   const hasOverflow = rows.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleRows =
-    hasOverflow && !props.expanded
-      ? // A background command is usually launched early in a turn, so keeping
-        // only the last row would collapse away the one row still reporting.
-        keepRowsWithLiveBackgroundCommands(rows, MAX_VISIBLE_WORK_LOG_ENTRIES)
-      : rows;
-  // The complement of what is visible, not a prefix: pinning a live background
-  // command means the hidden rows are no longer contiguous, so slicing would
-  // total the diff stats of the wrong rows.
-  const visibleRowIds = new Set(visibleRows.map((row) => row.id));
-  const hiddenRows = rows.filter((row) => !visibleRowIds.has(row.id));
+    hasOverflow && !props.expanded ? rows.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES) : rows;
+  const hiddenRows = rows.slice(0, rows.length - visibleRows.length);
   const hiddenCount = hiddenRows.length;
   const hiddenStats = sumActivityFileDiffStats(hiddenRows);
   const onlyToolRows = rows.every((row) => row.toolLike);
@@ -521,9 +489,20 @@ export function ThreadWorkLog(props: {
           const expanded = props.expandedRows[row.id] ?? false;
           const canExpand = row.canExpand;
           const detail = compactActivityDetail(row.detail);
-          const displayText = detail ? `${row.summary} ${detail}` : row.summary;
-          const textIsDestructive = row.icon === "alert" || row.icon === "warning";
           const item = row.projectedItem.item;
+          const backgroundItem = isBackgroundProcessItem(item) ? item : null;
+          const backgroundView =
+            backgroundItem === null
+              ? null
+              : resolveBackgroundProcessView(backgroundItem, Date.now());
+          const rowText = detail ? `${row.summary} ${detail}` : row.summary;
+          // A background command's ending is more than its glyph can say.
+          const backgroundOutcome = backgroundView?.outcome ?? null;
+          const displayText =
+            backgroundOutcome === null || backgroundOutcome.tone === "success"
+              ? rowText
+              : `${rowText}, ${backgroundOutcome.label}`;
+          const textIsDestructive = row.icon === "alert" || row.icon === "warning";
           const dynamicToolPath =
             item.type === "dynamic_tool" ? dynamicToolInputPreview(item.input) : null;
           const filePath =
@@ -534,10 +513,16 @@ export function ThreadWorkLog(props: {
                 : null;
           const diffStats = activityFileDiffStats(row);
           // The icon already communicates the tool kind on these rows, so the
-          // detail (command text, search pattern, path) is the whole row.
+          // detail (command text, search pattern, path) is the whole row. A
+          // background command keeps its heading: it is what says the command
+          // outlived its turn.
           const hideSummaryLabel =
-            detail !== null && (item.type === "command_execution" || item.type === "file_search");
-          const inProgress = IN_PROGRESS_ITEM_STATUSES.has(item.status);
+            detail !== null &&
+            backgroundItem === null &&
+            (item.type === "command_execution" || item.type === "file_search");
+          // A background command can run for an hour, so its running signal is
+          // the ticking clock, not a shimmer.
+          const inProgress = IN_PROGRESS_ITEM_STATUSES.has(item.status) && backgroundItem === null;
           const RowText = inProgress ? ShimmerText : Text;
 
           if (item.type === "checkpoint" && item.files.length > 0) {
@@ -565,10 +550,6 @@ export function ThreadWorkLog(props: {
             <Animated.View
               key={row.id}
               {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
-              className={cn(
-                row.prominent &&
-                  "mb-2 overflow-hidden rounded-xl border border-neutral-300/60 bg-card dark:border-white/[0.1]",
-              )}
             >
               <Pressable
                 accessibilityRole={canExpand ? "button" : undefined}
@@ -632,6 +613,13 @@ export function ThreadWorkLog(props: {
                         deletions={diffStats.deletions}
                       />
                     ) : null}
+                    {backgroundItem !== null && backgroundView !== null ? (
+                      <BackgroundProcessElapsed
+                        className="pr-1 text-2xs text-foreground-muted"
+                        item={backgroundItem}
+                        view={backgroundView}
+                      />
+                    ) : null}
                     {props.copiedRowId === row.id ? (
                       <Text className="pr-1 font-t3-medium text-3xs text-emerald-600 dark:text-emerald-400">
                         Copied
@@ -651,21 +639,18 @@ export function ThreadWorkLog(props: {
                         />
                       ) : null}
                     </View>
-                    {/* Success is the default outcome — only surface deviations. */}
-                    {row.status === "failure" || row.status === "neutral" ? (
-                      <View className="h-4 w-4 items-center justify-center">
-                        <SymbolView
-                          name={
-                            row.status === "failure"
-                              ? { ios: "xmark", android: "close" }
-                              : { ios: "minus", android: "remove" }
-                          }
-                          size={11}
-                          tintColor={row.status === "failure" ? "#e11d48" : props.iconSubtleColor}
-                          type="monochrome"
-                        />
-                      </View>
-                    ) : null}
+                    {/* A live background command is neutral too, but its
+                        clock already says it is running. */}
+                    <WorkRowStatusGlyph
+                      iconSubtleColor={props.iconSubtleColor}
+                      status={
+                        row.status === "failure"
+                          ? "failed"
+                          : row.status === "neutral" && backgroundView?.live !== true
+                            ? "stopped"
+                            : null
+                      }
+                    />
                   </View>
                 </View>
               </Pressable>
@@ -680,13 +665,6 @@ export function ThreadWorkLog(props: {
                     workspaceRoot={props.workspaceRoot}
                   />
                 </View>
-              ) : null}
-              {row.prominent ? (
-                <ThreadActivityThreadLink
-                  activity={row}
-                  environmentId={props.environmentId}
-                  iconColor={props.iconSubtleColor}
-                />
               ) : null}
             </Animated.View>
           );

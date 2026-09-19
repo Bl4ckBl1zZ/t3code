@@ -740,11 +740,16 @@ extension ThreadDetailsPullRequest: Identifiable {
 
 // MARK: - Background task row
 
+/// A background command drawn as an ordinary row: its glyph, the command, and
+/// the clock, mirroring apps/web/src/components/chat/BackgroundProcessRow.tsx.
+///
 /// Self-ticking elapsed time. The live set does not change while a command runs,
-/// so a value rendered once by the parent would sit frozen.
+/// so a value rendered once by the parent would sit frozen. The tick only
+/// rewrites text; nothing on the row animates while it waits.
 ///
 /// Shared with the transcript bar's background capsule, which presents these
-/// same rows when tapped.
+/// same rows when tapped. That sheet also shows the one command whose ending it
+/// is reporting, so a settled row keeps the capsule's tint for that ending.
 struct ThreadDetailsBackgroundTaskRow: View {
     let process: ThreadDetailsBackgroundProcess
 
@@ -757,17 +762,18 @@ struct ThreadDetailsBackgroundTaskRow: View {
                 process.command, nowMilliseconds: now
             )
             ThreadDetailsRow(
+                systemImage: view.variant == .monitor ? "moon.zzz.fill" : "terminal",
+                iconTint: ThreadBackgroundTint.color(
+                    live: view.live,
+                    ending: view.outcome?.tone,
+                    monitor: view.variant == .monitor,
+                    paused: view.paused
+                ),
                 title: ThreadDetailsBackgroundTasks.title(view),
-                titleIsMonospaced: ThreadDetailsBackgroundTasks.titleIsMonospaced(view),
                 subtitle: ThreadDetailsBackgroundTasks.subtitle(
                     view, hasMonitor: process.monitor != nil
                 ),
                 showsChevron: false,
-                leading: {
-                    // `bg-info` on the web; here the same "a command is running"
-                    // blue the composer strip paints, dimmed while paused.
-                    ThreadDetailsStatusDot(color: dotColor(view), dimmed: view.paused)
-                },
                 detail: {
                     ThreadDetailsRowBadge(
                         text: ThreadDetailsBackgroundTasks.detailLabel(view, nowMilliseconds: now),
@@ -778,24 +784,13 @@ struct ThreadDetailsBackgroundTaskRow: View {
         }
     }
 
-    /// The details section only ever lists live work, but the capsule's sheet
-    /// also shows the one command whose ending it is reporting — and a red dot
-    /// is the entire reason that row is still on screen.
-    private func dotColor(_ view: ThreadDetailsBackgroundView) -> Color {
-        guard !view.live else { return T3Colors.statusRunning }
-        switch ThreadDetailsBackgroundTasks.outcome(process.command)?.tone {
-        case .danger: return T3Colors.danger
-        case .warning: return T3Colors.warning
-        case nil: return T3Colors.success
-        }
-    }
-
     private var tickInterval: TimeInterval {
         let view = ThreadDetailsBackgroundTasks.resolveView(
             process.command,
             nowMilliseconds: Int(Date().timeIntervalSince1970 * 1000)
         )
-        guard !view.paused else { return 60 }
+        // A paused or settled clock has nothing to count.
+        guard view.live, !view.paused else { return 60 }
         let elapsed = ThreadDetailsBackgroundTasks.elapsedMilliseconds(
             view,
             nowMilliseconds: Int(Date().timeIntervalSince1970 * 1000)
@@ -939,8 +934,15 @@ private struct ThreadDetailsLineageRows: View {
             detail: {
                 if let availability {
                     ThreadDetailsRowBadge(text: availability)
+                } else if row.edge.kind == .subagent {
+                    WorkRowStatusGlyph(status: WorkRowStatus(agentStatus: row.edge.status))
                 }
             }
+        )
+        .accessibilityValue(
+            availability == nil && row.edge.kind == .subagent
+                ? WorkRowStatus(agentStatus: row.edge.status)?.accessibilityLabel ?? ""
+                : ""
         )
     }
 

@@ -6,14 +6,27 @@ import { useMemo, useState } from "react";
 import { Linking, Pressable, ScrollView, type ColorValue, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
+import { cn } from "../../lib/cn";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
-import { buildThreadActivityInspector } from "../../lib/threadActivityInspector";
+import {
+  buildThreadActivityInspector,
+  type ThreadActivityInspectorBlock,
+  type ThreadActivityInspectorModel,
+} from "../../lib/threadActivityInspector";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import { InlineUnifiedDiff } from "./InlineUnifiedDiff";
 import { buildThreadActivityFileParams } from "./threadActivityFileNavigation";
+
+const SECTION_LABEL_CLASS = "font-t3-medium text-2xs text-foreground-muted";
+
+const ENDING_TONE_CLASS = {
+  neutral: "text-foreground-muted",
+  warning: "text-amber-600 dark:text-amber-400",
+  danger: "text-rose-600 dark:text-rose-400",
+} as const;
 
 export function ThreadActivityInspector(props: {
   readonly activity: ThreadFeedActivity;
@@ -41,47 +54,19 @@ export function ThreadActivityInspector(props: {
 
   return (
     <View className="gap-3">
-      <View className="flex-row flex-wrap gap-x-4 gap-y-2 rounded-lg border border-neutral-300/50 bg-black/[0.025] p-2.5 dark:border-white/[0.1] dark:bg-white/[0.025]">
-        {model.fields.map((field) => (
-          <View key={`${field.label}:${field.value}`} className="min-w-[42%] flex-1 gap-0.5">
-            <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
-              {field.label}
-            </Text>
-            <Text selectable className="text-2xs leading-4 text-foreground">
-              {field.value}
-            </Text>
-          </View>
-        ))}
-      </View>
-
       {model.blocks.map((block) => (
-        <View key={`${block.label}:${block.value}`} className="gap-1">
-          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
-            {block.label}
-          </Text>
-          <ScrollView
-            nestedScrollEnabled
-            directionalLockEnabled
-            showsVerticalScrollIndicator
-            style={{ maxHeight: 240 }}
-            contentContainerStyle={{ paddingRight: 8 }}
-          >
-            <Text
-              selectable
-              className="text-2xs leading-[17px] text-foreground-muted"
-              style={block.monospaced ? { fontFamily: "ui-monospace" } : undefined}
-            >
-              {block.value}
-            </Text>
-          </ScrollView>
-        </View>
+        <InspectorBlock key={`${block.label ?? ""}:${block.value}`} block={block} maxHeight={240} />
       ))}
+
+      {model.ending !== null ? (
+        <Text className={cn("-mt-1.5 text-2xs", ENDING_TONE_CLASS[model.ending.tone])}>
+          {model.ending.label}
+        </Text>
+      ) : null}
 
       {model.diff !== null ? (
         <View className="gap-1">
-          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
-            Patch
-          </Text>
+          <Text className={SECTION_LABEL_CLASS}>Patch</Text>
           <InlineUnifiedDiff
             cacheScope={`thread-activity:${row.sourceThreadId}:${row.sourceItemId}`}
             diff={model.diff}
@@ -92,9 +77,7 @@ export function ThreadActivityInspector(props: {
 
       {model.checkpointFiles !== null && model.checkpointFiles.length > 0 ? (
         <View className="gap-1">
-          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
-            Changed files
-          </Text>
+          <Text className={SECTION_LABEL_CLASS}>Changed files</Text>
           <View className="overflow-hidden rounded-lg border border-neutral-300/50 dark:border-white/[0.1]">
             {model.checkpointFiles.map((file, index) => (
               <View
@@ -127,9 +110,7 @@ export function ThreadActivityInspector(props: {
 
       {model.fileLinks.length > 0 ? (
         <View className="gap-1">
-          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
-            Files
-          </Text>
+          <Text className={SECTION_LABEL_CLASS}>Files</Text>
           {model.fileLinks.map((link) => {
             const relativePath =
               resolveWorkspaceRelativeFilePath(props.workspaceRoot, link.path) ??
@@ -172,9 +153,7 @@ export function ThreadActivityInspector(props: {
 
       {model.webLinks.length > 0 ? (
         <View className="gap-1">
-          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
-            Sources
-          </Text>
+          <Text className={SECTION_LABEL_CLASS}>Sources</Text>
           {model.webLinks.map((link) => (
             <Pressable
               key={link.url}
@@ -227,26 +206,95 @@ export function ThreadActivityInspector(props: {
         </Pressable>
       ) : null}
 
-      <View className="gap-1 border-t border-neutral-300/50 pt-2 dark:border-white/[0.1]">
-        <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
-          Structured details
-        </Text>
-        <ScrollView
-          nestedScrollEnabled
-          directionalLockEnabled
-          showsVerticalScrollIndicator
-          style={{ maxHeight: 280 }}
-          contentContainerStyle={{ paddingRight: 8 }}
+      <InspectorDetails iconColor={props.iconColor} model={model} />
+    </View>
+  );
+}
+
+function InspectorBlock(props: {
+  readonly block: ThreadActivityInspectorBlock;
+  readonly maxHeight: number;
+}) {
+  return (
+    <View className="gap-1">
+      {props.block.label !== null ? (
+        <Text className={SECTION_LABEL_CLASS}>{props.block.label}</Text>
+      ) : null}
+      <ScrollView
+        nestedScrollEnabled
+        directionalLockEnabled
+        showsVerticalScrollIndicator
+        style={{ maxHeight: props.maxHeight }}
+        contentContainerStyle={{ paddingRight: 8 }}
+      >
+        <Text
+          selectable
+          className="text-2xs leading-[17px] text-foreground-muted"
+          style={props.block.monospaced ? { fontFamily: "ui-monospace" } : undefined}
         >
-          <Text
-            selectable
-            className="text-2xs leading-[17px] text-foreground-muted"
-            style={{ fontFamily: "ui-monospace" }}
-          >
-            {model.structuredDetails}
-          </Text>
-        </ScrollView>
-      </View>
+          {props.block.value}
+        </Text>
+      </ScrollView>
+    </View>
+  );
+}
+
+/**
+ * Orchestration metadata (item, status, run, node, session, raw JSON). Useful
+ * when debugging, noise when reading, so it starts collapsed.
+ */
+function InspectorDetails(props: {
+  readonly model: ThreadActivityInspectorModel;
+  readonly iconColor: ColorValue;
+}) {
+  const [open, setOpen] = useState(false);
+  const { fields, detailBlocks, structuredDetails } = props.model;
+
+  return (
+    <View className="gap-2 border-t border-neutral-300/50 pt-1 dark:border-white/[0.1]">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        className="min-h-8 flex-row items-center gap-1.5"
+        hitSlop={4}
+        onPress={() => {
+          void Haptics.selectionAsync();
+          setOpen((value) => !value);
+        }}
+      >
+        <SymbolView
+          name={open ? "chevron.down" : "chevron.right"}
+          size={10}
+          tintColor={props.iconColor}
+          type="monochrome"
+        />
+        <Text className={SECTION_LABEL_CLASS}>Details</Text>
+      </Pressable>
+      {open ? (
+        <>
+          <View className="flex-row flex-wrap gap-x-4 gap-y-2">
+            {fields.map((field) => (
+              <View key={`${field.label}:${field.value}`} className="min-w-[42%] flex-1 gap-0.5">
+                <Text className="text-2xs text-foreground-muted opacity-70">{field.label}</Text>
+                <Text selectable className="text-2xs leading-4 text-foreground">
+                  {field.value}
+                </Text>
+              </View>
+            ))}
+          </View>
+          {detailBlocks.map((block) => (
+            <InspectorBlock
+              key={`${block.label ?? ""}:${block.value}`}
+              block={block}
+              maxHeight={240}
+            />
+          ))}
+          <InspectorBlock
+            block={{ label: "Raw item", value: structuredDetails, monospaced: true }}
+            maxHeight={280}
+          />
+        </>
+      ) : null}
     </View>
   );
 }

@@ -46,11 +46,12 @@ export function DetailsDivider() {
 export function DetailsRow(props: {
   readonly icon?: ComponentProps<typeof SymbolView>["name"];
   readonly iconTint?: string;
-  /** Replaces the icon puck entirely — used for status dots and agent orbs. */
+  /** Replaces the icon puck entirely — used for agent orbs. */
   readonly leading?: ReactNode;
   readonly title: string;
   readonly titleMono?: boolean;
-  readonly subtitle?: string | null;
+  /** A string gets the standard muted two-line treatment; a node draws its own lines. */
+  readonly subtitle?: ReactNode;
   readonly detail?: ReactNode;
   readonly disabled?: boolean;
   readonly showChevron?: boolean;
@@ -91,7 +92,9 @@ export function DetailsRow(props: {
         >
           {props.title}
         </Text>
-        {props.subtitle ? (
+        {typeof props.subtitle !== "string" ? (
+          props.subtitle
+        ) : props.subtitle.length > 0 ? (
           <Text className="text-xs leading-snug text-foreground-muted" numberOfLines={2}>
             {props.subtitle}
           </Text>
@@ -104,11 +107,6 @@ export function DetailsRow(props: {
       ) : null}
     </Pressable>
   );
-}
-
-/** Small coloured dot used where a row's state matters more than its icon. */
-export function DetailsStatusDot(props: { readonly className: string }) {
-  return <View className={cn("h-2 w-2 shrink-0 rounded-full", props.className)} />;
 }
 
 /**

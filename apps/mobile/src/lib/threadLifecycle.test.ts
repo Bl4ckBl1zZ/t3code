@@ -4,6 +4,8 @@ import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 import {
   isV2LifecycleTimelineItem,
   resolveLifecyclePresentation,
+  subagentOrbSeed,
+  workingSubagents,
   type LifecycleTimelineRun,
 } from "./threadLifecycle";
 
@@ -173,7 +175,7 @@ describe("resolveLifecyclePresentation", () => {
     });
   });
 
-  it("renders thread creation as a related-thread card", () => {
+  it("renders thread creation as a related-thread row with a muted note", () => {
     const presentation = resolveLifecyclePresentation(
       item({
         type: "thread_created",
@@ -188,15 +190,17 @@ describe("resolveLifecyclePresentation", () => {
     expect(presentation).toMatchObject({
       kind: "related-thread",
       title: "Investigate flaky test",
-      detail: "claude · claude-opus-5",
-      badge: "created",
+      preview: "claude · claude-opus-5",
+      detail: null,
+      meta: "Created",
+      status: null,
       threadId: "thread-child",
       orbSeed: null,
       orbState: null,
     });
   });
 
-  it("prefers streamed results for terminal subagents and progress for live ones", () => {
+  it("names a subagent, previews its task, and prefers results once it stops", () => {
     const base = {
       type: "subagent",
       subagentId: "node-1",
@@ -204,32 +208,49 @@ describe("resolveLifecyclePresentation", () => {
       driver: "claudeAgent",
       providerInstanceId: "claude",
       childThreadId: "thread-child",
-      prompt: "do the thing",
+      title: "Flaky test hunter",
+      prompt: "Find the flaky test\n\nand   fix it",
       progress: "working on step 2",
       result: "all done",
     };
     expect(resolveLifecyclePresentation(item({ ...base, status: "completed" }), [])).toMatchObject({
+      title: "Flaky test hunter",
+      preview: "Find the flaky test and fix it",
       detail: "all done",
-      badgeTone: "success",
+      meta: null,
+      status: null,
       orbSeed: "thread-child",
       orbState: "done",
     });
     expect(resolveLifecyclePresentation(item({ ...base, status: "running" }), [])).toMatchObject({
       detail: "working on step 2",
-      badgeTone: "neutral",
+      status: "running",
       orbState: "active",
     });
     expect(resolveLifecyclePresentation(item({ ...base, status: "cancelled" }), [])).toMatchObject({
       detail: "all done",
+      status: "stopped",
       orbState: "done",
     });
     expect(resolveLifecyclePresentation(item({ ...base, status: "failed" }), [])).toMatchObject({
+      status: "failed",
       orbSeed: "thread-child",
       orbState: "failed",
     });
+    // The task is already the preview, so an agent with nothing streamed yet
+    // has no second line rather than the prompt twice.
     expect(
-      resolveLifecyclePresentation(item({ ...base, childThreadId: null, status: "running" }), []),
-    ).toMatchObject({ orbSeed: "node-1" });
+      resolveLifecyclePresentation(
+        item({
+          ...base,
+          childThreadId: null,
+          status: "running",
+          progress: undefined,
+          result: null,
+        }),
+        [],
+      ),
+    ).toMatchObject({ orbSeed: "node-1", detail: null });
   });
 
   it("returns null for non-lifecycle items", () => {
@@ -260,5 +281,45 @@ describe("checkpoint rollback presentation", () => {
 
   it("is treated as a first-class lifecycle row, not work-log activity", () => {
     expect(isV2LifecycleTimelineItem(item({ type: "checkpoint_rollback" }))).toBe(true);
+  });
+});
+
+describe("workingSubagents", () => {
+  const projected = (partial: Record<string, unknown>) =>
+    ({
+      position: 0,
+      visibility: "local",
+      sourceThreadId: "thread-1",
+      sourceItemId: String(partial.id),
+      item: item({
+        type: "subagent",
+        subagentId: `node-${String(partial.id)}`,
+        childThreadId: null,
+        prompt: "Inspect the package",
+        result: null,
+        ...partial,
+      }),
+    }) as never;
+
+  it("keeps subagents still in flight, in timeline order", () => {
+    const working = workingSubagents([
+      projected({ id: "a", status: "running" }),
+      projected({ id: "b", status: "completed" }),
+      projected({ id: "c", status: "pending" }),
+      projected({ id: "d", status: "failed" }),
+      projected({ id: "e", status: "waiting" }),
+      projected({ id: "f", status: "interrupted" }),
+      projected({ id: "g", type: "command_execution", status: "running" }),
+    ]);
+    expect(working.map((subagent) => subagent.id)).toEqual(["a", "c", "e"]);
+  });
+
+  it("seeds the orb by child thread, falling back to the subagent id", () => {
+    const [withThread, withoutThread] = workingSubagents([
+      projected({ id: "a", status: "running", childThreadId: "thread-a" }),
+      projected({ id: "b", status: "running" }),
+    ]);
+    expect(withThread && subagentOrbSeed(withThread)).toBe("thread-a");
+    expect(withoutThread && subagentOrbSeed(withoutThread)).toBe("node-b");
   });
 });

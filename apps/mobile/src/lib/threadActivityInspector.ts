@@ -1,5 +1,9 @@
 import type { V2ItemSupport } from "@t3tools/client-runtime/state/item-support";
-import type { ThreadId } from "@t3tools/contracts";
+import type { OrchestrationV2CommandExecutionItem, ThreadId } from "@t3tools/contracts";
+import {
+  backgroundProcessOutcome,
+  isBackgroundProcessItem,
+} from "@t3tools/shared/backgroundProcess";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
@@ -11,9 +15,16 @@ export interface ThreadActivityInspectorField {
 }
 
 export interface ThreadActivityInspectorBlock {
-  readonly label: string;
+  /** Null when the content explains itself, like a command and its output. */
+  readonly label: string | null;
   readonly value: string;
   readonly monospaced: boolean;
+}
+
+/** How a command ended, the line under its output. */
+export interface ThreadActivityInspectorEnding {
+  readonly label: string;
+  readonly tone: "neutral" | "warning" | "danger";
 }
 
 export interface ThreadActivityFileLink {
@@ -34,9 +45,17 @@ export interface ThreadActivityCheckpointFile {
   readonly kind: string;
 }
 
+/**
+ * What a tool row opens to. It leads with what the tool did (`blocks`, then
+ * `ending`, diffs and links); the orchestration metadata a reader rarely needs
+ * (`fields`, `detailBlocks`, `structuredDetails`) sits behind a collapsed
+ * "Details" disclosure.
+ */
 export interface ThreadActivityInspectorModel {
   readonly fields: ReadonlyArray<ThreadActivityInspectorField>;
   readonly blocks: ReadonlyArray<ThreadActivityInspectorBlock>;
+  readonly ending: ThreadActivityInspectorEnding | null;
+  readonly detailBlocks: ReadonlyArray<ThreadActivityInspectorBlock>;
   readonly fileLinks: ReadonlyArray<ThreadActivityFileLink>;
   readonly webLinks: ReadonlyArray<ThreadActivityWebLink>;
   /** Unified diff for file changes, rendered by the diff viewer instead of a text block. */
@@ -73,12 +92,35 @@ function durationLabel(
 
 function addBlock(
   blocks: ThreadActivityInspectorBlock[],
-  label: string,
+  label: string | null,
   value: unknown,
   monospaced = true,
 ): void {
   if (value === undefined || value === null || value === "") return;
   blocks.push({ label, value: formatStructured(value), monospaced });
+}
+
+/**
+ * "Exited with code 0 · 2.0s", or for a background command that never got to
+ * finish, the shared ending label: that, not an exit code, is what it has.
+ */
+function commandEnding(
+  item: OrchestrationV2CommandExecutionItem,
+): ThreadActivityInspectorEnding | null {
+  const outcome = isBackgroundProcessItem(item) ? backgroundProcessOutcome(item) : null;
+  if (outcome !== null && outcome.tone !== "success") {
+    return { label: outcome.label, tone: outcome.tone === "danger" ? "danger" : "warning" };
+  }
+  if (item.exitCode === undefined) return null;
+  const duration =
+    item.completedAt === null ? null : durationLabel(item.startedAt, item.completedAt);
+  return {
+    label:
+      duration === null
+        ? `Exited with code ${item.exitCode}`
+        : `Exited with code ${item.exitCode} · ${duration}`,
+    tone: item.exitCode === 0 ? "neutral" : "danger",
+  };
 }
 
 export function buildThreadActivityInspector(
@@ -134,12 +176,14 @@ export function buildThreadActivityInspector(
   }
 
   const blocks: ThreadActivityInspectorBlock[] = [];
+  const detailBlocks: ThreadActivityInspectorBlock[] = [];
   const fileLinks: ThreadActivityFileLink[] = [];
   const webLinks: ThreadActivityWebLink[] = [];
+  let ending: ThreadActivityInspectorEnding | null = null;
 
   if (support.attempts.length > 1) {
     addBlock(
-      blocks,
+      detailBlocks,
       "Attempt history",
       support.attempts
         .map(
@@ -155,11 +199,13 @@ export function buildThreadActivityInspector(
       addBlock(blocks, "Reasoning", item.text, false);
       break;
     case "command_execution":
-      addBlock(blocks, "Command", item.input);
-      addBlock(blocks, "Output", item.output);
-      if (item.exitCode !== undefined) {
-        addBlock(blocks, "Exit", `Process exited with code ${item.exitCode}`);
-      }
+      // One block, the way a terminal shows it: the command, then its output.
+      addBlock(
+        blocks,
+        null,
+        [`$ ${item.input}`, item.output?.trimEnd()].filter(Boolean).join("\n\n"),
+      );
+      ending = commandEnding(item);
       break;
     case "file_change":
       fileLinks.push({ label: item.fileName, path: item.fileName });
@@ -292,6 +338,8 @@ export function buildThreadActivityInspector(
   return {
     fields,
     blocks,
+    ending,
+    detailBlocks,
     fileLinks,
     webLinks,
     diff:

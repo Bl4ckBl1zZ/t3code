@@ -90,14 +90,13 @@ struct ThreadBackgroundTasksCapsule: View {
             .frame(width: 17, height: 17)
     }
 
-    /// A parked monitor is grey: nothing is burning, and painting it the same
-    /// live blue as a running command would overstate what the thread is doing.
     private var tint: Color {
-        if summary.reportsOutcome, let outcome = summary.outcome {
-            return outcome.tone == .danger ? T3Colors.danger : T3Colors.warning
-        }
-        if summary.variant == .monitor { return T3Colors.textTertiary }
-        return summary.paused ? T3Colors.statusRunning.opacity(0.5) : T3Colors.statusRunning
+        ThreadBackgroundTint.color(
+            live: !summary.reportsOutcome,
+            ending: summary.outcome?.tone,
+            monitor: summary.variant == .monitor,
+            paused: summary.paused
+        )
     }
 
     /// The count and the clock are primary text; only an ending borrows the
@@ -105,6 +104,31 @@ struct ThreadBackgroundTasksCapsule: View {
     /// warning rather than a measurement.
     private var labelColor: Color {
         summary.reportsOutcome ? tint : T3Colors.textPrimary
+    }
+}
+
+/// The colour of a background glyph, shared by the capsule and the rows behind
+/// it so the two cannot disagree about what a state looks like.
+///
+/// A parked monitor is grey: nothing is burning, and painting it the same live
+/// blue as a running command would overstate what the thread is doing. Once the
+/// work stops only a bad ending keeps a colour; a clean exit goes neutral.
+enum ThreadBackgroundTint {
+    static func color(
+        live: Bool,
+        ending: ThreadBackgroundOutcomeTone?,
+        monitor: Bool,
+        paused: Bool
+    ) -> Color {
+        guard live else {
+            switch ending {
+            case .danger: return T3Colors.danger
+            case .warning: return T3Colors.warning
+            case nil: return T3Colors.textSecondary
+            }
+        }
+        if monitor { return T3Colors.textTertiary }
+        return paused ? T3Colors.statusRunning.opacity(0.5) : T3Colors.statusRunning
     }
 }
 
