@@ -107,7 +107,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --workspace-topbar-height: 52px;
   --workspace-controls-top: 0px;
   --workspace-controls-left: calc(env(safe-area-inset-left) + 0.75rem);
-  --workspace-controls-right: calc(env(safe-area-inset-right) + 0.75rem);
+  /* Inset for a control cluster anchored to a content column's right edge
+     rather than the window's. Native window controls never sit over such a
+     column, so this one stays put under WCO. */
+  --workspace-inline-controls-right: calc(env(safe-area-inset-right) + 0.75rem);
+  --workspace-controls-right: var(--workspace-inline-controls-right);
   --workspace-native-controls-inset: 0px;
   --workspace-titlebar-control-size: 1.75rem;
   --workspace-titlebar-control-gap: 0.75rem;
@@ -777,10 +781,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     outline: none;
   }
 
+  /* Anchored inside the chat column's header, which the right panel pushes
+     away from the window edge; the native window controls land on the panel,
+     so this cluster keeps the plain content inset even under WCO. */
   .workspace-titlebar-controls {
     position: absolute;
     top: var(--workspace-controls-top);
-    right: var(--workspace-controls-right);
+    right: var(--workspace-inline-controls-right);
     display: flex;
     height: var(--workspace-topbar-height);
     align-items: center;
@@ -792,7 +799,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      stay clickable in narrow header columns. */
   [data-sidebar-state="collapsed"] .workspace-titlebar-controls {
     max-width: calc(
-      100% - var(--workspace-titlebar-content-left) - var(--workspace-controls-right)
+      100% - var(--workspace-titlebar-content-left) - var(--workspace-inline-controls-right)
     );
     overflow: hidden;
   }
