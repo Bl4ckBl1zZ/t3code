@@ -1428,7 +1428,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           const item = event.turnItem;
           assert.equal(item.requestKind, "mcp-elicitation");
           assert.equal(item.prompt, "Allow ChatGPT to use Safari?");
-          assert.equal(item.title, "Safari");
+          assert.equal(item.appName, "Safari");
           const requestNode = harness.events.find(
             (event) => event.type === "node.updated" && event.node.id === item.nodeId,
           );

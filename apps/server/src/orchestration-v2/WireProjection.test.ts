@@ -60,6 +60,7 @@ describe("orchestration V2 wire projection", () => {
     parentItemId: null,
     ordinal: 1,
     status: "completed" as const,
+    title: "pnpm test",
     input: "pnpm test",
     startedAt: base.startedAt,
     completedAt: base.completedAt,

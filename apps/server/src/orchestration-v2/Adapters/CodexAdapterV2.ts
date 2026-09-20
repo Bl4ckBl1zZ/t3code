@@ -3237,6 +3237,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           readonly requestKind: ProviderRequestKind;
           readonly prompt?: string | null;
           readonly title?: string;
+          readonly appName?: string;
           readonly options?: ReadonlyArray<ProviderApprovalOption>;
         }) =>
           Effect.gen(function* () {
@@ -3323,6 +3324,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               type: "approval_request",
               requestId,
               requestKind: input.requestKind,
+              ...(input.appName === undefined ? {} : { appName: input.appName }),
               ...(input.options === undefined ? {} : { options: input.options }),
               ...(input.prompt === null || input.prompt === undefined
                 ? {}
@@ -4203,7 +4205,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeRequestId,
               requestKind: "mcp-elicitation",
               prompt: payload.message,
-              title: description.appName,
+              appName: description.appName,
               options: description.options,
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();

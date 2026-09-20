@@ -10,9 +10,12 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   approval,
   pendingCount,
 }: ComposerPendingApprovalPanelProps) {
+  // Older elicitation items carried the requesting app in the item title;
+  // newer ones name it on its own field.
+  const appName = approval.appName ?? approval.title;
   const approvalSummary =
     approval.requestKind === "mcp-elicitation"
-      ? `App access approval requested${approval.title ? ` · ${approval.title}` : ""}`
+      ? `App access approval requested${appName ? ` · ${appName}` : ""}`
       : approval.requestKind === "command"
         ? "Command approval requested"
         : approval.requestKind === "file-read"
