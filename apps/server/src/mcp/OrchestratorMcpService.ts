@@ -62,9 +62,13 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { isBuiltInProviderAdapterDriverV2 } from "../orchestration-v2/builtInProviderAdapterDrivers.ts";
-import { subagentResultForRun } from "../orchestration-v2/SubagentProjection.ts";
+import {
+  delegatedTaskProgress,
+  subagentResultForRun,
+} from "../orchestration-v2/SubagentProjection.ts";
 import {
   isActiveRun,
+  isTerminalRunStatus,
   latestActiveRun,
   latestRun,
   ThreadManagementError,
@@ -275,7 +279,7 @@ function invalidOptionSelections(
 }
 
 function taskStatusForRun(
-  run: OrchestrationV2Run | undefined,
+  run: Pick<OrchestrationV2Run, "status"> | undefined,
 ): OrchestratorMcpDelegateTaskResult["status"] {
   switch (run?.status) {
     case "queued":
@@ -316,6 +320,45 @@ function delegatedTaskRun(
   return spawnTransfer.targetRunId === null
     ? undefined
     : childProjection.runs.find((run) => run.id === spawnTransfer.targetRunId);
+}
+
+/** Runs the child started after the delegated one still owe the parent work. */
+function hasPendingChildRuns(
+  childProjection: OrchestrationV2ThreadProjection,
+  delegatedRun: OrchestrationV2Run | undefined,
+): boolean {
+  return childProjection.runs.some(
+    (run) =>
+      !isTerminalRunStatus(run.status) &&
+      (delegatedRun === undefined || run.ordinal > delegatedRun.ordinal),
+  );
+}
+
+/** The newest finished run whose result the parent may read, ignoring wakes. */
+function latestTerminalResultRun(
+  projection: OrchestrationV2ThreadProjection,
+  delegatedRun: OrchestrationV2Run | undefined,
+): OrchestrationV2Run | undefined {
+  const monitorRunIds = new Set(
+    projection.messages
+      .filter((message) => message.notification?.source.kind === "monitor")
+      .map((message) => message.runId),
+  );
+  return projection.runs
+    .filter(
+      (run) =>
+        isTerminalRunStatus(run.status) &&
+        !monitorRunIds.has(run.id) &&
+        run.status !== "rolled_back" &&
+        (run.id === delegatedRun?.id || run.startedAt !== null),
+    )
+    .toSorted((left, right) => right.ordinal - left.ordinal)[0];
+}
+
+function canExposeTaskRunResult(run: OrchestrationV2Run | undefined): run is OrchestrationV2Run {
+  return (
+    run !== undefined && run.status !== "rolled_back" && isTerminalTaskStatus(taskStatusForRun(run))
+  );
 }
 
 function isTerminalTaskStatus(
@@ -524,6 +567,7 @@ function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpTh
     model: shell.modelSelection.model,
     runtimeMode: shell.runtimeMode,
     interactionMode: shell.interactionMode,
+    linkedPullRequest: shell.linkedPullRequest ?? null,
     parentThreadId: shell.lineage.parentThreadId,
     relationshipToParent: shell.lineage.relationshipToParent,
     itemCount: shell.visibleItemCount,
@@ -548,6 +592,8 @@ function threadDetail(projection: OrchestrationV2ThreadProjection): Orchestrator
     model: projection.thread.modelSelection.model,
     runtimeMode: projection.thread.runtimeMode,
     interactionMode: projection.thread.interactionMode,
+    linkedPullRequest: projection.thread.linkedPullRequest ?? null,
+    titleRegeneration: projection.thread.titleRegeneration ?? null,
     branch: projection.thread.branch,
     worktreePath: projection.thread.worktreePath,
     parentThreadId: projection.thread.lineage.parentThreadId,
@@ -586,6 +632,8 @@ function jsonText(value: unknown): string {
 
 function turnItemText(item: OrchestrationV2TurnItem): string | null {
   switch (item.type) {
+    case "notification":
+      return [item.summary, item.detail].filter((part) => part !== undefined).join("\n");
     case "user_message":
     case "assistant_message":
     case "reasoning":
@@ -624,6 +672,7 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
       return `Rolled back ${item.rolledBackRunCount} run(s) to checkpoint ${item.checkpointId}, restoring ${item.restoredFileCount} file(s).`;
     case "run_interrupt_request":
     case "run_interrupt_result":
+    case "system_notice":
       return item.message;
     case "error":
       return item.failure.message;
@@ -864,30 +913,69 @@ const make = Effect.gen(function* () {
       }
       const childProjection = yield* loadProjection(task.childThreadId);
       const childRun = delegatedTaskRun(childProjection, task);
-      const status = taskStatusForRun(childRun);
+      const terminalRun = latestTerminalResultRun(childProjection, childRun);
+      const progress = delegatedTaskProgress(childProjection);
+      const workState = task.result !== null ? "result_available" : progress.state;
+      const status =
+        task.result !== null
+          ? taskStatusForRun(
+              task.status === "completed" ||
+                task.status === "failed" ||
+                task.status === "cancelled" ||
+                task.status === "interrupted"
+                ? { status: task.status }
+                : childRun,
+            )
+          : workState === "result_available"
+            ? taskStatusForRun(progress.resultRun ?? childRun)
+            : taskStatusForRun(childRun) === "queued"
+              ? "queued"
+              : "running";
       const derivedResult =
         task.result !== null
           ? task.result
-          : childRun !== undefined && isTerminalTaskStatus(status)
-            ? subagentResultForRun(childProjection, childRun).text
+          : progress.resultRun !== undefined && isTerminalTaskStatus(status)
+            ? subagentResultForRun(childProjection, progress.resultRun).text
             : null;
-      const resultTransfer =
-        parentProjection.contextTransfers.find(
-          (transfer) =>
-            transfer.type === "subagent_result" &&
-            transfer.sourceThreadId === task.childThreadId &&
-            transfer.targetThreadId === scope.threadId,
-        ) ?? null;
+      const resultTransfers = parentProjection.contextTransfers.filter(
+        (transfer) =>
+          transfer.type === "subagent_result" &&
+          transfer.sourceThreadId === task.childThreadId &&
+          transfer.targetThreadId === scope.threadId,
+      );
+      // A transfer recorded before runs were pinned to it belongs to the
+      // delegated run, so fall back to the unpinned one only for that run.
+      const resultTransferForRun = (run: OrchestrationV2Run | undefined) =>
+        !canExposeTaskRunResult(run)
+          ? null
+          : (resultTransfers.find((transfer) => transfer.sourcePoint.runId === run.id) ??
+            (run.id === childRun?.id
+              ? resultTransfers.find((transfer) => transfer.sourcePoint.runId === undefined)
+              : undefined) ??
+            null);
+      const resultTransfer = resultTransfers[0] ?? null;
+      const terminalStatus = terminalRun === undefined ? null : taskStatusForRun(terminalRun);
       const response = {
         taskId: task.id,
         childThreadId: task.childThreadId,
         childRunId: childRun?.id ?? null,
         childNodeId: task.id,
         status,
+        workState,
+        hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),
         providerInstanceId: ProviderInstanceId.make(task.driver),
         model: task.model,
         summary: derivedResult,
         resultContextTransferId: resultTransfer?.id ?? null,
+        latestTerminalRunId: terminalRun?.id ?? null,
+        latestTerminalStatus:
+          terminalStatus !== null && isTerminalTaskStatus(terminalStatus) ? terminalStatus : null,
+        latestTerminalSummary: canExposeTaskRunResult(terminalRun)
+          ? terminalRun.id === childRun?.id
+            ? derivedResult
+            : subagentResultForRun(childProjection, terminalRun).text
+          : null,
+        latestTerminalResultContextTransferId: resultTransferForRun(terminalRun)?.id ?? null,
         waitTimedOut,
       } satisfies OrchestratorMcpDelegateTaskResult;
       // The agent has now read the result itself, so the automatic wake for

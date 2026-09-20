@@ -5353,7 +5353,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Runtime request ${command.requestId} is ${runtimeRequest.status}.`,
         });
       }
-      const isMessageResponse = runtimeRequest.responseMode === "message";
+      // "message" reaches us as the request's responseMode and, on requests
+      // raised by newer adapters, as the response capability; both mean the
+      // answer is an ordinary message rather than a live provider reply.
+      const isMessageResponse =
+        runtimeRequest.responseMode === "message" ||
+        runtimeRequest.responseCapability.type === "message";
       const questionItem = projection.turnItems.find(
         (item) => item.type === "user_input_request" && item.requestId === command.requestId,
       );
@@ -5382,7 +5387,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: "Dismissal cannot include an answer.",
         });
       }
-      if (!isMessageResponse && runtimeRequest.responseCapability.type !== "live") {
+      if (!isMessageResponse && runtimeRequest.responseCapability.type === "not_resumable") {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,

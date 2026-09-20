@@ -273,6 +273,19 @@ export const OrchestratorMcpCreateThreadsResult = Schema.Struct({
 });
 export type OrchestratorMcpCreateThreadsResult = typeof OrchestratorMcpCreateThreadsResult.Type;
 
+// Upstream retired t3_thread_start in favour of t3_thread_launch, whose
+// workspace strategies we have not adopted yet. Keep the input until the
+// replacement tool ships so the published tool does not disappear first.
+export const OrchestratorMcpThreadStartInput = Schema.Struct({
+  prompt: OrchestratorMcpPrompt,
+  title: Schema.optional(OrchestratorMcpTitle),
+  target: Schema.optional(OrchestratorMcpTarget),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+  runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
+  interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
+});
+export type OrchestratorMcpThreadStartInput = typeof OrchestratorMcpThreadStartInput.Type;
+
 export const OrchestratorMcpThreadStatus = Schema.Union([
   Schema.Literal("idle"),
   OrchestrationV2RunStatus,

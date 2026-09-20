@@ -48,6 +48,8 @@ describe("OrchestratorMcpService", () => {
         thread: { id: childThreadId },
         runs: [{ id: childRunId, ordinal: 1, status: "completed" }],
         contextTransfers: [],
+        messages: [],
+        subagents: [],
       } as unknown as OrchestrationV2ThreadProjection;
       const dependencies = Layer.mergeAll(
         NodeServices.layer,
@@ -123,6 +125,8 @@ describe("OrchestratorMcpService", () => {
         thread: { id: childThreadId },
         runs: [],
         contextTransfers: [],
+        messages: [],
+        subagents: [],
       } as unknown as OrchestrationV2ThreadProjection;
       const dependencies = Layer.mergeAll(
         NodeServices.layer,
@@ -187,6 +191,8 @@ describe("OrchestratorMcpService", () => {
         thread: { id: childThreadId },
         runs: [{ id: childRunId, status: "running" }],
         contextTransfers: [],
+        messages: [],
+        subagents: [],
       } as unknown as OrchestrationV2ThreadProjection;
       const dependencies = Layer.mergeAll(
         NodeServices.layer,
@@ -254,6 +260,8 @@ describe("OrchestratorMcpService", () => {
         thread: { id: childThreadId },
         runs: [{ id: childRunId, status: "running" }],
         contextTransfers: [],
+        messages: [],
+        subagents: [],
       } as unknown as OrchestrationV2ThreadProjection;
       const dependencies = Layer.mergeAll(
         NodeServices.layer,

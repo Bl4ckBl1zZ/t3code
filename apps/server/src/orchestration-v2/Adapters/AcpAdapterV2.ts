@@ -495,6 +495,11 @@ export const AcpProviderCapabilitiesV2 = {
     nativeItemIds: "weak",
     nativeRequestIds: "weak",
   },
+  runtimePolicy: {
+    // T3 policy-checks permission requests and its own client fs/terminal
+    // handlers, but ACP agents execute their own tools unconfined.
+    enforcement: "client-boundary",
+  },
 } satisfies OrchestrationV2ProviderCapabilities;
 
 function negotiatedCapabilities(
