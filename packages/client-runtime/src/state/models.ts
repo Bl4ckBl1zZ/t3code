@@ -16,6 +16,8 @@ import type {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
+
 export interface EnvironmentProject extends OrchestrationProjectShell {
   readonly environmentId: EnvironmentId;
 }
@@ -48,6 +50,7 @@ export interface ThreadRunSummary {
 export interface ThreadRuntimeSummary {
   readonly status: OrchestrationV2RunStatus | "idle";
   readonly activeRunId: RunId | null;
+  readonly activityStartedAt?: string | null | undefined;
   readonly providerInstanceId: ProviderInstanceId;
   readonly providerName: string | null;
   readonly lastError: string | null;
@@ -58,7 +61,20 @@ export function threadRuntimeIsActive(runtime: ThreadRuntimeSummary | null | und
   return runtime !== null && runtime !== undefined && threadRunStatusIsActive(runtime.status);
 }
 
-export function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolean {
+/**
+ * Archiving may discard queued work, but it must not detach a provider that is
+ * preparing, starting, or running a turn.
+ */
+export function threadRuntimeCanArchive(runtime: ThreadRuntimeSummary | null | undefined): boolean {
+  if (runtime?.status === "queued") return runtime.activeRunId === null;
+  return (
+    runtime?.status !== "preparing" &&
+    runtime?.status !== "starting" &&
+    runtime?.status !== "running"
+  );
+}
+
+function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolean {
   return (
     status === "preparing" ||
     status === "queued" ||
@@ -114,6 +130,8 @@ export interface EnvironmentThreadShell {
    * thing as a background command: idle now, will speak again on its own.
    */
   readonly activeAgentCount: number;
+  /** Provider instances that have owned the root conversation, oldest first. */
+  readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
   readonly itemCount: number;
   readonly visibleItemCount: number;
   readonly createdAt: string;
@@ -231,7 +249,10 @@ export function presentThreadShell(
     environmentId,
     id: thread.id,
     projectId: thread.projectId,
-    title: thread.title,
+    title:
+      thread.lineage.relationshipToParent === "subagent"
+        ? formatSubagentDisplayTitle(thread.title)
+        : thread.title,
     providerInstanceId: thread.providerInstanceId,
     modelSelection: thread.modelSelection,
     runtimeMode: thread.runtimeMode,
@@ -270,6 +291,7 @@ export function presentThreadShell(
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     backgroundProcessCount: thread.backgroundProcessCount ?? 0,
     activeAgentCount: thread.activeAgentCount ?? 0,
+    providerInstanceHistory: thread.providerInstanceHistory ?? [],
     itemCount: thread.itemCount,
     visibleItemCount: thread.visibleItemCount,
     createdAt: iso(thread.createdAt),
@@ -302,11 +324,36 @@ export function presentThreadShell(
 
 export const scopeThreadShell = presentThreadShell;
 
-export function selectEnvironmentThreadShell(
-  snapshot: OrchestrationV2ShellSnapshot | null,
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-): EnvironmentThreadShell | null {
-  const thread = snapshot?.threads.find((candidate) => candidate.id === threadId) ?? null;
-  return thread ? presentThreadShell(environmentId, thread) : null;
+const THREAD_PROVIDER_STACK_LIMIT = 3;
+
+/**
+ * Provider instances to draw in a thread row's trailing stack, back to front:
+ * the current one is always last, earlier owners precede it oldest first.
+ * Newest history wins when the thread has been handed off more times than fit.
+ */
+export function resolveThreadProviderStack(
+  thread: Pick<EnvironmentThreadShell, "providerInstanceHistory" | "modelSelection" | "runtime">,
+): ReadonlyArray<ProviderInstanceId> {
+  const current = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
+  const previous = thread.providerInstanceHistory.filter((instanceId) => instanceId !== current);
+  return [...previous.slice(-(THREAD_PROVIDER_STACK_LIMIT - 1)), current];
+}
+
+/** Both shell and detail timers use the activity-owning run, never last activity. */
+export function resolveThreadWorkingStartedAt(input: {
+  readonly latestRun: Pick<
+    ThreadRunSummary,
+    "runId" | "startedAt" | "requestedAt" | "completedAt"
+  > | null;
+  readonly runtime: Pick<ThreadRuntimeSummary, "activeRunId" | "activityStartedAt"> | null;
+}): string | null {
+  const valid = (value: string | null | undefined) =>
+    value != null && Number.isFinite(Date.parse(value)) ? value : null;
+  if (input.runtime?.activityStartedAt !== undefined) return valid(input.runtime.activityStartedAt);
+  // Older servers can supply a timestamp only if the newest run owns the work.
+  const run = input.latestRun;
+  if (run?.completedAt === null && run.runId === input.runtime?.activeRunId) {
+    return valid(run.startedAt) ?? valid(run.requestedAt);
+  }
+  return null;
 }

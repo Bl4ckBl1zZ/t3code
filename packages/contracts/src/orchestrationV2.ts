@@ -563,6 +563,7 @@ export const OrchestrationV2ExecutionNode = Schema.Struct({
     "system",
   ]),
   status: Schema.Literals([
+    "idle",
     "pending",
     "running",
     "waiting",
@@ -744,6 +745,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
   status: Schema.Literals([
+    "idle",
     "pending",
     "running",
     "waiting",
@@ -961,10 +963,14 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
   responseMode: Schema.optional(Schema.Literals(["callback", "message"])),
   responseCapability: Schema.Union([
     Schema.Struct({ type: Schema.Literal("live"), providerSessionId: ProviderSessionId }),
+    // The provider has no open request to answer, but a plain message reaches it.
+    Schema.Struct({ type: Schema.Literal("message") }),
     Schema.Struct({ type: Schema.Literal("not_resumable"), reason: Schema.String }),
   ]),
   createdAt: Schema.DateTimeUtc,
   resolvedAt: Schema.NullOr(Schema.DateTimeUtc),
+  decision: Schema.optional(ProviderApprovalDecision),
+  answers: Schema.optional(ProviderUserInputAnswers),
 });
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
 
@@ -1111,6 +1117,7 @@ export class OrchestrationV2CheckpointUnavailableError extends Schema.TaggedErro
 }
 
 export const OrchestrationV2TurnItemStatus = Schema.Literals([
+  "idle",
   "pending",
   "running",
   "waiting",
@@ -1336,6 +1343,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     type: Schema.Literal("user_input_request"),
     requestId: RuntimeRequestId,
     questions: Schema.Array(OrchestrationV2UserInputQuestion),
+    responseMode: Schema.optional(Schema.Literal("message")),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2177,6 +2185,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     type: Schema.Literal("user_input_request"),
     requestId: RuntimeRequestId,
     questions: Schema.Array(OrchestrationV2UserInputQuestion),
+    responseMode: Schema.optional(Schema.Literal("message")),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
