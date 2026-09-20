@@ -18,6 +18,7 @@ import {
 } from "./ProviderFailure.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
 import { ProviderAdapterProtocolError, ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
+import * as EffectAcpErrors from "effect-acp/errors";
 
 it("redacts credentials and URL secrets from provider failures", () => {
   const failure = makeProviderFailure({
@@ -103,6 +104,20 @@ it("reports the innermost cause instead of the wrapper that only restates ids", 
     failure.message,
     "hermes provider protocol error: Hermes is still running an earlier prompt on this session.",
   );
+});
+
+it("reports the ACP child's stderr instead of a bare process exit", () => {
+  const failure = makeProviderFailure({
+    cause: new EffectAcpErrors.AcpProcessExitedError({
+      code: 1,
+      stderr:
+        "Invalid project config at ~/.cursor/cli.json: schema validation failed. Unrecognized key(s): 'approvalMode', 'sandbox'",
+    }),
+    class: "provider_error",
+  });
+
+  assert.include(failure.message, "cli.json");
+  assert.include(failure.message, "Unrecognized key");
 });
 
 it("reads a cause chain that lost its prototypes in transit", () => {

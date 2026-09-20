@@ -105,12 +105,16 @@ function PullRequestRowImpl({
         selected ? "bg-accent" : "hover:bg-accent/60",
       )}
     >
-      <PullRequestStateGlyph
-        state={entry.state}
-        isDraft={entry.isDraft}
-        mergeability={entry.mergeability}
-        baseBranch={entry.baseBranch}
-      />
+      {/* The row is two lines tall, so a centered glyph reads as belonging to neither. The
+          wrapper takes the offset instead of the icon, keeping the tooltip anchored to the glyph. */}
+      <span className="mt-0.75 inline-flex shrink-0 self-start">
+        <PullRequestStateGlyph
+          state={entry.state}
+          isDraft={entry.isDraft}
+          mergeability={entry.mergeability}
+          baseBranch={entry.baseBranch}
+        />
+      </span>
       <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5">
         <span className="col-start-1 row-start-1 block truncate text-sm font-medium text-foreground">
           {entry.title}

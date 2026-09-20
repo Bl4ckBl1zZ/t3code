@@ -18,6 +18,7 @@ github:bil0000
 github:binbandit
 github:Brechard
 github:btsouth
+github:cestercian
 github:chrisdeeming
 github:chuks-qua
 github:cursoragent
@@ -79,3 +80,4 @@ github:vitalyiegorov
 github:Yash-Singh1
 github:yashranaway
 github:Ymit24
+github:yordis
