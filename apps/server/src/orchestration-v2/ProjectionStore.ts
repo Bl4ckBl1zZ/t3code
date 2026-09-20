@@ -2,6 +2,7 @@ import type {
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ProviderTurn,
   OrchestrationV2Run,
   OrchestrationV2Subagent,
   OrchestrationV2ThreadShellSnapshot,
@@ -139,6 +140,19 @@ function upsertById<T extends { readonly id: string }>(items: ReadonlyArray<T>, 
   const updated = [...items];
   updated[index] = next;
   return updated;
+}
+
+/**
+ * Only the frames that carry a usage report set `tokenUsage`; the lifecycle
+ * updates around them leave it off. Absent means "unchanged", so the live
+ * context meter does not blink back to empty between reports.
+ */
+export function upsertProviderTurn(
+  turns: ReadonlyArray<OrchestrationV2ProviderTurn>,
+  next: OrchestrationV2ProviderTurn,
+): Array<OrchestrationV2ProviderTurn> {
+  const retained = next.tokenUsage ?? turns.find((turn) => turn.id === next.id)?.tokenUsage;
+  return upsertById(turns, retained === undefined ? next : { ...next, tokenUsage: retained });
 }
 
 /**
@@ -307,7 +321,7 @@ export function applyToProjection(
     case "provider-turn.updated":
       return {
         ...base,
-        providerTurns: upsertById(base.providerTurns, event.payload),
+        providerTurns: upsertProviderTurn(base.providerTurns, event.payload),
       };
     case "runtime-request.updated":
       return {
@@ -1699,7 +1713,26 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             break;
           }
           case "provider-turn.updated": {
-            const payloadJson = yield* encodeProviderTurnPayload(event.payload);
+            // Only read back the stored row when this frame reports no usage of
+            // its own; a frame that carries one has nothing to inherit.
+            const existingRows =
+              event.payload.tokenUsage === undefined
+                ? yield* sql<PayloadRow>`
+                    SELECT payload_json
+                    FROM orchestration_v2_projection_provider_turns
+                    WHERE provider_turn_id = ${event.payload.id}
+                    LIMIT 1
+                  `
+                : [];
+            const existing = existingRows[0];
+            const providerTurn =
+              existing === undefined
+                ? event.payload
+                : upsertProviderTurn(
+                    [yield* decodeProviderTurnPayload(existing.payload_json)],
+                    event.payload,
+                  )[0]!;
+            const payloadJson = yield* encodeProviderTurnPayload(providerTurn);
             const payload = parseEncodedPayload(payloadJson);
             yield* sql`
               INSERT INTO orchestration_v2_projection_provider_turns (
@@ -1717,11 +1750,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               VALUES (
                 ${event.payload.id},
                 ${event.threadId},
-                ${event.payload.providerThreadId},
-                ${event.payload.nodeId},
-                ${event.payload.runAttemptId},
-                ${event.payload.ordinal},
-                ${event.payload.status},
+                ${providerTurn.providerThreadId},
+                ${providerTurn.nodeId},
+                ${providerTurn.runAttemptId},
+                ${providerTurn.ordinal},
+                ${providerTurn.status},
                 ${nullableStringField(payload, "startedAt")},
                 ${nullableStringField(payload, "completedAt")},
                 ${payloadJson}

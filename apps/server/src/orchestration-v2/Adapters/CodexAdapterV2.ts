@@ -133,6 +133,26 @@ const CODEX_OUTPUT_DELTA_EMIT_INTERVAL_MS = 500;
 
 /** Live output retained for a running command. The tail is what gets read. */
 const CODEX_COMMAND_OUTPUT_CAP_BYTES = 64_000;
+/**
+ * Codex reports `total` as the running cost of the whole thread and `last` as
+ * the newest model request. The context meter asks how full the window is right
+ * now, so `last` is the reading it wants.
+ */
+export function codexProviderTurnTokenUsage(
+  tokenUsage: CodexSchema.V2ThreadTokenUsageUpdatedNotification["tokenUsage"],
+  updatedAt: string,
+) {
+  return {
+    usedTokens: Math.max(0, tokenUsage.last.totalTokens),
+    maxTokens: tokenUsage.modelContextWindow ?? null,
+    inputTokens: Math.max(0, tokenUsage.last.inputTokens),
+    cachedInputTokens: Math.max(0, tokenUsage.last.cachedInputTokens),
+    outputTokens: Math.max(0, tokenUsage.last.outputTokens),
+    reasoningOutputTokens: Math.max(0, tokenUsage.last.reasoningOutputTokens),
+    updatedAt,
+  };
+}
+
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
@@ -3588,6 +3608,42 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               type: "turn_item.updated",
               driver: CODEX_PROVIDER,
               turnItem: artifacts.turnItem,
+            });
+          }).pipe(Effect.orDie),
+        );
+
+        yield* client.handleServerNotification("thread/tokenUsage/updated", (payload) =>
+          Effect.gen(function* () {
+            const context = yield* awaitActiveTurn(payload.turnId);
+            if (context === undefined) {
+              return;
+            }
+            const now = yield* DateTime.now;
+            // Live context usage rides on the provider turn: the turn is the
+            // natural owner, and re-emitting it never disturbs timeline items.
+            yield* emitProviderEvent({
+              type: "provider_turn.updated",
+              driver: CODEX_PROVIDER,
+              threadId: context.projectionThreadId,
+              providerTurn: {
+                id: context.providerTurnId,
+                providerThreadId: context.providerThread.id,
+                nodeId: context.providerNodeId,
+                runAttemptId: context.subagent === null ? context.input.attemptId : null,
+                nativeTurnRef: {
+                  driver: CODEX_PROVIDER,
+                  nativeId: payload.turnId,
+                  strength: "strong",
+                },
+                ordinal: context.providerTurnOrdinal,
+                status: "running",
+                startedAt: context.startedAt,
+                completedAt: null,
+                tokenUsage: codexProviderTurnTokenUsage(
+                  payload.tokenUsage,
+                  DateTime.formatIso(now),
+                ),
+              },
             });
           }).pipe(Effect.orDie),
         );

@@ -1590,3 +1590,18 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   that makes our server advertise the version. Upstream's keyset thread paging
   (`OrchestrationV2ThreadBoundedSnapshot`, `threadHistoryHttp`) and its V1 `subagentRuntime`
   bridge remain unadopted, per the entries above.
+
+- Live context reporting from PR #2829 is carried onto the fork's meter. Codex's
+  `thread/tokenUsage/updated` and Claude's per-message usage now ride on the provider turn
+  they belong to, and the composer's ring reads that before falling back to the provider
+  thread's standing usage and then to the last compaction item, which only ever knew one
+  moment. Both the server projection and the client fold treat an absent `tokenUsage` as
+  unchanged, so the ring does not blink to empty on the lifecycle frames between reports.
+  One divergence: upstream sizes Claude's window by re-reading the user's `contextWindow`
+  option and special-casing two Opus slugs, defaulting to 200k. We already run every Claude
+  model at the largest window its catalog offers and pass the matching suffix to the CLI, so
+  the meter measures against `resolveClaudeCatalogContextWindowTokens`, which is the window
+  the CLI actually got; 200k remains the floor for a model the catalog does not know.
+  Upstream's `CodexTurnTokenUsage`/`ClaudeTurnTokenUsage` accumulators are not carried: they
+  feed a V1 usage-record surface this fork does not have. The native iOS client has a
+  `FeatureContextMeter` but is still never handed a reading, as upstream's is not either.

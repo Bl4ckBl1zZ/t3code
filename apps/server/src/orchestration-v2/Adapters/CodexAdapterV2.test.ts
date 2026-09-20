@@ -51,6 +51,7 @@ import {
   CODEX_DEFAULT_INSTANCE_ID,
   CODEX_DRIVER_KIND,
   codexBackgroundCommandDetail,
+  codexProviderTurnTokenUsage,
   codexThreadRuntimeParams,
   type CodexAgentMessageDeltaUpdate,
   type CodexAppServerClientFactoryShape,
@@ -4159,4 +4160,63 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );
+});
+
+describe("CodexAdapterV2 context usage", () => {
+  it("reports the current context rather than cumulative processed tokens", () => {
+    const usage = codexProviderTurnTokenUsage(
+      {
+        total: {
+          totalTokens: 180_000,
+          inputTokens: 160_000,
+          cachedInputTokens: 20_000,
+          outputTokens: 20_000,
+          reasoningOutputTokens: 5_000,
+        },
+        last: {
+          totalTokens: 50_000,
+          inputTokens: 45_000,
+          cachedInputTokens: 10_000,
+          outputTokens: 5_000,
+          reasoningOutputTokens: 1_000,
+        },
+        modelContextWindow: 200_000,
+      },
+      "2026-08-29T00:00:00.000Z",
+    );
+
+    assert.deepEqual(usage, {
+      usedTokens: 50_000,
+      maxTokens: 200_000,
+      inputTokens: 45_000,
+      cachedInputTokens: 10_000,
+      outputTokens: 5_000,
+      reasoningOutputTokens: 1_000,
+      updatedAt: "2026-08-29T00:00:00.000Z",
+    });
+  });
+
+  it("leaves the window unknown when Codex does not report one", () => {
+    const usage = codexProviderTurnTokenUsage(
+      {
+        total: {
+          totalTokens: 10,
+          inputTokens: 8,
+          cachedInputTokens: 0,
+          outputTokens: 2,
+          reasoningOutputTokens: 0,
+        },
+        last: {
+          totalTokens: 10,
+          inputTokens: 8,
+          cachedInputTokens: 0,
+          outputTokens: 2,
+          reasoningOutputTokens: 0,
+        },
+      },
+      "2026-08-29T00:00:00.000Z",
+    );
+
+    assert.isNull(usage.maxTokens);
+  });
 });

@@ -1457,6 +1457,24 @@ function ChatViewContent(props: ChatViewProps) {
     () => countActiveAgents(serverProjection?.subagents ?? []),
     [serverProjection],
   );
+  // The newest provider turn that carried a usage report wins; older turns keep
+  // the context meter alive in the gap between turns.
+  const activeThreadLiveTokenUsage = useMemo(() => {
+    const turns = serverProjection?.providerTurns;
+    if (!turns || turns.length === 0) return null;
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const usage = turns[index]?.tokenUsage;
+      if (usage !== undefined) return usage;
+    }
+    return null;
+  }, [serverProjection?.providerTurns]);
+  const activeThreadProviderThread = useMemo(
+    () =>
+      serverProjection?.providerThreads.find(
+        (thread) => thread.id === serverProjection.thread.activeProviderThreadId,
+      ) ?? null,
+    [serverProjection],
+  );
   const serverVisibleTurnItems = useThreadVisibleTurnItems(routeThreadDetailRef);
   const committedServerMessageIds = useMemo(
     () => deriveCommittedServerUserMessageIds(serverVisibleTurnItems),
@@ -8599,6 +8617,8 @@ function ChatViewContent(props: ChatViewProps) {
                             onThreadModelOptionsChange={onThreadModelOptionsChange}
                             threadDetailLoading={isServerThread && serverProjection === null}
                             activeThreadVisibleTurnItems={serverVisibleTurnItems}
+                            activeThreadLiveTokenUsage={activeThreadLiveTokenUsage}
+                            activeThreadProviderThread={activeThreadProviderThread}
                             resolvedTheme={resolvedTheme}
                             settings={settings}
                             keybindings={keybindings}

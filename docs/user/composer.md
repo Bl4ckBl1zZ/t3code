@@ -66,6 +66,16 @@ sent messages. They stay above the composer as it expands or the keyboard opens.
 On web and desktop, changing the project from a new thread keeps the current environment when that
 project exists there. If it does not, T3 Code selects another environment that has the project.
 
+## Context meter
+
+On web and desktop, the ring beside the send controls shows how full the agent's context window is.
+Claude and Codex report their usage as they work, so the ring fills during a turn rather than only
+after a compaction, and the reading survives between turns. Hover it for the percentage, the token
+count against the window, and whether the agent compacts on its own.
+
+Providers that report no usage leave the ring showing only what the last compaction recorded, with
+no percentage -- there is no window size to measure against.
+
 ## Notices above the composer
 
 On web and desktop, loading and syncing statuses fill the available banner width beside the

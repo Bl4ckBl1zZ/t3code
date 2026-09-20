@@ -1642,4 +1642,93 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       assert.equal(threadShell?.titleOrigin, "user");
     }),
   );
+
+  it.effect("keeps the last reported token usage when a later provider turn omits it", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-token-usage");
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const providerThreadId = ProviderThreadId.make("provider-thread:projection-token-usage");
+      const rootNodeId = NodeId.make("node:projection-token-usage");
+      const providerTurnId = ProviderTurnId.make("provider-turn:projection-token-usage");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-token-usage:thread-created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:projection-token-usage"),
+          title: "Projection token usage",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: providerThreadId,
+          lineage: {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+
+      const providerTurn = {
+        id: providerTurnId,
+        providerThreadId,
+        nodeId: rootNodeId,
+        runAttemptId: null,
+        nativeTurnRef: null,
+        ordinal: 1,
+        startedAt: now,
+      } as const;
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-token-usage:reported"),
+        type: "provider-turn.updated",
+        threadId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: now,
+        payload: {
+          ...providerTurn,
+          status: "running",
+          completedAt: null,
+          tokenUsage: {
+            usedTokens: 50_000,
+            maxTokens: 200_000,
+            updatedAt: "2026-08-29T00:00:00.000Z",
+          },
+        },
+      });
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-token-usage:completed"),
+        type: "provider-turn.updated",
+        threadId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: now,
+        payload: { ...providerTurn, status: "completed", completedAt: now },
+      });
+
+      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const turn = projection.providerTurns.find((candidate) => candidate.id === providerTurnId);
+      assert.equal(turn?.status, "completed");
+      assert.equal(turn?.tokenUsage?.usedTokens, 50_000);
+    }),
+  );
 });

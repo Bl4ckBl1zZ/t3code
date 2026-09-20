@@ -463,10 +463,27 @@ type ProviderTurn = {
   status: "pending" | "running" | "completed" | "interrupted" | "failed" | "cancelled";
   startedAt: string | null;
   completedAt: string | null;
+  tokenUsage?: {
+    usedTokens: number;
+    maxTokens?: number | null;
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    reasoningOutputTokens?: number;
+    updatedAt: string;
+  };
 };
 ```
 
 Codex has strong native turn ids. Weaker providers may only have ordinals. Both map into `ProviderTurnId`.
+
+`tokenUsage` is how full the context window is right now, as the provider last reported it: the size
+of its newest model request, not the thread's cumulative spend. The turn owns it because re-emitting
+a turn is cheap and disturbs nothing in the timeline. Only the frames that carry a report set the
+field, so **absent means unchanged, never zero** — both the server projection and the client fold
+carry the previous reading forward. Providers that report standing usage per thread instead write
+`ProviderThread.contextUsage`; the context meter prefers the live turn reading, then the provider
+thread, then the last `compaction` item's `afterTokenCount`.
 
 ## RuntimeRequest
 
