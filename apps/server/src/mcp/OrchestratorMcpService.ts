@@ -20,6 +20,8 @@ import {
   type OrchestratorMcpDeleteScheduledTaskInput,
   type OrchestratorMcpDeleteScheduledTaskResult,
   type OrchestratorMcpListScheduledTasksResult,
+  type OrchestratorMcpThreadLaunchInput,
+  type OrchestratorMcpThreadLaunchResult,
   type OrchestratorMcpRuntimeMode,
   type OrchestratorMcpScheduledTask,
   type OrchestratorMcpScheduleTaskInput,
@@ -66,6 +68,7 @@ import {
   delegatedTaskProgress,
   subagentResultForRun,
 } from "../orchestration-v2/SubagentProjection.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import {
   isActiveRun,
   isTerminalRunStatus,
@@ -115,6 +118,10 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpCreateThreadsInput,
   ) => Effect.Effect<OrchestratorMcpCreateThreadsResult, OrchestratorMcpFailure>;
+  readonly launchThread: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpThreadLaunchInput,
+  ) => Effect.Effect<OrchestratorMcpThreadLaunchResult, OrchestratorMcpFailure>;
   readonly scheduleTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpScheduleTaskInput,
@@ -729,6 +736,7 @@ function timelineItem(input: {
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const threadManagement = yield* ThreadManagementService;
+  const threadLaunch = yield* ThreadLaunchService;
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
 
@@ -1425,6 +1433,72 @@ const make = Effect.gen(function* () {
           status: "cancel_requested",
         };
       }),
+    launchThread: (scope, input) =>
+      Effect.gen(function* () {
+        yield* requireCapability(scope);
+        const parent = yield* loadProjection(scope.threadId);
+        // Binding a workspace and provisioning a worktree is real filesystem
+        // work; a restricted or planning caller must not reach it.
+        if (
+          parent.thread.runtimeMode !== "full-access" ||
+          parent.thread.interactionMode !== "default"
+        ) {
+          return yield* failure(
+            "capability_denied",
+            "Launching a thread requires a full-access, default-mode calling thread.",
+          );
+        }
+        const providers = yield* loadProviders;
+        const target = yield* resolveTarget({ parent, target: input.target, providers });
+        const runtimeMode = yield* resolveRuntimeMode(parent.thread.runtimeMode, input.runtimeMode);
+        const interactionMode = yield* resolveInteractionMode(
+          parent.thread.interactionMode,
+          input.interactionMode,
+        );
+        // Deliberately not keyed off a client request id: preparing a worktree
+        // is not safely repeatable, so every call is its own launch. Callers
+        // recover a lost response through t3_thread_list, not a retry.
+        const commandId = CommandId.make(
+          `mcp-launch:${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`,
+        );
+        const threadId = ThreadId.make(commandId);
+        const messageId = MessageId.make(commandId);
+        const result = yield* threadLaunch
+          .launch({
+            commandId,
+            threadId,
+            projectId: input.projectId ?? parent.thread.projectId,
+            title: input.title,
+            modelSelection: target.modelSelection,
+            runtimeMode,
+            interactionMode,
+            workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
+            ...(input.message === undefined
+              ? {}
+              : { initialMessage: { messageId, text: input.message, attachments: [] } }),
+            createdBy: "agent",
+            creationSource: "mcp",
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              failure("orchestration_error", `Unable to launch thread: ${errorMessage(error)}`),
+            ),
+          );
+        const thread = result.projection.thread;
+        const run = result.projection.runs.find(
+          (candidate) => candidate.userMessageId === messageId,
+        );
+        return {
+          threadId: thread.id,
+          projectId: thread.projectId,
+          providerInstanceId: thread.modelSelection.instanceId,
+          model: thread.modelSelection.model,
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          runId: run?.id ?? null,
+          status: run?.status ?? null,
+        };
+      }),
     createThreads: (scope, input) =>
       Effect.gen(function* () {
         yield* requireCapability(scope);
@@ -1775,5 +1849,9 @@ const make = Effect.gen(function* () {
 export const layer: Layer.Layer<
   OrchestratorMcpService,
   never,
-  Crypto.Crypto | ThreadManagementService | ProviderRegistry | ScheduledTaskService
+  | Crypto.Crypto
+  | ThreadManagementService
+  | ThreadLaunchService
+  | ProviderRegistry
+  | ScheduledTaskService
 > = Layer.effect(OrchestratorMcpService, make);

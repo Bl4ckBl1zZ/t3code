@@ -1571,8 +1571,11 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   response capability and the runtime-policy capability all land in `@t3tools/contracts`, so a
   fork client and an upstream-shaped server interoperate rather than failing to decode. Where
   an item or status has no producer here yet, both clients render it or degrade, never crash.
-  Deliberate divergences: `t3_thread_start` stays until upstream's `t3_thread_launch` and its
-  workspace strategies land, so the published tool does not disappear before its replacement;
+  Deliberate divergences: `t3_thread_launch` replaces `t3_thread_start`, carrying upstream's
+  workspace strategies onto our `ThreadLaunchService`, but selecting its provider through the
+  fork's `target` idiom rather than a raw `modelSelection`, and without upstream's attachment
+  parameter, which needs MCP attachment claims we do not have. It stays in the orchestrator
+  toolkit instead of upstream's new project toolkit, which is unported.
   `formatElapsed` stays for the native mobile feed; the richer fork `t3McpToolPresentation`
   and the fork's `threadPullRequestsV2` capability win over upstream's narrower versions;
   `delegatedTaskProgress` omits upstream's provider-thread background-task clause, which has

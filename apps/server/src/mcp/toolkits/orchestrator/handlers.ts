@@ -59,25 +59,11 @@ const handlers = {
       const service = yield* OrchestratorMcpService;
       return yield* service.createThreads(scope, input);
     }),
-  t3_thread_start: (input) =>
+  t3_thread_launch: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* OrchestratorMcpService;
-      const result = yield* service.createThreads(scope, {
-        ...(input.clientRequestId === undefined ? {} : { clientRequestId: input.clientRequestId }),
-        threads: [
-          {
-            prompt: input.prompt,
-            ...(input.title === undefined ? {} : { title: input.title }),
-            ...(input.target === undefined ? {} : { target: input.target }),
-            ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
-            ...(input.interactionMode === undefined
-              ? {}
-              : { interactionMode: input.interactionMode }),
-          },
-        ],
-      });
-      return result.threads[0]!;
+      return yield* service.launchThread(scope, input);
     }),
   t3_thread_list: (input) =>
     Effect.gen(function* () {

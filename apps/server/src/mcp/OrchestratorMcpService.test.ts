@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
   NodeId,
+  ProjectId,
   ProviderInstanceId,
   RunId,
   ThreadId,
@@ -12,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
@@ -70,6 +72,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {
@@ -139,6 +142,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {
@@ -205,6 +209,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {
@@ -278,6 +283,7 @@ describe("OrchestratorMcpService", () => {
             ),
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ThreadLaunchService)({}),
         Layer.mock(ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {
@@ -303,6 +309,166 @@ describe("OrchestratorMcpService", () => {
           ["run.interrupt", "delegated_task.completion-delivery.dispose"],
         );
       }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+    }),
+  );
+  const launchScope = (threadId: ThreadId): McpInvocationScope => ({
+    credentialId: "credential:mcp-test",
+    audience: "t3-code",
+    environmentId: EnvironmentId.make("environment:mcp-launch"),
+    threadId,
+    providerSessionId: "provider-session:mcp-launch",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    capabilities: new Set(["orchestration"]),
+    issuedAt: 1,
+  });
+
+  const launchParent = (overrides: Record<string, unknown> = {}) =>
+    ({
+      thread: {
+        id: ThreadId.make("thread:mcp-launch-parent"),
+        projectId: ProjectId.make("project:mcp-launch"),
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-terra" },
+        branch: "main",
+        worktreePath: "/tmp/parent-worktree",
+        ...overrides,
+      },
+      runs: [],
+      contextTransfers: [],
+      messages: [],
+      subagents: [],
+    }) as unknown as OrchestrationV2ThreadProjection;
+
+  const launchDependencies = (
+    parentProjection: OrchestrationV2ThreadProjection,
+    launches: Array<Record<string, unknown>>,
+  ) =>
+    Layer.mergeAll(
+      NodeServices.layer,
+      Layer.mock(ThreadManagementService)({
+        getThreadProjection: () => Effect.succeed(parentProjection),
+      }),
+      Layer.mock(ProviderRegistry)({
+        getProviders: Effect.succeed([
+          {
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: "codex",
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            models: [{ id: "gpt-5.6-terra" }],
+          },
+        ] as never),
+      }),
+      Layer.mock(ThreadLaunchService)({
+        launch: (input) =>
+          Effect.sync(() => {
+            launches.push(input as unknown as Record<string, unknown>);
+          }).pipe(
+            Effect.as({
+              threadId: input.threadId!,
+              resumed: false,
+              projection: {
+                thread: {
+                  id: input.threadId,
+                  projectId: input.projectId,
+                  modelSelection: input.modelSelection,
+                  branch: "feature/child",
+                  worktreePath: "/tmp/child-worktree",
+                },
+                runs: [
+                  {
+                    id: RunId.make("run:mcp-launch"),
+                    status: "queued",
+                    userMessageId: input.initialMessage?.messageId,
+                  },
+                ],
+              },
+            } as never),
+          ),
+      }),
+      Layer.mock(ScheduledTaskService)({}),
+    );
+
+  it.effect("launches a thread into its own worktree and reports where it landed", () =>
+    Effect.gen(function* () {
+      const parentProjection = launchParent();
+      const launches: Array<Record<string, unknown>> = [];
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const result = yield* service.launchThread(launchScope(parentProjection.thread.id), {
+          title: "Stack part two",
+          workspaceStrategy: { type: "worktree", baseRef: "feature/part-one" },
+          message: "Add the second migration.",
+        });
+
+        assert.equal(launches.length, 1);
+        assert.deepEqual(launches[0]?.workspaceStrategy, {
+          type: "worktree",
+          baseRef: "feature/part-one",
+        });
+        // The thread inherits the caller's project and modes without being told.
+        assert.equal(launches[0]?.projectId, parentProjection.thread.projectId);
+        assert.equal(launches[0]?.runtimeMode, "full-access");
+        assert.equal(launches[0]?.createdBy, "agent");
+        assert.equal(result.branch, "feature/child");
+        assert.equal(result.worktreePath, "/tmp/child-worktree");
+        assert.equal(result.status, "queued");
+      }).pipe(
+        Effect.provide(
+          OrchestratorMcpService.layer.pipe(
+            Layer.provide(launchDependencies(parentProjection, launches)),
+          ),
+        ),
+      );
+    }),
+  );
+
+  it.effect("binds the project root when no workspace strategy is given", () =>
+    Effect.gen(function* () {
+      const parentProjection = launchParent();
+      const launches: Array<Record<string, unknown>> = [];
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        // Not the caller's worktree: an unbound launch belongs to the project.
+        yield* service.launchThread(launchScope(parentProjection.thread.id), { title: "Root" });
+        assert.deepEqual(launches[0]?.workspaceStrategy, { type: "root" });
+        assert.isUndefined(launches[0]?.initialMessage);
+      }).pipe(
+        Effect.provide(
+          OrchestratorMcpService.layer.pipe(
+            Layer.provide(launchDependencies(parentProjection, launches)),
+          ),
+        ),
+      );
+    }),
+  );
+
+  it.effect("refuses to launch from a restricted or planning caller", () =>
+    Effect.gen(function* () {
+      for (const overrides of [{ runtimeMode: "approval-required" }, { interactionMode: "plan" }]) {
+        const parentProjection = launchParent(overrides);
+        const launches: Array<Record<string, unknown>> = [];
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const failure = yield* service
+            .launchThread(launchScope(parentProjection.thread.id), { title: "Denied" })
+            .pipe(Effect.flip);
+          assert.equal(failure.code, "capability_denied");
+          assert.equal(launches.length, 0);
+        }).pipe(
+          Effect.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(launchDependencies(parentProjection, launches)),
+            ),
+          ),
+        );
+      }
     }),
   );
 });

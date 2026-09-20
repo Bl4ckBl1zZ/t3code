@@ -495,7 +495,7 @@ public enum T3McpToolPresentation {
         "update_scheduled_task": ("Update", "Updating", "Updated", "a scheduled task"),
         "delete_scheduled_task": ("Delete", "Deleting", "Deleted", "a scheduled task"),
         "create_threads": ("Create", "Creating", "Created", "T3 threads"),
-        "t3_thread_start": ("Start", "Starting", "Started", "a T3 thread"),
+        "t3_thread_launch": ("Launch", "Launching", "Launched", "a project thread"),
         "t3_thread_list": ("List", "Listing", "Listed", "T3 threads"),
         "t3_thread_read": ("Read", "Reading", "Read", "a T3 thread"),
         "t3_thread_send": ("Send", "Sending", "Sent", "to a T3 thread"),

@@ -244,12 +244,24 @@ inherit the parent's project, branch, and worktree path, but they have no
 sub-agent lineage. Entries with a prompt immediately dispatch a run; entries
 without a prompt remain idle.
 
-### `t3_thread_start`
+### `t3_thread_launch`
 
-Creates one ordinary top-level thread and immediately dispatches its first
-prompt. It is the single-thread convenience form of `create_threads` and
-returns the created thread and run IDs. Use `clientRequestId` when a caller may
-retry the request.
+Creates one ordinary top-level thread whose workspace is bound before its agent
+starts. `workspaceStrategy` chooses that binding: `worktree` provisions and
+binds a new checkout from `baseRef`, `existing_worktree` binds a path that is
+already there, and the default `root` uses the project checkout — not the
+caller's worktree. Project, provider, model and modes inherit from the caller
+unless overridden; `message` dispatches the first run after preparation, and
+omitting it leaves the thread idle. Returns the thread's own branch and
+worktree path alongside its run.
+
+Unlike every other mutation here it takes no `clientRequestId` and derives no
+stable ids: provisioning a worktree is not safely repeatable, so each call is
+its own launch. A caller that loses the response inspects `t3_thread_list`
+rather than retrying. It requires a full-access, default-mode calling thread,
+because it does real filesystem work on the caller's behalf.
+
+Use `create_threads` instead for a batch that shares the caller's checkout.
 
 ### `t3_thread_list`
 

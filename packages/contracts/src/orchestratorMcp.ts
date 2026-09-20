@@ -27,6 +27,7 @@ import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
   OrchestrationV2RunStatus,
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
   OrchestrationV2TurnItemStatus,
 } from "./orchestrationV2.ts";
 import {
@@ -273,18 +274,40 @@ export const OrchestratorMcpCreateThreadsResult = Schema.Struct({
 });
 export type OrchestratorMcpCreateThreadsResult = typeof OrchestratorMcpCreateThreadsResult.Type;
 
-// Upstream retired t3_thread_start in favour of t3_thread_launch, whose
-// workspace strategies we have not adopted yet. Keep the input until the
-// replacement tool ships so the published tool does not disappear first.
-export const OrchestratorMcpThreadStartInput = Schema.Struct({
-  prompt: OrchestratorMcpPrompt,
-  title: Schema.optional(OrchestratorMcpTitle),
+export const OrchestratorMcpThreadLaunchInput = Schema.Struct({
+  projectId: Schema.optional(
+    ProjectId.annotate({ description: "Defaults to the calling thread's project." }),
+  ),
+  title: OrchestratorMcpTitle,
   target: Schema.optional(OrchestratorMcpTarget),
-  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
+  workspaceStrategy: Schema.optional(
+    OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
+      description:
+        "Where this thread runs, bound before its agent starts: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath; root uses the project checkout. Omitted means root, NOT the caller's worktree. For a PR stack, use the parent branch as baseRef with startFromOrigin false. Uncommitted changes are not copied.",
+    }),
+  ),
+  message: Schema.optional(
+    OrchestratorMcpPrompt.annotate({
+      description:
+        "First task prompt, delivered after workspace preparation. Omit it to create an idle thread.",
+    }),
+  ),
 });
-export type OrchestratorMcpThreadStartInput = typeof OrchestratorMcpThreadStartInput.Type;
+export type OrchestratorMcpThreadLaunchInput = typeof OrchestratorMcpThreadLaunchInput.Type;
+
+export const OrchestratorMcpThreadLaunchResult = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  providerInstanceId: ProviderInstanceId,
+  model: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  worktreePath: Schema.NullOr(Schema.String),
+  runId: Schema.NullOr(RunId),
+  status: Schema.NullOr(OrchestrationV2RunStatus),
+});
+export type OrchestratorMcpThreadLaunchResult = typeof OrchestratorMcpThreadLaunchResult.Type;
 
 export const OrchestratorMcpThreadStatus = Schema.Union([
   Schema.Literal("idle"),

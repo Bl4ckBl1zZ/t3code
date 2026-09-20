@@ -23,7 +23,8 @@ import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendInput,
   OrchestratorMcpThreadSendResult,
-  OrchestratorMcpThreadStartInput,
+  OrchestratorMcpThreadLaunchInput,
+  OrchestratorMcpThreadLaunchResult,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
 } from "@t3tools/contracts";
@@ -153,16 +154,16 @@ export const CreateThreadsTool = Tool.make("create_threads", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
-export const ThreadStartTool = Tool.make("t3_thread_start", {
+export const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   description:
-    "Create an ordinary TOP-LEVEL T3 conversation and immediately start its first turn. This is not a child agent/subagent; use delegate_task for delegated work. The new thread inherits this thread's project, checkout, provider, model, and runtime settings unless overridden. Use t3_thread_wait and t3_thread_read to collect its result.",
-  parameters: OrchestratorMcpThreadStartInput,
-  success: OrchestratorMcpCreatedThread,
+    'Create an ordinary TOP-LEVEL T3 thread with an explicit workspace binding, established before its agent starts. Use this when the user asks for independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child agents/subagents, and create_threads for a batch that shares this checkout. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree from local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to reuse a checkout; set startFromOrigin true to base it on upstream commits. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Do not ask the agent to create its own worktree in its prompt: that leaves the thread bound elsewhere. Put the first task in message, or omit it to create an idle thread. Omit projectId, target and the modes to inherit them. Each call is its own launch with no retry key, because preparing a worktree is not safely repeatable: keep the returned threadId, follow preparation with t3_thread_read and t3_thread_wait, and inspect t3_thread_list after an error or a lost response instead of calling again. Requires a full-access, default-mode calling thread.',
+  parameters: OrchestratorMcpThreadLaunchInput,
+  success: OrchestratorMcpThreadLaunchResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies,
 })
-  .annotate(Tool.Title, "Start a T3 thread")
+  .annotate(Tool.Title, "Launch a T3 thread")
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
@@ -244,7 +245,7 @@ export const OrchestratorToolkit = Toolkit.make(
   UpdateScheduledTaskTool,
   DeleteScheduledTaskTool,
   CreateThreadsTool,
-  ThreadStartTool,
+  ThreadLaunchTool,
   ThreadListTool,
   ThreadReadTool,
   ThreadSendTool,

@@ -60,6 +60,7 @@ import { checkpointWorkspace } from "../orchestration-v2/testkit/ReplayFixtureWo
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -514,6 +515,9 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provideMerge(orchestrationLayer),
             Layer.provide(providerRegistryLayer),
             Layer.provide(scheduledTaskStubLayer),
+            // t3_thread_launch provisions real workspaces; this test covers the
+            // tools that share this thread's checkout instead.
+            Layer.provide(Layer.mock(ThreadLaunchService)({})),
             Layer.provide(NodeServices.layer),
           );
 
@@ -1230,14 +1234,13 @@ describe("orchestrator MCP toolkit", () => {
               (yield* orchestrator.getThreadProjection(emptyThread.threadId)).runs,
             ).toHaveLength(1);
 
-            const activeThreadCall = yield* invoke("t3_thread_start", {
-              prompt: cancellationPrompt,
-              title: "Managed active thread",
+            const activeThreadCall = yield* invoke("create_threads", {
+              threads: [{ prompt: cancellationPrompt, title: "Managed active thread" }],
               clientRequestId: "managed-active-thread-1",
             });
-            const activeThread = yield* decodeCreatedThread(
+            const activeThread = (yield* decodeCreateThreadsResult(
               activeThreadCall.structuredContent,
-            ).pipe(Effect.orDie);
+            ).pipe(Effect.orDie)).threads[0]!;
             const activeThreadItem = (yield* orchestrator.getThreadProjection(
               parentThreadId,
             )).visibleTurnItems
