@@ -152,6 +152,9 @@ struct FeatureComposerUserInputPanel: View {
     let input: FeatureUserInput
     let isResponding: Bool
     let onSubmit: ([String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void
+    /// Hands back text the reader typed into "Other…" that selecting an option
+    /// has just replaced, so the composer can park it in the thread draft.
+    let onDisplaceCustomAnswer: (String) -> Void
 
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -471,6 +474,20 @@ struct FeatureComposerUserInputPanel: View {
     }
 
     private func select(_ label: String, for question: FeatureInputQuestion) {
+        // Read before toggling. A single-select option replaces the whole
+        // answer, and the advance below moves the panel off this question, so
+        // anything typed into "Other…" would have nowhere left to live. A
+        // multi-select keeps its custom text in the same selection array, so
+        // displacing it there would only duplicate it into the draft.
+        if !question.allowsMultiple {
+            let displaced = FeatureComposerCustomAnswer.text(
+                in: answers[question.id],
+                for: question
+            )
+            if !displaced.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                onDisplaceCustomAnswer(displaced)
+            }
+        }
         answers[question.id] = (answers[question.id] ?? .selections([]))
             .togglingOption(label, allowsMultiple: question.allowsMultiple)
         if question.allowsMultiple {
@@ -531,6 +548,18 @@ enum FeatureComposerCustomAnswer {
         case nil:
             return ""
         }
+    }
+
+    /// Moves an answer the reader typed but did not send into the thread draft,
+    /// after whatever was already waiting there. Selecting an option outranks a
+    /// custom answer, and their own words are not ours to drop on that tap.
+    static func carryingDisplacedAnswer(_ answer: String, into draft: String) -> String {
+        let displaced = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !displaced.isEmpty else { return draft }
+        var trimmedDraft = draft
+        while let last = trimmedDraft.last, last.isWhitespace { trimmedDraft.removeLast() }
+        guard !trimmedDraft.isEmpty else { return displaced }
+        return "\(trimmedDraft)\n\n\(displaced)"
     }
 
     static func replacingText(

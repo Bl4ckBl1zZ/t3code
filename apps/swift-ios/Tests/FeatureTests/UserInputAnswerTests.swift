@@ -91,4 +91,79 @@ struct UserInputAnswerTests {
             ) == .selections(["Server"])
         )
     }
+
+    @Test
+    func testDisplacedAnswerJoinsTheDraftWithoutLosingEitherSide() {
+        #expect(
+            FeatureComposerCustomAnswer.carryingDisplacedAnswer(
+                "second half",
+                into: "first half\n"
+            ) == "first half\n\nsecond half"
+        )
+        #expect(
+            FeatureComposerCustomAnswer.carryingDisplacedAnswer(
+                "also rename the flag ",
+                into: ""
+            ) == "also rename the flag"
+        )
+    }
+
+    @Test
+    func testDisplacedAnswerLeavesTheDraftAloneWhenNothingWasTyped() {
+        #expect(FeatureComposerCustomAnswer.carryingDisplacedAnswer("", into: "draft") == "draft")
+        #expect(FeatureComposerCustomAnswer.carryingDisplacedAnswer("   ", into: "draft") == "draft")
+        #expect(FeatureComposerCustomAnswer.carryingDisplacedAnswer("  ", into: "  ") == "  ")
+    }
+
+    @Test
+    func testSingleSelectOptionDisplacesTypedTextButAnOptionDisplacesNothing() {
+        let question = FeatureInputQuestion(
+            id: "fix",
+            header: "Fix",
+            question: "How should this be fixed?",
+            options: [
+                .init(label: "Rename it", detail: "Rename the flag"),
+                .init(label: "Leave it", detail: "No change"),
+            ]
+        )
+        let typed = FeatureComposerCustomAnswer.replacingText(
+            in: nil,
+            with: "also rename the flag",
+            for: question
+        )
+
+        // What `select` hands to the composer before `togglingOption` drops it.
+        #expect(
+            FeatureComposerCustomAnswer.text(in: typed, for: question) == "also rename the flag"
+        )
+        #expect(typed.togglingOption("Rename it", allowsMultiple: false) == .text("Rename it"))
+
+        // Swapping one option for another displaces nothing: the reader never
+        // typed the outgoing value, so there is no prose to rescue.
+        let selected = FeatureInputAnswer.text("Rename it")
+        #expect(FeatureComposerCustomAnswer.text(in: selected, for: question) == "")
+    }
+
+    @Test
+    func testMultiSelectOptionKeepsCustomTextInPlaceSoNothingIsDisplaced() {
+        let question = FeatureInputQuestion(
+            id: "surfaces",
+            header: "Surfaces",
+            question: "Where should this ship?",
+            options: [
+                .init(label: "Server", detail: "Backend"),
+                .init(label: "Web", detail: "Browser"),
+            ],
+            allowsMultiple: true
+        )
+        let withCustom = FeatureComposerCustomAnswer.replacingText(
+            in: .selections(["Server"]),
+            with: "CLI",
+            for: question
+        )
+        let afterToggle = withCustom.togglingOption("Web", allowsMultiple: true)
+
+        #expect(afterToggle == .selections(["Server", "CLI", "Web"]))
+        #expect(FeatureComposerCustomAnswer.text(in: afterToggle, for: question) == "CLI")
+    }
 }

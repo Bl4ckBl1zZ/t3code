@@ -372,6 +372,15 @@ struct FeatureComposerView: View {
                     isResponding: isResolvingRequest,
                     onSubmit: { answers, files, dismiss in
                         onUserInputSubmit(input.id, answers, files, dismiss)
+                    },
+                    // Through `text`, not `storedText`: the displaced answer is
+                    // the reader's prose and belongs beside the draft's own, not
+                    // after its citation and review-comment blocks.
+                    onDisplaceCustomAnswer: { displaced in
+                        text = FeatureComposerCustomAnswer.carryingDisplacedAnswer(
+                            displaced,
+                            into: text
+                        )
                     }
                 )
             } else {
