@@ -1,8 +1,10 @@
-import type {
-  OrchestrationV2DomainEvent,
-  OrchestrationV2ThreadProjection,
-  OrchestrationV2TurnItem,
+import {
+  orchestrationV2CommandExecutionIsLiveInBackground,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
+import { backgroundProcessTail } from "@t3tools/shared/backgroundProcess";
 import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
 
 const MAX_DETAIL_STRING_BYTES = 32_768;
@@ -52,14 +54,24 @@ function summarizeDynamicValue(value: unknown): unknown {
 export function projectTurnItemForWire(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   switch (item.type) {
     case "command_execution": {
-      // Clients read failure off the output preview, which truncation can cut
-      // the evidence out of. Decide it here, from everything the run produced.
+      const { output, ...projected } = item;
+      // Clients used to read failure off the output preview. Keep the outcome
+      // without shipping or retaining the output that proved it.
       const failed =
         item.outputIndicatesFailure === true ||
         (item.exitCode !== undefined && item.exitCode !== 0) ||
-        (item.output !== undefined && toolOutputIndicatesFailure(item.output));
-      const projected = { ...item, output: truncateDetail(item.output) };
-      return failed ? { ...projected, outputIndicatesFailure: true } : projected;
+        (output !== undefined && toolOutputIndicatesFailure(output));
+      // The one exception: a background command that is still running renders
+      // its last printed line above the composer and in thread details. That
+      // line is the whole payload of that view, so it is all we send.
+      const tail = orchestrationV2CommandExecutionIsLiveInBackground(item)
+        ? backgroundProcessTail(output)
+        : null;
+      return {
+        ...projected,
+        ...(tail === null ? {} : { output: tail }),
+        ...(failed ? { outputIndicatesFailure: true } : {}),
+      };
     }
     case "file_change":
       return {

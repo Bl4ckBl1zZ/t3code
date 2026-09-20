@@ -658,10 +658,12 @@ type CommandExecution = {
   type: "command_execution";
   input: string;
   status: TurnItemStatus;
+  // Persisted in full; the wire projection sends this only as the last printed
+  // line of a background command that is still running, and drops it otherwise.
   output?: string;
   exitCode?: number;
-  // Decided server-side, from the whole output before transport truncation.
-  // A provider can close a command as completed while its output says otherwise.
+  // Decided server-side, from the whole output, before it is dropped. A
+  // provider can close a command as completed while its output says otherwise.
   outputIndicatesFailure?: boolean;
 };
 

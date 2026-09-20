@@ -67,14 +67,13 @@ describe("orchestration V2 wire projection", () => {
     updatedAt: base.updatedAt,
   };
 
-  it("reports a command failure that truncation would have cut the evidence out of", () => {
+  it("keeps a finished command's outcome without sending the output that proved it", () => {
     const output = `${"x".repeat(100_000)}\npnpm: command not found`;
     const item = { ...command, output } satisfies OrchestrationV2TurnItem;
     const projected = projectTurnItemForWire(item);
 
-    expect(projected.type === "command_execution" ? projected.output : null).not.toContain(
-      "command not found",
-    );
+    expect(projected.type === "command_execution" ? projected.output : "unset").toBeUndefined();
+    expect(JSON.stringify(projected).length).toBeLessThan(1_000);
     expect(projected).toMatchObject({ outputIndicatesFailure: true });
   });
 
@@ -83,8 +82,32 @@ describe("orchestration V2 wire projection", () => {
     expect(projectTurnItemForWire(item)).toMatchObject({ outputIndicatesFailure: true });
   });
 
-  it("leaves a successful command unflagged", () => {
+  it("leaves a successful command unflagged and output-free", () => {
     const item = { ...command, exitCode: 0, output: "done" } satisfies OrchestrationV2TurnItem;
-    expect(projectTurnItemForWire(item)).toEqual(item);
+    const { output: _output, ...expected } = item;
+    expect(projectTurnItemForWire(item)).toEqual(expected);
+  });
+
+  it("sends only the last line of a background command that is still running", () => {
+    const item = {
+      ...command,
+      background: true,
+      status: "running" as const,
+      completedAt: null,
+      output: `${"x".repeat(100_000)}\nListening on :3000\n`,
+    } satisfies OrchestrationV2TurnItem;
+
+    expect(projectTurnItemForWire(item)).toMatchObject({ output: "Listening on :3000" });
+  });
+
+  it("stops sending a background command's tail once it finishes", () => {
+    const item = {
+      ...command,
+      background: true,
+      output: "Listening on :3000\n",
+    } satisfies OrchestrationV2TurnItem;
+
+    const projected = projectTurnItemForWire(item);
+    expect(projected.type === "command_execution" ? projected.output : "unset").toBeUndefined();
   });
 });

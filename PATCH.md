@@ -1579,8 +1579,11 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   `formatElapsed` stays for the native mobile feed; the richer fork `t3McpToolPresentation`
   and the fork's `threadPullRequestsV2` capability win over upstream's narrower versions;
   `delegatedTaskProgress` omits upstream's provider-thread background-task clause, which has
-  no projection here; and the wire projection keeps sending a truncated command-output preview
-  instead of dropping output entirely, since our timeline renders it. Protocol negotiation is
+  no projection here; and the wire projection sends a live background command's last printed
+  line, which upstream has no equivalent of, because that single line is the whole payload of
+  our background-command strip. Every other command sends no output at all, matching upstream:
+  a finished command keeps its exit code and `outputIndicatesFailure`, not its transcript.
+  Protocol negotiation is
   ported but deliberately uncalled: our servers advertise no `orchestrationProtocolVersion`, so
   enforcing version 2 today would reject every existing fork server, including remote,
   Tailscale and T3 Connect ones. `connection/compatibility.ts` gains callers only in the change
