@@ -4,6 +4,7 @@ import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { CodexArtifactTemplateCard } from "./CodexArtifactTemplateCard";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import { findOpenHtmlEmbedFence, htmlEmbedPhase } from "@t3tools/client-runtime/html-embed-fence";
 import {
   CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES,
   artifactTemplateFromHastProperties,
@@ -67,7 +68,11 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
-import { HtmlEmbedBlock, isHtmlEmbedLanguage } from "./chat/HtmlEmbedBlock";
+import {
+  HTML_EMBED_FENCE_LANGUAGE,
+  HtmlEmbedBlock,
+  isHtmlEmbedLanguage,
+} from "./chat/HtmlEmbedBlock";
 import { MarkdownMedia } from "./chat/MarkdownMedia";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
 import { CHAT_FILE_TAG_CHIP_CLASS_NAME, FileTagChipContent } from "./chat/FileTagChip";
@@ -1771,6 +1776,12 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
     resolveThreadPullRequest,
     updateThreadPullRequestLink,
   } = context;
+  // Only one fence in a message can still be open, and finding it is what tells
+  // the embed below whether its source is final. The guard keeps every message
+  // without an embed to a single substring scan.
+  const openHtmlEmbedFence = text.includes(HTML_EMBED_FENCE_LANGUAGE)
+    ? findOpenHtmlEmbedFence(text)
+    : null;
   const fileLinkChip = (
     fileLinkMeta: MarkdownFileLinkMeta,
     copyMarkdown: string,
@@ -2147,7 +2158,16 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
       if (isHtmlEmbedLanguage(language)) {
         return (
           <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
-            <HtmlEmbedBlock code={codeBlock.code} theme={resolvedTheme} />
+            <HtmlEmbedBlock
+              code={codeBlock.code}
+              theme={resolvedTheme}
+              phase={htmlEmbedPhase({
+                openFence: openHtmlEmbedFence,
+                streaming: isStreaming,
+                offset: node?.position?.start.offset ?? null,
+                html: codeBlock.code,
+              })}
+            />
           </RenderErrorBoundary>
         );
       }

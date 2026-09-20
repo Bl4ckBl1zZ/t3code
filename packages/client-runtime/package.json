@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./html-embed-fence": {
+      "types": "./src/htmlEmbedFence.ts",
+      "default": "./src/htmlEmbedFence.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"
