@@ -219,6 +219,17 @@ This fork stays close to `pingdotgg/t3code` and carries only the following opera
   how the first port of upstream `c7222ca4df` silently did nothing), and the slider is a `select`
   carrying an optional `presentation: "slider"` hint rather than a third descriptor kind, so the
   SwiftUI and Expo clients keep rendering their radio lists instead of failing to decode.
+- Ports upstream's "surface ACP stderr when cursor-agent exits at session start" (`d6f291303d`)
+  onto orchestration V2. The shared halves come across unchanged: `AcpProcessExitedError` gains an
+  optional `stderr` field that its `message` getter appends, `provider/acp/AcpStderr.ts` keeps the
+  bounded redacted tail, and `AcpSessionRuntime` records that tail unconditionally (upstream only
+  piped stderr when a caller passed `onStderr`, so a start that failed before the adapter wired one
+  had nothing to report) and enriches a bare `AcpProcessExitedError` on both request failures and
+  transport termination. The two V1 halves are dropped: `provider/acp/AcpAdapterSupport.ts` and its
+  remap to `ProviderAdapterProcessError`, and the `ProviderCommandReactor` branch that reads that
+  error's `detail`. Neither type exists in the fork, and V2 needs no equivalent —
+  `ProviderFailure.deepestCauseMessage` already walks the cause chain and reads the `message`
+  getter, so the enriched excerpt reaches the user once the error carries it.
 - Does not carry upstream's V1 `ProviderCommandReactor` interrupt recovery (`17822fab70`). It stops
   the session and writes `thread.session.status = "stopped"` plus a `provider.turn.interrupt.failed`
   activity, none of which orchestration V2 models. V2 covers the same ground its own way:

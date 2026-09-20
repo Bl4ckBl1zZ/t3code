@@ -29,6 +29,7 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./AcpStderr.ts";
 import {
   collectSessionConfigOptionValues,
   decideToolCallUpdateEmission,
@@ -1316,6 +1317,8 @@ export const make = (
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
     const stderrFailure = yield* Deferred.make<never, EffectAcpErrors.AcpError>();
+    const stderrTailRef = yield* Ref.make("");
+    const stderrDrained = yield* Deferred.make<void>();
     const eventQueue = yield* Queue.unbounded<AcpSessionRuntimeEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallTrackedState>());
@@ -1338,6 +1341,33 @@ export const make = (
     >(Option.none());
     const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
 
+    /**
+     * A child that dies before it answers surfaces as a bare "ACP process
+     * exited with code N", which says nothing about why. Attach the tail of
+     * its stderr — redacted and bounded — so the failure is diagnosable.
+     */
+    const enrichProcessExitWithStderr = (
+      error: EffectAcpErrors.AcpError,
+    ): Effect.Effect<EffectAcpErrors.AcpError> =>
+      error._tag !== "AcpProcessExitedError" || (error.stderr?.trim().length ?? 0) > 0
+        ? Effect.succeed(error)
+        : Deferred.await(stderrDrained).pipe(
+            Effect.timeout("250 millis"),
+            Effect.ignore,
+            Effect.andThen(Ref.get(stderrTailRef)),
+            Effect.map((tail) => {
+              const stderr = sanitizeAcpStderrExcerpt(tail);
+              return stderr.length === 0
+                ? error
+                : new EffectAcpErrors.AcpProcessExitedError({
+                    ...(error.code !== undefined ? { code: error.code } : {}),
+                    ...(error.pid !== undefined ? { pid: error.pid } : {}),
+                    stderr,
+                    ...(error.cause !== undefined ? { cause: error.cause } : {}),
+                  });
+            }),
+          );
+
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
 
@@ -1350,6 +1380,9 @@ export const make = (
         Effect.flatMap(() =>
           effect.pipe(
             Effect.raceFirst(Deferred.await(stderrFailure)),
+            Effect.catch((error) =>
+              enrichProcessExitWithStderr(error).pipe(Effect.flatMap(Effect.fail)),
+            ),
             Effect.tap((result) =>
               logRequest({
                 method,
@@ -1605,26 +1638,30 @@ export const make = (
       );
     }
 
-    if (options.onStderr) {
-      const onStderr = options.onStderr;
-      yield* child.stderr.pipe(
-        Stream.decodeText(),
-        Stream.runForEach(onStderr),
-        Effect.catch((cause) => {
-          const error = Schema.is(EffectAcpErrors.AcpError)(cause)
-            ? cause
-            : new EffectAcpErrors.AcpTransportError({
-                detail: "Could not read ACP process output",
-                cause,
-              });
-          return Deferred.fail(stderrFailure, error).pipe(
-            Effect.andThen(options.onTermination?.(error) ?? Effect.void),
-            Effect.andThen(child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore)),
-          );
-        }),
-        Effect.forkIn(runtimeScope),
-      );
-    }
+    // The tail is kept whether or not a caller wants the live stream: a start
+    // that fails before `onStderr` is wired would otherwise have no diagnosis.
+    yield* child.stderr.pipe(
+      Stream.decodeText(),
+      Stream.runForEach((chunk) =>
+        Ref.update(stderrTailRef, (current) => appendAcpStderrTail(current, chunk)).pipe(
+          Effect.andThen(options.onStderr ? options.onStderr(chunk) : Effect.void),
+        ),
+      ),
+      Effect.catch((cause) => {
+        const error = Schema.is(EffectAcpErrors.AcpError)(cause)
+          ? cause
+          : new EffectAcpErrors.AcpTransportError({
+              detail: "Could not read ACP process output",
+              cause,
+            });
+        return Deferred.fail(stderrFailure, error).pipe(
+          Effect.andThen(options.onTermination?.(error) ?? Effect.void),
+          Effect.andThen(child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore)),
+        );
+      }),
+      Effect.ensuring(Deferred.succeed(stderrDrained, undefined)),
+      Effect.forkIn(runtimeScope),
+    );
 
     const acpContext = yield* Layer.build(
       EffectAcpClient.layerChildProcess(child, {
@@ -1641,9 +1678,16 @@ export const make = (
         ...(options.protocolLogging?.logger ? { logger: options.protocolLogging.logger } : {}),
         ...(options.onIncomingRequest ? { onIncomingRequest: options.onIncomingRequest } : {}),
         onTermination: (error) =>
-          (options.onTermination?.(error) ?? Effect.void).pipe(
-            Effect.ensuring(
-              Scope.close(runtimeScope, Exit.fail(error)).pipe(Effect.forkDetach, Effect.asVoid),
+          enrichProcessExitWithStderr(error).pipe(
+            Effect.flatMap((enriched) =>
+              (options.onTermination?.(enriched) ?? Effect.void).pipe(
+                Effect.ensuring(
+                  Scope.close(runtimeScope, Exit.fail(enriched)).pipe(
+                    Effect.forkDetach,
+                    Effect.asVoid,
+                  ),
+                ),
+              ),
             ),
           ),
         ...(options.onOutgoingResponseFailure

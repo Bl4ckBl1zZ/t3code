@@ -25,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   openPictureInPicture: vi.fn(async (_tabId: string): Promise<void> => undefined),
   closePictureInPicture: vi.fn(async (_tabId: string): Promise<void> => undefined),
   pickElement: vi.fn(),
-  previewAnnotationScreenshotFile: vi.fn(),
   addPreviewAnnotation: vi.fn(),
   addImage: vi.fn(),
   toggleAnnotation: null as (() => void) | null,
@@ -85,10 +84,6 @@ vi.mock("~/composerDraftStore", () => ({
       addPreviewAnnotation: mocks.addPreviewAnnotation,
       addImage: mocks.addImage,
     }),
-}));
-
-vi.mock("~/lib/previewAnnotation", () => ({
-  previewAnnotationScreenshotFile: mocks.previewAnnotationScreenshotFile,
 }));
 
 vi.mock("~/localApi", () => ({
@@ -336,7 +331,6 @@ describe("PreviewView navigation", () => {
     mocks.openPictureInPicture.mockClear();
     mocks.closePictureInPicture.mockClear();
     mocks.pickElement.mockReset();
-    mocks.previewAnnotationScreenshotFile.mockReset();
     mocks.addPreviewAnnotation.mockClear();
     mocks.addImage.mockClear();
     mocks.toggleAnnotation = null;
@@ -542,7 +536,7 @@ describe("PreviewView navigation", () => {
     expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, annotation);
   });
 
-  it("still sends when screenshot attachment conversion fails", async () => {
+  it("still sends annotation text when the picked crop is malformed", async () => {
     const annotation = {
       id: "annotation-2",
       pageUrl: "https://example.com/dashboard",
@@ -553,7 +547,7 @@ describe("PreviewView navigation", () => {
       strokes: [],
       styleChanges: [],
       screenshot: {
-        dataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
+        dataUrl: "data:image/png;base64,%%%",
         width: 10,
         height: 10,
         cropRect: { x: 0, y: 0, width: 10, height: 10 },
@@ -562,7 +556,6 @@ describe("PreviewView navigation", () => {
     };
     const onSendAnnotation = vi.fn();
     mocks.pickElement.mockResolvedValue({ annotation, submission: "send" });
-    mocks.previewAnnotationScreenshotFile.mockRejectedValue(new Error("conversion failed"));
 
     renderToStaticMarkup(
       <PreviewView
