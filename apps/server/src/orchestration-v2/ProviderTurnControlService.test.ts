@@ -222,6 +222,8 @@ it.effect(
           getPlan: () => Effect.die("unused getPlan"),
           getThreadProjection: () => Ref.get(projection),
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+          getTurnStartContext: () => Effect.die("unused getTurnStartContext"),
+          getTurnStartHistory: () => Effect.die("unused getTurnStartHistory"),
         }),
       );
       const sessionManagerLayer = Layer.succeed(

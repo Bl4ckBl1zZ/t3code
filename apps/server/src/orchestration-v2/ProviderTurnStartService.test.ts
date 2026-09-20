@@ -196,6 +196,8 @@ function makeTestLayer(input: {
       getThreadShell: () => Effect.die("unused getThreadShell"),
       getThreadProjection: () => Effect.succeed(input.projection),
       getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+      getTurnStartContext: () => Effect.succeed({ ...input.projection, hasConversation: true }),
+      getTurnStartHistory: () => Effect.succeed(input.projection.turnItems),
       getPlan: () => Effect.die("unused getPlan"),
     }),
   );
@@ -502,6 +504,9 @@ function makeStartTestLayer(input: {
             getPlan: () => Effect.die("unused getPlan"),
             getThreadProjection: () => Effect.succeed(input.projection),
             getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+            getTurnStartContext: () =>
+              Effect.succeed({ ...input.projection, hasConversation: true }),
+            getTurnStartHistory: () => Effect.succeed(input.projection.turnItems),
           }),
         ),
         Layer.succeed(

@@ -97,7 +97,7 @@ export const layer: Layer.Layer<
       readonly runId: RunId;
     }) {
       const { runId } = input;
-      const projection = yield* projectionStore.getThreadProjection(input.threadId);
+      const projection = yield* projectionStore.getTurnStartContext(input.threadId, runId);
       const run = projection.runs.find((candidate) => candidate.id === runId);
       if (run === undefined) {
         return yield* new ProviderTurnStartError({ runId, cause: `Run ${runId} was not found.` });
@@ -399,7 +399,7 @@ export const layer: Layer.Layer<
           toProviderInstanceId: run.providerInstanceId,
           coveredRunOrdinals: { from: 1, to: Math.max(1, run.ordinal - 1) },
           strategy: "full_thread_summary",
-          items: projection.turnItems,
+          items: yield* projectionStore.getTurnStartHistory(input.threadId),
           createdAt,
           cwd: projection.thread.worktreePath,
           summaryModelSelection: run.modelSelection,
