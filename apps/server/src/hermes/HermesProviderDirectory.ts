@@ -8,7 +8,6 @@ import * as Schema from "effect/Schema";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import {
   HERMES_REMOTE_PAIRING_TOKEN_ENV,
-  HERMES_REMOTE_TLS_CERT_SHA256_ENV,
   assessHermesConnectionSecurity,
 } from "./HermesConnectionSecurity.ts";
 import { resolveHermesServeEndpoint } from "./HermesServeRuntime.ts";
@@ -95,10 +94,6 @@ export function resolveHermesProviderConnections(
         remoteGloballyEnabled: settings.enableRemoteHermes,
         remoteInstanceEnabled: config.remoteAccessEnabled,
         remotePairingToken: sensitiveEnvironmentValue(environment, HERMES_REMOTE_PAIRING_TOKEN_ENV),
-        remoteTlsCertificateSha256: sensitiveEnvironmentValue(
-          environment,
-          HERMES_REMOTE_TLS_CERT_SHA256_ENV,
-        ),
       });
       if (security.status === "ready") {
         ready.push({

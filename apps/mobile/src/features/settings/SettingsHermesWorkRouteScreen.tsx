@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigation } from "@react-navigation/native";
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, hermesWorkScheduleStatus } from "@t3tools/contracts";
 import { Alert, Linking, Modal, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type {
@@ -25,6 +25,14 @@ import { HermesSetupCard } from "../hermes/HermesSetupCard";
 import { HermesArtifactPreview } from "./HermesArtifactPreview";
 import { useWorkRefresh } from "./useWorkRefresh";
 import { HermesWorkGroups } from "./HermesWorkGroups";
+
+/** A finished task reads as finished; only a waiting one reads as active. */
+const scheduleLabel = {
+  scheduled: "Active",
+  paused: "Paused",
+  completed: "Completed",
+  error: "Failed",
+} as const;
 
 type Section = HermesWorkQueryInput["section"];
 type Form = {
@@ -374,7 +382,8 @@ function WorkConnection({
               <Text className="font-t3-semibold">{item.name}</Text>
               <Text>{item.prompt}</Text>
               <Text>
-                {item.schedule} · {item.paused ? "Paused" : "Active"}
+                {item.scheduleDisplay ?? item.schedule} ·{" "}
+                {scheduleLabel[hermesWorkScheduleStatus(item)]}
               </Text>
               <Text>Delivery: {item.deliver}</Text>
               {item.nextRunAt ? <Text>Next: {item.nextRunAt}</Text> : null}
@@ -419,7 +428,6 @@ function WorkConnection({
             <View key={item.id} className="gap-1 rounded-xl bg-card p-3">
               <Text className="font-t3-semibold">{item.title}</Text>
               <Text>{item.status ?? (item.active ? "Running" : "Outcome unknown")}</Text>
-              {item.deliveryStatus ? <Text>Delivery: {item.deliveryStatus}</Text> : null}
               {item.readAt === null ? <Text>Unread</Text> : null}
               <Action
                 label="Open run"

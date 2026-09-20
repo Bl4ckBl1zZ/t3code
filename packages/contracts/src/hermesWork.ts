@@ -19,8 +19,17 @@ export const HermesWorkSchedule = Schema.Struct({
   profile: Schema.String,
   name: Schema.String,
   prompt: Schema.String,
+  /** Re-parseable timing, so editing a task and saving it round-trips. */
   schedule: Schema.String,
+  /** Hermes's own rendering of the timing, which names one-shots as such. */
+  scheduleDisplay: Schema.NullOr(Schema.String),
   paused: Schema.Boolean,
+  /**
+   * Hermes's lifecycle value, normally `scheduled`, `paused`, `completed`, or
+   * `error`. Left open: an unknown value must not fail the decode, and a task
+   * that has stopped running must not keep rendering as if it will run again.
+   */
+  state: Schema.NullOr(Schema.String),
   deliver: Schema.String,
   model: Schema.NullOr(Schema.String),
   nextRunAt: Schema.NullOr(Schema.String),
@@ -28,6 +37,23 @@ export const HermesWorkSchedule = Schema.Struct({
   lastStatus: Schema.NullOr(Schema.String),
   lastError: Schema.NullOr(Schema.String),
 });
+
+export type HermesWorkScheduleStatus = "paused" | "completed" | "error" | "scheduled";
+
+/**
+ * Collapses a task's pause flag and Hermes lifecycle value into what the clients
+ * badge. A spent one-shot and a failed task are finished, not waiting: treating
+ * "not paused" as "scheduled" makes a task that will never run again look live.
+ */
+export function hermesWorkScheduleStatus(schedule: {
+  readonly paused: boolean;
+  readonly state: string | null;
+}): HermesWorkScheduleStatus {
+  if (schedule.paused || schedule.state === "paused") return "paused";
+  if (schedule.state === "completed") return "completed";
+  if (schedule.state === "error") return "error";
+  return "scheduled";
+}
 export const HermesWorkRun = Schema.Struct({
   id: Schema.String,
   profile: Schema.String,
@@ -37,7 +63,6 @@ export const HermesWorkRun = Schema.Struct({
   active: Schema.Boolean,
   jobId: Schema.NullOr(Schema.String),
   status: Schema.NullOr(Schema.String),
-  deliveryStatus: Schema.NullOr(Schema.String),
   content: Schema.NullOr(Schema.String),
   readAt: Schema.NullOr(Schema.String),
 });

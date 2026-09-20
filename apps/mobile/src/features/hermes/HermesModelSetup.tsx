@@ -24,7 +24,10 @@ export function HermesModelSetup({
   providerInstanceId: string;
   onConfigured: () => void;
 }) {
-  const input = { providerInstanceId, profile: "default" };
+  // No profile: the server resolves the instance's configured profileKey.
+  // Pinning "default" here aims model sign-in at the wrong assistant whenever
+  // the connection uses any other profile.
+  const input = { providerInstanceId };
   const query = useEnvironmentQuery(hermesEnvironment.workModelStatus({ environmentId, input }));
   const start = useAtomCommand(hermesEnvironment.workModelAuthStart);
   const cancel = useAtomCommand(hermesEnvironment.workModelAuthCancel);
@@ -40,7 +43,6 @@ export function HermesModelSetup({
           environmentId,
           input: {
             providerInstanceId,
-            profile: "default",
             provider: login.provider,
             sessionId: login.sessionId,
           },

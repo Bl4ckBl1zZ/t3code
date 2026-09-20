@@ -21,6 +21,8 @@ export const HermesWorkSyncCursor = Schema.Struct({
   watermark: Schema.Number,
   offset: Schema.Number,
   nextWatermark: Schema.Number,
+  /** Rotation into the profile's cron jobs, so one sweep refreshes a bounded slice. */
+  jobOffset: Schema.optional(Schema.Number),
 });
 export type HermesWorkSyncCursor = typeof HermesWorkSyncCursor.Type;
 const decodeRun = Schema.decodeUnknownEffect(Schema.fromJsonString(HermesWorkRunSnapshot));
@@ -31,7 +33,7 @@ export class HermesWorkRunRepository extends Context.Service<
   HermesWorkRunRepository,
   {
     readonly pendingResults: (
-      input: HermesWorkRunScope,
+      input: HermesWorkRunScope & { readonly now: string },
     ) => Effect.Effect<ReadonlyArray<string>, HermesWorkRunRepositoryError>;
     readonly getCursor: (
       input: HermesWorkRunScope,
@@ -143,12 +145,44 @@ export const makeHermesWorkRunRepository = Effect.gen(function* () {
     },
     Effect.mapError((cause) => new HermesWorkRunRepositoryError({ cause })),
   );
+  /**
+   * Claims the next batch of runs whose output still needs downloading.
+   *
+   * Claiming, rather than merely reading, is what keeps the queue moving: the
+   * rows are stamped before they are handed out, so a run whose output never
+   * downloads sinks to the back instead of holding a slot on every sweep. Runs
+   * that have never been tried come first, newest first, because a scheduled
+   * task someone is waiting on is worth more than a conversation from months
+   * ago.
+   */
   const pendingResults = Effect.fn("HermesWorkRunRepository.pendingResults")(
-    function* (input: HermesWorkRunScope) {
-      const rows = yield* sql<{
-        session_id: string;
-      }>`SELECT session_id FROM hermes_work_runs WHERE provider_instance_id = ${input.providerInstanceId} AND profile = ${input.profile} AND result_json IS NULL ORDER BY observed_at, session_id LIMIT 10`;
-      return rows.map((row) => row.session_id);
+    function* (input: HermesWorkRunScope & { readonly now: string }) {
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<{
+            session_id: string;
+          }>`SELECT session_id FROM hermes_work_runs
+            WHERE provider_instance_id = ${input.providerInstanceId}
+              AND profile = ${input.profile}
+              AND result_json IS NULL
+            ORDER BY
+              (result_attempted_at IS NULL) DESC,
+              result_attempted_at ASC,
+              session_id DESC
+            LIMIT 10`;
+          const ids = rows.map((row) => row.session_id);
+          yield* Effect.forEach(
+            ids,
+            (id) =>
+              sql`UPDATE hermes_work_runs SET result_attempted_at = ${input.now}
+                WHERE provider_instance_id = ${input.providerInstanceId}
+                  AND profile = ${input.profile}
+                  AND session_id = ${id}`,
+            { discard: true },
+          );
+          return ids;
+        }),
+      );
     },
     Effect.mapError((cause) => new HermesWorkRunRepositoryError({ cause })),
   );

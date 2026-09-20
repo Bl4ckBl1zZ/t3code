@@ -6,7 +6,7 @@ import {
   HermesGatewayClient,
   HermesGatewayConnectionError,
   HermesGatewayMutationIndeterminateError,
-  HermesGatewayMutationsBlockedError,
+  HermesGatewayDuplicateOperationIdError,
   classifyHermesGatewayReady,
   type HermesGatewayLogEvent,
   type HermesGatewaySocket,
@@ -702,7 +702,22 @@ describe("Native Hermes Serve transport", () => {
 
     await expect(created).rejects.toBeInstanceOf(HermesGatewayMutationIndeterminateError);
     expect(client.mutationRecord("malformed-create-operation")?.state).toBe("indeterminate");
+    // Recorded for observability, but it must not fence the socket: this
+    // transport multiplexes every thread on a provider session, and the native
+    // protocol never advertises mutation.stable_ids, so nothing could ever lift
+    // a socket-wide fence again.
     expect(client.writesBlocked).toBe(true);
+    const unrelated = client.submitPrompt(
+      { session_id: "another-session", text: "unrelated" },
+      { operationId: "unrelated-operation" },
+    );
+    const unrelatedFrame = sentFrames(socket).at(-1)!;
+    expect(unrelatedFrame).toMatchObject({
+      method: "prompt.submit",
+      params: { session_id: "another-session" },
+    });
+    socket.receive(success(unrelatedFrame.id, { status: "queued" }));
+    await expect(unrelated).resolves.toEqual({ status: "queued" });
     client.close();
   });
 
@@ -735,18 +750,37 @@ describe("Native Hermes Serve transport", () => {
     expect(replayed.map((frame) => frame.method)).toEqual(["session.list"]);
     replacement.receive(success(replayed[0]!.id, { sessions: [] }));
     await expect(read).resolves.toEqual({ sessions: [] });
+    // The indeterminate record is observability, not a socket-wide fence: an
+    // unrelated thread on this same session keeps working. Per-binding exclusion
+    // is the durable intent guard's job, not the transport's.
+    expect(client.writesBlocked).toBe(true);
+    const followUp = client.mutate(
+      "prompt.submit",
+      { session_id: "session-2", text: "unrelated thread" },
+      { operationId: "prompt-operation-2" },
+    );
+    await eventually(() => replacement.sent.length === 2);
+    const followUpFrame = sentFrames(replacement)[1]!;
+    expect(followUpFrame).toMatchObject({
+      method: "prompt.submit",
+      params: { session_id: "session-2" },
+    });
+    replacement.receive(success(followUpFrame.id, { status: "queued" }));
+    await expect(followUp).resolves.toEqual({ status: "queued" });
+
+    // Replay protection still stands: the same operation id is refused.
     await expect(
       client.mutate(
         "prompt.submit",
-        { session_id: "session-1", text: "must not send" },
-        { operationId: "prompt-operation-2" },
+        { session_id: "session-1", text: "must not resend" },
+        { operationId: "prompt-operation" },
       ),
-    ).rejects.toBeInstanceOf(HermesGatewayMutationsBlockedError);
-    expect(replacement.sent).toHaveLength(1);
+    ).rejects.toBeInstanceOf(HermesGatewayDuplicateOperationIdError);
 
     client.acknowledgeIndeterminate("prompt-operation");
+    expect(client.writesBlocked).toBe(false);
     const interrupt = client.interrupt("session-1", { operationId: "interrupt-operation" });
-    const interruptFrame = sentFrames(replacement)[1]!;
+    const interruptFrame = sentFrames(replacement)[2]!;
     expect(interruptFrame).toMatchObject({
       method: "session.interrupt",
       params: { session_id: "session-1" },

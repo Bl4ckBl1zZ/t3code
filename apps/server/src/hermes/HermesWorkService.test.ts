@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
-import { HermesWorkError, HermesWorkRun } from "@t3tools/contracts";
+import { HermesWorkError, HermesWorkRun, hermesWorkScheduleStatus } from "@t3tools/contracts";
 import { HermesDashboardClient, type HermesDashboardRequest } from "./HermesDashboardClient.ts";
 import { HermesWorkRunRepository } from "./HermesWorkRunRepository.ts";
 import { HermesWorkConversationService } from "./HermesWorkConversationService.ts";
@@ -219,6 +219,59 @@ describe("Hermes Work management", () => {
       expect(result.schedules[0]?.schedule).toBe("2026-09-15T10:00:00+02:00");
     }),
   );
+  it.effect("reports a spent one-shot as finished rather than still scheduled", () =>
+    Effect.gen(function* () {
+      const { service } = yield* make(() => [
+        {
+          id: "spent",
+          name: "Hello every minute",
+          // Hermes only treats "every ..." as recurring, so a bare duration
+          // becomes a one-shot that runs once and disables itself. Reading only
+          // `paused` left this rendering as an active schedule that never ran
+          // again.
+          schedule: { kind: "once", run_at: "2026-09-14T02:57:05+02:00", display: "once in 1m" },
+          state: "completed",
+          enabled: false,
+          paused: null,
+          next_run_at: null,
+        },
+        {
+          id: "live",
+          schedule: { kind: "interval", minutes: 60, display: "every 60m" },
+          state: "scheduled",
+        },
+        { id: "broken", schedule: { kind: "interval", minutes: 60 }, state: "error" },
+      ]);
+      const result = yield* service.query({ ...target, section: "schedules" });
+      expect(
+        result.schedules.map((job) => ({
+          id: job.id,
+          status: hermesWorkScheduleStatus(job),
+          shown: job.scheduleDisplay ?? job.schedule,
+        })),
+      ).toEqual([
+        { id: "spent", status: "completed", shown: "once in 1m" },
+        { id: "live", status: "scheduled", shown: "every 60m" },
+        { id: "broken", status: "error", shown: "every 60m" },
+      ]);
+      // The editor still round-trips a value Hermes can parse back.
+      expect(result.schedules[0]?.schedule).toBe("2026-09-14T02:57:05+02:00");
+    }),
+  );
+  it.effect("keeps a schedule from an older Hermes that reports neither field", () =>
+    Effect.gen(function* () {
+      const { service } = yield* make(() => [
+        { id: "legacy", schedule: { kind: "interval", minutes: 30 } },
+      ]);
+      const result = yield* service.query({ ...target, section: "schedules" });
+      expect(result.schedules[0]).toMatchObject({
+        scheduleDisplay: null,
+        state: null,
+        schedule: "every 30m",
+      });
+      expect(hermesWorkScheduleStatus(result.schedules[0]!)).toBe("scheduled");
+    }),
+  );
   it.effect("handles a never-started gateway without presenting it as running", () =>
     Effect.gen(function* () {
       const { service } = yield* make(() => ({ gateway_running: false, gateway_state: null }));
@@ -271,7 +324,6 @@ describe("Hermes Work management", () => {
         active: false,
         jobId: "job",
         status: "completed",
-        deliveryStatus: "delivered",
         content: "saved output",
         readAt: "2026-09-14T00:00:00Z",
       };
@@ -285,7 +337,6 @@ describe("Hermes Work management", () => {
       );
       const result = yield* service.query({ ...target, section: "runs", id: "job" });
       expect(result.runs[0]).toMatchObject({
-        deliveryStatus: "delivered",
         content: "saved output",
         readAt: saved.readAt,
         endedAt: 123,
@@ -298,7 +349,7 @@ describe("Hermes Work management", () => {
         runs: [{ id: "cron_job_1", ended_at: 123, is_active: false }],
       }));
       const result = yield* service.query({ ...target, section: "runs", id: "job" });
-      expect(result.runs[0]).toMatchObject({ status: null, deliveryStatus: null, endedAt: 123 });
+      expect(result.runs[0]).toMatchObject({ status: null, endedAt: 123 });
     }),
   );
 });

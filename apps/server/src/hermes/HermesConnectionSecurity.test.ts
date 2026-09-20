@@ -12,7 +12,6 @@ const assess = (overrides: Partial<Parameters<typeof assessHermesConnectionSecur
     remoteGloballyEnabled: false,
     remoteInstanceEnabled: false,
     remotePairingToken: undefined,
-    remoteTlsCertificateSha256: undefined,
     ...overrides,
   });
 

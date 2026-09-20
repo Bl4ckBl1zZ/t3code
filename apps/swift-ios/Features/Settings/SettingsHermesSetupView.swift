@@ -60,7 +60,11 @@ struct SettingsHermesSetupView: View {
                 }
                 if state?.phase == "needs_model" || state?.phase == "connected" {
                     NavigationLink(state?.phase == "needs_model" ? "Connect a model account" : "Manage model account") {
-                        SettingsHermesModelView(manager: manager, environmentID: environmentID, instanceID: instanceID) { refreshID += 1 }
+                        // Connecting a model is what unblocks the rest of setup, so
+                        // rerun it here. Polling the status alone would leave the
+                        // phase on needs_model and the background scheduler stopped,
+                        // because only a setup run starts the Hermes gateway.
+                        SettingsHermesModelView(manager: manager, environmentID: environmentID, instanceID: instanceID) { start() }
                     }
                 }
                 Button("Refresh status") { refreshID += 1 }.disabled(starting)

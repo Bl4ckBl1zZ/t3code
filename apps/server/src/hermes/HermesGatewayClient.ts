@@ -350,11 +350,11 @@ export class HermesGatewayMutationIndeterminateError extends Error {
   }
 }
 
-export class HermesGatewayMutationsBlockedError extends Error {
-  override readonly name = "HermesGatewayMutationsBlockedError";
+export class HermesGatewayMutationIndeterminateRecordError extends Error {
+  override readonly name = "HermesGatewayMutationIndeterminateRecordError";
   readonly operationIds: ReadonlyArray<string>;
   constructor(operationIds: ReadonlyArray<string>) {
-    super("Hermes mutations are blocked until indeterminate operations are reconciled.");
+    super("Hermes has indeterminate operations awaiting reconciliation.");
     this.operationIds = operationIds;
   }
 }
@@ -647,10 +647,13 @@ export class HermesGatewayClient {
   ): Promise<Result> {
     const requiredCapability = options.requiredCapability ?? METHOD_CAPABILITIES[method];
     this.requireCapability(requiredCapability);
-    const blocked = this.indeterminateOperationIds();
-    if (blocked.length > 0) {
-      throw new HermesGatewayMutationsBlockedError(blocked);
-    }
+    // An indeterminate mutation is recorded and surfaced through `health`, but it
+    // deliberately does not fence later writes. This transport multiplexes every
+    // thread on a provider session, so a socket-wide fence lets one blipped prompt
+    // block unrelated threads — and the native Serve protocol never advertises
+    // `mutation.stable_ids`, which is the only way `reconcileMutation` could lift
+    // it again. Exclusion that actually matters is enforced per binding by the
+    // durable one-unsettled-prompt intent guard in HermesSessionBindingRepository.
     if (!options.operationId.trim()) {
       throw new HermesGatewayConfigurationError("Hermes mutation operationId is required.");
     }
@@ -1910,7 +1913,6 @@ function authenticatedEndpoint(options: HermesGatewayClientOptions): string {
     remoteGloballyEnabled: true,
     remoteInstanceEnabled: true,
     remotePairingToken: undefined,
-    remoteTlsCertificateSha256: undefined,
   });
   if (assessment.status !== "ready") {
     throw new HermesGatewayConfigurationError(assessment.message);

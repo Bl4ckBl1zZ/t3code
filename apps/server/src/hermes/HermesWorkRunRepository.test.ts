@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
 import migration from "../persistence/Migrations/061_HermesWorkRuns.ts";
+import resultAttemptsMigration from "../persistence/Migrations/062_HermesWorkRunResultAttempts.ts";
 import {
   HermesWorkRunRepository,
   hermesWorkRunRepositoryLayer,
@@ -17,11 +18,11 @@ test("Hermes run snapshots", (it) => {
     () =>
       Effect.gen(function* () {
         yield* migration;
+        yield* resultAttemptsMigration;
         const repository = yield* HermesWorkRunRepository;
         const scope = { providerInstanceId: "hermes", profile: "default", id: "cron_hourly_123" };
         const run = {
           status: null,
-          deliveryStatus: null,
           content: null,
           readAt: null,
           id: scope.id,
@@ -68,5 +69,75 @@ test("Hermes run snapshots", (it) => {
         assert.strictEqual(rows.length, 1);
         assert.strictEqual(rows[0]?.read_at, null);
       }),
+  );
+});
+
+const rotationTest = it.layer(
+  hermesWorkRunRepositoryLayer.pipe(Layer.provideMerge(NodeSqliteClient.layerMemory())),
+);
+rotationTest("Hermes pending-output queue", (it) => {
+  it.effect("rotates the pending-output queue so an undownloadable run cannot starve it", () =>
+    Effect.gen(function* () {
+      yield* migration;
+      yield* resultAttemptsMigration;
+      const repository = yield* HermesWorkRunRepository;
+      const base = {
+        status: null,
+        content: null,
+        readAt: null,
+        profile: "default",
+        jobId: null,
+        title: "x",
+        startedAt: 1,
+        endedAt: null,
+        active: false,
+      };
+      // One sweep stamps every row with the same observed_at, so ordering can
+      // never rely on it to make progress.
+      yield* repository.upsert({
+        providerInstanceId: "h",
+        observedAt: "2026-09-20T00:00:00Z",
+        runs: [
+          ...Array.from({ length: 10 }, (_, i) => ({ ...base, id: `aaa-undownloadable-${i}` })),
+          ...Array.from({ length: 20 }, (_, i) => ({ ...base, id: `zzz-healthy-${i}` })),
+        ],
+      });
+      for (let sweep = 0; sweep < 25; sweep += 1) {
+        const pending = yield* repository.pendingResults({
+          providerInstanceId: "h",
+          profile: "default",
+          now: `2026-09-20T00:${String(sweep).padStart(2, "0")}:00Z`,
+        });
+        for (const id of pending) {
+          if (id.startsWith("aaa-undownloadable")) continue;
+          yield* repository.saveResult({
+            providerInstanceId: "h",
+            profile: "default",
+            id,
+            content: "{}",
+          });
+        }
+      }
+      for (let i = 0; i < 20; i += 1) {
+        assert.strictEqual(
+          yield* repository.getResult({
+            providerInstanceId: "h",
+            profile: "default",
+            id: `zzz-healthy-${i}`,
+          }),
+          "{}",
+          `zzz-healthy-${i} should have drained`,
+        );
+      }
+      const remaining = yield* repository.pendingResults({
+        providerInstanceId: "h",
+        profile: "default",
+        now: "2026-09-20T01:00:00Z",
+      });
+      assert.deepStrictEqual(
+        [...remaining].sort(),
+        Array.from({ length: 10 }, (_, i) => `aaa-undownloadable-${i}`).sort(),
+      );
+    }),
   );
 });

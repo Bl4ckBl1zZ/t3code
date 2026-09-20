@@ -45,7 +45,6 @@ const catalogInput = {
   remoteGloballyEnabled: true,
   remoteInstanceEnabled: true,
   remotePairingToken: undefined,
-  remoteTlsCertificateSha256: undefined,
   profileKey: "main",
   importEnabled: true,
 } as const;

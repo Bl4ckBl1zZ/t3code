@@ -83,7 +83,9 @@
           "name": "Hourly check",
           "prompt": "Report meaningful changes",
           "schedule": "every 1h",
+          "scheduleDisplay": "every 60m",
           "paused": false,
+          "state": "scheduled",
           "deliver": "local",
           "model": "configured-model",
           "nextRunAt": "2026-09-14T09:00:00Z",
@@ -142,7 +144,9 @@
         "name": "Hourly check",
         "prompt": "Report meaningful changes",
         "schedule": "every 1h",
+        "scheduleDisplay": null,
         "paused": false,
+        "state": null,
         "deliver": "local",
         "model": "configured-model",
         "nextRunAt": "2026-09-14T09:00:00Z",
@@ -161,7 +165,6 @@
         "active": false,
         "jobId": "hourly-check",
         "status": "completed",
-        "deliveryStatus": null,
         "content": "A meaningful change was found.",
         "readAt": null
       }

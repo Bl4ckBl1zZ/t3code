@@ -118,3 +118,62 @@ it.effect("bounds history reconciliation and durably continues backfill on the n
     assert.strictEqual(cursor.offset, 400);
   }),
 );
+
+it.effect("bounds cron run-history refreshes per sweep and rotates across every job", () =>
+  Effect.gen(function* () {
+    const calls: HermesDashboardRequest[] = [];
+    const JOBS = 40;
+    let cursor = { watermark: 9_999, offset: 0, nextWatermark: 0, jobOffset: 0 };
+    const dashboard = HermesDashboardClient.of({
+      connection: () => Effect.die("Background reconciliation does not access raw credentials."),
+      connections: () =>
+        Effect.succeed({
+          connections: [{ providerInstanceId: "h", displayName: "Hermes", configured: true }],
+        }),
+      request: (input) =>
+        Effect.sync(() => {
+          calls.push(input);
+          if (input.path === "/api/profiles") return { profiles: [{ name: "default" }] };
+          if (input.path === "/api/cron/jobs")
+            // Uniform last_run_at, so coverage comes from the rotation rather
+            // than from the recency sort.
+            // Hermes reports last_run_at as an ISO timestamp. A stricter shape
+            // here fails the decode and silently stops the entire sweep, so the
+            // real-world form is what this exercises.
+            return Array.from({ length: JOBS }, (_, i) => ({
+              id: `job-${i}`,
+              last_run_at: `2026-09-14T02:${String(i % 60).padStart(2, "0")}:17.873243+02:00`,
+            }));
+          if (input.path.endsWith("/runs")) return { runs: [] };
+          return { sessions: [], total: 0 };
+        }),
+    });
+    const repository = HermesWorkRunRepository.of({
+      pendingResults: () => Effect.succeed([]),
+      getCursor: () => Effect.sync(() => cursor),
+      saveCursor: ({ cursor: next }) =>
+        Effect.sync(() => {
+          cursor = { ...next, jobOffset: next.jobOffset ?? 0 };
+        }),
+      getResult: () => Effect.succeed(null),
+      saveResult: () => Effect.void,
+      markRead: () => Effect.void,
+      list: () => Effect.succeed([]),
+      upsert: () => Effect.void,
+    });
+    const service = yield* makeHermesWorkSyncService.pipe(
+      Effect.provide(
+        Layer.merge(
+          Layer.succeed(HermesDashboardClient, dashboard),
+          Layer.succeed(HermesWorkRunRepository, repository),
+        ),
+      ),
+    );
+    for (let sweep = 0; sweep < 4; sweep += 1) yield* service.sweep();
+    const runFetches = calls.filter((call) => call.path.endsWith("/runs"));
+    // A sweep costs a fixed number of requests no matter how many schedules exist.
+    assert.strictEqual(runFetches.length, 40);
+    // And rotating reaches every job, so none is permanently skipped.
+    assert.strictEqual(new Set(runFetches.map((call) => call.path.split("/")[4])).size, JOBS);
+  }),
+);

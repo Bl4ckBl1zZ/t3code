@@ -12,7 +12,6 @@ import {
   HermesGatewayCapabilityError,
   HermesGatewayRpcError,
   HermesGatewayMutationIndeterminateError,
-  HermesGatewayMutationsBlockedError,
 } from "./HermesGatewayClient.ts";
 import {
   queryHermesWorkGroups,
@@ -37,7 +36,6 @@ function failure(cause: unknown): HermesWorkError {
   if (isWorkError(cause)) return cause;
   if (
     cause instanceof HermesGatewayMutationIndeterminateError ||
-    cause instanceof HermesGatewayMutationsBlockedError ||
     (cause instanceof HermesGatewayRpcError && cause.disposition === "indeterminate")
   )
     return new HermesWorkError({

@@ -76,6 +76,7 @@ import Migration0058 from "./Migrations/058_AuthSessionClientConnection.ts";
 import Migration0059 from "./Migrations/059_ProjectionProjectIcon.ts";
 import Migration0060 from "./Migrations/060_AgentSessionImports.ts";
 import Migration0061 from "./Migrations/061_HermesWorkRuns.ts";
+import Migration0062 from "./Migrations/062_HermesWorkRunResultAttempts.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -149,6 +150,7 @@ export const migrationEntries = [
   [59, "ProjectionProjectIcon", Migration0059],
   [60, "AgentSessionImports", Migration0060],
   [61, "HermesWorkRuns", Migration0061],
+  [62, "HermesWorkRunResultAttempts", Migration0062],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -239,6 +241,7 @@ export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]
   [59, { kind: "column", table: "projection_projects", column: "project_icon_json" }],
   [60, { kind: "table", table: "agent_session_import_sources" }],
   [61, { kind: "table", table: "hermes_work_runs" }],
+  [62, { kind: "column", table: "hermes_work_runs", column: "result_attempted_at" }],
 ];
 
 const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {

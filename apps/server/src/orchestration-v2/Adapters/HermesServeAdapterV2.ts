@@ -59,7 +59,6 @@ import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   assessHermesConnectionSecurity,
   HERMES_REMOTE_PAIRING_TOKEN_ENV,
-  HERMES_REMOTE_TLS_CERT_SHA256_ENV,
 } from "../../hermes/HermesConnectionSecurity.ts";
 import {
   HermesGatewayClient,
@@ -378,7 +377,6 @@ export interface HermesServeAdapterV2Options {
   readonly enabled: boolean;
   readonly authToken: string | undefined;
   readonly remotePairingToken?: string | undefined;
-  readonly remoteTlsCertificateSha256?: string | undefined;
   readonly connectionRuntime?: HermesServeRuntimeShape | undefined;
   readonly idAllocator: IdAllocatorV2Shape;
   readonly repository: HermesSessionBindingRepositoryShape;
@@ -420,12 +418,6 @@ export function resolveHermesRemotePairingToken(
   environment: ProviderInstanceEnvironment,
 ): string | undefined {
   return resolveSensitiveHermesEnvironment(environment, HERMES_REMOTE_PAIRING_TOKEN_ENV);
-}
-
-export function resolveHermesRemoteTlsCertificateSha256(
-  environment: ProviderInstanceEnvironment,
-): string | undefined {
-  return resolveSensitiveHermesEnvironment(environment, HERMES_REMOTE_TLS_CERT_SHA256_ENV);
 }
 
 function resolveSensitiveHermesEnvironment(
@@ -681,9 +673,10 @@ interface HermesThreadState {
   externalRunActive: boolean;
   /**
    * Events from a gateway run with no T3 turn attached. They are held until a
-   * continuation turn opens to drain them, which is what makes Hermes-native
-   * proactive work (cron jobs, other clients on the same session) land in the
-   * T3 transcript instead of being dropped.
+   * continuation turn opens to drain them, which is what makes another client's
+   * work on this same session land in the T3 transcript instead of being
+   * dropped. Scheduled tasks do not arrive here: Hermes runs each one in its
+   * own `cron_*` session, so they surface through Work's run history instead.
    */
   readonly externalEvents: Array<HermesGatewayOrderedEvent>;
   externalContinuationRequested: boolean;
@@ -1202,7 +1195,6 @@ export function makeHermesServeAdapterV2(
         remoteGloballyEnabled: options.enabled,
         remoteInstanceEnabled: options.settings.remoteAccessEnabled,
         remotePairingToken: options.remotePairingToken,
-        remoteTlsCertificateSha256: options.remoteTlsCertificateSha256,
       });
       if (connectionSecurity.status !== "ready") {
         return yield* new ProviderAdapterOpenSessionError({
@@ -2700,8 +2692,10 @@ export function makeHermesServeAdapterV2(
       /**
        * Holds the events of a gateway run T3 never submitted and asks the
        * orchestrator for a continuation turn to drain them. Hermes streams
-       * cron jobs and other clients' prompts on the same session, and without
-       * this the transcript would only ever move when a T3 turn was open.
+       * other clients' prompts on this session, and without this the
+       * transcript would only ever move when a T3 turn was open. A scheduled
+       * task is not such a case: it gets its own session and never streams
+       * here.
        *
        * Content opens the offer; bare status events are captured only once
        * content exists, so a terminal status that arrives before the
@@ -5029,7 +5023,6 @@ export const makeHermesServeAdapterV2Driver = Effect.fn("makeHermesServeAdapterV
       enabled: input.enabled,
       authToken: token,
       remotePairingToken: resolveHermesRemotePairingToken(input.environment),
-      remoteTlsCertificateSha256: resolveHermesRemoteTlsCertificateSha256(input.environment),
       ...(options.connectionRuntime === undefined
         ? {}
         : { connectionRuntime: options.connectionRuntime }),

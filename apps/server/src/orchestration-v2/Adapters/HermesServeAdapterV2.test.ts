@@ -3466,7 +3466,6 @@ describe("HermesServeAdapterV2", () => {
           enabled: true,
           authToken: "local-token",
           remotePairingToken: "dedicated-pairing-token",
-          remoteTlsCertificateSha256: "ab".repeat(32),
           idAllocator,
           repository,
           clientFactory: () => {
