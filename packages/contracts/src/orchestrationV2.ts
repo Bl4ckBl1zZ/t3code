@@ -2739,6 +2739,9 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("message.dispatch"),
     restartContinuation: Schema.optional(Schema.Struct({ sourceRunId: RunId })),
     ...OrchestrationV2CreationFields,
+    // Attributes the message to the schedule that fired it, so the timeline can
+    // say so without the prompt carrying a synthetic prefix the agent reads.
+    scheduledTaskId: Schema.optional(ScheduledTaskId),
     commandId: CommandId,
     threadId: ThreadId,
     messageId: MessageId,

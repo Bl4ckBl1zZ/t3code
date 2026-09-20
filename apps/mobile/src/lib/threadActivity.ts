@@ -21,6 +21,7 @@ import type {
   OrchestrationV2UserMessageInputIntent,
   RunAttemptId,
   RunId,
+  ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -92,6 +93,8 @@ export interface ThreadFeedMessage {
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
+  /** Names the schedule that sent this message, when one did. */
+  readonly scheduledTaskId?: ScheduledTaskId;
   readonly visibility: OrchestrationV2ProjectedTurnItem["visibility"];
   readonly sourceThreadId: ThreadId;
   readonly createdAt: string;
@@ -1215,6 +1218,9 @@ export function buildThreadFeed(
                 inputIntent: item.inputIntent,
                 createdBy: item.createdBy,
                 creationSource: item.creationSource,
+                ...(item.scheduledTaskId === undefined
+                  ? {}
+                  : { scheduledTaskId: item.scheduledTaskId }),
               }
             : {}),
           visibility: row.visibility,

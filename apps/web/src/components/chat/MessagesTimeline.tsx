@@ -5,6 +5,7 @@ import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useAssetUrlState } from "../../assets/assetUrls";
 import type { ToolActivityIcon } from "@t3tools/contracts";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/userMessage";
 import { MonitorIcon } from "lucide-react";
 import { GitPullRequestIcon } from "lucide-react";
 import {
@@ -1288,7 +1289,18 @@ function MessageAuthorHeading({ children }: { children: string }) {
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const userAttachments = row.message.attachments ?? [];
-  const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
+  // Scheduled prompts used to carry their attribution as a text prefix; the
+  // presentation resolves both that and the structured field.
+  const userMessage = resolveUserMessagePresentation({
+    id: row.message.id,
+    role: row.message.role,
+    text: row.message.text,
+    ...(row.message.createdBy === undefined ? {} : { createdBy: row.message.createdBy }),
+    ...(row.message.scheduledTaskId === undefined
+      ? {}
+      : { scheduledTaskId: row.message.scheduledTaskId }),
+  });
+  const displayedUserMessage = deriveDisplayedUserMessageState(userMessage.text);
   const terminalContexts = displayedUserMessage.contexts;
   const previewAnnotations: ParsedPreviewAnnotation[] = [];
   let visibleText = displayedUserMessage.visibleText;
@@ -1318,7 +1330,14 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
   return (
     <div className={cn("group flex flex-col gap-1", isAgentMessage ? "items-start" : "items-end")}>
-      {isAgentMessage ? (
+      {userMessage.isAutomation ? (
+        <p
+          className="ms-1 text-[11px] text-muted-foreground/70"
+          data-user-message-attribution="automation"
+        >
+          Sent by automation
+        </p>
+      ) : isAgentMessage ? (
         <p
           className="ms-1 text-[11px] text-muted-foreground/70"
           data-user-message-attribution="agent"

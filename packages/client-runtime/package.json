@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./userMessage": {
+      "types": "./src/userMessage.ts",
+      "default": "./src/userMessage.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"

@@ -612,7 +612,13 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
         runId: item.runId,
         streaming: item.type === "assistant_message" && item.streaming,
         ...(item.type === "user_message"
-          ? { createdBy: item.createdBy, creationSource: item.creationSource }
+          ? {
+              createdBy: item.createdBy,
+              creationSource: item.creationSource,
+              ...(item.scheduledTaskId === undefined
+                ? {}
+                : { scheduledTaskId: item.scheduledTaskId }),
+            }
           : {}),
         createdAt,
         updatedAt: DateTime.formatIso(item.updatedAt),

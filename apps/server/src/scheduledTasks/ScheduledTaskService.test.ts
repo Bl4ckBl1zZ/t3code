@@ -69,6 +69,43 @@ const makeTestLayer = (input: {
     Layer.provide(NodeServices.layer),
   );
 
+/** Captures what a fired task actually sends, for the attribution assertions. */
+const makeDispatchCapturingLayer = (
+  sends: Array<Parameters<ThreadManagementService["Service"]["sendToThread"]>[0]>,
+) =>
+  scheduledTaskLayer.pipe(
+    Layer.provide(
+      Layer.mock(ThreadManagementService)({
+        streamDomainEvents: Stream.empty,
+        getThreadShell: () => Effect.succeed({ deletedAt: null } as never),
+        sendToThread: (input) =>
+          Effect.sync(() => {
+            sends.push(input);
+          }).pipe(Effect.as({} as never)),
+      }),
+    ),
+    Layer.provide(Layer.mock(ThreadLaunchService)({})),
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "scheduled-task-run-test-" })),
+    Layer.provide(NodeServices.layer),
+  );
+
+it.effect("sends a schedule's prompt verbatim and names the schedule on the message", () =>
+  Effect.gen(function* () {
+    const sends: Array<Parameters<ThreadManagementService["Service"]["sendToThread"]>[0]> = [];
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService;
+      const created = yield* service.upsert(taskInput({ title: "Bound", threadId: boundThreadId }));
+      yield* service.runNow({ id: created.task.id });
+
+      assert.equal(sends.length, 1);
+      // The agent reads the prompt the user wrote, with no synthetic prefix.
+      assert.equal(sends[0]?.text, "Sweep the PRs");
+      assert.equal(sends[0]?.scheduledTaskId, created.task.id);
+    }).pipe(Effect.provide(makeDispatchCapturingLayer(sends)));
+  }),
+);
+
 const titlesFor = (service: ScheduledTaskService["Service"]) =>
   service.list().pipe(Effect.map((result) => result.tasks.map((task) => task.title).toSorted()));
 

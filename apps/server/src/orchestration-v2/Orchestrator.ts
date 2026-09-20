@@ -988,6 +988,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           status: "completed",
           title: null,
           type: "user_message",
+          ...(queuedMessage.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: queuedMessage.scheduledTaskId }),
           messageId: queuedMessage.id,
           text: queuedMessage.text,
           attachments: queuedMessage.attachments,
@@ -2446,6 +2449,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly attachments: ReadonlyArray<ChatAttachment>;
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
+    readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly forceRestart: boolean;
   }) =>
     Effect.gen(function* () {
@@ -2561,6 +2565,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           const message: OrchestrationV2ConversationMessage = {
             createdBy: input.createdBy,
             creationSource: input.creationSource,
+            ...(input.scheduledTaskId === undefined
+              ? {}
+              : { scheduledTaskId: input.scheduledTaskId }),
             id: input.messageId,
             threadId: input.command.threadId,
             runId: messageInput.runId,
@@ -2590,6 +2597,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             completedAt: now,
             updatedAt: now,
             type: "user_message",
+            ...(input.scheduledTaskId === undefined
+              ? {}
+              : { scheduledTaskId: input.scheduledTaskId }),
             messageId: input.messageId,
             inputIntent:
               input.command.type === "queued-message.promote-to-steer"
@@ -3286,6 +3296,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           attachments: command.attachments,
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          ...(command.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: command.scheduledTaskId }),
           forceRestart: dispatchMode.type === "restart_active",
         });
         return;
@@ -3436,6 +3449,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          ...(command.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: command.scheduledTaskId }),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -3692,6 +3708,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          ...(command.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: command.scheduledTaskId }),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -3722,6 +3741,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           completedAt: now,
           updatedAt: now,
           type: "user_message",
+          ...(command.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: command.scheduledTaskId }),
           messageId: command.messageId,
           inputIntent: "turn_start",
           text: dispatchText,
@@ -4464,6 +4486,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
+        ...(command.scheduledTaskId === undefined
+          ? {}
+          : { scheduledTaskId: command.scheduledTaskId }),
         id: command.messageId,
         threadId: command.threadId,
         runId,
@@ -4494,6 +4519,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: now,
         updatedAt: now,
         type: "user_message",
+        ...(command.scheduledTaskId === undefined
+          ? {}
+          : { scheduledTaskId: command.scheduledTaskId }),
         messageId: command.messageId,
         inputIntent: "turn_start",
         text: dispatchText,
@@ -5480,16 +5508,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const text =
           questionItem?.type === "user_input_request"
             ? questionItem.questions
-                .map((question) => {
+                .flatMap((question) => {
                   const answer = command.answers?.[question.id];
+                  const files = (questionAttachments[question.id] ?? [])
+                    .map((file) => file.name)
+                    .join(", ");
+                  // A question the provider marked optional and the user left
+                  // blank must not appear as if it had been answered.
+                  if (question.required === false && answer === undefined && files === "") {
+                    return [];
+                  }
                   const rendered =
                     typeof answer === "string"
                       ? answer
                       : JSON.stringify(answer ?? "See attached files.");
-                  const files = (questionAttachments[question.id] ?? [])
-                    .map((file) => file.name)
-                    .join(", ");
-                  return `${question.question}\n${rendered}${files ? `\nFiles: ${files}` : ""}`;
+                  return [`${question.question}\n${rendered}${files ? `\nFiles: ${files}` : ""}`];
                 })
                 .join("\n\n")
             : "Question response";
@@ -5638,6 +5671,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         attachments: queuedMessage.attachments,
         createdBy: queuedMessage.createdBy,
         creationSource: queuedMessage.creationSource,
+        ...(queuedMessage.scheduledTaskId === undefined
+          ? {}
+          : { scheduledTaskId: queuedMessage.scheduledTaskId }),
         forceRestart: false,
       });
     });

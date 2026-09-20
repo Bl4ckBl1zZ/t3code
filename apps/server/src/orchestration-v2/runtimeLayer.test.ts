@@ -1462,6 +1462,102 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     );
   }
 
+  it.effect("leaves an unanswered optional question out of the response message", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const sink = yield* EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("question-optional");
+      const requestId = RuntimeRequestId.make("request-optional");
+      const nodeId = NodeId.make("question-node-optional");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "mobile",
+        commandId: CommandId.make("question-create-optional"),
+        threadId,
+        projectId: ProjectId.make("questions-project"),
+        title: "Question",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/questions",
+      });
+      yield* sink.write({
+        commandId: CommandId.make("question-seed-optional"),
+        events: [
+          {
+            id: EventId.make("request-event-optional"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: requestId,
+              nodeId,
+              providerTurnId: null,
+              kind: "user_input",
+              status: "pending",
+              responseMode: "message",
+              nativeRequestRef: { driver, nativeId: "async-optional", strength: "strong" },
+              responseCapability: {
+                type: "live",
+                providerSessionId: ProviderSessionId.make("detached-session"),
+              },
+              createdAt: now,
+              resolvedAt: null,
+            },
+          },
+          {
+            id: EventId.make("question-item-event-optional"),
+            type: "turn-item.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("question-item-optional"),
+              threadId,
+              runId: null,
+              nodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 0,
+              status: "waiting",
+              title: null,
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+              type: "user_input_request",
+              requestId,
+              questions: [
+                { id: "spec", header: "Question", question: "Which spec?", options: [] },
+                {
+                  id: "notes",
+                  header: "Question",
+                  question: "Anything else?",
+                  options: [],
+                  required: false,
+                },
+              ],
+            },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId: CommandId.make("question-respond-optional"),
+        threadId,
+        requestId,
+        answers: { spec: "Use this spec" },
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(projection.messages[0]?.text, "Which spec?\nUse this spec");
+    }),
+  );
+
   it.effect("persists active order in shells and clears it on re-entry", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
