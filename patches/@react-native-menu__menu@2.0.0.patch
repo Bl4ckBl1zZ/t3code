@@ -97,7 +97,7 @@ index 5c4e0da4292b15d3a27b5ea1555f11452a470815..db134864676ed83dbcd895d7a1bde38e
      func setup () {
          let menu = UIMenu(title: _title,
              identifier: nil,
-@@ -86,8 +111,98 @@ public class MenuViewImplementation: UIButton {
+@@ -86,8 +111,102 @@ public class MenuViewImplementation: UIButton {
              }
          }
  
@@ -184,13 +184,17 @@ index 5c4e0da4292b15d3a27b5ea1555f11452a470815..db134864676ed83dbcd895d7a1bde38e
 +            if let existing = longPressInteraction {
 +                existing.view?.removeInteraction(existing)
 +            }
-+            let interaction = UIContextMenuInteraction(delegate: self)
++            // UIControl's built-in interaction presents a compact menu that
++            // preserves the keyboard; a separate view interaction presents a
++            // rich context menu and temporarily hides it.
++            guard let interaction = self.contextMenuInteraction else { return }
 +            host.addInteraction(interaction)
 +            longPressInteraction = interaction
 +            return
 +        }
 +        if let existing = longPressInteraction {
 +            existing.view?.removeInteraction(existing)
++            self.addInteraction(existing)
 +            longPressInteraction = nil
 +        }
      }
