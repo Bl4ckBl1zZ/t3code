@@ -18,7 +18,8 @@ New calls follow the end of web tool history only when you were already reading 
 bottom. Updates to an existing call do not pull you away from older output.
 
 Known T3 tools use readable action names and reflect whether the call is running, completed,
-failed or canceled. Pull-request actions show the request number when available and use a
+failed or canceled. A command reads as failed when it exits with an error or its output says
+the command was not found, even when the agent reports the call as finished. Pull-request actions show the request number when available and use a
 pull-request icon; preview-browser actions use a browser icon. Completed history summaries
 keep those actions distinct from other tools.
 

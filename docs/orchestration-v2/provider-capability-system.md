@@ -17,6 +17,7 @@ type ProviderCapabilities = {
   context: ContextCapabilities;
   checkpointing: CheckpointCapabilities;
   identity: IdentityCapabilities;
+  runtimePolicy: RuntimePolicyCapabilities;
 };
 ```
 
@@ -212,6 +213,26 @@ This controls how the normalizer correlates events:
 - `strong`: use native id as scoped provider ref.
 - `weak`: use native id plus ordinal/fingerprint.
 - `none`: allocate by scoped ordinal.
+
+## Runtime Policy Capabilities
+
+```ts
+type RuntimePolicyCapabilities = {
+  enforcement: "native" | "client-boundary";
+};
+```
+
+Where the thread's runtime mode is actually enforced, which is not the same as whether the
+adapter accepts one.
+
+- `native`: the provider receives the approval and sandbox policy each turn and confines its
+  own execution. Codex, Claude, Cursor and OpenCode report this.
+- `client-boundary`: policy is applied only where T3 mediates the work — permission requests
+  and the client filesystem and terminal handlers. Provider-owned execution is unconfined, so
+  the sandbox guarantee is weaker. The ACP family and Hermes report this.
+
+Events persisted before the field existed decode to `client-boundary`, so replay never
+overclaims enforcement.
 
 ## Degradation Policies
 

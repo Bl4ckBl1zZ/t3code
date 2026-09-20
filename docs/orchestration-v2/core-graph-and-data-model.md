@@ -660,6 +660,9 @@ type CommandExecution = {
   status: TurnItemStatus;
   output?: string;
   exitCode?: number;
+  // Decided server-side, from the whole output before transport truncation.
+  // A provider can close a command as completed while its output says otherwise.
+  outputIndicatesFailure?: boolean;
 };
 
 type DynamicTool = {
@@ -675,5 +678,10 @@ Compaction, handoff, and fork are orchestration lifecycle items, not dynamic too
 - `compaction`: one item can transition from `running` with title like "Compacting context..." to `completed` with title like "Compacted context".
 - `handoff`: records the context bridge from one or more source provider threads/providers to a target provider thread/provider.
 - `fork`: records that the user or system created a new app thread from a run, node, or provider thread.
+- `notification`: reports work that finished outside the turn reading it — a delegated task, a
+  background command or task, or a monitor. Its `outcome` describes that work; the item's own
+  `status` only describes the record. No adapter here emits one yet, so it arrives only from a
+  newer server.
+- `system_notice`: a message from the app rather than the provider. Also not emitted here yet.
 
 The UI can render known variants with deterministic components and render `dynamic_tool` as expandable JSON input/output. Each turn item keeps refs back to `runId`, `nodeId`, `providerTurnId`, and `nativeItemRef` so debug views can jump from the display stream back into the graph and provider logs.

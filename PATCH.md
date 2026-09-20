@@ -1563,3 +1563,24 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   No cross-app capture API exists on iOS. Linux/Windows capture backends and desktop-config
   installers are omitted from the macOS-only build, and upstream's V1 provider injection is
   replaced by the V2 start/control boundaries. No migration or V1 runtime is imported.
+
+- Adopts the orchestration wire surface from upstream PR #2829 (`t3code/codex-turn-mapping`)
+  from `c9f033a9b7` forward, the point our own PR #263 last took it. Notifications, system
+  notices, an `idle` item/subagent/node status, per-turn token usage, native provider-thread
+  metadata, structured file-change details, historical handoff messages, the `message`
+  response capability and the runtime-policy capability all land in `@t3tools/contracts`, so a
+  fork client and an upstream-shaped server interoperate rather than failing to decode. Where
+  an item or status has no producer here yet, both clients render it or degrade, never crash.
+  Deliberate divergences: `t3_thread_start` stays until upstream's `t3_thread_launch` and its
+  workspace strategies land, so the published tool does not disappear before its replacement;
+  `formatElapsed` stays for the native mobile feed; the richer fork `t3McpToolPresentation`
+  and the fork's `threadPullRequestsV2` capability win over upstream's narrower versions;
+  `delegatedTaskProgress` omits upstream's provider-thread background-task clause, which has
+  no projection here; and the wire projection keeps sending a truncated command-output preview
+  instead of dropping output entirely, since our timeline renders it. Protocol negotiation is
+  ported but deliberately uncalled: our servers advertise no `orchestrationProtocolVersion`, so
+  enforcing version 2 today would reject every existing fork server, including remote,
+  Tailscale and T3 Connect ones. `connection/compatibility.ts` gains callers only in the change
+  that makes our server advertise the version. Upstream's keyset thread paging
+  (`OrchestrationV2ThreadBoundedSnapshot`, `threadHistoryHttp`) and its V1 `subagentRuntime`
+  bridge remain unadopted, per the entries above.
