@@ -11,6 +11,8 @@ import * as ThreadMetadataMcp from "./ThreadMetadataMcpService.ts";
 
 const threadId = ThreadId.make("thread:metadata-caller");
 const scope: McpInvocationContext.McpInvocationScope = {
+  credentialId: "credential:metadata-test",
+  audience: "metadata-test",
   environmentId: EnvironmentId.make("environment:metadata-test"),
   threadId,
   providerSessionId: "provider-session:metadata-test",

@@ -120,13 +120,9 @@ function resultFromThread(input: {
     commandId: input.commandId,
     sequence: input.sequence,
     title: input.thread.title,
-    titleRegeneration:
-      input.thread.titleRegeneration === undefined || input.thread.titleRegeneration === null
-        ? null
-        : {
-            requestId: input.thread.titleRegeneration.requestId,
-            startedAt: DateTime.formatIso(input.thread.titleRegeneration.startedAt),
-          },
+    // Our `ThreadTitleRegeneration.startedAt` is a `DateTime.Utc`, where
+    // upstream's is already an ISO string, so it passes straight through.
+    titleRegeneration: input.thread.titleRegeneration ?? null,
     linkedPullRequest: input.thread.linkedPullRequest ?? null,
     updatedAt: DateTime.formatIso(input.thread.updatedAt),
   };

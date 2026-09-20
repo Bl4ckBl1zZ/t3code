@@ -1676,8 +1676,13 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   delegation does. Upstream's `toolkits/core.test.ts` comes with it, adapted in one place: it
   asserts every published tool brands as `t3-code`, where we brand by tool family (preview tools
   are `browser`, PR tools are `pull-request`), so the assertion checks the declared icon instead.
-  The toolkits upstream registers beside this one -- `project`, `environment`, `previewControls`,
-  `attachment`, `device` -- are not carried yet.
+  Four fork-shaped substitutions were needed: `threadMetadataMcp.ts` had to be re-exported from the
+  contracts index (it was in the tree with nothing exporting it), thread search goes through our
+  `orchestration-v2/ThreadSearchQuery` rather than upstream's `ProjectionSnapshotQuery.searchThreads`,
+  `t3_thread_organize`'s pin and unpin dispatch `thread.metadata.update` with `pinned` because we
+  have no `thread.pin` command, and `ThreadMetadataMcpUpdateResult.titleRegeneration` passes through
+  unchanged because our `startedAt` is already a `DateTime.Utc`. The toolkits upstream registers
+  beside this one -- `project`, `attachment`, `device` -- are not carried yet.
 
 - The MCP `environment` and `previewControls` toolkits from PR #2829 come with the thread one:
   `t3_environment_read` / `t3_environment_preferences_update` and `t3_preview_list` /

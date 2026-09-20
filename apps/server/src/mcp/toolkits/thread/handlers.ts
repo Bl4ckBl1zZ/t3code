@@ -18,7 +18,7 @@ import {
   readWritableThread,
   unavailable,
 } from "../../threadAccess.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ThreadSearchQuery from "../../../orchestration-v2/ThreadSearchQuery.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
 import { ThreadToolkit } from "./tools.ts";
@@ -103,7 +103,7 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
   t3_thread_search: (input) =>
     Effect.gen(function* () {
       const { caller } = yield* readCaller();
-      const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const query = yield* ThreadSearchQuery.ThreadSearchQuery;
       const result = yield* query.searchThreads(input).pipe(Effect.mapError(unavailable));
       return { matches: result.matches.filter((match) => match.projectId === caller.projectId) };
     }),
@@ -272,6 +272,11 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
       let command: OrchestrationV2Command;
       switch (input.action) {
+        // Pinning is a metadata field here, not a command of its own.
+        case "pin":
+        case "unpin":
+          command = { ...common, type: "thread.metadata.update", pinned: input.action === "pin" };
+          break;
         case "snooze":
           if (input.snoozedUntil === undefined) {
             return yield* new OrchestratorMcpFailure({
