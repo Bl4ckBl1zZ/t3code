@@ -115,6 +115,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --workspace-native-controls-inset: 0px;
   --workspace-titlebar-control-size: 1.75rem;
   --workspace-titlebar-control-gap: 0.75rem;
+  --workspace-titlebar-scroll-fade-height: 1.5rem;
   --chat-content-max-width: 46rem;
   --thread-details-panel-width: 19.5rem;
   --thread-details-panel-inset: 0px;
@@ -446,7 +447,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @utility topbar-scroll-fade {
-  --topbar-scroll-fade-height: 2.5rem;
   -webkit-mask-image:
     linear-gradient(
       to bottom,
@@ -462,8 +462,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   -webkit-mask-position: top, bottom, right;
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-size:
-    100% calc(var(--topbar-scroll-fade-height) + 1px),
-    100% calc(100% - var(--topbar-scroll-fade-height)),
+    100% calc(var(--workspace-titlebar-scroll-fade-height) + 1px),
+    100% calc(100% - var(--workspace-titlebar-scroll-fade-height)),
     var(--app-scrollbar-width) 100%;
   mask-image:
     linear-gradient(
@@ -480,13 +480,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   mask-position: top, bottom, right;
   mask-repeat: no-repeat;
   mask-size:
-    100% calc(var(--topbar-scroll-fade-height) + 1px),
-    100% calc(100% - var(--topbar-scroll-fade-height)),
+    100% calc(var(--workspace-titlebar-scroll-fade-height) + 1px),
+    100% calc(100% - var(--workspace-titlebar-scroll-fade-height)),
     var(--app-scrollbar-width) 100%;
-
-  @variant sm {
-    --topbar-scroll-fade-height: 3rem;
-  }
 }
 
 /* Virtualizers own their native scroll element, so they cannot use ScrollArea's
@@ -1468,19 +1464,19 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   @variant dark {
     color-scheme: dark;
-    /* Keep the workspace in the same neutral-black family as sidebar v2.
-       Surfaces lift from this base instead of starting from a milky gray. */
+    /* Keep controls and floating surfaces close to the neutral-black canvas.
+       Borders and hover states provide separation without milky gray fills. */
     --background: var(--color-neutral-950);
-    --surface-raised: var(--secondary);
+    --surface-raised: color-mix(in srgb, var(--background) 97%, var(--color-white));
     --foreground: var(--color-neutral-100);
     --card: color-mix(in srgb, var(--background) 97%, var(--color-white));
     --card-foreground: var(--color-neutral-100);
-    --popover: color-mix(in srgb, var(--background) 94%, var(--color-white));
+    --popover: color-mix(in srgb, var(--background) 97%, var(--color-white));
     --popover-foreground: var(--color-neutral-100);
     --primary: oklch(0.571 0.21 264);
-    --secondary: --alpha(var(--color-white) / 4%);
+    --secondary: --alpha(var(--color-white) / 3%);
     --secondary-foreground: var(--color-neutral-100);
-    --muted: --alpha(var(--color-white) / 4%);
+    --muted: --alpha(var(--color-white) / 3%);
     --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
     --accent: --alpha(var(--color-white) / 4%);
     --accent-foreground: var(--color-neutral-100);
@@ -2070,6 +2066,16 @@ code {
   -webkit-app-region: drag;
 }
 
+/* Electron 44 inherits app-region. Reset children to the initial value so they
+   do not add drag rectangles over fixed controls. Explicit `none` is treated
+   as `no-drag` and breaks titlebar dragging; `initial` emits no rectangle.
+   The base layer lets explicit drag/no-drag utilities take precedence. */
+@layer base {
+  .drag-region > * {
+    -webkit-app-region: initial;
+  }
+}
+
 .drag-region button,
 .drag-region input,
 .drag-region textarea,
@@ -2332,6 +2338,22 @@ code {
   background: transparent !important;
 }
 
+/* Paragraphs and code blocks arrive in chunks while a response streams. Fade
+   each new block in so the chunk does not pop. @starting-style only applies
+   when an element is first inserted, and the rule is gated on data-streaming,
+   so opening a finished thread never replays the fade. Opacity only, one
+   shot, no layout change. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-markdown[data-streaming] > *,
+  .chat-markdown[data-streaming] .chat-markdown-shiki {
+    transition: opacity 600ms ease-out;
+
+    @starting-style {
+      opacity: 0;
+    }
+  }
+}
+
 /* Diagnostics-style tables: row separators only, uppercase headers, and a
    scroll-fade container for horizontal overflow. The root chat-markdown
    wrapping rules (overflow-wrap: anywhere) would let columns shrink to single
@@ -2581,32 +2603,36 @@ code {
   }
 }
 
-/* Text shimmer for in-flight AI work (running tool calls, live agent status).
-   Settled text must never shimmer — remove the class the moment work stops. */
-.text-shimmer {
-  color: transparent;
-  background-image: linear-gradient(
-    90deg,
-    var(--muted-foreground) 20%,
-    var(--foreground) 50%,
-    var(--muted-foreground) 80%
-  );
-  background-size: 200% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  animation: text-shimmer-sweep 1.8s linear infinite;
-  animation-play-state: var(--visible-animation-state, paused);
-}
-@media (prefers-reduced-motion: reduce) {
-  .text-shimmer {
-    animation: none;
-    color: var(--muted-foreground);
-    background-image: none;
+/* Shine for in-flight AI work (running tool calls, live agent status). A narrow
+   highlight band sweeps muted label text; steps() keeps it to 30 repaints per
+   cycle instead of one per vsync. Settled text must never shine — remove the
+   class the moment work stops. */
+@keyframes live-tool-shine {
+  from {
+    background-position:
+      -4.5rem 0,
+      0 0;
+  }
+  to {
+    background-position:
+      calc(100% + 4.5rem) 0,
+      0 0;
   }
 }
-@keyframes text-shimmer-sweep {
-  to {
-    background-position: -200% 0;
+
+@utility live-tool-shine {
+  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+    color: transparent;
+    background-image:
+      linear-gradient(to right, transparent, var(--contrast-foreground), transparent),
+      linear-gradient(var(--contrast-secondary-label), var(--contrast-secondary-label));
+    background-size:
+      4.5rem 100%,
+      100% 100%;
+    background-repeat: no-repeat;
+    background-clip: text;
+    animation: live-tool-shine 2.2s steps(30) infinite;
+    animation-play-state: var(--visible-animation-state, paused);
   }
 }
 
