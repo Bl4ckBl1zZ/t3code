@@ -175,8 +175,20 @@ export function applyOrchestrationV2ProjectionEvent(
       };
     case "provider-thread.updated":
       return { ...base, providerThreads: upsertEntity(base.providerThreads, event.payload) };
-    case "provider-turn.updated":
-      return { ...base, providerTurns: upsertEntity(base.providerTurns, event.payload) };
+    case "provider-turn.updated": {
+      // A later provider-turn event may omit usage it already reported; keep the
+      // last reading so the live context meter does not blink back to empty.
+      const retained =
+        event.payload.tokenUsage ??
+        base.providerTurns.find((turn) => turn.id === event.payload.id)?.tokenUsage;
+      return {
+        ...base,
+        providerTurns: upsertEntity(base.providerTurns, {
+          ...event.payload,
+          ...(retained === undefined ? {} : { tokenUsage: retained }),
+        }),
+      };
+    }
     case "runtime-request.updated":
       return { ...base, runtimeRequests: upsertEntity(base.runtimeRequests, event.payload) };
     case "message.updated":
@@ -189,8 +201,9 @@ export function applyOrchestrationV2ProjectionEvent(
       // requests. Ordinary item updates (the token-streaming hot path) can
       // therefore patch just their own row; a full rescan on every delta made
       // streaming O(N²) on long threads.
+      const previous = projection.turnItems.find((item) => item.id === event.payload.id);
       const visible =
-        event.payload.type === "run_interrupt_request"
+        event.payload.type === "run_interrupt_request" || previous?.type === "run_interrupt_request"
           ? { ...next, visibleTurnItems: activeVisibleTurnItems(next) }
           : next;
       return {

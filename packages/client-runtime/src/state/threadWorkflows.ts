@@ -1,4 +1,5 @@
 import type {
+  ChatAttachment,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ThreadProjection,
@@ -7,6 +8,7 @@ import { copySorted } from "@t3tools/shared/Array";
 
 type Projection = OrchestrationV2ThreadProjection;
 type Run = Projection["runs"][number];
+type Message = Projection["messages"][number];
 type ProviderSession = Projection["providerSessions"][number];
 
 const ACTIVE_RUN_STATUSES = new Set<Run["status"]>(["preparing", "starting", "running", "waiting"]);
@@ -20,11 +22,16 @@ const MERGE_BACK_BLOCKING_RUN_STATUSES = new Set<Run["status"]>([
 export interface QueuedThreadRun {
   readonly run: Run;
   readonly text: string;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+  /** Editing replaces this message's content, so its id travels with the row. */
+  readonly messageId: Message["id"];
 }
 
 export interface ThreadQueueWorkflowState {
   readonly activeRun: Run | null;
   readonly queuedRuns: ReadonlyArray<QueuedThreadRun>;
+  /** Restart recovery holds the queue until the user resumes it. */
+  readonly isHeld: boolean;
   readonly canReorder: boolean;
   readonly canPromoteToSteer: boolean;
 }
@@ -80,6 +87,26 @@ export function resolveThreadProviderSession(projection: Projection): ProviderSe
   );
 }
 
+/**
+ * The runs the user actually queued. Automatic delegated-completion deliveries
+ * and notification wakes are the agent's own follow-up, not queue entries.
+ */
+export function getUserQueuedThreadRuns(
+  projection: Pick<Projection, "runs" | "messages">,
+): ReadonlyArray<Run> {
+  const automaticCompletionMessageIds = new Set(
+    projection.messages
+      .filter(
+        (message) =>
+          message.delegatedCompletion !== undefined || message.notification !== undefined,
+      )
+      .map((message) => message.id),
+  );
+  return projection.runs.filter(
+    (run) => run.status === "queued" && !automaticCompletionMessageIds.has(run.userMessageId),
+  );
+}
+
 export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQueueWorkflowState {
   const activeRun = resolveActiveThreadRun(projection);
   const session = resolveThreadProviderSession(projection);
@@ -90,30 +117,25 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
     projection.providerTurns.some(
       (turn) => turn.runAttemptId === activeRun.activeAttemptId && turn.status === "running",
     );
-  // Automatic delegated-completion deliveries are the agent's own follow-up,
-  // not something the user queued, so they stay out of the queue controls.
-  const automaticCompletionMessageIds = new Set(
-    projection.messages
-      .filter((message) => message.delegatedCompletion !== undefined)
-      .map((message) => message.id),
-  );
   const queuedRuns = copySorted(
-    projection.runs.filter(
-      (run) => run.status === "queued" && !automaticCompletionMessageIds.has(run.userMessageId),
-    ),
+    getUserQueuedThreadRuns(projection),
     (left, right) =>
       (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal) ||
       left.ordinal - right.ordinal,
-  ).map((run) => ({
-    run,
-    text:
-      projection.messages.find((message) => message.id === run.userMessageId)?.text ??
-      "Queued message",
-  }));
+  ).map((run) => {
+    const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
+    return {
+      run,
+      text: message?.text ?? "Queued message",
+      attachments: message?.attachments ?? [],
+      messageId: run.userMessageId,
+    };
+  });
 
   return {
     activeRun,
     queuedRuns,
+    isHeld: projection.runs.some((run) => run.status === "queued" && run.queueHeld === true),
     canReorder: capabilities?.supportsQueuedMessages === true,
     canPromoteToSteer:
       hasSteerableProviderTurn &&
