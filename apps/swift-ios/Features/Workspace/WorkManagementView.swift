@@ -100,7 +100,6 @@ struct WorkManagementView: View {
                         VStack(alignment: .leading) {
                             HStack { Text(run.title); if run.readAt == nil { Text("New").font(.caption).foregroundStyle(.secondary) } }
                             Text(run.status ?? (run.active ? "Running" : (run.endedAt == nil ? "Outcome unknown" : "Ended"))).font(.caption)
-                            if let delivery = run.deliveryStatus { Text("Delivery: \(delivery)").font(.caption) }
                             if let startedAt = run.startedAt { Text(Date(timeIntervalSince1970: startedAt).formatted()).font(.caption) }
                         }
                     }
@@ -174,7 +173,7 @@ struct WorkManagementView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(job.name).font(.headline)
                         Text(job.prompt).lineLimit(3)
-                        Text("\(job.schedule) · \(job.paused ? "Paused" : "Enabled")").font(.caption)
+                        Text("\(job.scheduleDisplay ?? job.schedule) · \(job.statusLabel)").font(.caption)
                         if let next = job.nextRunAt { Text("Next: \(next)").font(.caption) }
                         if let status = job.lastStatus { Text("Last result: \(status)").font(.caption) }
                         if let error = job.lastDeliveryError { Text("Delivery: \(error)").foregroundStyle(.red).font(.caption) }

@@ -39,7 +39,6 @@ describe("Hermes operational onboarding and gates", () => {
       gatewayToken: "private-gateway-token",
       remoteGloballyEnabled: false,
       remotePairingToken: undefined,
-      remoteTlsCertificateSha256: undefined,
     });
 
     expect(result.status).toBe("ready");

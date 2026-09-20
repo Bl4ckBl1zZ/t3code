@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -51,6 +53,58 @@ describe("HermesServeRuntime", () => {
       assert.notInclude(result, "private-token");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+  it.effect("frees the endpoint for a rotated credential instead of stranding its process", () =>
+    Effect.gen(function* () {
+      // The dashboard layer gives every runtime its own scope precisely so a
+      // credential change can stop the previous `hermes serve` child before the
+      // replacement tries to claim the same port. Without that the stale child
+      // keeps the listener, rejects the new token, and every later attempt
+      // reports endpoint_in_use for the rest of the process lifetime.
+      let runningToken: string | null = null;
+      const makeRuntime = (authToken: string) =>
+        makeHermesServeRuntime({
+          endpoint: "ws://127.0.0.1:19921/api/ws",
+          authToken,
+          managedServerEnabled: true,
+          processEnvironment: {},
+          probe: async (input) => {
+            if (runningToken === null) throw new Error("nothing is listening");
+            if (input.authToken !== runningToken) throw new Error("unauthorized");
+          },
+          endpointReachable: async () => runningToken !== null,
+          start: (input) =>
+            Effect.sync(() => {
+              runningToken = input.authToken;
+              return {
+                isRunning: Effect.succeed(runningToken !== null),
+                kill: () =>
+                  Effect.sync(() => {
+                    runningToken = null;
+                  }),
+              };
+            }),
+        });
+
+      const previousScope = yield* Scope.make();
+      const previous = yield* makeRuntime("old-token").pipe(
+        Effect.provideService(Scope.Scope, previousScope),
+      );
+      assert.equal((yield* previous.ensureReady).ownership, "t3_owned");
+      assert.equal(runningToken, "old-token");
+
+      yield* Scope.close(previousScope, Exit.void);
+      assert.isNull(runningToken, "closing the superseded runtime stops its child");
+
+      const nextScope = yield* Scope.make();
+      const next = yield* makeRuntime("new-token").pipe(
+        Effect.provideService(Scope.Scope, nextScope),
+      );
+      assert.equal((yield* next.ensureReady).ownership, "t3_owned");
+      assert.equal(runningToken, "new-token");
+      yield* Scope.close(nextScope, Exit.void);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("launches only its owned serve process without impersonating Hermes Desktop", () =>
     Effect.gen(function* () {
       let ready = false;

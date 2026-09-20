@@ -32,7 +32,6 @@ import {
   makeHermesServeAdapterV2Driver,
   resolveHermesGatewayToken,
   resolveHermesRemotePairingToken,
-  resolveHermesRemoteTlsCertificateSha256,
   type HermesServeAdapterV2DriverEnv,
 } from "../../orchestration-v2/Adapters/HermesServeAdapterV2.ts";
 import type { TextGenerationShape } from "../../textGeneration/TextGeneration.ts";
@@ -387,7 +386,6 @@ export function hermesProviderSnapshot(input: {
   readonly settings: HermesSettings;
   readonly gatewayToken: string | undefined;
   readonly remotePairingToken: string | undefined;
-  readonly remoteTlsCertificateSha256: string | undefined;
   readonly continuationKey: string;
   readonly checkedAt: string;
   readonly inventory?: {
@@ -426,7 +424,6 @@ export function hermesProviderSnapshot(input: {
         remoteGloballyEnabled: input.enabled,
         remoteInstanceEnabled: input.settings.remoteAccessEnabled,
         remotePairingToken: input.remotePairingToken,
-        remoteTlsCertificateSha256: input.remoteTlsCertificateSha256,
       })
     : undefined;
   const hasGatewayToken = Boolean(
@@ -519,7 +516,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       let checkedAt = DateTime.formatIso(yield* DateTime.now);
       const gatewayToken = resolveHermesGatewayToken(environment);
       const remotePairingToken = resolveHermesRemotePairingToken(environment);
-      const remoteTlsCertificateSha256 = resolveHermesRemoteTlsCertificateSha256(environment);
       const dashboardToken = isRemoteHermesEndpoint(config.endpoint)
         ? remotePairingToken?.trim() || gatewayToken
         : gatewayToken;
@@ -569,7 +565,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
           settings: config,
           gatewayToken,
           remotePairingToken,
-          remoteTlsCertificateSha256,
           continuationKey: continuationIdentity.continuationKey,
           checkedAt,
           effectiveEndpoint: connectionRuntime.effectiveEndpoint,
@@ -591,7 +586,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
           remoteGloballyEnabled: enabled,
           remoteInstanceEnabled: config.remoteAccessEnabled,
           remotePairingToken: undefined,
-          remoteTlsCertificateSha256: undefined,
         });
         if (configuredSecurity.status !== "ready") {
           inventoryWarning = configuredSecurity.message;
@@ -609,7 +603,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
           remoteGloballyEnabled: enabled,
           remoteInstanceEnabled: config.remoteAccessEnabled,
           remotePairingToken,
-          remoteTlsCertificateSha256,
         });
         if (security.status !== "ready") return currentSnapshot();
         const client = new HermesGatewayClient({
@@ -711,7 +704,6 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
                 remoteGloballyEnabled: enabled,
                 remoteInstanceEnabled: config.remoteAccessEnabled,
                 remotePairingToken,
-                remoteTlsCertificateSha256,
                 profileKey: config.profileKey,
                 importEnabled: config.importEnabled,
                 ensureReady: connectionRuntime.ensureReady,

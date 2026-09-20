@@ -264,6 +264,10 @@ export const makeHermesWorkService = Effect.gen(function* () {
             profile: text(job.profile) || input.profile,
             name: text(job.name),
             prompt: text(job.prompt),
+            // Kept re-parseable rather than pretty: this value is what the edit
+            // form loads and sends back, and Hermes only accepts the forms it
+            // can parse. Its own `display` reads better but round-trips into a
+            // parse error, so it travels separately.
             schedule:
               text(job.schedule) ||
               text(nested(job.schedule).expr) ||
@@ -272,7 +276,10 @@ export const makeHermesWorkService = Effect.gen(function* () {
                 ? `every ${number(nested(job.schedule).minutes)}m`
                 : "") ||
               text(job.schedule_display),
+            scheduleDisplay:
+              nullableText(nested(job.schedule).display) || nullableText(job.schedule_display),
             paused: flag(job.paused) || job.state === "paused",
+            state: nullableText(job.state),
             deliver: text(job.deliver) || "local",
             model: nullableText(job.model),
             nextRunAt: nullableText(job.next_run_at),
@@ -333,7 +340,6 @@ export const makeHermesWorkService = Effect.gen(function* () {
             active: flag(run.is_active),
             jobId: input.id,
             status: nullableText(run.end_reason),
-            deliveryStatus: previous?.deliveryStatus ?? null,
             content: previous?.content ?? nullableText(run.preview),
             readAt: previous?.readAt ?? null,
           });

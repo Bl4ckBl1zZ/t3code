@@ -16,7 +16,9 @@ Native schedules have one executor: Hermes. T3 does not schedule duplicate promp
 
 ## Connection and lifecycle
 
-The management transport resolves the configured connection through the environment's provider directory. It authenticates requests with a bearer token and does not forward credentials through redirects. Remote WebSockets acquire a single-use dashboard ticket over HTTPS. Local Serve connections use the native local token mechanism.
+The management transport resolves the configured connection through the environment's provider directory. It authenticates requests with a bearer token and does not forward credentials through redirects. Remote WebSockets acquire a single-use dashboard ticket over HTTPS. Local Serve connections use the native local token mechanism. T3 pins no certificate: a remote endpoint must present one the host already trusts.
+
+A managed backend belongs to its provider instance, not to the credential that launched it. Rotating a token or environment stops the previous backend before the replacement claims the endpoint, so a credential change cannot strand an orphan that holds the port and rejects every later connection.
 
 Local backend startup is serialized per endpoint so opening management and refreshing provider inventory cannot launch competing backends. The runtime only stops a process it owns.
 
@@ -44,11 +46,17 @@ Changing a conversation's model uses native `config.set` with session scope. `pr
 
 Older native events can omit run identifiers. After a turn finishes, trailing events must not open an external continuation: a new native run boundary is required. External continuations ingest already-running Hermes output; their internal notification text is never submitted as a new prompt.
 
+Prompt exclusion is durable and scoped to one binding: the unsettled-prompt intent guard owns it and can be repaired against the gateway after a crash. The transport records an indeterminate mutation for observability but never fences the socket on one. A socket carries every thread on a provider session, and the pinned protocol exposes no way to reconcile such a record afterwards, so a socket-wide fence would block unrelated threads with no way back.
+
 ## Background reconciliation
 
 The server-lifetime Work synchronization service reads native schedules and sessions and stores observed runs and outputs. It never triggers execution. The run repository keys observations by provider, profile, and session and retains associations with removed schedules.
 
-Session backfill is bounded and resumes from durable progress. Output retrieval is queued rather than downloading every conversation on every sweep. Available execution status is kept distinct from delivery status; absent information remains unknown.
+A sweep costs a bounded number of requests however much history an install holds. Session backfill resumes from a durable watermark. Schedule run history refreshes a fixed slice per sweep and rotates, so adding schedules adds no per-minute work; new runs still surface promptly because the session catalog observes them and recovers the schedule from the run identity. Output retrieval is a claimed queue: a batch is stamped before it is handed out, so a conversation whose output cannot be downloaded rotates to the back instead of holding the queue, and never-tried runs are fetched newest first.
+
+Execution status and delivery stay distinct, and absent information remains unknown. Hermes reports delivery per schedule rather than per run, so T3 surfaces it there instead of inventing a per-run value it cannot observe.
+
+A scheduled run executes in its own native session, never in the conversation that created the schedule, and local delivery keeps its output there. Run history is therefore the only place these results appear, and the external-continuation path never sees them. A schedule carries both a re-parseable timing string, which the editor round-trips, and the native display string, which names a one-shot as one; the native lifecycle value travels beside the pause flag so a spent one-shot or a failed schedule stops rendering as if it were still waiting to run.
 
 Legacy database migrations remain so existing installations can upgrade. The old ACP provider, manual import/reset RPCs, capability-probing conformance harness, and proactive inbox management path are removed. Historical compatibility does not re-enable the retired runtime.
 

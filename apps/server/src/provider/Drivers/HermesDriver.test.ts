@@ -14,7 +14,6 @@ import {
   hermesFastOverride,
   resolveHermesGatewayToken,
   resolveHermesRemotePairingToken,
-  resolveHermesRemoteTlsCertificateSha256,
 } from "../../orchestration-v2/Adapters/HermesServeAdapterV2.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { BUILT_IN_DRIVERS } from "../builtInDrivers.ts";
@@ -47,7 +46,6 @@ describe("HermesDriver", () => {
       settings,
       gatewayToken: "token",
       remotePairingToken: undefined,
-      remoteTlsCertificateSha256: undefined,
       continuationKey: "hermes",
       checkedAt: "2026-09-14T00:00:00.000Z",
       effectiveEndpoint: "ws://127.0.0.1:9119/api/ws",
@@ -283,20 +281,14 @@ describe("HermesDriver", () => {
     );
   });
 
-  it("only consumes dedicated sensitive remote trust and pairing variables", () => {
+  it("only consumes the dedicated sensitive pairing variable", () => {
     const environment = [
       { name: "HERMES_GATEWAY_TOKEN", value: "broad-token", sensitive: true },
       { name: "HERMES_REMOTE_PAIRING_TOKEN", value: "pairing-token", sensitive: true },
-      {
-        name: "HERMES_REMOTE_TLS_CERT_SHA256",
-        value: "ab".repeat(32),
-        sensitive: true,
-      },
       { name: "MCP_API_TOKEN", value: "must-not-be-used", sensitive: true },
     ];
 
     assert.equal(resolveHermesRemotePairingToken(environment), "pairing-token");
-    assert.equal(resolveHermesRemoteTlsCertificateSha256(environment), "ab".repeat(32));
     assert.isUndefined(
       resolveHermesRemotePairingToken([
         { name: "HERMES_REMOTE_PAIRING_TOKEN", value: "plain", sensitive: false },

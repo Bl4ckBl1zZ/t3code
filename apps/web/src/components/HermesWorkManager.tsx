@@ -2,7 +2,7 @@ import { waitForThreadShell } from "../state/entities";
 import { HermesSetup } from "./HermesSetup";
 import { useNavigate } from "@tanstack/react-router";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, hermesWorkScheduleStatus } from "@t3tools/contracts";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { HermesWorkGroups } from "./HermesWorkGroups";
 import type {
@@ -67,6 +67,13 @@ const SECTIONS: ReadonlyArray<{ id: Section; label: string }> = [
   { id: "artifacts", label: "Generated results" },
   { id: "files", label: "Files" },
 ];
+/** A finished task reads as finished; only a waiting one keeps the live badge. */
+const scheduleBadge = {
+  scheduled: { label: "Scheduled", variant: "success" },
+  paused: { label: "Paused", variant: "outline" },
+  completed: { label: "Completed", variant: "secondary" },
+  error: { label: "Failed", variant: "error" },
+} as const;
 type Schedule = HermesWorkQueryResult["schedules"][number];
 type Profile = HermesWorkQueryResult["profiles"][number];
 type Channel = HermesWorkQueryResult["channels"][number];
@@ -645,10 +652,10 @@ function HermesWorkManagerForEnvironment({ initialSection }: { readonly initialS
                   {data.schedules.map((job) => (
                     <Card key={job.id} title={job.name || job.id} detail={job.prompt}>
                       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                        <Badge variant={job.paused ? "outline" : "success"}>
-                          {job.paused ? "Paused" : "Scheduled"}
+                        <Badge variant={scheduleBadge[hermesWorkScheduleStatus(job)].variant}>
+                          {scheduleBadge[hermesWorkScheduleStatus(job)].label}
                         </Badge>
-                        <span>{job.schedule}</span>
+                        <span>{job.scheduleDisplay ?? job.schedule}</span>
                         <span>Deliver to {job.deliver || "local results"}</span>
                         {job.model ? <span>Model: {job.model}</span> : null}
                       </div>
@@ -746,11 +753,6 @@ function HermesWorkManagerForEnvironment({ initialSection }: { readonly initialS
                           {run.endedAt ? ` → ${formatTime(run.endedAt)}` : ""}
                         </span>
                       </div>
-                      {run.deliveryStatus ? (
-                        <p className="text-xs text-muted-foreground">
-                          Delivery: {run.deliveryStatus}
-                        </p>
-                      ) : null}
                       {run.readAt === null ? <Badge variant="outline">Unread</Badge> : null}
                       {run.content ? (
                         <p className="line-clamp-3 whitespace-pre-wrap text-sm text-muted-foreground">
@@ -1344,6 +1346,8 @@ function WorkEditor({
                 />
               </Field>
               <p className="text-xs text-muted-foreground">
+                Start with <code>every</code> to repeat, as in <code>every 10m</code> or{" "}
+                <code>every 1h</code>. A bare duration such as <code>30m</code> runs once and stops.
                 Timing follows the Hermes environment’s timezone. Review it before saving a daily
                 routine.
               </p>
@@ -1362,6 +1366,11 @@ function WorkEditor({
                   onChange={(event) => setDeliver(event.target.value)}
                 />
               </Field>
+              <p className="text-xs text-muted-foreground">
+                Local results stay in run history. Each run is its own Hermes conversation, so it
+                does not reply in the chat that created it. Name a messaging destination to be
+                notified elsewhere.
+              </p>
               <Field label="Model (optional)">
                 <Input
                   value={model}

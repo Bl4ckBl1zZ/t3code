@@ -20,7 +20,11 @@ Your existing Hermes conversations are available under Conversations. Open one t
 
 ## Schedule work
 
-In Scheduled tasks, create a task with its instructions, timing, and delivery destination. For example, use `every 1h` for an hourly check or `in 30m` for a one-time task. You can also ask the assistant to schedule work in conversation.
+In Scheduled tasks, create a task with its instructions, timing, and delivery destination. You can also ask the assistant to schedule work in conversation.
+
+Timing decides whether a task repeats, and the difference is one word. `every 1h` repeats hourly; `every 10m` repeats every ten minutes. A bare duration such as `30m` runs **once**, that far from now, and then stops. A cron expression such as `0 9 * * *` repeats. A task written without `every` is accepted and does exactly what it says: it runs a single time. After it does, it is listed as completed rather than scheduled, and it has no next run.
+
+Check the timing shown beside a task after saving it. A task that reads `once in 10m` will not repeat, however it was phrased when it was requested.
 
 Review the profile's background service status. The service must be running for unattended tasks to execute. Starting the connection alone does not guarantee that the scheduler is running.
 
@@ -32,9 +36,13 @@ Hermes schedules and T3 scheduled tasks for other providers have different execu
 
 Open a schedule's run history to inspect its individual runs, then select a run to read the output. The broader run list includes activity discovered from Hermes even when you did not start it in T3.
 
+A scheduled run does not continue the conversation you created it from. Every run is its own Hermes conversation, and with the default local delivery its output stays in run history. Asking an assistant in chat to check something every ten minutes therefore produces a task whose results you read under Scheduled tasks, not new messages arriving in that chat. To be notified elsewhere, choose a messaging destination for the task instead of local delivery.
+
 The T3 environment checks for background activity while its server is running. Reconnecting a client does not rerun the task. When Hermes does not report an outcome, T3 shows the uncertainty instead of assuming success.
 
-A task's execution and its delivery are separate outcomes. A result saved locally does not mean it was sent to a messaging channel. Choose and configure the destination you intend to use.
+Results are synchronized in the background, newest first. A long history fills in over several minutes, and a conversation whose output cannot be read is retried later instead of holding up the rest.
+
+A task's execution and its delivery are separate outcomes. A result saved locally does not mean it was sent to a messaging channel. Hermes reports delivery problems against the task rather than against an individual run, so check the task in Scheduled tasks for a delivery error. Choose and configure the destination you intend to use.
 
 ## Work while away
 

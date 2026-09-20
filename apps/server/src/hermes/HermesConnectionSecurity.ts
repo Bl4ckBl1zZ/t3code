@@ -1,5 +1,4 @@
 export const HERMES_REMOTE_PAIRING_TOKEN_ENV = "HERMES_REMOTE_PAIRING_TOKEN";
-export const HERMES_REMOTE_TLS_CERT_SHA256_ENV = "HERMES_REMOTE_TLS_CERT_SHA256";
 
 export type HermesEndpointScope = "loopback" | "remote";
 
@@ -31,7 +30,6 @@ export interface HermesConnectionSecurityInput {
   readonly remoteGloballyEnabled: boolean;
   readonly remoteInstanceEnabled: boolean;
   readonly remotePairingToken: string | undefined;
-  readonly remoteTlsCertificateSha256: string | undefined;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -150,8 +148,9 @@ export function assessHermesConnectionSecurity(
   }
 
   // The dashboard authenticates HTTPS management requests with this bearer
-  // token and issues single-use tickets for WebSocket connections. TLS trust
-  // is verified by the transport using the system certificate authorities.
+  // token and issues single-use tickets for WebSocket connections. TLS trust is
+  // whatever the platform's certificate authorities say: T3 pins nothing here,
+  // so a remote endpoint needs a certificate the host already trusts.
   return {
     status: "ready",
     scope,

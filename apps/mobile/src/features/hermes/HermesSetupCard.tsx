@@ -44,7 +44,7 @@ export function HermesSetupCard({
     configured && state?.phase === "idle"
       ? hermesEnvironment.workModelStatus({
           environmentId,
-          input: { providerInstanceId, profile: "default" },
+          input: { providerInstanceId },
         })
       : null,
   );

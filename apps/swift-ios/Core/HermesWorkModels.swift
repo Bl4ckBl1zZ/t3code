@@ -23,7 +23,9 @@ public struct HermesWorkSchedule: Decodable, Sendable, Identifiable {
     public let name: String
     public let prompt: String
     public let schedule: String
+    public let scheduleDisplay: String?
     public let paused: Bool
+    public let state: String?
     public let deliver: String
     public let model: String?
     public let nextRunAt: String?
@@ -32,6 +34,16 @@ public struct HermesWorkSchedule: Decodable, Sendable, Identifiable {
     public let lastError: String?
     public let continuity: Bool?
     public let lastDeliveryError: String?
+
+    /// Mirrors `hermesWorkScheduleStatus` in the contracts package: a spent
+    /// one-shot and a failed task are finished, not waiting, and must not keep
+    /// reading as enabled.
+    public var statusLabel: String {
+        if paused || state == "paused" { return "Paused" }
+        if state == "completed" { return "Completed" }
+        if state == "error" { return "Failed" }
+        return "Enabled"
+    }
 }
 public struct HermesWorkRun: Decodable, Sendable, Identifiable {
     public let id: String
@@ -42,7 +54,6 @@ public struct HermesWorkRun: Decodable, Sendable, Identifiable {
     public let active: Bool
     public let jobId: String?
     public let status: String?
-    public let deliveryStatus: String?
     public let content: String?
     public let readAt: String?
 }
@@ -207,7 +218,9 @@ public struct HermesWorkThreadDetails: Decodable, Sendable {
         public let name: String
         public let prompt: String
         public let schedule: String
+        public let scheduleDisplay: String?
         public let paused: Bool
+        public let state: String?
         public let deliver: String
         public let model: String?
         public let nextRunAt: String?

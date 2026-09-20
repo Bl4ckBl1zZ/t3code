@@ -70,7 +70,6 @@ export function makeHermesSessionCatalog(input: {
   readonly remoteGloballyEnabled: boolean;
   readonly remoteInstanceEnabled: boolean;
   readonly remotePairingToken: string | undefined;
-  readonly remoteTlsCertificateSha256: string | undefined;
   readonly profileKey: string;
   readonly importEnabled: boolean;
   readonly ensureReady?: Effect.Effect<HermesServeConnection, HermesServeRuntimeError>;
@@ -113,7 +112,6 @@ export function makeHermesSessionCatalog(input: {
         remoteGloballyEnabled: input.remoteGloballyEnabled,
         remoteInstanceEnabled: input.remoteInstanceEnabled,
         remotePairingToken: input.remotePairingToken,
-        remoteTlsCertificateSha256: input.remoteTlsCertificateSha256,
       });
       if (security.status !== "ready") {
         return yield* new HermesSessionsError({

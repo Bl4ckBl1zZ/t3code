@@ -1,5 +1,5 @@
 import { HermesWorkError } from "@t3tools/contracts";
-import { Context, Effect, Layer, Scope, Semaphore, Schema } from "effect";
+import { Context, Effect, Exit, Layer, Scope, Semaphore, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
@@ -199,11 +199,36 @@ export const makeHermesDashboardClient = (options: HermesDashboardClientOptions 
 export const hermesDashboardClientLayer = Layer.effect(
   HermesDashboardClient,
   Effect.gen(function* () {
-    const scope = yield* Scope.Scope;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const settings = yield* ServerSettings.ServerSettingsService;
     const mutex = yield* Semaphore.make(1);
-    const runtimes = new Map<string, HermesServeRuntimeShape>();
+    /**
+     * One runtime per provider instance, not per credential.
+     *
+     * Keying by the credential instead would leave the superseded runtime — and
+     * the `hermes serve` child it launched — holding the port after a token or
+     * environment change, because its finalizer belongs to this layer's scope
+     * and only runs at shutdown. The replacement would then probe that stale
+     * listener with the new token, be rejected, find the port occupied, and
+     * report `endpoint_in_use` for the rest of the process lifetime. Closing the
+     * previous runtime's own scope first stops its child before the replacement
+     * tries to claim the port.
+     */
+    const runtimes = new Map<
+      string,
+      {
+        readonly key: string;
+        readonly runtime: HermesServeRuntimeShape;
+        readonly scope: Scope.Closeable;
+      }
+    >();
+    yield* Effect.addFinalizer(() =>
+      Effect.forEach(
+        [...runtimes.values()],
+        (entry) => Scope.close(entry.scope, Exit.void).pipe(Effect.ignore),
+        { discard: true },
+      ).pipe(Effect.tap(() => Effect.sync(() => runtimes.clear()))),
+    );
     const ensureReady = Effect.fn("HermesDashboardClient.ensureReady")(function* (
       provider: HermesProviderConnection,
     ) {
@@ -227,18 +252,29 @@ export const hermesDashboardClientLayer = Layer.effect(
       ]);
       const runtime = yield* mutex.withPermits(1)(
         Effect.gen(function* () {
-          const existing = runtimes.get(key);
-          if (existing) return existing;
+          const existing = runtimes.get(provider.providerInstanceId);
+          if (existing?.key === key) return existing.runtime;
+          if (existing !== undefined) {
+            // Stop the process the previous credential launched before the
+            // replacement tries to claim the same port.
+            runtimes.delete(provider.providerInstanceId);
+            yield* Scope.close(existing.scope, Exit.void).pipe(Effect.ignore);
+          }
+          const runtimeScope = yield* Scope.make();
           const created = yield* makeHermesServeRuntime({
             endpoint: provider.endpoint,
             authToken: provider.token,
             managedServerEnabled: provider.settings.managedServerEnabled,
             processEnvironment: mergeProviderInstanceEnvironment(instance?.environment),
           }).pipe(
-            Effect.provideService(Scope.Scope, scope),
+            Effect.provideService(Scope.Scope, runtimeScope),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           );
-          runtimes.set(key, created);
+          runtimes.set(provider.providerInstanceId, {
+            key,
+            runtime: created,
+            scope: runtimeScope,
+          });
           return created;
         }),
       );
