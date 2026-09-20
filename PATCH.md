@@ -1689,3 +1689,9 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   no `projectSettingsOverrides` for, so it states the two capability cases directly. Upstream's
   `project` and `attachment` toolkits are not carried: they need `ThreadMessageIntake.ts` and
   `AttachmentClaims.ts`, which are their own port.
+
+- `t3_worktree_list` from PR #2829 joins the existing worktree toolkit: branch refs in the
+  thread's workspace paged with the checkout path each is bound to, over the app's own
+  `GitWorkflowService.listRefs`. Ported verbatim; the fork's `handlers.ts` keeps its
+  `satisfies`-checked handler object rather than upstream's inline `toLayer` literal, so the entry
+  was inserted there. Its presentation entry was already in `t3McpToolPresentation.ts`.

@@ -1,10 +1,18 @@
 import {
   WorktreeMcpFailure,
+  OrchestratorMcpFailure,
+  VcsListRefsInput,
+  VcsListRefsResult,
   WorktreeMcpHandoffInput,
   WorktreeMcpHandoffResult,
   WorktreeMcpStatusResult,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
+
+import { GitWorkflowService } from "../../../git/GitWorkflowService.ts";
+import { ProjectService } from "../../../project/ProjectService.ts";
+import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { WorktreeMcpService } from "../../WorktreeMcpService.ts";
@@ -44,4 +52,30 @@ export const WorktreeStatusTool = Tool.make("t3_worktree_status", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
-export const WorktreeToolkit = Toolkit.make(WorktreeHandoffTool, WorktreeStatusTool);
+const WorktreeListTool = Tool.make("t3_worktree_list", {
+  description:
+    "List branch refs and their associated checkout paths for this thread's workspace using the app's ref inventory. Detached worktrees without a branch are not included. Use t3_worktree_status for the thread binding and t3_worktree_handoff to create a new worktree.",
+  parameters: Schema.Struct({
+    query: VcsListRefsInput.fields.query,
+    cursor: VcsListRefsInput.fields.cursor,
+    limit: VcsListRefsInput.fields.limit,
+    refKind: VcsListRefsInput.fields.refKind,
+    includeMatchingRemoteRefs: VcsListRefsInput.fields.includeMatchingRemoteRefs,
+  }),
+  success: VcsListRefsResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService,
+    ProjectService,
+    GitWorkflowService,
+  ],
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+export const WorktreeToolkit = Toolkit.make(
+  WorktreeHandoffTool,
+  WorktreeStatusTool,
+  WorktreeListTool,
+);

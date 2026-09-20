@@ -141,7 +141,8 @@ selection model-visible without allowing a request that cannot run.
 ## Tool Surface
 
 The orchestrator toolkit below exposes fifteen tools. A separate thread toolkit
-adds seventeen more, and environment and preview toolkits add two each.
+adds seventeen more, a workspace toolkit adds three, and environment and
+preview toolkits add two each.
 
 ### `orchestrator_capabilities`
 
@@ -349,9 +350,17 @@ the target's, which is the same escalation rule delegation uses.
   calling project immediately. It requires a full-access/default caller, and
   each call is a new manual run.
 
-## Environment And Preview Toolkits
+## Workspace, Environment And Preview Toolkits
 
-Two smaller toolkits sit beside the thread one.
+Three smaller toolkits sit beside the thread one.
+
+The workspace toolkit moves a thread between checkouts and reports where it is.
+`t3_worktree_handoff` creates a worktree and re-points the thread at it,
+`t3_worktree_status` reports the current binding, and `t3_worktree_list` pages
+the branch refs in the thread's workspace with the checkout path each one is
+bound to, using the app's own ref inventory. A detached worktree with no branch
+is left out, since there is no ref to name it by. All three need the `worktree`
+capability.
 
 `t3_environment_read` reports the environment the credential belongs to — its
 id, label, server version and platform — together with an allowlisted subset of
