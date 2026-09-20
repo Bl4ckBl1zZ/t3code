@@ -1,9 +1,11 @@
+import type { HtmlEmbedPhase } from "@t3tools/client-runtime/html-embed-fence";
 import { CheckIcon, CopyIcon, Maximize2Icon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { LRUCache } from "../../lib/lruCache";
+import { cn } from "../../lib/utils";
 
 export const HTML_EMBED_FENCE_LANGUAGE = "t3-html";
 
@@ -192,15 +194,26 @@ function ExpandedEmbedDialog({ srcDoc, onClose }: { srcDoc: string; onClose: () 
   );
 }
 
+/** Enough shape to read as a pending embed; static, so the card never reflows. */
+const PLACEHOLDER_BAR_WIDTHS = ["w-2/5", "w-4/5", "w-3/5"];
+
 export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
   code,
   theme,
+  phase = "ready",
 }: {
   code: string;
   theme: "light" | "dark";
+  phase?: HtmlEmbedPhase;
 }) {
+  const isReady = phase === "ready";
   const settledCode = useSettledValue(code, SETTLE_DELAY_MS);
-  const srcDoc = useMemo(() => buildHtmlEmbedDocument(settledCode, theme), [settledCode, theme]);
+  // Half a document paints almost nothing and costs a full frame reload per
+  // settle, so an unfinished fence never reaches the iframe at all.
+  const srcDoc = useMemo(
+    () => (isReady ? buildHtmlEmbedDocument(settledCode, theme) : ""),
+    [isReady, settledCode, theme],
+  );
   const [inlineHeight, setInlineHeight] = useState(
     () => inlineHeightCache.get(code) ?? INLINE_DEFAULT_HEIGHT,
   );
@@ -246,6 +259,62 @@ export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
 
   const copyLabel = copied ? "Copied" : "Copy source";
 
+  const copyAction = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="chat-markdown-chrome-action"
+            onClick={handleCopy}
+            aria-label={copyLabel}
+          />
+        }
+      >
+        {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{copyLabel}</TooltipPopup>
+    </Tooltip>
+  );
+
+  if (!isReady) {
+    const building = phase === "building";
+    return (
+      <div className="chat-markdown-codeblock my-2 overflow-hidden" data-language="t3-html">
+        <div className="chat-markdown-codeblock-header select-none">
+          <span className="chat-markdown-codeblock-title">
+            <span className="truncate">Interactive embed</span>
+          </span>
+          <span className="flex items-center gap-2">
+            {building ? <span className="text-xs text-muted-foreground/70">Building</span> : null}
+            {copyAction}
+          </span>
+        </div>
+        {building ? (
+          // One breath on the container, not per bar: the compositor draws a
+          // handful of stepped frames a cycle however many bars sit under it.
+          <div
+            role="status"
+            aria-label="Building interactive embed"
+            className="motion-safe:animate-skeleton space-y-2.5 px-3 py-4"
+          >
+            {PLACEHOLDER_BAR_WIDTHS.map((width) => (
+              <div key={width} className={cn("h-2.5 rounded-sm bg-muted-foreground/15", width)} />
+            ))}
+          </div>
+        ) : (
+          // The turn ended mid-fence. There is no embed coming, and a card that
+          // kept breathing would be a spinner that never resolves.
+          <p className="px-3 py-3.5 text-xs text-muted-foreground">
+            The agent stopped before finishing this embed.
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="chat-markdown-codeblock my-2 overflow-hidden" data-language="t3-html">
       <div className="chat-markdown-codeblock-header select-none">
@@ -253,23 +322,7 @@ export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
           <span className="truncate">Interactive embed</span>
         </span>
         <span className="flex items-center gap-0.5">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className="chat-markdown-chrome-action"
-                  onClick={handleCopy}
-                  aria-label={copyLabel}
-                />
-              }
-            >
-              {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-            </TooltipTrigger>
-            <TooltipPopup side="top">{copyLabel}</TooltipPopup>
-          </Tooltip>
+          {copyAction}
           <Tooltip>
             <TooltipTrigger
               render={
