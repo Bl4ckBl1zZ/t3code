@@ -93,7 +93,7 @@ describe("buildThreadActivityInspector", () => {
       { ...EMPTY_V2_ITEM_SUPPORT, item },
       sourceThreadId,
     );
-    expect(model.fileLinks).toEqual([{ label: "modify src/only.ts", path: "src/only.ts" }]);
+    expect(model.fileLinks).toEqual([{ label: "src/only.ts", path: "src/only.ts" }]);
   });
 
   it("leads a command with its output and exit, keeping lifecycle metadata as details", () => {

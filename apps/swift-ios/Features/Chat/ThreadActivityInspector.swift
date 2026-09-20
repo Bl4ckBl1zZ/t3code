@@ -370,18 +370,21 @@ public enum ThreadActivityInspector {
             ending = commandEnding(item, exitCode: exitCode, now: now)
 
         case let .fileChange(fileName, additions, deletions, diffStr, oldStr, newStr, changes):
-            // One item can cover several files. Without the structured list the
-            // item only knows the first, which is what `fileName` has been.
-            for change in changes ?? [.init(
-                operation: "modify", path: fileName, oldPath: nil, fileType: nil, mimeType: nil
-            )] {
-                let renamedFrom = change.oldPath.map { "\($0) → " } ?? ""
-                fileLinks.append(
-                    .init(
-                        label: "\(change.operation) \(renamedFrom)\(change.path)",
-                        path: change.path
+            // One item can cover several files, and only the structured list
+            // knows them; `fileName` names the first. An item without one reads
+            // exactly as it did before.
+            if let changes, !changes.isEmpty {
+                for change in changes {
+                    let renamedFrom = change.oldPath.map { "\($0) → " } ?? ""
+                    fileLinks.append(
+                        .init(
+                            label: "\(change.operation) \(renamedFrom)\(change.path)",
+                            path: change.path
+                        )
                     )
-                )
+                }
+            } else {
+                fileLinks.append(.init(label: fileName, path: fileName))
             }
             if additions != nil || deletions != nil {
                 fields.append(
