@@ -6,7 +6,6 @@ import {
   type ServerConfig,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -313,7 +312,6 @@ export interface EnvironmentShellSummary {
   readonly hasCachedShell: boolean;
   readonly hasLiveShell: boolean;
   readonly firstError: string | null;
-  readonly latestSnapshotUpdatedAt: string | null;
 }
 
 const EMPTY_ENVIRONMENT_SHELL_SUMMARY: EnvironmentShellSummary = Object.freeze({
@@ -322,7 +320,6 @@ const EMPTY_ENVIRONMENT_SHELL_SUMMARY: EnvironmentShellSummary = Object.freeze({
   hasCachedShell: false,
   hasLiveShell: false,
   firstError: null,
-  latestSnapshotUpdatedAt: null,
 });
 
 const EMPTY_SERVER_CONFIGS: ReadonlyMap<EnvironmentId, ServerConfig> = new Map();
@@ -336,8 +333,7 @@ function shellSummariesEqual(
     left.hasSynchronizingShell === right.hasSynchronizingShell &&
     left.hasCachedShell === right.hasCachedShell &&
     left.hasLiveShell === right.hasLiveShell &&
-    left.firstError === right.firstError &&
-    left.latestSnapshotUpdatedAt === right.latestSnapshotUpdatedAt
+    left.firstError === right.firstError
   );
 }
 
@@ -364,7 +360,6 @@ export function createEnvironmentShellSummaryAtom(input: {
     let hasCachedShell = false;
     let hasLiveShell = false;
     let firstError: string | null = null;
-    let latestSnapshotUpdatedAt: string | null = null;
 
     for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
       const state = get(input.shellStateValueAtom(environmentId));
@@ -378,22 +373,6 @@ export function createEnvironmentShellSummaryAtom(input: {
         continue;
       }
       hasSnapshot = true;
-      const snapshot = state.snapshot.value;
-      const updatedAt = snapshot.threads.concat(snapshot.archivedThreads).reduce<string | null>(
-        (latest, thread) => {
-          const value = DateTime.formatIso(thread.updatedAt);
-          return latest === null || value > latest ? value : latest;
-        },
-        snapshot.projects.reduce<string | null>((latest, project) => {
-          return latest === null || project.updatedAt > latest ? project.updatedAt : latest;
-        }, null),
-      );
-      if (
-        updatedAt !== null &&
-        (latestSnapshotUpdatedAt === null || updatedAt > latestSnapshotUpdatedAt)
-      ) {
-        latestSnapshotUpdatedAt = updatedAt;
-      }
     }
 
     const next: EnvironmentShellSummary = {
@@ -402,7 +381,6 @@ export function createEnvironmentShellSummaryAtom(input: {
       hasCachedShell,
       hasLiveShell,
       firstError,
-      latestSnapshotUpdatedAt,
     };
     if (shellSummariesEqual(previousSummary, next)) {
       return previousSummary;

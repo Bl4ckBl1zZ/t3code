@@ -52,7 +52,6 @@ const EMPTY_SHELL_SUMMARY: EnvironmentShellSummary = {
   hasCachedShell: false,
   hasLiveShell: false,
   firstError: null,
-  latestSnapshotUpdatedAt: null,
 };
 
 const CACHED_SHELL_SUMMARY: EnvironmentShellSummary = {
@@ -60,7 +59,6 @@ const CACHED_SHELL_SUMMARY: EnvironmentShellSummary = {
   hasSnapshot: true,
   hasSynchronizingShell: true,
   hasCachedShell: true,
-  latestSnapshotUpdatedAt: "2026-06-07T00:00:00.000Z",
 };
 
 describe("mobile workspace projection", () => {

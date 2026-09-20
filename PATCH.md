@@ -1725,3 +1725,12 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   the worker swap, the finalizer order and the deletion guard were portable. Upstream's
   threads-sync throttling test measures writes-per-title-update, which our settle-gated persistence
   does not produce; the deletion-guard test is ported and verified to fail without the guard.
+
+- `latestSnapshotUpdatedAt` is removed from the shell summary (`07cf2a0e4a`), along with the Expo
+  `latestCachedSnapshotReceivedAt` it fed. Computing it meant walking every thread and archived
+  thread and ISO-formatting each `updatedAt` on every summary recompute, to produce a value with
+  no reader -- and because the value changed whenever any thread did, it also defeated the
+  summary's own identity check and woke every subscriber. Upstream's added regression tests come
+  with it; the last one disables a catalog environment, which our catalog entries have no flag
+  for, so it removes the environment instead -- the same transition through
+  `enabledEnvironmentIds`.
