@@ -1635,3 +1635,16 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   neither of which the fork had; `makeDomainEvent` now also accepts an `occurredAt` so a payload
   derived against a moment is stamped with that same moment rather than a later one. Mobile and
   the SwiftUI client render no per-step timing, here or upstream, so they only carry the fields.
+
+- The thread shell now carries `activityRunStartedAt` and `providerInstanceHistory` from PR #2829,
+  which the fork's client-runtime already knew how to read and no server had ever filled in. Both
+  shell paths produce them -- the projection fold and the SQL shell query -- so the sidebar list
+  and a single thread agree. The sidebar tooltip gained upstream's "Handed off from" line, and
+  `resolveWorkingStartedAt` now delegates to the shared `resolveThreadWorkingStartedAt` as upstream
+  does. That last one is a behaviour change we chose: our version fell back to the thread's last
+  update time, so a settled thread kept counting up from whenever it was last touched. It now shows
+  nothing unless a run owns the work, and it counts a run waiting on an approval, which the old
+  version dropped. One SQL detail worth keeping: `json_group_array` aggregates in scan order and an
+  outer ORDER BY does not change that, so the history is ordered after decoding rather than in the
+  query. Upstream's mobile provider icon stack is not carried -- it belongs to a Thread List v2
+  rendering layer this fork does not have.

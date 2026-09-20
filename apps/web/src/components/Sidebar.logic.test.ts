@@ -1663,16 +1663,35 @@ describe("sortSettledThreadsForSidebar", () => {
 });
 
 describe("resolveWorkingStartedAt", () => {
+  // The run the fixture describes, so the runtime agrees about who is working.
   const runtime = {
     status: "running" as const,
     providerName: "Codex",
     providerInstanceId: ProviderInstanceId.make("codex"),
-    activeRunId: RunId.make("run-1"),
+    activeRunId: RunId.make("turn-1"),
     lastError: null,
     updatedAt: "2026-03-09T10:02:00.000Z",
   };
 
-  it("uses the running run's start time", () => {
+  it("counts from the moment the server says the work started", () => {
+    expect(
+      resolveWorkingStartedAt({
+        latestRun: makeLatestRun(),
+        runtime: { ...runtime, activityStartedAt: "2026-03-09T10:01:00.000Z" },
+      }),
+    ).toBe("2026-03-09T10:01:00.000Z");
+  });
+
+  it("shows no elapsed time when the server says nothing is working", () => {
+    expect(
+      resolveWorkingStartedAt({
+        latestRun: makeLatestRun({ completedAt: null }),
+        runtime: { ...runtime, activityStartedAt: null },
+      }),
+    ).toBeNull();
+  });
+
+  it("uses the running run's start time against a server that cannot answer", () => {
     expect(
       resolveWorkingStartedAt({
         latestRun: makeLatestRun({ completedAt: null }),
@@ -1690,15 +1709,6 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe("2026-03-09T10:00:00.000Z");
   });
 
-  it("falls back to the runtime transition when the latest run already completed", () => {
-    expect(
-      resolveWorkingStartedAt({
-        latestRun: makeLatestRun(),
-        runtime,
-      }),
-    ).toBe("2026-03-09T10:02:00.000Z");
-  });
-
   it("skips a malformed startedAt instead of returning it", () => {
     expect(
       resolveWorkingStartedAt({
@@ -1706,6 +1716,10 @@ describe("resolveWorkingStartedAt", () => {
         runtime,
       }),
     ).toBe("2026-03-09T10:00:00.000Z");
+  });
+
+  it("does not time a finished run against an old server", () => {
+    expect(resolveWorkingStartedAt({ latestRun: makeLatestRun(), runtime })).toBeNull();
   });
 
   it("returns null with neither a running run nor a runtime", () => {

@@ -33,6 +33,11 @@ their pinned threads keep the default newest-first order below the ones you have
 On web and desktop, pinning or unpinning a thread keeps the sidebar at your current scroll
 position instead of following the thread to its new place in the list.
 
+On web and desktop, hover a thread to see where it runs, which model it uses, and -- when it has
+changed agents -- which ones it ran on before. The elapsed time beside a working thread counts from
+the moment that turn started, including while it waits for your approval, and disappears once the
+thread stops working.
+
 ## Snooze until later
 
 On web and desktop, choose **Snooze → Custom…** from a thread's menu, the chat header menu, or a

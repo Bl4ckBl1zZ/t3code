@@ -33,6 +33,7 @@ import {
   orchestrationV2ActiveAgentCount,
   orchestrationV2BackgroundProcessCount,
   PlanId,
+  ProviderInstanceId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -482,6 +483,8 @@ type ShellThreadRow = {
   readonly latest_run_started_at: string | null;
   readonly latest_run_completed_at: string | null;
   readonly active_run_id: string | null;
+  readonly activity_run_started_at: string | null;
+  readonly provider_instance_history_json: string | null;
   readonly last_error: string | null;
   readonly pending_request_payload_json: string | null;
   readonly latest_message_payload_json: string | null;
@@ -507,6 +510,34 @@ const LiveBackgroundCommandRows = Schema.Array(
 const decodeLiveBackgroundCommandRows = Schema.decodeUnknownOption(
   Schema.fromJsonString(LiveBackgroundCommandRows),
 );
+
+const ProviderInstanceHistoryRows = Schema.Array(
+  Schema.Struct({
+    instanceId: ProviderInstanceId,
+    firstSeenAt: Schema.NullOr(Schema.String),
+    firstProviderThreadId: Schema.NullOr(Schema.String),
+  }),
+);
+const decodeProviderInstanceHistoryRows = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ProviderInstanceHistoryRows),
+);
+
+/**
+ * Provider instances that have owned this thread's root conversation, oldest
+ * first. A malformed row costs the handoff trail in a tooltip, not the read.
+ */
+function providerInstanceHistoryFromRow(
+  json: string | null,
+): OrchestrationV2ThreadShell["providerInstanceHistory"] {
+  if (json === null) return [];
+  return Option.getOrElse(decodeProviderInstanceHistoryRows(json), () => [])
+    .toSorted(
+      (left, right) =>
+        (left.firstSeenAt ?? "").localeCompare(right.firstSeenAt ?? "") ||
+        (left.firstProviderThreadId ?? "").localeCompare(right.firstProviderThreadId ?? ""),
+    )
+    .map((row) => row.instanceId);
+}
 
 /**
  * Count live background commands from the shell row, using the same shared rule
@@ -952,6 +983,13 @@ export function threadShellFromProjection(
     projection.runs
       .filter(isInterruptibleRunForShell)
       .toSorted((left, right) => right.ordinal - left.ordinal)[0] ?? null;
+  // A run blocked on an approval still owns the activity, so the timer keeps
+  // counting; `activeRun` deliberately excludes it because it is not
+  // interruptible in the same way.
+  const activityRun =
+    projection.runs
+      .filter((run) => isInterruptibleRunForShell(run) || run.status === "waiting")
+      .toSorted((left, right) => right.ordinal - left.ordinal)[0] ?? null;
   const pendingRuntimeRequest =
     projection.runtimeRequests
       .filter((request) => request.status === "pending")
@@ -1017,6 +1055,11 @@ export function threadShellFromProjection(
     latestRunStartedAt: latestRun?.startedAt ?? null,
     latestRunCompletedAt: latestRun?.completedAt ?? null,
     activeRunId: activeRun?.id ?? null,
+    activityRunStartedAt: activityRun?.startedAt ?? activityRun?.requestedAt ?? null,
+    providerInstanceHistory: providerInstanceHistoryForShell({
+      threadId: projection.thread.id,
+      providerThreads: projection.providerThreads,
+    }),
     status: latestRun?.status ?? "idle",
     lastError: providerSession?.lastError ?? null,
     pendingRuntimeRequest:
@@ -1066,6 +1109,30 @@ export function threadShellFromProjection(
   };
 }
 
+/**
+ * Provider instances that have owned this thread's root conversation, oldest
+ * first. Subagent provider threads carry an owner node and are excluded so a
+ * delegated Codex child does not make a Claude thread look handed off.
+ */
+function providerInstanceHistoryForShell(input: {
+  readonly threadId: ThreadId;
+  readonly providerThreads: OrchestrationV2ThreadProjection["providerThreads"];
+}): ReadonlyArray<ProviderInstanceId> {
+  const history: Array<ProviderInstanceId> = [];
+  for (const providerThread of input.providerThreads
+    .filter((thread) => thread.appThreadId === input.threadId && thread.ownerNodeId === null)
+    .toSorted(
+      (left, right) =>
+        DateTime.toEpochMillis(left.createdAt) - DateTime.toEpochMillis(right.createdAt) ||
+        left.id.localeCompare(right.id),
+    )) {
+    if (!history.includes(providerThread.providerInstanceId)) {
+      history.push(providerThread.providerInstanceId);
+    }
+  }
+  return history;
+}
+
 function isInterruptibleRunForShell(run: OrchestrationV2ThreadProjection["runs"][number]): boolean {
   return run.status === "preparing" || run.status === "starting" || run.status === "running";
 }
@@ -1078,6 +1145,8 @@ type ShellThreadState = {
   readonly latestRunStartedAt: DateTime.Utc | null;
   readonly latestRunCompletedAt: DateTime.Utc | null;
   readonly activeRunId: RunId | null;
+  readonly activityRunStartedAt: DateTime.Utc | null;
+  readonly providerInstanceHistory: OrchestrationV2ThreadShell["providerInstanceHistory"];
   readonly lastError: string | null;
   readonly pendingRuntimeRequest: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null;
   readonly latestVisibleMessage: OrchestrationV2ConversationMessage | null;
@@ -1216,6 +1285,8 @@ function shellFromState(input: {
     latestRunStartedAt: input.state.latestRunStartedAt,
     latestRunCompletedAt: input.state.latestRunCompletedAt,
     activeRunId: input.state.activeRunId,
+    activityRunStartedAt: input.state.activityRunStartedAt,
+    providerInstanceHistory: input.state.providerInstanceHistory,
     status: input.state.latestRunStatus,
     lastError: input.state.lastError,
     pendingRuntimeRequest:
@@ -2475,6 +2546,46 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ORDER BY r.ordinal DESC, r.run_id DESC
                 LIMIT 1
               ) AS active_run_id,
+              -- A preparing run has no start yet; its request time is when the
+              -- user asked, which is what the working timer counts from.
+              -- 'waiting' joins the interruptible statuses here because a run
+              -- blocked on an approval is still the one owning the activity.
+              (
+                SELECT COALESCE(
+                  json_extract(r.payload_json, '$.startedAt'),
+                  json_extract(r.payload_json, '$.requestedAt')
+                )
+                FROM orchestration_v2_projection_runs r
+                WHERE r.thread_id = t.thread_id
+                  AND r.status IN ('preparing', 'starting', 'running', 'waiting')
+                ORDER BY r.ordinal DESC, r.run_id DESC
+                LIMIT 1
+              ) AS activity_run_started_at,
+              -- Root provider threads only: a delegated child carries an owner
+              -- node and must not make its parent look handed off.
+              -- Ordered on the way out rather than here: json_group_array
+              -- aggregates in scan order, which an outer ORDER BY does not
+              -- change.
+              (
+                SELECT json_group_array(
+                  json_object(
+                    'instanceId', pt.provider_instance_id,
+                    'firstSeenAt', pt.first_seen_at,
+                    'firstProviderThreadId', pt.first_provider_thread_id
+                  )
+                )
+                FROM (
+                  SELECT
+                    provider_instance_id,
+                    MIN(json_extract(payload_json, '$.createdAt')) AS first_seen_at,
+                    MIN(provider_thread_id) AS first_provider_thread_id
+                  FROM orchestration_v2_projection_provider_threads
+                  WHERE thread_id = t.thread_id
+                    AND owner_node_id IS NULL
+                    AND provider_instance_id IS NOT NULL
+                  GROUP BY provider_instance_id
+                ) pt
+              ) AS provider_instance_history_json,
               (
                 SELECT json_extract(session.payload_json, '$.lastError')
                 FROM orchestration_v2_projection_provider_sessions session
@@ -2657,6 +2768,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ? null
               : DateTime.makeUnsafe(row.latest_run_completed_at),
           activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
+          activityRunStartedAt:
+            row.activity_run_started_at === null
+              ? null
+              : DateTime.makeUnsafe(row.activity_run_started_at),
+          providerInstanceHistory: providerInstanceHistoryFromRow(
+            row.provider_instance_history_json,
+          ),
           lastError: row.last_error,
           pendingRuntimeRequest,
           latestVisibleMessage,

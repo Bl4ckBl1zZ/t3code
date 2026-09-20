@@ -208,6 +208,11 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   return {
     status: thread.status,
     activeRunId: thread.activeRunId,
+    // Left undefined by a server that predates the field, which is what tells
+    // `resolveThreadWorkingStartedAt` to fall back to the latest run.
+    ...(thread.activityRunStartedAt === undefined
+      ? {}
+      : { activityStartedAt: nullableIso(thread.activityRunStartedAt) }),
     providerInstanceId: thread.providerInstanceId,
     providerName: null,
     lastError: thread.lastError ?? null,
