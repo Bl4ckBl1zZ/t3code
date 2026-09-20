@@ -207,8 +207,9 @@ alert icon in the work log; failures that stop the runtime retain their stronger
 error treatment. Open a failed row to inspect its output.
 
 On web and desktop, task progress and stashed prompts appear as tabs attached above the composer.
-Expand Tasks to inspect the current plan. Approval requests and questions open in the same
-attached area, with their actions beside the request. Notices keep their own stack.
+Expand Tasks to inspect the current plan. Each finished task shows how long it took, measured from
+when the agent picked it up; the task in progress reads "now". Approval requests and questions open
+in the same attached area, with their actions beside the request. Notices keep their own stack.
 
 On native iOS, use **Prompt history → Stash draft** to save up to 20 drafts for the current
 thread. The Stash tab opens the saved list. Restoring moves any unsent text and attachments

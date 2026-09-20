@@ -196,6 +196,7 @@ function makeTestLayer(input: {
       getThreadShell: () => Effect.die("unused getThreadShell"),
       getThreadProjection: () => Effect.succeed(input.projection),
       getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+      getPlan: () => Effect.die("unused getPlan"),
     }),
   );
   const eventSinkLayer = Layer.succeed(
@@ -498,6 +499,7 @@ function makeStartTestLayer(input: {
             apply: () => Effect.void,
             getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
             getThreadShell: () => Effect.die("unused getThreadShell"),
+            getPlan: () => Effect.die("unused getPlan"),
             getThreadProjection: () => Effect.succeed(input.projection),
             getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
           }),

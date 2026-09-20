@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
+  OrchestrationV2PlanArtifact,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ProviderTurn,
   OrchestrationV2Run,
@@ -31,6 +32,7 @@ import {
   OrchestrationV2TurnItemJson as OrchestrationV2TurnItemJsonSchema,
   orchestrationV2ActiveAgentCount,
   orchestrationV2BackgroundProcessCount,
+  PlanId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -115,6 +117,11 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>;
+  /** One plan, for callers that need the prior version and not the whole thread. */
+  readonly getPlan: (
+    threadId: ThreadId,
+    planId: PlanId,
+  ) => Effect.Effect<OrchestrationV2PlanArtifact | null, ProjectionStoreV2Error>;
   readonly getThreadSnapshot: (threadId: ThreadId) => Effect.Effect<
     {
       readonly schemaVersion: number;
@@ -2814,12 +2821,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
+    const getPlan: ProjectionStoreV2Shape["getPlan"] = (threadId, planId) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<PayloadRow>`
+          SELECT payload_json
+          FROM orchestration_v2_projection_plans
+          WHERE thread_id = ${threadId} AND plan_id = ${planId}
+          LIMIT 1
+        `;
+        const row = rows[0];
+        return row === undefined ? null : yield* decodePlanPayload(row.payload_json);
+      }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
+
     return {
       apply,
       getShellSnapshot,
       getThreadShell,
       getThreadProjection,
       getThreadSnapshot,
+      getPlan,
     } satisfies ProjectionStoreV2Shape;
   }),
 );
@@ -2931,6 +2951,11 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             ),
           ),
         ),
+      getPlan: (threadId, planId) =>
+        Effect.gen(function* () {
+          const projection = (yield* Ref.get(replayState)).projections.get(threadId);
+          return projection?.plans.find((plan) => plan.id === planId) ?? null;
+        }),
     };
 
     return service;

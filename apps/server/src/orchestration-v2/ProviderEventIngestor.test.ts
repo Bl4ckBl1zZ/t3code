@@ -5,9 +5,12 @@ import {
   NodeId,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2PlanArtifact,
   type OrchestrationV2ProviderThread,
+  PlanId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -26,6 +29,7 @@ import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionSt
 import {
   ProviderEventIngestorV2,
   layer as providerEventIngestorLayer,
+  withPlanStepDurations,
 } from "./ProviderEventIngestor.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
 
@@ -105,6 +109,100 @@ function threadCreatedEvent(
     };
   });
 }
+
+type TodoListPlan = Extract<OrchestrationV2PlanArtifact, { readonly kind: "todo_list" }>;
+
+function todoPlan(steps: TodoListPlan["steps"]): TodoListPlan {
+  return {
+    id: PlanId.make("plan:durations"),
+    threadId: ThreadId.make("thread:durations"),
+    runId: null,
+    nodeId: NodeId.make("node:durations"),
+    status: "active",
+    kind: "todo_list",
+    steps,
+  };
+}
+
+const at = (iso: string) => DateTime.makeUnsafe(iso);
+
+it("measures a step from when it started running until it completed", () => {
+  const running = withPlanStepDurations(
+    todoPlan([
+      { id: "1", text: "Read", status: "running" },
+      { id: "2", text: "Write", status: "pending" },
+    ]),
+    undefined,
+    at("2026-08-29T00:00:00.000Z"),
+  );
+  assert.equal(running.steps[0]?.durationAnchorAt, "2026-08-29T00:00:00.000Z");
+  assert.isUndefined(running.steps[0]?.durationMs);
+
+  const completed = withPlanStepDurations(
+    todoPlan([
+      { id: "1", text: "Read", status: "completed" },
+      { id: "2", text: "Write", status: "running" },
+    ]),
+    running,
+    at("2026-08-29T00:00:03.000Z"),
+  );
+  assert.equal(completed.steps[0]?.durationMs, 3_000);
+  assert.equal(completed.steps[1]?.durationAnchorAt, "2026-08-29T00:00:03.000Z");
+});
+
+it("keeps a finished step's measurement across later updates", () => {
+  const first = withPlanStepDurations(
+    todoPlan([{ id: "1", text: "Read", status: "running" }]),
+    undefined,
+    at("2026-08-29T00:00:00.000Z"),
+  );
+  const done = withPlanStepDurations(
+    todoPlan([{ id: "1", text: "Read", status: "completed" }]),
+    first,
+    at("2026-08-29T00:00:05.000Z"),
+  );
+  const later = withPlanStepDurations(
+    todoPlan([{ id: "1", text: "Read", status: "completed" }]),
+    done,
+    at("2026-08-29T00:09:00.000Z"),
+  );
+  assert.equal(later.steps[0]?.durationMs, 5_000);
+});
+
+it("refuses to inherit timing when a positional step id gets new text", () => {
+  const first = withPlanStepDurations(
+    todoPlan([{ id: "1", text: "Read", status: "running" }]),
+    undefined,
+    at("2026-08-29T00:00:00.000Z"),
+  );
+  const replaced = withPlanStepDurations(
+    todoPlan([{ id: "1", text: "Something else entirely", status: "completed" }]),
+    first,
+    at("2026-08-29T00:05:00.000Z"),
+  );
+  assert.isUndefined(replaced.steps[0]?.durationMs);
+});
+
+it("gives the elapsed time to one step when several complete straight from pending", () => {
+  const pending = withPlanStepDurations(
+    todoPlan([
+      { id: "1", text: "A", status: "pending" },
+      { id: "2", text: "B", status: "pending" },
+    ]),
+    undefined,
+    at("2026-08-29T00:00:00.000Z"),
+  );
+  const both = withPlanStepDurations(
+    todoPlan([
+      { id: "1", text: "A", status: "completed" },
+      { id: "2", text: "B", status: "completed" },
+    ]),
+    pending,
+    at("2026-08-29T00:00:04.000Z"),
+  );
+  assert.equal(both.steps[0]?.durationMs, 4_000);
+  assert.isUndefined(both.steps[1]?.durationMs);
+});
 
 const layer = it.layer(TestLayer);
 

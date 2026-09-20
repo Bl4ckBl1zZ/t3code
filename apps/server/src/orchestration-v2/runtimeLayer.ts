@@ -100,7 +100,9 @@ const worktreeProvisioningProvided = worktreeProvisioningLayer.pipe(
 );
 
 const providerEventIngestorProvided = providerEventIngestorLayer.pipe(
-  Layer.provide(Layer.mergeAll(eventSinkProvided, idAllocatorLayer)),
+  // The same `storesLayer` reference the event sink gets, so layer memoization
+  // hands the ingestor the projection everything else already writes to.
+  Layer.provide(Layer.mergeAll(eventSinkProvided, idAllocatorLayer, storesLayer)),
 );
 
 const checkpointServiceProvided = checkpointServiceLayer.pipe(Layer.provide(idAllocatorLayer));

@@ -103,6 +103,8 @@ export interface ActivePlanState {
   readonly steps: Array<{
     readonly step: string;
     readonly status: "pending" | "inProgress" | "completed";
+    /** How long the step took, once the server has measured it. */
+    readonly durationMs?: number;
   }>;
 }
 
@@ -261,9 +263,10 @@ export function deriveActivePlanState(
     createdAt: planItemTime(projection, plan.id),
     runId: plan.runId,
     explanation: plan.explanation ?? null,
-    steps: plan.steps.map(({ text, status }) => ({
+    steps: plan.steps.map(({ text, status, durationMs }) => ({
       step: text,
       status: status === "running" ? "inProgress" : status,
+      ...(durationMs === undefined ? {} : { durationMs }),
     })),
   };
 }

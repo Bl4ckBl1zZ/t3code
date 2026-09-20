@@ -1626,3 +1626,12 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   yet, so this is the decode-and-render half, which is what lets a fork client read an
   upstream-shaped server. The SwiftUI payload gained a seventh associated value rather than a
   named struct, matching the shape of every other case there.
+
+- Plan step timing from PR #2829 is ported as upstream has it: the ingestor measures each task
+  against the moment it first appeared as running, keeps a finished task's measurement across
+  later updates, and refuses to inherit timing when a positional step id comes back with new
+  text. Our composer's task badge already rendered `durationMs` and had never been given one.
+  Getting there needed `ProjectionStoreV2.getPlan` and the projection in the ingestor's layer,
+  neither of which the fork had; `makeDomainEvent` now also accepts an `occurredAt` so a payload
+  derived against a moment is stamped with that same moment rather than a later one. Mobile and
+  the SwiftUI client render no per-step timing, here or upstream, so they only carry the fields.
