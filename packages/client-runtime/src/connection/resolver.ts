@@ -16,6 +16,7 @@ import {
   SshConnectionProfile,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
+import { appendOrchestrationProtocol } from "./compatibility.ts";
 import { credentialMissingError, environmentMismatchError, profileMissingError } from "./errors.ts";
 import type {
   BearerConnectionTarget,
@@ -232,16 +233,21 @@ export const make = Effect.gen(function* () {
       "connection.environment.id": target.environmentId,
       "connection.target.kind": target._tag,
     });
-    switch (target._tag) {
-      case "PrimaryConnectionTarget":
-        return yield* primary(target);
-      case "BearerConnectionTarget":
-        return yield* bearer({ ...entry, target });
-      case "RelayConnectionTarget":
-        return yield* relay(target);
-      case "SshConnectionTarget":
-        return yield* ssh({ ...entry, target });
-    }
+    const prepared = yield* (() => {
+      switch (target._tag) {
+        case "PrimaryConnectionTarget":
+          return primary(target);
+        case "BearerConnectionTarget":
+          return bearer({ ...entry, target });
+        case "RelayConnectionTarget":
+          return relay(target);
+        case "SshConnectionTarget":
+          return ssh({ ...entry, target });
+      }
+    })();
+    // Announced on every socket, whatever the transport, so a server that
+    // cannot speak this protocol refuses the upgrade instead of mis-decoding.
+    return { ...prepared, socketUrl: appendOrchestrationProtocol(prepared.socketUrl) };
   });
 
   return ConnectionResolver.of({ prepare });

@@ -28,6 +28,8 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
     public let completedAt: String?
     /// Explicit queue order when the server assigned one; ordinal otherwise.
     public let queuePosition: Int?
+    /// True while restart recovery holds this queued run back.
+    public let queueHeld: Bool
     public let userMessageID: String?
     public let providerThreadID: String?
     public let activeAttemptID: String?
@@ -39,6 +41,7 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
         startedAt: String? = nil,
         completedAt: String? = nil,
         queuePosition: Int? = nil,
+        queueHeld: Bool = false,
         userMessageID: String? = nil,
         providerThreadID: String? = nil,
         activeAttemptID: String? = nil
@@ -49,6 +52,7 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
         self.startedAt = startedAt
         self.completedAt = completedAt
         self.queuePosition = queuePosition
+        self.queueHeld = queueHeld
         self.userMessageID = userMessageID
         self.providerThreadID = providerThreadID
         self.activeAttemptID = activeAttemptID
@@ -62,6 +66,7 @@ public struct ThreadWorkflowRun: Equatable, Hashable, Sendable, Identifiable {
             startedAt: run.startedAt ?? run.requestedAt,
             completedAt: run.completedAt,
             queuePosition: run.queuePosition,
+            queueHeld: run.queueHeld == true,
             userMessageID: run.userMessageId,
             providerThreadID: run.providerThreadId,
             activeAttemptID: run.activeAttemptId
@@ -178,17 +183,22 @@ public struct QueuedThreadRun: Equatable, Hashable, Sendable, Identifiable {
 public struct ThreadQueueWorkflowState: Equatable, Sendable {
     public let activeRun: ThreadWorkflowRun?
     public let queuedRuns: [QueuedThreadRun]
+    /// Restart recovery is holding the queue. One held run holds all of them:
+    /// they were queued to run in order.
+    public let isHeld: Bool
     public let canReorder: Bool
     public let canPromoteToSteer: Bool
 
     public init(
         activeRun: ThreadWorkflowRun?,
         queuedRuns: [QueuedThreadRun],
+        isHeld: Bool = false,
         canReorder: Bool,
         canPromoteToSteer: Bool
     ) {
         self.activeRun = activeRun
         self.queuedRuns = queuedRuns
+        self.isHeld = isHeld
         self.canReorder = canReorder
         self.canPromoteToSteer = canPromoteToSteer
     }
@@ -306,6 +316,7 @@ public enum ThreadWorkflows {
         return ThreadQueueWorkflowState(
             activeRun: activeRun,
             queuedRuns: queuedRuns,
+            isHeld: queuedRuns.contains { $0.run.queueHeld },
             canReorder: capabilities?.supportsQueuedMessages == true,
             canPromoteToSteer: hasSteerableProviderTurn
                 && (capabilities?.supportsActiveSteering == true

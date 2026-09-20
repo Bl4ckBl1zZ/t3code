@@ -65,6 +65,19 @@ export function codexFeedbackMessage(
   };
 }
 
+/**
+ * One upload per thread: the returned release must run when the upload settles.
+ * Returns null when an upload for that thread is already in flight.
+ */
+export function beginCodexFeedbackSubmission(
+  submissionsInFlight: Set<string>,
+  threadKey: string,
+): (() => void) | null {
+  if (submissionsInFlight.has(threadKey)) return null;
+  submissionsInFlight.add(threadKey);
+  return () => submissionsInFlight.delete(threadKey);
+}
+
 export async function submitCodexFeedback<E>(input: {
   readonly submission: CodexFeedbackSubmissionDetails;
   readonly clearDraft: () => void;

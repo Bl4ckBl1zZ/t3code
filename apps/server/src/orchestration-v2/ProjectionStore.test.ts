@@ -27,6 +27,7 @@ import {
   isTurnItemAtOrBeforeRun,
   ProjectionStoreV2,
   layer as projectionStoreLayer,
+  threadShellFromProjection,
 } from "./ProjectionStore.ts";
 
 const TestLayer = Layer.mergeAll(
@@ -1640,6 +1641,249 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       assert.equal(threadShell?.title, "Reconciled two");
       assert.equal(threadShell?.titleRevision, 2);
       assert.equal(threadShell?.titleOrigin, "user");
+    }),
+  );
+
+  it.effect("reports where a handed-off thread has been, and when its work started", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const later = DateTime.addDuration(now, "1 minute");
+      const threadId = ThreadId.make("thread:projection-shell-activity");
+      const codexInstanceId = ProviderInstanceId.make("codex");
+      const claudeInstanceId = ProviderInstanceId.make("claude");
+      const rootNodeId = NodeId.make("node:projection-shell-activity");
+      const runId = RunId.make("run:projection-shell-activity");
+      const codexThreadId = ProviderThreadId.make("provider-thread:shell-activity:codex");
+      const claudeThreadId = ProviderThreadId.make("provider-thread:shell-activity:claude");
+      const subagentThreadId = ProviderThreadId.make("provider-thread:shell-activity:subagent");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-activity:thread-created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:projection-shell-activity"),
+          title: "Handed off",
+          providerInstanceId: claudeInstanceId,
+          modelSelection: { instanceId: claudeInstanceId, model: "claude-opus-4-1" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: claudeThreadId,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+
+      const providerThread = (input: {
+        readonly id: ProviderThreadId;
+        readonly providerInstanceId: ProviderInstanceId;
+        readonly ownerNodeId: NodeId | null;
+        readonly createdAt: DateTime.Utc;
+      }) => ({
+        id: input.id,
+        driver,
+        providerInstanceId: input.providerInstanceId,
+        providerSessionId: null,
+        appThreadId: threadId,
+        ownerNodeId: input.ownerNodeId,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "active" as const,
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt,
+      });
+
+      for (const [suffix, payload] of [
+        [
+          "codex",
+          providerThread({
+            id: codexThreadId,
+            providerInstanceId: codexInstanceId,
+            ownerNodeId: null,
+            createdAt: now,
+          }),
+        ],
+        [
+          "claude",
+          providerThread({
+            id: claudeThreadId,
+            providerInstanceId: claudeInstanceId,
+            ownerNodeId: null,
+            createdAt: later,
+          }),
+        ],
+        // A delegated child must not make the parent look handed off again.
+        [
+          "subagent",
+          providerThread({
+            id: subagentThreadId,
+            providerInstanceId: ProviderInstanceId.make("cursor"),
+            ownerNodeId: rootNodeId,
+            createdAt: later,
+          }),
+        ],
+      ] as const) {
+        yield* projectionStore.apply({
+          id: EventId.make(`event:projection-shell-activity:provider-thread:${suffix}`),
+          type: "provider-thread.updated",
+          threadId,
+          driver,
+          occurredAt: now,
+          payload,
+        });
+      }
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-activity:run-created"),
+        type: "run.created",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId: claudeInstanceId,
+          modelSelection: { instanceId: claudeInstanceId, model: "claude-opus-4-1" },
+          providerThreadId: claudeThreadId,
+          userMessageId: MessageId.make("message:projection-shell-activity"),
+          rootNodeId,
+          activeAttemptId: null,
+          // A run waiting on an approval still owns the activity.
+          status: "waiting",
+          requestedAt: now,
+          startedAt: later,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+
+      const fromProjection = yield* projectionStore
+        .getThreadProjection(threadId)
+        .pipe(Effect.map(threadShellFromProjection));
+      const fromShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (candidate) => candidate.id === threadId,
+      );
+
+      for (const shell of [fromProjection, fromShell]) {
+        assert.deepEqual(shell?.providerInstanceHistory, [codexInstanceId, claudeInstanceId]);
+        assert.equal(
+          shell?.activityRunStartedAt === null || shell?.activityRunStartedAt === undefined
+            ? null
+            : DateTime.formatIso(shell.activityRunStartedAt),
+          DateTime.formatIso(later),
+        );
+      }
+    }),
+  );
+
+  it.effect("keeps the last reported token usage when a later provider turn omits it", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-token-usage");
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const providerThreadId = ProviderThreadId.make("provider-thread:projection-token-usage");
+      const rootNodeId = NodeId.make("node:projection-token-usage");
+      const providerTurnId = ProviderTurnId.make("provider-turn:projection-token-usage");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-token-usage:thread-created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:projection-token-usage"),
+          title: "Projection token usage",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: providerThreadId,
+          lineage: {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+
+      const providerTurn = {
+        id: providerTurnId,
+        providerThreadId,
+        nodeId: rootNodeId,
+        runAttemptId: null,
+        nativeTurnRef: null,
+        ordinal: 1,
+        startedAt: now,
+      } as const;
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-token-usage:reported"),
+        type: "provider-turn.updated",
+        threadId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: now,
+        payload: {
+          ...providerTurn,
+          status: "running",
+          completedAt: null,
+          tokenUsage: {
+            usedTokens: 50_000,
+            maxTokens: 200_000,
+            updatedAt: "2026-08-29T00:00:00.000Z",
+          },
+        },
+      });
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-token-usage:completed"),
+        type: "provider-turn.updated",
+        threadId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: now,
+        payload: { ...providerTurn, status: "completed", completedAt: now },
+      });
+
+      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const turn = projection.providerTurns.find((candidate) => candidate.id === providerTurnId);
+      assert.equal(turn?.status, "completed");
+      assert.equal(turn?.tokenUsage?.usedTokens, 50_000);
     }),
   );
 });

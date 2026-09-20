@@ -198,6 +198,7 @@ type Run = {
     | "failed"
     | "cancelled"
     | "rolled_back";
+  queueHeld?: boolean;
   requestedAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -213,6 +214,8 @@ type Run = {
 Only a run with `countsForConversation = true` contributes to the user-visible turn count and checkpoint count.
 
 `providerThreadId` is the provider-native conversation used for this run. This makes mixed-provider app threads explicit: run 1 may be Codex, run 2 may be Claude, and run 3 may return to the original Codex provider thread.
+
+`queueHeld` is set on a `queued` run that restart recovery parked. A queued run never reached a provider, so recovery preserves it rather than cancelling it: the run keeps its `queuePosition`, its attempt and its root node, and the scheduler refuses to start anything on a thread that holds one. The `queue.resume` command clears the flag across the thread's queue and starts the head in the same dispatch.
 
 `contextHandoffId` points to a materialized handoff artifact consumed by this run. A run may also be associated with a broader `ContextTransfer` through the transfer's target/source fields. The handoff is the payload; the transfer is the durable relationship and policy record.
 
@@ -463,10 +466,27 @@ type ProviderTurn = {
   status: "pending" | "running" | "completed" | "interrupted" | "failed" | "cancelled";
   startedAt: string | null;
   completedAt: string | null;
+  tokenUsage?: {
+    usedTokens: number;
+    maxTokens?: number | null;
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    reasoningOutputTokens?: number;
+    updatedAt: string;
+  };
 };
 ```
 
 Codex has strong native turn ids. Weaker providers may only have ordinals. Both map into `ProviderTurnId`.
+
+`tokenUsage` is how full the context window is right now, as the provider last reported it: the size
+of its newest model request, not the thread's cumulative spend. The turn owns it because re-emitting
+a turn is cheap and disturbs nothing in the timeline. Only the frames that carry a report set the
+field, so **absent means unchanged, never zero** — both the server projection and the client fold
+carry the previous reading forward. Providers that report standing usage per thread instead write
+`ProviderThread.contextUsage`; the context meter prefers the live turn reading, then the provider
+thread, then the last `compaction` item's `afterTokenCount`.
 
 ## RuntimeRequest
 
@@ -658,8 +678,13 @@ type CommandExecution = {
   type: "command_execution";
   input: string;
   status: TurnItemStatus;
+  // Persisted in full; the wire projection sends this only as the last printed
+  // line of a background command that is still running, and drops it otherwise.
   output?: string;
   exitCode?: number;
+  // Decided server-side, from the whole output, before it is dropped. A
+  // provider can close a command as completed while its output says otherwise.
+  outputIndicatesFailure?: boolean;
 };
 
 type DynamicTool = {
@@ -675,5 +700,10 @@ Compaction, handoff, and fork are orchestration lifecycle items, not dynamic too
 - `compaction`: one item can transition from `running` with title like "Compacting context..." to `completed` with title like "Compacted context".
 - `handoff`: records the context bridge from one or more source provider threads/providers to a target provider thread/provider.
 - `fork`: records that the user or system created a new app thread from a run, node, or provider thread.
+- `notification`: reports work that finished outside the turn reading it — a delegated task, a
+  background command or task, or a monitor. Its `outcome` describes that work; the item's own
+  `status` only describes the record. No adapter here emits one yet, so it arrives only from a
+  newer server.
+- `system_notice`: a message from the app rather than the provider. Also not emitted here yet.
 
 The UI can render known variants with deterministic components and render `dynamic_tool` as expandable JSON input/output. Each turn item keeps refs back to `runId`, `nodeId`, `providerTurnId`, and `nativeItemRef` so debug views can jump from the display stream back into the graph and provider logs.

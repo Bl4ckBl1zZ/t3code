@@ -61,6 +61,8 @@ import {
   ClaudeProviderCapabilitiesV2,
   claudeEffectiveQueryPolicyKey,
   claudeMcpQueryOverrides,
+  claudeProviderTurnTokenUsage,
+  claudeViewedImagePath,
   claudeQueryMessages,
   claudeRuntimeQueryPolicyForRuntimePolicy,
   loggedClaudeQueryOptions,
@@ -3744,4 +3746,67 @@ describe("ClaudeAdapterV2 model catalog", () => {
       assert.equal(catalogReads, 1);
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );
+});
+
+describe("ClaudeAdapterV2 context usage", () => {
+  it("counts cache reads and writes as context the model saw", () => {
+    const usage = claudeProviderTurnTokenUsage(
+      {
+        input_tokens: 42_000,
+        cache_creation_input_tokens: 2_000,
+        cache_read_input_tokens: 5_000,
+        output_tokens: 1_000,
+      },
+      CLAUDE_TEST_MODEL_SELECTION,
+      "2026-08-29T00:00:00.000Z",
+    );
+
+    assert.deepEqual(usage, {
+      usedTokens: 50_000,
+      // We always run Claude models at their largest window, so the meter
+      // measures against that rather than the 200k default upstream assumes.
+      maxTokens: 1_000_000,
+      inputTokens: 49_000,
+      cachedInputTokens: 5_000,
+      outputTokens: 1_000,
+      reasoningOutputTokens: 0,
+      updatedAt: "2026-08-29T00:00:00.000Z",
+    });
+  });
+
+  it("falls back to the smallest Claude window for a model the catalog does not know", () => {
+    const usage = claudeProviderTurnTokenUsage(
+      { input_tokens: 100, output_tokens: 10 },
+      { instanceId: ProviderInstanceId.make(CLAUDE_PROVIDER), model: "claude-from-the-future" },
+      "2026-08-29T00:00:00.000Z",
+    );
+
+    assert.equal(usage.maxTokens, 200_000);
+    assert.equal(usage.usedTokens, 110);
+  });
+});
+
+describe("ClaudeAdapterV2 viewed images", () => {
+  const toolInput = (value: Record<string, unknown>) => ({ type: "record" as const, value });
+
+  it("marks a read of an image file as one the agent looked at", () => {
+    assert.equal(
+      claudeViewedImagePath("read", toolInput({ file_path: "  docs/diagram.png  " })),
+      "docs/diagram.png",
+    );
+    assert.equal(claudeViewedImagePath("read file", toolInput({ path: "shot.jpeg" })), "shot.jpeg");
+  });
+
+  it("ignores reads that are not images, and tools that are not reads", () => {
+    assert.isUndefined(claudeViewedImagePath("read", toolInput({ file_path: "src/index.ts" })));
+    assert.isUndefined(claudeViewedImagePath("write", toolInput({ file_path: "diagram.png" })));
+    assert.isUndefined(claudeViewedImagePath("read", toolInput({})));
+  });
+
+  it("drops a path that could not survive being rendered", () => {
+    assert.isUndefined(claudeViewedImagePath("read", toolInput({ file_path: "a\nb.png" })));
+    assert.isUndefined(
+      claudeViewedImagePath("read", toolInput({ file_path: `${"a".repeat(4_093)}.png` })),
+    );
+  });
 });

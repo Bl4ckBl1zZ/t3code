@@ -9,6 +9,10 @@ and changed 2 files.” Open the summary to inspect the calls. Repeated edits to
 same path count as one changed file. Failures, active work, subagents and threads the
 agent created remain separately visible. The native iOS app uses the same grouping.
 
+An edit that touches several files at once reads as "Changed 3 files" rather than naming only the
+first, and opening it lists each one with what happened to it -- added, modified, or renamed from
+its old path. Agents that report a single file per edit are unaffected.
+
 Your expansion choices stay in place as you browse the conversation or close and reopen a
 tool group. Web and desktop restore the position within a long tool result. Native iOS
 restores the position within the tool row you were reading. These choices last for the current conversation
@@ -18,9 +22,11 @@ New calls follow the end of web tool history only when you were already reading 
 bottom. Updates to an existing call do not pull you away from older output.
 
 Known T3 tools use readable action names and reflect whether the call is running, completed,
-failed or canceled. Pull-request actions show the request number when available and use a
-pull-request icon; preview-browser actions use a browser icon. Completed history summaries
-keep those actions distinct from other tools.
+failed or canceled. A command reads as failed when it exits with an error or its output says the
+command was not found, even when the agent reports the call as finished. That outcome is what a
+finished command keeps: the text it printed is not carried into the conversation view. Pull-request
+actions show the request number when available and use a pull-request icon; preview-browser actions
+use a browser icon. Completed history summaries keep those actions distinct from other tools.
 
 When a supported provider identifies the browser or app behind a tool call, activity shows
 its icon when available. Grouped history names the apps used, such as “Used Chrome

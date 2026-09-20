@@ -1462,6 +1462,102 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     );
   }
 
+  it.effect("leaves an unanswered optional question out of the response message", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const sink = yield* EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("question-optional");
+      const requestId = RuntimeRequestId.make("request-optional");
+      const nodeId = NodeId.make("question-node-optional");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "mobile",
+        commandId: CommandId.make("question-create-optional"),
+        threadId,
+        projectId: ProjectId.make("questions-project"),
+        title: "Question",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/questions",
+      });
+      yield* sink.write({
+        commandId: CommandId.make("question-seed-optional"),
+        events: [
+          {
+            id: EventId.make("request-event-optional"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: requestId,
+              nodeId,
+              providerTurnId: null,
+              kind: "user_input",
+              status: "pending",
+              responseMode: "message",
+              nativeRequestRef: { driver, nativeId: "async-optional", strength: "strong" },
+              responseCapability: {
+                type: "live",
+                providerSessionId: ProviderSessionId.make("detached-session"),
+              },
+              createdAt: now,
+              resolvedAt: null,
+            },
+          },
+          {
+            id: EventId.make("question-item-event-optional"),
+            type: "turn-item.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("question-item-optional"),
+              threadId,
+              runId: null,
+              nodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 0,
+              status: "waiting",
+              title: null,
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+              type: "user_input_request",
+              requestId,
+              questions: [
+                { id: "spec", header: "Question", question: "Which spec?", options: [] },
+                {
+                  id: "notes",
+                  header: "Question",
+                  question: "Anything else?",
+                  options: [],
+                  required: false,
+                },
+              ],
+            },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId: CommandId.make("question-respond-optional"),
+        threadId,
+        requestId,
+        answers: { spec: "Use this spec" },
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(projection.messages[0]?.text, "Which spec?\nUse this spec");
+    }),
+  );
+
   it.effect("persists active order in shells and clears it on re-entry", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
@@ -2233,6 +2329,102 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         afterSecondPromotion.runs.find((run) => run.id === secondQueuedRun.id)?.status,
         "starting",
       );
+    }),
+  );
+
+  it.effect("holds a queue across restart and drains it only once resumed", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-queue-hold-thread");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queue-hold-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-queue-hold-project"),
+        title: "Hold the queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-queue-hold",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queue-hold-active-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-queue-hold-active-message"),
+        text: "Keep the provider occupied.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queue-hold-queued-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-queue-hold-queued-message"),
+        text: "Run this next.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const queuedRun = before.runs.find((run) => run.status === "queued");
+      assert.isDefined(queuedRun);
+      const activeRun = before.runs.find((run) => run.id !== queuedRun.id);
+      assert.isDefined(activeRun);
+
+      // Stand in for restart recovery: hold the queue, then finish the run that
+      // was occupying the provider so only the hold can keep the queue parked.
+      const heldAt = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-queue-hold-held"),
+            type: "run.updated",
+            threadId,
+            runId: queuedRun.id,
+            providerInstanceId: queuedRun.providerInstanceId,
+            occurredAt: heldAt,
+            payload: { ...queuedRun, queueHeld: true },
+          },
+          {
+            id: EventId.make("runtime-layer-queue-hold-active-completed"),
+            type: "run.updated",
+            threadId,
+            runId: activeRun.id,
+            ...(activeRun.rootNodeId === null ? {} : { nodeId: activeRun.rootNodeId }),
+            providerInstanceId: activeRun.providerInstanceId,
+            occurredAt: heldAt,
+            payload: { ...activeRun, status: "completed", completedAt: heldAt },
+          },
+        ],
+      });
+
+      assert.equal(yield* orchestrator.resumeQueuedRuns, 0);
+      const stillHeld = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(stillHeld.runs.find((run) => run.id === queuedRun.id)?.status, "queued");
+
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("runtime-layer-queue-hold-resume"),
+        threadId,
+      });
+
+      const afterResume = yield* orchestrator.getThreadProjection(threadId);
+      const resumedRun = afterResume.runs.find((run) => run.id === queuedRun.id);
+      assert.equal(resumedRun?.queueHeld ?? false, false);
+      // Resuming is what starts the head; the user does not have to send again.
+      assert.equal(resumedRun?.status, "starting");
     }),
   );
 

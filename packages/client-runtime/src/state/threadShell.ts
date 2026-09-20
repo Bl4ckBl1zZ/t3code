@@ -180,6 +180,23 @@ export function createEnvironmentThreadShellAtoms(input: {
     return previousThreadShells;
   }).pipe(Atom.withLabel("environment-thread-shell-list"));
 
+  let previousNavigationShells: ReadonlyArray<EnvironmentThreadShell> = [];
+  // Turn navigation walks the threads a user can actually land on: an archived
+  // thread or a subagent child is reachable from its parent, never from the
+  // next/previous shortcut.
+  const navigationThreadShellsAtom = Atom.make((get) => {
+    const next = get(threadRefsAtom).flatMap((ref) => {
+      const thread = get(threadShellAtomFamily(threadKey(ref)));
+      if (thread === null) return [];
+      if (thread.archivedAt !== null) return [];
+      if (thread.lineage.relationshipToParent === "subagent") return [];
+      return [thread];
+    });
+    if (arrayElementsEqual(previousNavigationShells, next)) return previousNavigationShells;
+    previousNavigationShells = next;
+    return previousNavigationShells;
+  }).pipe(Atom.withLabel("environment-navigation-thread-shells"));
+
   return {
     environmentThreadsAtom,
     environmentThreadIndexAtom,
@@ -187,6 +204,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     environmentThreadRefsByProjectAtom,
     threadRefsAtom,
     threadShellsAtom,
+    navigationThreadShellsAtom,
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),

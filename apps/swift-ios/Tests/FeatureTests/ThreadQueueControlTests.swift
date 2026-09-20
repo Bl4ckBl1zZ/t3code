@@ -64,6 +64,25 @@ final class ThreadQueueControlTests: XCTestCase {
         XCTAssertTrue(state.canPromoteToSteer)
     }
 
+    func testReportsHeldWhenRestartRecoveryPausedAnyQueuedRun() {
+        let runs = [
+            ThreadWorkflowRun(id: "first", ordinal: 1, status: "queued", queueHeld: true),
+            ThreadWorkflowRun(id: "second", ordinal: 2, status: "queued"),
+        ]
+
+        let held = ThreadWorkflows.deriveQueueWorkflowState(runs: runs)
+        XCTAssertTrue(held.isHeld)
+        // The hold is the whole queue's, so both rows stay put and in order.
+        XCTAssertEqual(held.queuedRuns.map(\.run.id), ["first", "second"])
+
+        let released = ThreadWorkflows.deriveQueueWorkflowState(
+            runs: runs.map {
+                ThreadWorkflowRun(id: $0.id, ordinal: $0.ordinal, status: $0.status)
+            }
+        )
+        XCTAssertFalse(released.isHeld)
+    }
+
     func testShowsOnlyQueuedRunsSoAPromotedHeadLeavesTheStrip() {
         let state = ThreadWorkflows.deriveQueueWorkflowState(
             runs: [

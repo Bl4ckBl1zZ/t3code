@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as MobileDatabase from "../persistence/mobile-database";
+import { encodeStoredShellSnapshot } from "./shell-cache-encoding";
 
 const SERVER_CONFIG_CACHE_SCHEMA_VERSION = 1;
 const VCS_REFS_CACHE_SCHEMA_VERSION = 1;
@@ -29,9 +30,6 @@ const StoredVcsRefs = Schema.Struct({
 });
 
 const decodeStoredShellSnapshot = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(StoredOrchestrationShellSnapshot),
-);
-const encodeStoredShellSnapshot = Schema.encodeEffect(
   Schema.fromJsonString(StoredOrchestrationShellSnapshot),
 );
 const decodeStoredThreadSnapshot = Schema.decodeUnknownEffect(

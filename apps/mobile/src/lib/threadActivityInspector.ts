@@ -208,7 +208,18 @@ export function buildThreadActivityInspector(
       ending = commandEnding(item);
       break;
     case "file_change":
-      fileLinks.push({ label: item.fileName, path: item.fileName });
+      // One item can cover several files, and only the structured list knows
+      // them; `fileName` names the first. An item without one reads as before.
+      if (item.changes === undefined || item.changes.length === 0) {
+        fileLinks.push({ label: item.fileName, path: item.fileName });
+      } else {
+        for (const change of item.changes) {
+          fileLinks.push({
+            label: `${change.operation} ${change.oldPath ? `${change.oldPath} → ` : ""}${change.path}`,
+            path: change.path,
+          });
+        }
+      }
       if (item.additions !== undefined || item.deletions !== undefined) {
         fields.push({
           label: "Changes",

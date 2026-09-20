@@ -35,6 +35,13 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
+import { EnvironmentHandlersLive } from "./toolkits/environment/handlers.ts";
+import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
+import { PreviewControlsHandlersLive } from "./toolkits/previewControls/handlers.ts";
+import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
+import { ThreadToolkitHandlersLive } from "./toolkits/thread/handlers.ts";
+import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
@@ -404,7 +411,20 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
 export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
   Layer.provide(OrchestratorToolkitHandlersLive),
   Layer.provide(OrchestratorMcpService.layer),
+  Layer.provide(ThreadMetadataMcpService.layer),
 );
+
+export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
+  Layer.provide(ThreadToolkitHandlersLive),
+);
+
+export const EnvironmentToolkitRegistrationLive = McpServer.toolkit(EnvironmentToolkit).pipe(
+  Layer.provide(EnvironmentHandlersLive),
+);
+
+export const PreviewControlsToolkitRegistrationLive = McpServer.toolkit(
+  PreviewControlsToolkit,
+).pipe(Layer.provide(PreviewControlsHandlersLive));
 
 export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
   Layer.provide(WorktreeToolkitHandlersLive),
@@ -426,6 +446,9 @@ const McpTransportLive = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   OrchestratorToolkitRegistrationLive,
+  ThreadToolkitRegistrationLive,
+  EnvironmentToolkitRegistrationLive,
+  PreviewControlsToolkitRegistrationLive,
   WorktreeToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

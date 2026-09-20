@@ -26,7 +26,6 @@ export interface WorkspaceState {
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
   readonly shellSnapshotError: string | null;
-  readonly latestCachedSnapshotReceivedAt: string | null;
   readonly networkStatus: NetworkStatus;
 }
 
@@ -99,7 +98,6 @@ export function projectWorkspaceState(input: {
       input.environments.find((environment) => environment.connectionError !== null)
         ?.connectionError ?? null,
     shellSnapshotError: input.shellSummary.firstError,
-    latestCachedSnapshotReceivedAt: input.shellSummary.latestSnapshotUpdatedAt,
     networkStatus: input.networkStatus,
   };
 }

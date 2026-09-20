@@ -15,14 +15,19 @@ The command keeps its own row in the conversation, shaped like any other tool ca
   working and one that is stuck
 - **why it failed or never got to finish**, once it ends
 
-Open the row to read the command's full output and exit code.
+Open the row to read its exit code and how it ended.
 
 A row stays visible even when the surrounding tool calls collapse, so a long-running command is never
 hidden behind "+3 previous tool calls".
 
 Some commands show a progress bar. That only happens when the command declared a timeout, which is
 the only case where the remaining time is a real number rather than a guess. A command with no
-declared deadline shows elapsed time and its output, and nothing that pretends to be a percentage.
+declared deadline shows elapsed time and its last printed line, and nothing that pretends to be a
+percentage.
+
+While a command is running, T3 sends its most recent line and nothing more. A finished command keeps
+its exit code and whether it succeeded, not the text it printed. Ask the agent to read a log or
+re-run a command when you need the full transcript.
 
 If a command has printed nothing yet, the row says so rather than looking stalled.
 

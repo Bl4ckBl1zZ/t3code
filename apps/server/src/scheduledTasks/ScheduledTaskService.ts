@@ -97,10 +97,6 @@ function taskError(message: string, input?: { taskId?: ScheduledTaskId; cause?: 
   });
 }
 
-function automationPrompt(task: ScheduledTask): string {
-  return `[Triggered by schedule task: ${task.title}]\n\n${task.prompt}`;
-}
-
 function iso(value: DateTime.DateTime): string {
   return DateTime.formatIso(DateTime.toUtc(value));
 }
@@ -524,8 +520,9 @@ export const layer = Layer.effect(
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
         const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
         // Dispatch from the fresh row so prompt/model/binding edits made
-        // after the poll read are honoured.
-        const prompt = automationPrompt(active);
+        // after the poll read are honoured. The prompt goes over verbatim: the
+        // schedule is named on the message, not smuggled into what the agent reads.
+        const prompt = active.prompt;
 
         // Preparation failures arrive from a background fiber that can outpace
         // this one. Gating the downgrade on the dispatch record keeps the two
@@ -550,6 +547,7 @@ export const layer = Layer.effect(
                     messageId,
                     text: prompt,
                     attachments: [],
+                    scheduledTaskId: active.id,
                   },
                   createdBy: active.createdBy,
                   creationSource: active.creationSource,
@@ -573,6 +571,7 @@ export const layer = Layer.effect(
                   messageId,
                   text: prompt,
                   attachments: [],
+                  scheduledTaskId: active.id,
                   modelSelection: active.modelSelection,
                   mode: "auto",
                   createdBy: active.createdBy,

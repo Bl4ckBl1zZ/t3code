@@ -1,5 +1,3 @@
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -12,9 +10,21 @@ import {
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { copySorted } from "./Array.ts";
 
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
+
+/** Choose the command for a model change against the thread's current provider instance. */
+export function modelSelectionCommandType(
+  currentInstanceId: ProviderInstanceId,
+  selection: ModelSelection,
+) {
+  return currentInstanceId === selection.instanceId
+    ? ("thread.model-selection.set" as const)
+    : ("provider.switch" as const);
+}
 
 export interface SelectableModelOption {
   slug: string;
@@ -277,6 +287,26 @@ export function isClaudeUltrathinkPrompt(text: string | null | undefined): boole
 /** Compare Codex model families without changing provider-owned dispatch identifiers. */
 export function codexModelFamily(slug: string): string {
   return slug.startsWith("openai.gpt-") ? slug.slice("openai.".length) : slug;
+}
+
+export function formatCodexModelName(name: string): string {
+  return name.replace(/^gpt/i, "GPT").replace(/-([a-z])/g, (_, c) => "-" + c.toUpperCase());
+}
+
+export function formatModelSlugName(slug: string): string {
+  const separator = slug.lastIndexOf("/") + 1;
+  const prefix = slug.slice(0, separator);
+  const name = slug.slice(separator);
+  if (/^gpt-\d/i.test(name)) return prefix + formatCodexModelName(name);
+  if (!/^(claude-(opus|sonnet|haiku|fable)|gemini|grok|composer)-\d/i.test(name)) return slug;
+  return (
+    prefix +
+    name
+      .replace(/^(claude-[a-z]+-\d+)-(\d{1,2})(?=-|\[|$)/i, "$1.$2")
+      .split("-")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ")
+  );
 }
 
 export function normalizeModelSlug(

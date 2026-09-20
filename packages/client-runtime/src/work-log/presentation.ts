@@ -17,6 +17,8 @@ export interface WorkLogPresentationEntry {
   readonly toolLifecycleStatus?: string;
   readonly sourceActivityKind?: string;
   readonly taskId?: string;
+  /** Set when the call was a read of an image file the agent looked at. */
+  readonly viewedImagePath?: string;
 }
 
 export type ToolGroupAction =
@@ -57,6 +59,7 @@ export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupActio
   if (
     entry.requestKind === "file-read" ||
     entry.itemType === "image_view" ||
+    entry.viewedImagePath !== undefined ||
     (entry.itemType === "dynamic_tool_call" && entry.toolTitle === "Read File")
   ) {
     return "read";

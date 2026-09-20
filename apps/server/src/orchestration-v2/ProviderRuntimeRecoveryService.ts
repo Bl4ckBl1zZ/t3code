@@ -57,11 +57,15 @@ export class ProviderRuntimeRecoveryService extends Context.Service<
   }
 >()("t3/orchestration-v2/ProviderRuntimeRecoveryService") {}
 
+/**
+ * Runs whose provider work cannot survive the restart. Queued runs are not
+ * among them: they never reached a provider, so they keep their execution
+ * identities and their order and are held instead of cancelled.
+ */
 function nonterminalRuns(projection: OrchestrationV2ThreadProjection) {
   return projection.runs.filter((run) => {
     const status: string = run.status;
     return (
-      run.status === "queued" ||
       status === "preparing" ||
       run.status === "starting" ||
       run.status === "running" ||
@@ -128,6 +132,20 @@ export const make = Effect.gen(function* () {
           ),
         );
       const events: Array<OrchestrationV2DomainEvent> = [];
+      // Hold the queue rather than draining it into a provider the user has not
+      // looked at since the server came back. Explicit consent releases it.
+      for (const run of projection.runs) {
+        if (run.status !== "queued" || run.queueHeld === true) continue;
+        events.push({
+          id: yield* allocateEventId(),
+          type: "run.updated",
+          threadId: projection.thread.id,
+          runId: run.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...run, queueHeld: true },
+        });
+      }
       for (const request of requests) {
         events.push({
           id: yield* allocateEventId(),

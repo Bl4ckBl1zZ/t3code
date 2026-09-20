@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
-import { findOpenHtmlEmbedFence, htmlEmbedPhase } from "./htmlEmbedFence";
+import { findOpenHtmlEmbedFence, htmlEmbedPhase } from "./htmlEmbedFence.ts";
 
 describe("findOpenHtmlEmbedFence", () => {
   it("reports the fence that is still being written", () => {

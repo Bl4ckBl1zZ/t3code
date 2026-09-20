@@ -9,6 +9,7 @@ const prompt: PendingUserInput = {
   requestId: RuntimeRequestId.make("request-1"),
   createdAt: "2026-08-15T00:00:00.000Z",
   responseCapability: "live",
+  dismissible: false,
   questions: [
     {
       id: "question-1",

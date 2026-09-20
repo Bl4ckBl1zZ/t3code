@@ -63,6 +63,7 @@ export const PROVIDER_OPTIONS: Array<{
 ];
 
 export type WorkLogToolLifecycleStatus =
+  | "idle"
   | "inProgress"
   | "completed"
   | "failed"
@@ -102,6 +103,8 @@ export interface ActivePlanState {
   readonly steps: Array<{
     readonly step: string;
     readonly status: "pending" | "inProgress" | "completed";
+    /** How long the step took, once the server has measured it. */
+    readonly durationMs?: number;
   }>;
 }
 
@@ -161,10 +164,19 @@ export function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
 }
 
 export function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
-  return (
+  if (
     entry.tone === "error" ||
     entry.toolLifecycleStatus === "failed" ||
     entry.toolLifecycleStatus === "declined"
+  ) {
+    return true;
+  }
+  // A command that reported a nonzero exit or failing output is a failure even
+  // when the provider closed its item as completed.
+  const item = entry.structuredPayload;
+  return (
+    item?.type === "command_execution" &&
+    (item.outputIndicatesFailure === true || (item.exitCode !== undefined && item.exitCode !== 0))
   );
 }
 
@@ -251,9 +263,10 @@ export function deriveActivePlanState(
     createdAt: planItemTime(projection, plan.id),
     runId: plan.runId,
     explanation: plan.explanation ?? null,
-    steps: plan.steps.map(({ text, status }) => ({
+    steps: plan.steps.map(({ text, status, durationMs }) => ({
       step: text,
       status: status === "running" ? "inProgress" : status,
+      ...(durationMs === undefined ? {} : { durationMs }),
     })),
   };
 }
@@ -374,6 +387,8 @@ function projectedWorkEntryStatus(
       return "inProgress";
     case "completed":
       return "completed";
+    case "idle":
+      return "idle";
     case "failed":
       return "failed";
     case "cancelled":
@@ -600,7 +615,13 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
         runId: item.runId,
         streaming: item.type === "assistant_message" && item.streaming,
         ...(item.type === "user_message"
-          ? { createdBy: item.createdBy, creationSource: item.creationSource }
+          ? {
+              createdBy: item.createdBy,
+              creationSource: item.creationSource,
+              ...(item.scheduledTaskId === undefined
+                ? {}
+                : { scheduledTaskId: item.scheduledTaskId }),
+            }
           : {}),
         createdAt,
         updatedAt: DateTime.formatIso(item.updatedAt),

@@ -23,6 +23,10 @@
       "types": "./src/backgroundProcess.ts",
       "import": "./src/backgroundProcess.ts"
     },
+    "./toolOutput": {
+      "types": "./src/toolOutput.ts",
+      "import": "./src/toolOutput.ts"
+    },
     "./orchestrationV2Window": {
       "types": "./src/orchestrationV2Window.ts",
       "import": "./src/orchestrationV2Window.ts"

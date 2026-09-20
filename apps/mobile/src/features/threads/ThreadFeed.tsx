@@ -5,6 +5,7 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { findOpenHtmlEmbedFence } from "@t3tools/client-runtime/html-embed-fence";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/userMessage";
 import { requestThreadFullHistory } from "@t3tools/client-runtime/state/threads";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
@@ -151,7 +152,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
-import { isScheduledTaskMessageId } from "./scheduledTaskMessageBadge";
 import { RELATED_THREAD_ROWS_CLASS, ThreadLifecycleRow } from "./ThreadLifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { formatOrchestrationV2TimelineDayLabel } from "@t3tools/shared/orchestrationV2Timeline";
@@ -1203,7 +1203,18 @@ function renderFeedEntry(
 
   if (entry.type === "message") {
     const { message } = entry;
-    const renderedText = renderAssistantCitationsAsText(message.text);
+    // Scheduled prompts used to carry their attribution as a text prefix; the
+    // presentation resolves both that and the structured field.
+    const userMessage = resolveUserMessagePresentation({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      ...(message.createdBy === undefined ? {} : { createdBy: message.createdBy }),
+      ...(message.scheduledTaskId === undefined
+        ? {}
+        : { scheduledTaskId: message.scheduledTaskId }),
+    });
+    const renderedText = renderAssistantCitationsAsText(userMessage.text);
     const isUser = message.role === "user";
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
@@ -1286,7 +1297,7 @@ function renderFeedEntry(
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
       const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
-      const automationBadge = isScheduledTaskMessageId(message.id);
+      const automationBadge = userMessage.isAutomation;
       return (
         <Animated.View
           className="mb-5 items-end"

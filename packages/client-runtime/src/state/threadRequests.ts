@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2RuntimeRequest,
   OrchestrationV2ThreadProjection,
   ProviderRequestKind,
   ProviderApprovalOption,
@@ -12,12 +13,15 @@ export interface ThreadPendingApproval {
   readonly createdAt: string;
   readonly detail?: string;
   readonly title?: string;
+  /** App requesting access for mcp-elicitation approvals (#8058). */
+  readonly appName?: string;
   readonly options?: ReadonlyArray<ProviderApprovalOption>;
   readonly responseCapability: "live" | "not_resumable";
 }
 
 export interface ThreadUserInputQuestion {
   readonly allowCustomAnswer?: boolean | undefined;
+  readonly required?: boolean | undefined;
   readonly id: string;
   readonly header: string;
   readonly question: string;
@@ -33,7 +37,10 @@ export interface ThreadPendingUserInput {
   readonly requestId: RuntimeRequestId;
   readonly createdAt: string;
   readonly questions: ReadonlyArray<ThreadUserInputQuestion>;
-  readonly responseCapability: "live" | "not_resumable";
+  readonly responseCapability: OrchestrationV2RuntimeRequest["responseCapability"]["type"];
+  readonly responseMode?: "message";
+  /** A question answerable by a plain message can be dismissed instead. */
+  readonly dismissible: boolean;
 }
 
 export interface PendingThreadRequests {
@@ -43,7 +50,7 @@ export interface PendingThreadRequests {
 
 /** Joins pending request entities to the request items that carry display data. */
 export function derivePendingThreadRequests(
-  projection: OrchestrationV2ThreadProjection,
+  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests" | "turnItems">,
 ): PendingThreadRequests {
   const approvals: ThreadPendingApproval[] = [];
   const userInputs: ThreadPendingUserInput[] = [];
@@ -57,6 +64,12 @@ export function derivePendingThreadRequests(
           candidate.type === "user_input_request" && candidate.requestId === request.id,
       );
       if (item === undefined || item.type !== "user_input_request") continue;
+      // "message" arrives as the capability on newer servers, and as the
+      // request's or item's responseMode elsewhere; all mean the same here.
+      const byMessage =
+        responseCapability === "message" ||
+        request.responseMode === "message" ||
+        item.responseMode === "message";
       userInputs.push({
         requestId: request.id,
         createdAt: DateTime.formatIso(request.createdAt),
@@ -65,6 +78,8 @@ export function derivePendingThreadRequests(
           multiSelect: question.multiSelect ?? false,
         })),
         responseCapability,
+        ...(byMessage ? { responseMode: "message" as const } : {}),
+        dismissible: byMessage,
       });
       continue;
     }
@@ -79,8 +94,9 @@ export function derivePendingThreadRequests(
       createdAt: DateTime.formatIso(request.createdAt),
       ...(item?.type === "approval_request" && item.prompt ? { detail: item.prompt } : {}),
       ...(item?.type === "approval_request" && item.title ? { title: item.title } : {}),
+      ...(item?.type === "approval_request" && item.appName ? { appName: item.appName } : {}),
       ...(item?.type === "approval_request" && item.options ? { options: item.options } : {}),
-      responseCapability,
+      responseCapability: responseCapability === "live" ? "live" : "not_resumable",
     });
   }
 

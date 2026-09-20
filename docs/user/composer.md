@@ -66,6 +66,16 @@ sent messages. They stay above the composer as it expands or the keyboard opens.
 On web and desktop, changing the project from a new thread keeps the current environment when that
 project exists there. If it does not, T3 Code selects another environment that has the project.
 
+## Context meter
+
+On web and desktop, the ring beside the send controls shows how full the agent's context window is.
+Claude and Codex report their usage as they work, so the ring fills during a turn rather than only
+after a compaction, and the reading survives between turns. Hover it for the percentage, the token
+count against the window, and whether the agent compacts on its own.
+
+Providers that report no usage leave the ring showing only what the last compaction recorded, with
+no percentage -- there is no window size to measure against.
+
 ## Notices above the composer
 
 On web and desktop, loading and syncing statuses fill the available banner width beside the
@@ -76,6 +86,17 @@ On web and desktop, additional notices peek out above the attached banner. Hover
 to reveal them, or focus **Show other notices** with `Tab` and press `Enter` or `Space`. Press
 `Escape` to close the stack and return focus to that control. On a touchscreen, tap the peek to
 open the stack. Interacting with the attached banner or composer does not open the stack.
+
+## Paused queues
+
+Messages you queue behind a running turn sit above the composer and send in order once the agent
+finishes. If the server restarts while messages are still waiting, the queue pauses instead of
+sending: the agent that was working is gone, and you may not want the next message going to a
+fresh one unread. Your messages, their order and their attachments are all kept.
+
+A paused queue says **Paused when the server restarted** above its rows. Edit, reorder or remove
+whatever you want first, then choose **Resume** to start the message at the top and let the rest
+follow. Nothing sends until you do.
 
 ## Prompt stash
 
@@ -197,8 +218,9 @@ alert icon in the work log; failures that stop the runtime retain their stronger
 error treatment. Open a failed row to inspect its output.
 
 On web and desktop, task progress and stashed prompts appear as tabs attached above the composer.
-Expand Tasks to inspect the current plan. Approval requests and questions open in the same
-attached area, with their actions beside the request. Notices keep their own stack.
+Expand Tasks to inspect the current plan. Each finished task shows how long it took, measured from
+when the agent picked it up; the task in progress reads "now". Approval requests and questions open
+in the same attached area, with their actions beside the request. Notices keep their own stack.
 
 On native iOS, use **Prompt history → Stash draft** to save up to 20 drafts for the current
 thread. The Stash tab opens the saved list. Restoring moves any unsent text and attachments

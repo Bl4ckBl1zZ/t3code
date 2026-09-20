@@ -257,6 +257,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "run.restart-continuation.prepare":
     case "run.restart-continuation.clear":
     case "run.interrupt":
+    case "queue.resume":
     case "queued-message.promote-to-steer":
     case "queued-run.reorder":
     case "queued-run.cancel":
@@ -290,6 +291,15 @@ function isBlockingRun(run: OrchestrationV2Run): boolean {
     run.status === "running" ||
     run.status === "waiting"
   );
+}
+
+/**
+ * Restart recovery holds a thread's queue rather than draining it into a
+ * provider the user has not looked at since the server came back. One held run
+ * holds the whole queue: they were meant to run in order.
+ */
+function isHeldQueuedRun(run: OrchestrationV2Run): boolean {
+  return run.status === "queued" && run.queueHeld === true;
 }
 
 /**
@@ -862,7 +872,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
-        projection.runs.some(isBlockingRun)
+        projection.runs.some(isBlockingRun) ||
+        projection.runs.some(isHeldQueuedRun)
       ) {
         return;
       }
@@ -988,6 +999,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           status: "completed",
           title: null,
           type: "user_message",
+          ...(queuedMessage.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: queuedMessage.scheduledTaskId }),
           messageId: queuedMessage.id,
           text: queuedMessage.text,
           attachments: queuedMessage.attachments,
@@ -1068,7 +1082,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     for (const thread of shell.threads) {
       const resumedThread = yield* Effect.gen(function* () {
         const projection = yield* projectionStore.getThreadProjection(thread.id);
-        if (projection.runs.some(isBlockingRun) || nextQueuedRun(projection) === undefined) {
+        if (
+          projection.runs.some(isBlockingRun) ||
+          projection.runs.some(isHeldQueuedRun) ||
+          nextQueuedRun(projection) === undefined
+        ) {
           return false;
         }
         yield* threadDispatch.withLock(thread.id, startNextQueuedRun(thread.id));
@@ -2446,6 +2464,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly attachments: ReadonlyArray<ChatAttachment>;
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
+    readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly forceRestart: boolean;
   }) =>
     Effect.gen(function* () {
@@ -2561,6 +2580,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           const message: OrchestrationV2ConversationMessage = {
             createdBy: input.createdBy,
             creationSource: input.creationSource,
+            ...(input.scheduledTaskId === undefined
+              ? {}
+              : { scheduledTaskId: input.scheduledTaskId }),
             id: input.messageId,
             threadId: input.command.threadId,
             runId: messageInput.runId,
@@ -2590,6 +2612,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             completedAt: now,
             updatedAt: now,
             type: "user_message",
+            ...(input.scheduledTaskId === undefined
+              ? {}
+              : { scheduledTaskId: input.scheduledTaskId }),
             messageId: input.messageId,
             inputIntent:
               input.command.type === "queued-message.promote-to-steer"
@@ -3286,6 +3311,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           attachments: command.attachments,
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          ...(command.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: command.scheduledTaskId }),
           forceRestart: dispatchMode.type === "restart_active",
         });
         return;
@@ -3436,6 +3464,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          ...(command.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: command.scheduledTaskId }),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -3692,6 +3723,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          ...(command.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: command.scheduledTaskId }),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -3722,6 +3756,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           completedAt: now,
           updatedAt: now,
           type: "user_message",
+          ...(command.scheduledTaskId === undefined
+            ? {}
+            : { scheduledTaskId: command.scheduledTaskId }),
           messageId: command.messageId,
           inputIntent: "turn_start",
           text: dispatchText,
@@ -4464,6 +4501,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.restartContinuation !== undefined ? { restartContinuation: true } : {}),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
+        ...(command.scheduledTaskId === undefined
+          ? {}
+          : { scheduledTaskId: command.scheduledTaskId }),
         id: command.messageId,
         threadId: command.threadId,
         runId,
@@ -4494,6 +4534,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         completedAt: now,
         updatedAt: now,
         type: "user_message",
+        ...(command.scheduledTaskId === undefined
+          ? {}
+          : { scheduledTaskId: command.scheduledTaskId }),
         messageId: command.messageId,
         inputIntent: "turn_start",
         text: dispatchText,
@@ -5353,7 +5396,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Runtime request ${command.requestId} is ${runtimeRequest.status}.`,
         });
       }
-      const isMessageResponse = runtimeRequest.responseMode === "message";
+      // "message" reaches us as the request's responseMode and, on requests
+      // raised by newer adapters, as the response capability; both mean the
+      // answer is an ordinary message rather than a live provider reply.
+      const isMessageResponse =
+        runtimeRequest.responseMode === "message" ||
+        runtimeRequest.responseCapability.type === "message";
       const questionItem = projection.turnItems.find(
         (item) => item.type === "user_input_request" && item.requestId === command.requestId,
       );
@@ -5382,7 +5430,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: "Dismissal cannot include an answer.",
         });
       }
-      if (!isMessageResponse && runtimeRequest.responseCapability.type !== "live") {
+      if (!isMessageResponse && runtimeRequest.responseCapability.type === "not_resumable") {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -5475,16 +5523,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const text =
           questionItem?.type === "user_input_request"
             ? questionItem.questions
-                .map((question) => {
+                .flatMap((question) => {
                   const answer = command.answers?.[question.id];
+                  const files = (questionAttachments[question.id] ?? [])
+                    .map((file) => file.name)
+                    .join(", ");
+                  // A question the provider marked optional and the user left
+                  // blank must not appear as if it had been answered.
+                  if (question.required === false && answer === undefined && files === "") {
+                    return [];
+                  }
                   const rendered =
                     typeof answer === "string"
                       ? answer
                       : JSON.stringify(answer ?? "See attached files.");
-                  const files = (questionAttachments[question.id] ?? [])
-                    .map((file) => file.name)
-                    .join(", ");
-                  return `${question.question}\n${rendered}${files ? `\nFiles: ${files}` : ""}`;
+                  return [`${question.question}\n${rendered}${files ? `\nFiles: ${files}` : ""}`];
                 })
                 .join("\n\n")
             : "Question response";
@@ -5633,8 +5686,44 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         attachments: queuedMessage.attachments,
         createdBy: queuedMessage.createdBy,
         creationSource: queuedMessage.creationSource,
+        ...(queuedMessage.scheduledTaskId === undefined
+          ? {}
+          : { scheduledTaskId: queuedMessage.scheduledTaskId }),
         forceRestart: false,
       });
+    });
+
+  const dispatchQueueResume = (
+    command: Extract<OrchestrationV2Command, { readonly type: "queue.resume" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadProjection(command.threadId)
+        .pipe(
+          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
+        );
+      if (projection.thread.archivedAt !== null || projection.thread.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is not active.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      const emitEvent = emit(events, command);
+      const held = projection.runs.filter(isHeldQueuedRun);
+      for (const run of held) {
+        yield* emitEvent({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...run, queueHeld: false },
+        });
+      }
     });
 
   const dispatchQueuedRunReorder = (
@@ -7281,6 +7370,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "queued-message.promote-to-steer":
         yield* dispatchQueuedMessagePromoteToSteer(command, events, effects);
         break;
+      case "queue.resume":
+        yield* dispatchQueueResume(command, events);
+        break;
       case "queued-run.reorder":
         yield* dispatchQueuedRunReorder(command, events);
         break;
@@ -7458,6 +7550,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (command.type === "delegated_task.wake-policy") {
       yield* mapDispatchError(command)(offerDelegatedCompletionDeliveries(command.parentThreadId));
+    }
+    // Releasing the hold is the whole point of the command, so drain here
+    // rather than waiting for the next terminal run to notice. The thread lock
+    // is already held by dispatchWithReceipt and is not reentrant.
+    if (command.type === "queue.resume") {
+      yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
     }
 
     return {

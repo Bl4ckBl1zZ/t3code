@@ -140,7 +140,9 @@ selection model-visible without allowing a request that cannot run.
 
 ## Tool Surface
 
-The server exposes eleven orchestration tools.
+The orchestrator toolkit below exposes sixteen tools. A separate thread toolkit
+adds seventeen more, a workspace toolkit adds three, and environment and
+preview toolkits add two each.
 
 ### `orchestrator_capabilities`
 
@@ -244,12 +246,24 @@ inherit the parent's project, branch, and worktree path, but they have no
 sub-agent lineage. Entries with a prompt immediately dispatch a run; entries
 without a prompt remain idle.
 
-### `t3_thread_start`
+### `t3_thread_launch`
 
-Creates one ordinary top-level thread and immediately dispatches its first
-prompt. It is the single-thread convenience form of `create_threads` and
-returns the created thread and run IDs. Use `clientRequestId` when a caller may
-retry the request.
+Creates one ordinary top-level thread whose workspace is bound before its agent
+starts. `workspaceStrategy` chooses that binding: `worktree` provisions and
+binds a new checkout from `baseRef`, `existing_worktree` binds a path that is
+already there, and the default `root` uses the project checkout — not the
+caller's worktree. Project, provider, model and modes inherit from the caller
+unless overridden; `message` dispatches the first run after preparation, and
+omitting it leaves the thread idle. Returns the thread's own branch and
+worktree path alongside its run.
+
+Unlike every other mutation here it takes no `clientRequestId` and derives no
+stable ids: provisioning a worktree is not safely repeatable, so each call is
+its own launch. A caller that loses the response inspects `t3_thread_list`
+rather than retrying. It requires a full-access, default-mode calling thread,
+because it does real filesystem work on the caller's behalf.
+
+Use `create_threads` instead for a batch that shares the caller's checkout.
 
 ### `t3_thread_list`
 
@@ -272,6 +286,19 @@ provenance. MCP-created threads and user-role messages use `createdBy: "agent"`
 and `creationSource: "mcp"`; provider output uses `creationSource: "provider"`.
 Actor and ingress are separate so agent-authored user-role messages remain
 distinguishable from human-authored messages.
+
+### `t3_thread_update`
+
+Updates metadata for the calling thread or another thread in the same project.
+The typed actions are `rename`, `regenerate_title`, `link_pull_request`, and
+`unlink_pull_request`. A link input supplies the repository, number, and URL;
+the server records the target thread's project ID. Branch and workspace changes
+are outside this tool.
+
+The result includes the command ID and durable event sequence together with the
+resultant title, title-regeneration marker, and linked pull request. Reusing a
+`clientRequestId` for the same action and thread replays the same command
+receipt.
 
 ### `t3_thread_send`
 
@@ -301,6 +328,66 @@ Interrupts a selected active run through the normal V2 `run.interrupt` command.
 Without `runId`, it selects the newest interruptible run. A terminal run is
 returned unchanged, and a thread with no active provider turn returns
 `no_active_run`.
+
+## Thread Toolkit
+
+A second toolkit covers what a caller does to a thread that already exists.
+Every tool resolves the caller's credential first and then the thread, so a
+`threadId` argument can only ever name a thread in the caller's own project;
+omitting it means the calling thread. Writes additionally require a live
+full-access caller whose runtime and interaction modes are at least as broad as
+the target's, which is the same escalation rule delegation uses.
+
+- **Organizing.** `t3_thread_organize` pins, snoozes, settles, archives or marks
+  a thread unread through the ordinary lifecycle commands. `snooze` requires
+  `snoozedUntil`; nothing here schedules future work.
+- **The queue.** `t3_queue_list` pages queued messages in delivery order and
+  `t3_queue_read` returns up to 16,000 characters of one. `t3_queue_edit`,
+  `t3_queue_cancel`, `t3_queue_reorder` and `t3_queue_promote_to_steer` are the
+  same commands the composer's queue strip issues, with the same rules — a run
+  that is no longer queued is rejected, and steering needs a steerable turn.
+- **Pending questions.** `t3_pending_request_list` and `t3_pending_request_read`
+  surface unanswered user-input requests, and `t3_pending_request_respond`
+  answers one. Approval requests are deliberately absent: an agent cannot
+  approve its own permission prompt.
+- **Configuration.** `t3_thread_configuration` reads a thread's model selection
+  and modes; `t3_thread_configure` sets the calling thread's selection only.
+  Permission modes are not settable here.
+- **Lineage.** `t3_thread_fork` and `t3_thread_merge_back` run the existing fork
+  and merge-back commands, and `t3_thread_transfers` reads transfer status.
+  Acceptance means the command committed, not that a provider turn finished.
+- **Search.** `t3_thread_search` runs the app's bounded thread search and then
+  drops matches outside the calling project, so it may return fewer results than
+  `limit`. It is not paginated and is not exhaustive.
+- **Scheduling.** `run_scheduled_task_now` triggers a scheduled task in the
+  calling project immediately. It requires a full-access/default caller, and
+  each call is a new manual run.
+
+## Workspace, Environment And Preview Toolkits
+
+Three smaller toolkits sit beside the thread one.
+
+The workspace toolkit moves a thread between checkouts and reports where it is.
+`t3_worktree_handoff` creates a worktree and re-points the thread at it,
+`t3_worktree_status` reports the current binding, and `t3_worktree_list` pages
+the branch refs in the thread's workspace with the checkout path each one is
+bound to, using the app's own ref inventory. A detached worktree with no branch
+is left out, since there is no ref to name it by. All three need the `worktree`
+capability.
+
+`t3_environment_read` reports the environment the credential belongs to — its
+id, label, server version and platform — together with an allowlisted subset of
+its preferences. The allowlist is the point: provider credentials and the rest
+of the settings file never appear, and free-text writing-style instructions are
+truncated to 4,000 code points with a `truncated` marker rather than streamed
+whole. `t3_environment_preferences_update` writes that same subset back and
+needs a live full-access/default caller. A credential issued for another
+environment is refused outright.
+
+`t3_preview_list` and `t3_preview_close` page and close the calling thread's
+preview tabs. Both gate on the `preview` capability, which already carries the
+project's browser-access setting, so a credential without it cannot enumerate
+tabs or close one.
 
 ## Delegated Task Lifecycle
 

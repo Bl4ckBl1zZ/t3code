@@ -71,6 +71,7 @@ import {
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
+  ArrowRightLeftIcon,
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
@@ -410,6 +411,7 @@ function SidebarThreadTooltip({
   projectFaviconPath,
   environmentLabel,
   providerEntry,
+  providerEntryByInstanceId,
   showInstanceBadge,
   modelInstanceId,
   modelLabel,
@@ -424,6 +426,7 @@ function SidebarThreadTooltip({
   projectFaviconPath: string | null;
   environmentLabel: string | null;
   providerEntry: ProviderInstanceEntry | null;
+  providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   showInstanceBadge: boolean;
   modelInstanceId: string;
   modelLabel: string;
@@ -436,6 +439,9 @@ function SidebarThreadTooltip({
   showProjectContext: boolean;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
+  const previousProviderNames = thread.providerInstanceHistory
+    .filter((instanceId) => instanceId !== modelInstanceId)
+    .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
   return (
     <TooltipPopup
       side="right"
@@ -502,6 +508,14 @@ function SidebarThreadTooltip({
                 {showInstanceBadge && providerEntry
                   ? `${modelLabel} · ${providerEntry.displayName}`
                   : modelLabel}
+              </div>
+            </div>
+          ) : null}
+          {previousProviderNames.length > 0 ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <ArrowRightLeftIcon className="size-3 shrink-0 stroke-muted-foreground" />
+              <div className="min-w-0 truncate text-foreground/75">
+                Handed off from {previousProviderNames.join(", ")}
               </div>
             </div>
           ) : null}
@@ -1183,6 +1197,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       projectFaviconPath={props.projectFaviconPath}
       environmentLabel={props.environmentLabel}
       providerEntry={providerEntry}
+      providerEntryByInstanceId={props.providerEntryByInstanceId}
       showInstanceBadge={showInstanceBadge}
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
@@ -2103,6 +2118,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           projectFaviconPath={props.projectFaviconPath}
           environmentLabel={props.environmentLabel}
           providerEntry={providerEntry}
+          providerEntryByInstanceId={props.providerEntryByInstanceId}
           showInstanceBadge={showInstanceBadge}
           modelInstanceId={modelInstanceId}
           modelLabel={modelLabel}

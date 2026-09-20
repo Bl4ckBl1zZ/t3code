@@ -14,6 +14,7 @@ import {
   type OrchestrationV2TurnItem,
   ProjectId,
   RunId,
+  type ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -122,6 +123,8 @@ export interface ThreadManagementSendInput {
   readonly mode: ThreadManagementSendMode;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /** Names the schedule that produced this message, when one did. */
+  readonly scheduledTaskId?: ScheduledTaskId;
 }
 
 export interface ThreadManagementSendResult {
@@ -557,6 +560,9 @@ const make = Effect.gen(function* () {
             text: input.text,
             attachments: input.attachments,
             ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+            ...(input.scheduledTaskId === undefined
+              ? {}
+              : { scheduledTaskId: input.scheduledTaskId }),
             dispatchMode,
             createdBy: input.createdBy,
             creationSource: input.creationSource,

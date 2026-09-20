@@ -62,6 +62,8 @@ public enum QueuedMessagePresentation {
 
 struct QueuedMessageStripView: View {
     let queuedRuns: [QueuedThreadRun]
+    /// Restart recovery is holding the queue; nothing sends until resumed.
+    let isHeld: Bool
     let canReorder: Bool
     /// The run currently dispatching, whose row locks and loses its editor.
     let dispatchingRunID: String?
@@ -74,6 +76,7 @@ struct QueuedMessageStripView: View {
     let onEdit: (_ runID: String, _ text: String) -> Void
     let onDelete: (_ runID: String) -> Void
     let onPromoteToSteer: (_ queuedRunID: String, _ targetRunID: String) -> Void
+    let onResumeQueue: () -> Void
 
     @State private var editingRunID: String?
     @State private var editText = ""
@@ -85,6 +88,8 @@ struct QueuedMessageStripView: View {
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textTertiary)
                     .padding(.horizontal, 4)
+
+                if isHeld { heldNotice }
 
                 ForEach(Array(queuedRuns.enumerated()), id: \.element.id) { index, queued in
                     row(queued, at: index)
@@ -110,7 +115,27 @@ struct QueuedMessageStripView: View {
     }
 
     private var headerText: String {
-        "\(queuedRuns.count) queued — sends when the agent finishes"
+        if isHeld { return "\(queuedRuns.count) queued — paused" }
+        return "\(queuedRuns.count) queued — sends when the agent finishes"
+    }
+
+    private var heldNotice: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "pause.circle")
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textTertiary)
+            Text("Paused when the server restarted. Nothing was lost.")
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button("Resume", action: onResumeQueue)
+                .font(T3Typography.supporting)
+                .buttonStyle(.plain)
+                .foregroundStyle(T3Colors.textPrimary)
+                .accessibilityIdentifier("queued-message-strip-resume")
+        }
+        .padding(.horizontal, 4)
     }
 
     @ViewBuilder

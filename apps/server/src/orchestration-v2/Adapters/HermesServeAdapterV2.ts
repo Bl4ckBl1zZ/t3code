@@ -257,6 +257,11 @@ export const HermesProviderCapabilitiesV2 = {
     nativeItemIds: "weak",
     nativeRequestIds: "none",
   },
+  runtimePolicy: {
+    // Hermes gates its own commands and exposes no per-session policy knob,
+    // so T3 only applies runtime modes where it answers the approval itself.
+    enforcement: "client-boundary",
+  },
 } satisfies OrchestrationV2ProviderCapabilities;
 
 export interface HermesGatewayClientLike {

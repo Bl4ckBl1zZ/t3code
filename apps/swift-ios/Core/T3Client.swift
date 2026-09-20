@@ -54,6 +54,10 @@ public actor T3Client {
             // first: the base URL is user-supplied and a reconnect reuses it.
             query.removeAll { ClientConnectionIdentity.queryItemNames.contains($0.name) }
             query.append(contentsOf: connectionIdentity.queryItems)
+            // Named so a server that has moved past this protocol turns the
+            // upgrade away instead of handing us frames we cannot decode.
+            query.removeAll { $0.name == OrchestrationProtocol.queryItemName }
+            query.append(OrchestrationProtocol.queryItem)
             components.queryItems = query
             guard let url = components.url else { throw PairingURLError.invalidURL }
             return url
@@ -737,6 +741,12 @@ public actor T3Client {
         try await dispatch(
             OrchestrationCommands.cancelQueuedRun(threadID: threadID, runID: runID)
         )
+    }
+
+    /// Releases a queue that restart recovery held, starting the run at its head.
+    @discardableResult
+    public func resumeThreadQueue(threadID: String) async throws -> DispatchResult {
+        try await dispatch(OrchestrationCommands.resumeQueue(threadID: threadID))
     }
 
     /// Restores the thread's workspace to `checkpointID` within `scopeID`.
@@ -2944,6 +2954,19 @@ public enum OrchestrationCommands {
             "commandId": .string(commandID),
             "threadId": .string(threadID),
             "runId": .string(runID),
+        ])
+    }
+
+    /// `queue.resume`. Thread-scoped, not run-scoped: the hold covers the whole
+    /// queue, so releasing one run would leave the rest stuck behind it.
+    public static func resumeQueue(
+        threadID: String,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("queue.resume"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
         ])
     }
 

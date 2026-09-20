@@ -20,9 +20,16 @@ const project = {
 describe("projectThreadAwarenessV2", () => {
   const updatedAt = DateTime.makeUnsafe(NOW);
   const v2Thread = (
-    overrides: Partial<Pick<OrchestrationV2ThreadShell, "status" | "pendingRuntimeRequest">> = {},
+    overrides: Partial<
+      Pick<OrchestrationV2ThreadShell, "status" | "pendingRuntimeRequest" | "lineage">
+    > = {},
   ) => ({
     id: "thread-2" as ThreadId,
+    lineage: {
+      rootThreadId: "thread-2" as ThreadId,
+      parentThreadId: null,
+      relationshipToParent: null,
+    },
     title: "Integrate orchestration",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     status: "running" as const,
@@ -40,6 +47,26 @@ describe("projectThreadAwarenessV2", () => {
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
   });
+
+  it.each(["running", "completed", "failed"] as const)(
+    "does not publish %s subagent activity",
+    (status) => {
+      expect(
+        projectThreadAwarenessV2({
+          environmentId: "env-1" as EnvironmentId,
+          project,
+          thread: v2Thread({
+            status,
+            lineage: {
+              rootThreadId: "parent" as ThreadId,
+              parentThreadId: "parent" as ThreadId,
+              relationshipToParent: "subagent",
+            },
+          }),
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("prioritizes V2 user-input requests", () => {
     expect(

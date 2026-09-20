@@ -9,6 +9,12 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 
+/** Wire version for orchestration snapshots, streams, commands, and RPC payloads. */
+export const ORCHESTRATION_PROTOCOL_VERSION = 2;
+export const ORCHESTRATION_PROTOCOL_VERSION_TEXT = "2";
+export const ORCHESTRATION_PROTOCOL_QUERY_PARAM = "orchestrationProtocol";
+export const ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
+
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
   "linux",
@@ -96,6 +102,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server exposes the pull-request list, detail, activity, diff, and mutation APIs. Absent on
       servers from before the pull-request workspace shipped, so clients must not probe them. */
   pullRequests: Schema.optionalKey(Schema.Boolean),
+  pullRequestChecks: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.settle / thread.unsettle commands. Absent on
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */
@@ -111,6 +118,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       threadSettlement: clients keep their local visited state against
       servers that lack this. */
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
+  /** Server resolves message delivery and model-selection context and validates
+      identified rollback readiness. Clients retain projection-based command
+      shaping and validation when this is absent. */
+  serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
   /** Server streams themes an environment publishes. Absent on servers from
       before environment themes shipped, which never emit the events -- so a
       client reconnecting to one must drop published themes rather than keep
@@ -166,6 +177,8 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
+  /** Absent on hosts from before explicit orchestration protocol negotiation. */
+  orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

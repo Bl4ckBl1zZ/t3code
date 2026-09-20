@@ -1347,6 +1347,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refreshThread(id: route.uiID, client: route.client)
     }
 
+    func resumeThreadQueue(threadID: String) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.resumeThreadQueue(threadID: route.wireID)
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
     func editQueuedRun(threadID: String, runID: String, text: String) async throws {
         let route = try threadRoute(for: threadID)
         _ = try await route.client.editQueuedRun(
@@ -4928,7 +4934,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             let body = ([explanation].compactMap { $0 } + rendered).joined(separator: "\n")
             return message(.tool, body, tool: "Plan")
 
-        case let .fileChange(fileName, additions, deletions, diffStr, _, _):
+        case let .fileChange(fileName, additions, deletions, diffStr, _, _, _):
             var header = fileName
             if let additions, let deletions {
                 header += "  +\(additions) −\(deletions)"

@@ -20,6 +20,7 @@ import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
+import { runCachePersistence } from "./cachePersistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
@@ -119,6 +120,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationV2ThreadDetailSnapshot,
   ) {
+    // A deletion can arrive while an older snapshot waits in the queue; writing
+    // it would resurrect the thread in the cache.
+    if ((yield* SubscriptionRef.get(state)).status === "deleted") return;
     yield* cache.saveThread(environmentId, snapshot).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not persist the thread cache.").pipe(
@@ -132,11 +136,23 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  yield* Stream.fromQueue(persistence).pipe(
-    Stream.debounce("500 millis"),
-    Stream.runForEach(persist),
-    Effect.forkScoped,
+  // Registered before the scoped worker fibers so reverse finalizer order
+  // interrupts them first and this flush sees a settled projection.
+  yield* Effect.addFinalizer(() =>
+    Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)]).pipe(
+      Effect.flatMap(([current, snapshotSequence]) =>
+        Option.match(current.data, {
+          onNone: () => Effect.void,
+          onSome: (projection) =>
+            shouldPersistThread(projection)
+              ? persist({ snapshotSequence, projection })
+              : Effect.void,
+        }),
+      ),
+    ),
   );
+
+  yield* runCachePersistence(persistence, persist).pipe(Effect.forkScoped);
 
   const setSynchronizing = SubscriptionRef.update(state, (current) =>
     current.status === "deleted"
@@ -435,20 +451,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     );
   }
-
-  yield* Effect.addFinalizer(() =>
-    Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)]).pipe(
-      Effect.flatMap(([current, snapshotSequence]) =>
-        Option.match(current.data, {
-          onNone: () => Effect.void,
-          onSome: (projection) =>
-            shouldPersistThread(projection)
-              ? persist({ snapshotSequence, projection })
-              : Effect.void,
-        }),
-      ),
-    ),
-  );
 
   return state;
 });

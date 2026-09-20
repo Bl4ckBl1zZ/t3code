@@ -1,8 +1,10 @@
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { ClaudeUsageLimitListener } from "../../provider/providerUsageLimits.ts";
 import { ModelManifest } from "../../provider/ModelManifest.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   type ClaudeModelCatalog,
+  resolveClaudeCatalogContextWindowTokens,
   resolveClaudeModelCatalog,
   scopeClaudeModelCatalog,
 } from "../../provider/ClaudeModelCatalog.ts";
@@ -155,6 +157,46 @@ export const CLAUDE_DRIVER_KIND = CLAUDE_PROVIDER;
 export const CLAUDE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CLAUDE_DRIVER_KIND);
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 
+/**
+ * The catalog reports the largest window we enable for a model, which is the
+ * one the CLI actually runs with. 200k is the floor every Claude model clears.
+ */
+function claudeContextWindow(modelSelection: ModelSelection): number {
+  return (
+    resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) ?? 200_000
+  );
+}
+
+/**
+ * The CLI reports the usage of the request it just made, split by cache state.
+ * Cache reads and writes are context the model saw, so they count as input.
+ */
+export function claudeProviderTurnTokenUsage(
+  usage: {
+    readonly input_tokens: number;
+    readonly cache_creation_input_tokens?: number | null;
+    readonly cache_read_input_tokens?: number | null;
+    readonly output_tokens: number;
+  },
+  modelSelection: ModelSelection,
+  updatedAt: string,
+) {
+  const inputTokens =
+    usage.input_tokens +
+    (usage.cache_creation_input_tokens ?? 0) +
+    (usage.cache_read_input_tokens ?? 0);
+  const outputTokens = usage.output_tokens;
+  return {
+    usedTokens: inputTokens + outputTokens,
+    maxTokens: claudeContextWindow(modelSelection),
+    inputTokens,
+    cachedInputTokens: usage.cache_read_input_tokens ?? 0,
+    outputTokens,
+    reasoningOutputTokens: 0,
+    updatedAt,
+  };
+}
+
 export const ClaudeProviderCapabilitiesV2 = {
   sessions: {
     supportsMultipleProviderThreadsPerSession: false,
@@ -246,6 +288,9 @@ export const ClaudeProviderCapabilitiesV2 = {
     nativeTurnIds: "weak",
     nativeItemIds: "strong",
     nativeRequestIds: "strong",
+  },
+  runtimePolicy: {
+    enforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
@@ -1435,7 +1480,7 @@ function isClaudeWebSearchOutput(output: unknown): output is WebSearchOutput {
 const ClaudeNativeToolInputRecord = Schema.Record(Schema.String, Schema.Unknown);
 type ClaudeNativeToolInputRecord = typeof ClaudeNativeToolInputRecord.Type;
 
-type ClaudeNativeToolInput =
+export type ClaudeNativeToolInput =
   | {
       readonly type: "record";
       readonly value: ClaudeNativeToolInputRecord;
@@ -1466,6 +1511,25 @@ function claudeNativeToolInputValue(input: ClaudeNativeToolInput): unknown {
 
 function inputRecordValue(input: ClaudeNativeToolInput, key: string): unknown {
   return input.type === "record" ? input.value[key] : undefined;
+}
+
+/**
+ * A read of an image file is the agent looking at a picture, so the timeline can
+ * show it rather than a path buried in a JSON blob. Absurd or multi-line paths
+ * are dropped here rather than at the point one would reach an <img>.
+ */
+export function claudeViewedImagePath(
+  normalizedToolName: string,
+  toolInput: ClaudeNativeToolInput,
+): string | undefined {
+  if (!["read", "read file"].includes(normalizedToolName)) return undefined;
+  const readPath = firstStringInputField(toolInput, ["file_path", "path"])?.trim();
+  return readPath &&
+    readPath.length <= 4096 &&
+    !/[\r\n]/.test(readPath) &&
+    isWorkspaceImagePreviewPath(readPath)
+    ? readPath
+    : undefined;
 }
 
 function firstStringInputField(
@@ -2456,6 +2520,7 @@ export function makeClaudeAdapterV2(
           readonly context: ActiveClaudeTurnContext;
           readonly status: OrchestrationV2ProviderTurn["status"];
           readonly completedAt: DateTime.Utc | null;
+          readonly tokenUsage?: OrchestrationV2ProviderTurn["tokenUsage"];
         }): OrchestrationV2ProviderTurn => ({
           id: input.context.providerTurnId,
           providerThreadId: input.context.input.providerThread.id,
@@ -2470,6 +2535,9 @@ export function makeClaudeAdapterV2(
           status: input.status,
           startedAt: input.context.startedAt,
           completedAt: input.completedAt,
+          // Left off unless this frame reported one: the projection reads an
+          // absent reading as "unchanged", not as "back to empty".
+          ...(input.tokenUsage === undefined ? {} : { tokenUsage: input.tokenUsage }),
         });
 
         const buildToolCallArtifacts = (input: {
@@ -2561,6 +2629,10 @@ export function makeClaudeAdapterV2(
             | "completedAt"
             | "updatedAt"
           >;
+          const viewedImagePath = claudeViewedImagePath(
+            input.classification.normalizedName,
+            input.toolInput,
+          );
           const itemType = input.classification.itemType;
           const webSearchPatterns = webSearchPatternsFromClaudeTool({
             toolInput: input.toolInput,
@@ -2607,6 +2679,7 @@ export function makeClaudeAdapterV2(
                       ...itemBase,
                       type: "dynamic_tool",
                       toolName: input.toolName,
+                      ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
                       input: claudeNativeToolInputValue(input.toolInput),
                       ...(outputValue === undefined ? {} : { output: outputValue }),
                     };
@@ -4156,7 +4229,26 @@ export function makeClaudeAdapterV2(
 
           if (message.type === "assistant") {
             context.nativeMessageCursor = message.uuid;
-            yield* completeProviderRetry(context, yield* DateTime.now);
+            const now = yield* DateTime.now;
+            yield* completeProviderRetry(context, now);
+            // Only the main agent's requests fill the thread's context window;
+            // a subagent frame carries its own child's usage.
+            if (message.parent_tool_use_id === null && message.message.usage !== undefined) {
+              yield* emitProviderEvent({
+                type: "provider_turn.updated",
+                driver: CLAUDE_PROVIDER,
+                providerTurn: providerTurnPayload({
+                  context,
+                  status: "running",
+                  completedAt: null,
+                  tokenUsage: claudeProviderTurnTokenUsage(
+                    message.message.usage,
+                    context.input.modelSelection,
+                    DateTime.formatIso(now),
+                  ),
+                }),
+              });
+            }
           }
 
           if (message.type === "system" && message.subtype === "api_retry") {
@@ -4217,6 +4309,25 @@ export function makeClaudeAdapterV2(
               metadata.post_tokens === undefined
                 ? undefined
                 : Math.max(0, Math.trunc(metadata.post_tokens));
+            // Compaction is the one moment the window shrinks. Report it, or
+            // the meter stays pinned at the pre-compaction reading until the
+            // next assistant frame lands.
+            if (afterTokenCount !== undefined) {
+              yield* emitProviderEvent({
+                type: "provider_turn.updated",
+                driver: CLAUDE_PROVIDER,
+                providerTurn: providerTurnPayload({
+                  context,
+                  status: "running",
+                  completedAt: null,
+                  tokenUsage: {
+                    usedTokens: afterTokenCount,
+                    maxTokens: claudeContextWindow(context.input.modelSelection),
+                    updatedAt: DateTime.formatIso(occurredAt),
+                  },
+                }),
+              });
+            }
             yield* emitProviderEvent({
               type: "turn_item.updated",
               driver: CLAUDE_PROVIDER,

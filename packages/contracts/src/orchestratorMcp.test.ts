@@ -9,7 +9,6 @@ import {
   OrchestratorMcpThreadListInput,
   OrchestratorMcpThreadReadInput,
   OrchestratorMcpThreadSendInput,
-  OrchestratorMcpThreadStartInput,
   OrchestratorMcpThreadWaitInput,
 } from "./orchestratorMcp.ts";
 
@@ -20,7 +19,6 @@ const decodeThreadInterruptInput = Schema.decodeUnknownSync(OrchestratorMcpThrea
 const decodeThreadListInput = Schema.decodeUnknownSync(OrchestratorMcpThreadListInput);
 const decodeThreadReadInput = Schema.decodeUnknownSync(OrchestratorMcpThreadReadInput);
 const decodeThreadSendInput = Schema.decodeUnknownSync(OrchestratorMcpThreadSendInput);
-const decodeThreadStartInput = Schema.decodeUnknownSync(OrchestratorMcpThreadStartInput);
 const decodeThreadWaitInput = Schema.decodeUnknownSync(OrchestratorMcpThreadWaitInput);
 
 describe("orchestrator MCP contracts", () => {
@@ -43,10 +41,16 @@ describe("orchestrator MCP contracts", () => {
       childRunId: "run-child-1",
       childNodeId: "node-task-1",
       status: "completed",
+      workState: "result_available",
+      hasPendingChildRuns: false,
       providerInstanceId: "claudeAgent",
       model: "claude-sonnet-4-6",
       summary: "Workspace inspected.",
       resultContextTransferId: "context-transfer-result-1",
+      latestTerminalRunId: "run-child-1",
+      latestTerminalStatus: "completed",
+      latestTerminalSummary: "Workspace inspected.",
+      latestTerminalResultContextTransferId: "context-transfer-result-1",
       waitTimedOut: false,
     });
 
@@ -123,12 +127,6 @@ describe("orchestrator MCP contracts", () => {
   });
 
   it("decodes project-scoped thread orchestration requests", () => {
-    expect(
-      decodeThreadStartInput({
-        prompt: "Run the first loop iteration.",
-        clientRequestId: "start-loop-1",
-      }).prompt,
-    ).toBe("Run the first loop iteration.");
     expect(
       decodeThreadListInput({
         statuses: ["running", "completed"],

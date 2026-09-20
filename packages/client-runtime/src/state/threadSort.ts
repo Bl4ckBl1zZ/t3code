@@ -308,9 +308,12 @@ export function applyDurableThreadOrder<T>(
   isPinned: (thread: T) => boolean,
   getId: (thread: T) => string,
 ): T[] {
+  // `sort` on the array `map` just built, not `toSorted`: this module is shared
+  // with the React Native client, whose Hermes runtime lacks the ES2023
+  // change-array-by-copy methods.
   return threads
     .map((thread, index) => ({ thread, index }))
-    .toSorted((a, b) => {
+    .sort((a, b) => {
       const pinned = isPinned(a.thread);
       const pinDifference = Number(isPinned(b.thread)) - Number(pinned);
       if (pinDifference !== 0) return pinDifference;

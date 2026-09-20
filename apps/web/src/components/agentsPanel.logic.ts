@@ -49,6 +49,7 @@ export function agentRowState(status: OrchestrationV2Subagent["status"]): AgentR
   switch (status) {
     case "running":
       return "active";
+    case "idle":
     case "pending":
     case "waiting":
       return "idle";

@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./userMessage": {
+      "types": "./src/userMessage.ts",
+      "default": "./src/userMessage.ts"
+    },
     "./html-embed-fence": {
       "types": "./src/htmlEmbedFence.ts",
       "default": "./src/htmlEmbedFence.ts"

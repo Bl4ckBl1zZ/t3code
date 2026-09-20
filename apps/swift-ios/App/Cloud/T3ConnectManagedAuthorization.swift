@@ -222,6 +222,8 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
         var queryItems = components?.queryItems ?? []
         queryItems.removeAll { $0.name == "wsTicket" }
         queryItems.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
+        queryItems.removeAll { $0.name == OrchestrationProtocol.queryItemName }
+        queryItems.append(OrchestrationProtocol.queryItem)
         components?.queryItems = queryItems
         guard let url = components?.url else { throw T3ConnectDPoPError.invalidURL }
         return url

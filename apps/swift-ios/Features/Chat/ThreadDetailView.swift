@@ -651,6 +651,7 @@ public struct ThreadDetailView: View {
         if !state.queuedRuns.isEmpty {
             QueuedMessageStripView(
                 queuedRuns: state.queuedRuns,
+                isHeld: state.isHeld,
                 canReorder: state.canReorder,
                 dispatchingRunID: nil,
                 busyRunID: queueBusyRunID,
@@ -688,6 +689,14 @@ public struct ThreadDetailView: View {
                             queuedRunID: queuedRunID,
                             targetRunID: targetRunID
                         )
+                    }
+                },
+                onResumeQueue: {
+                    // The head run is what resuming starts, so it carries the
+                    // busy state the rows already read.
+                    guard let headRunID = state.queuedRuns.first?.run.id else { return }
+                    performQueueAction(runID: headRunID) {
+                        try await model.client.resumeThreadQueue(threadID: thread.id)
                     }
                 }
             )

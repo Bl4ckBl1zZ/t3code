@@ -9,6 +9,7 @@ import {
   type ProviderInteractionMode,
   ProjectId,
   type RunId,
+  type ScheduledTaskId,
   type RuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
@@ -57,6 +58,8 @@ export interface ThreadLaunchInitialMessage {
   readonly messageId?: MessageId;
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
+  /** Names the schedule that produced this message, when one did. */
+  readonly scheduledTaskId?: ScheduledTaskId;
 }
 
 export interface ThreadLaunchInput {
@@ -661,6 +664,9 @@ export const make = Effect.gen(function* () {
               messageId,
               text: input.initialMessage.text,
               attachments: input.initialMessage.attachments,
+              ...(input.initialMessage.scheduledTaskId === undefined
+                ? {}
+                : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
               modelSelection: input.modelSelection,
               dispatchMode:
                 input.prepareWorkspace === false

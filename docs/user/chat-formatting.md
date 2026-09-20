@@ -74,3 +74,11 @@ position is being restored.
 On iOS, open file previews and folder listings refresh after the agent finishes a file edit or
 command. A failed refresh keeps the previous preview visible and shows an error. Use **Reload**
 to retry or to pick up changes made outside the agent.
+
+## Who sent a prompt
+
+A prompt another agent sent into the conversation is labelled **Sent by another agent**.
+A prompt a scheduled task sent is labelled **Sent by automation** on web and desktop, and
+carries an **Automation** badge on iPhone. The scheduled prompt itself is exactly what you
+wrote: the label replaces the attribution line that used to be prepended to it, so the
+agent no longer reads it as part of its instructions.

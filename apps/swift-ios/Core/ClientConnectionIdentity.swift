@@ -1,5 +1,21 @@
 import Foundation
 
+/// The orchestration wire protocol this build speaks, mirroring
+/// `ORCHESTRATION_PROTOCOL_VERSION` in `packages/contracts`.
+///
+/// Unlike the identity fields below, this is not best-effort: a server that
+/// cannot speak this version refuses the upgrade with HTTP 426 rather than
+/// letting the client mis-decode its way through a session. Bump it here
+/// whenever the TypeScript constant moves.
+public enum OrchestrationProtocol {
+    public static let version = 2
+    public static let queryItemName = "orchestrationProtocol"
+
+    public static var queryItem: URLQueryItem {
+        URLQueryItem(name: queryItemName, value: String(version))
+    }
+}
+
 /// Who is on the other end of a `/ws` upgrade.
 ///
 /// The server reads these off the upgrade URL next to `wsTicket` and records

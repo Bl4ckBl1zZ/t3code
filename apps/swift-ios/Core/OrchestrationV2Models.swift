@@ -107,6 +107,16 @@ public struct OrchestrationV2PlanStep: Codable, Equatable, Sendable {
     public let status: String
 }
 
+/// One file inside a `file_change` item. An item can cover several files; its
+/// `fileName` names only the first.
+public struct OrchestrationV2FileChangeDetail: Codable, Equatable, Sendable {
+    public let operation: String
+    public let path: String
+    public let oldPath: String?
+    public let fileType: String?
+    public let mimeType: String?
+}
+
 public struct OrchestrationV2FileSearchResult: Codable, Equatable, Sendable {
     public let fileName: String
     public let line: Int?
@@ -525,7 +535,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case proposedPlan(planID: String, markdown: String, streaming: Bool)
         case todoList(planID: String, steps: [OrchestrationV2PlanStep], explanation: String?)
         case userInputRequest(requestID: String, questions: [OrchestrationV2UserInputQuestion])
-        case fileChange(fileName: String, additions: Int?, deletions: Int?, diffStr: String?, oldStr: String?, newStr: String?)
+        case fileChange(fileName: String, additions: Int?, deletions: Int?, diffStr: String?, oldStr: String?, newStr: String?, changes: [OrchestrationV2FileChangeDetail]?)
         case commandExecution(input: String, output: String?, exitCode: Int?, liveness: OrchestrationV2CommandLiveness)
         case fileSearch(pattern: String?, results: [OrchestrationV2FileSearchResult]?)
         case webSearch(patterns: [String]?, results: [OrchestrationV2WebSearchResult]?)
@@ -555,7 +565,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case messageId, inputIntent, text, attachments
         case streaming, planId, markdown, steps, explanation
         case requestId, questions, requestKind, prompt, options
-        case fileName, additions, deletions, diffStr, oldStr, newStr
+        case fileName, additions, deletions, diffStr, oldStr, newStr, changes
         case input, output, exitCode
         case pattern, results, patterns
         case checkpointId, scopeId, files, restoredFileCount, rolledBackRunCount
@@ -623,7 +633,10 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
                 deletions: try container.decodeIfPresent(Int.self, forKey: .deletions),
                 diffStr: try container.decodeIfPresent(String.self, forKey: .diffStr),
                 oldStr: try container.decodeIfPresent(String.self, forKey: .oldStr),
-                newStr: try container.decodeIfPresent(String.self, forKey: .newStr)
+                newStr: try container.decodeIfPresent(String.self, forKey: .newStr),
+                changes: try container.decodeIfPresent(
+                    [OrchestrationV2FileChangeDetail].self, forKey: .changes
+                )
             )
         case "command_execution":
             payload = .commandExecution(
@@ -762,13 +775,14 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case let .userInputRequest(requestID, questions):
             try container.encode(requestID, forKey: .requestId)
             try container.encode(questions, forKey: .questions)
-        case let .fileChange(fileName, additions, deletions, diffStr, oldStr, newStr):
+        case let .fileChange(fileName, additions, deletions, diffStr, oldStr, newStr, changes):
             try container.encode(fileName, forKey: .fileName)
             try container.encodeIfPresent(additions, forKey: .additions)
             try container.encodeIfPresent(deletions, forKey: .deletions)
             try container.encodeIfPresent(diffStr, forKey: .diffStr)
             try container.encodeIfPresent(oldStr, forKey: .oldStr)
             try container.encodeIfPresent(newStr, forKey: .newStr)
+            try container.encodeIfPresent(changes, forKey: .changes)
         case let .commandExecution(input, output, exitCode, liveness):
             try container.encode(input, forKey: .input)
             try container.encodeIfPresent(output, forKey: .output)
@@ -1079,6 +1093,10 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
     /// Explicit position in the thread's queue when the server assigned one.
     /// Absent on runs that were never queued; callers fall back to `ordinal`.
     public let queuePosition: Int?
+    /// Set while restart recovery is holding this queued run. The queue keeps
+    /// its order and its payloads, but nothing drains until the user resumes.
+    /// Defaulted so the memberwise init stays usable from fixtures.
+    public var queueHeld: Bool? = nil
     public let requestedAt: OrchestrationV2Timestamp
     public let startedAt: OrchestrationV2Timestamp?
     public let completedAt: OrchestrationV2Timestamp?

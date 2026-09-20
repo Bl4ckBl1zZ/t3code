@@ -28,7 +28,7 @@ export interface AgentAwarenessState {
   readonly deepLink: string;
 }
 
-export function buildAgentAwarenessDeepLink(input: {
+function buildAgentAwarenessDeepLink(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }): string {
@@ -40,7 +40,7 @@ export interface ProjectThreadAwarenessV2Input {
   readonly project: Pick<Project, "title">;
   readonly thread: Pick<
     OrchestrationV2ThreadShell,
-    "id" | "title" | "modelSelection" | "status" | "pendingRuntimeRequest" | "updatedAt"
+    "id" | "lineage" | "title" | "modelSelection" | "status" | "pendingRuntimeRequest" | "updatedAt"
   >;
 }
 
@@ -49,6 +49,7 @@ export function projectThreadAwarenessV2(
   input: ProjectThreadAwarenessV2Input,
 ): AgentAwarenessState | null {
   const { environmentId, project, thread } = input;
+  if (thread.lineage.relationshipToParent === "subagent") return null;
   const phase = resolveThreadAwarenessPhaseV2(thread);
   if (phase === null) {
     return null;

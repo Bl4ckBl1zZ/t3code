@@ -11,6 +11,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import { bootstrapRemoteBearerSession } from "../authorization/remote.ts";
 import { deriveWsBaseUrl, normalizeHttpBaseUrl } from "../environment/endpoint.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
   BearerConnectionCredential,
@@ -91,6 +92,9 @@ export const preparePairingRegistration = Effect.fn(
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({
     httpBaseUrl: target.httpBaseUrl,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
+  // Say so before minting a session against a server we cannot talk to.
+  const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
+  if (compatibilityError !== null) return yield* compatibilityError;
   const access = yield* bootstrapRemoteBearerSession({
     httpBaseUrl: target.httpBaseUrl,
     credential: target.credential,

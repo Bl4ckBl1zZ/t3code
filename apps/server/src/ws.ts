@@ -58,6 +58,8 @@ import {
   OrchestrationV2ThreadLaunchError,
   type OrchestrationProjectShell,
   type OrchestrationV2ShellSnapshot,
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  ORCHESTRATION_PROTOCOL_VERSION,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -94,7 +96,12 @@ import {
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { windowOrchestrationV2ThreadProjection } from "@t3tools/shared/orchestrationV2Window";
-import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
+import {
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerRespondable,
+  HttpServerResponse,
+} from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -116,6 +123,7 @@ import {
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
+  dedupeShellEnrichment,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
@@ -602,6 +610,17 @@ const isClientWebDeployment = Schema.is(ClientWebDeployment);
 const MAX_CLIENT_APP_VERSION_LENGTH = 64;
 const MAX_CLIENT_BROWSER_LENGTH = 64;
 const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
+
+/**
+ * Only turns away a client that names a version this server cannot speak. A
+ * client that names none predates negotiation and already speaks this wire --
+ * unlike upstream, whose version 1 was a genuinely different protocol -- so
+ * rejecting it would lock every shipped build out of an updated server.
+ */
+export function hasCompatibleOrchestrationProtocol(url: URL): boolean {
+  const declared = url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM);
+  return declared === null || declared === String(ORCHESTRATION_PROTOCOL_VERSION);
+}
 
 // Optional client identity announced on the /ws upgrade URL next to wsTicket.
 // Lenient by design: absent or malformed values degrade to {} so a connection
@@ -1343,6 +1362,7 @@ const makeWsRpcLayer = (
           );
 
           return stream.pipe(
+            dedupeShellEnrichment,
             Stream.mapError(
               (cause) =>
                 new OrchestrationV2GetShellSnapshotError({
@@ -3068,6 +3088,17 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       "/ws",
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+        const requestUrl = HttpServerRequest.toURL(request);
+        if (Option.isSome(requestUrl) && !hasCompatibleOrchestrationProtocol(requestUrl.value)) {
+          return HttpServerResponse.jsonUnsafe(
+            {
+              code: "orchestration_protocol_incompatible",
+              message: `Update this client to one that supports orchestration protocol ${ORCHESTRATION_PROTOCOL_VERSION}.`,
+              orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+            },
+            { status: 426 },
+          );
+        }
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
         const analytics = yield* AnalyticsService.AnalyticsService;

@@ -22,10 +22,19 @@ export function ThreadQueueControl(props: {
   );
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun, "reorder queued message");
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, "promote queued message");
+  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
+  const [resuming, setResuming] = useState(false);
   const iconColor = useThemeColor("--color-icon-subtle");
 
   if (!workflow || workflow.queuedRuns.length === 0) return null;
+
+  const resumeQueue = async () => {
+    setResuming(true);
+    void Haptics.selectionAsync();
+    await resume({ environmentId: props.environmentId, input: { threadId: props.threadId } });
+    setResuming(false);
+  };
 
   const move = async (runId: RunId, beforeRunId: RunId | null) => {
     setBusyRunId(runId);
@@ -61,6 +70,24 @@ export function ThreadQueueControl(props: {
           {workflow.queuedRuns.length}
         </Text>
       </View>
+      {workflow.isHeld ? (
+        <View className="flex-row items-center gap-2 border-b border-neutral-300/50 px-3 py-2 dark:border-white/[0.08]">
+          <SymbolView name="pause.circle" size={13} tintColor={iconColor} type="monochrome" />
+          <Text className="min-w-0 flex-1 text-2xs text-foreground-muted">
+            Paused when the server restarted. Nothing was lost.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Resume queue"
+            disabled={resuming}
+            onPress={() => void resumeQueue()}
+            className="min-h-8 flex-row items-center gap-1 rounded-lg border border-neutral-300/60 px-2 disabled:opacity-30 dark:border-white/[0.1]"
+          >
+            <SymbolView name="play.fill" size={11} tintColor={iconColor} type="monochrome" />
+            <Text className="font-t3-medium text-2xs text-foreground">Resume</Text>
+          </Pressable>
+        </View>
+      ) : null}
       <ScrollView style={{ maxHeight: 156 }} contentContainerStyle={{ paddingVertical: 4 }}>
         {workflow.queuedRuns.map(({ run, text }, index) => (
           <View key={run.id} className="min-h-11 flex-row items-center gap-1.5 px-2">

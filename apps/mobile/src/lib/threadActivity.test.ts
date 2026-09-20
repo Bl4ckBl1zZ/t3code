@@ -247,6 +247,31 @@ function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
 }
 
 describe("buildThreadFeed", () => {
+  it("counts the files a multi-file change touched instead of naming only the first", () => {
+    const summaryOf = (item: OrchestrationV2TurnItem) =>
+      buildThreadFeed([projected(item, 0)]).find((entry) => entry.type === "activity-group")
+        ?.activities[0]?.summary;
+
+    expect(
+      summaryOf({
+        ...base("file-change-one", "2026-06-20T00:00:02.000Z", 0),
+        type: "file_change",
+        fileName: "src/only.ts",
+      }),
+    ).toBe("Changed src/only.ts");
+    expect(
+      summaryOf({
+        ...base("file-change-many", "2026-06-20T00:00:02.000Z", 0),
+        type: "file_change",
+        fileName: "src/a.ts",
+        changes: [
+          { operation: "modify", path: "src/a.ts" },
+          { operation: "add", path: "src/b.ts" },
+        ],
+      }),
+    ).toBe("Changed 2 files");
+  });
+
   it("presents provider retries as visible work-log activity", () => {
     const retryBase = {
       ...base("item-provider-retry", "2026-06-20T00:00:02.000Z", 1),
@@ -774,6 +799,15 @@ describe("background commands", () => {
 
     const runningForeground = onlyActivity({ ...command(), status: "running", completedAt: null });
     expect(threadFeedActivityHasRow(runningForeground)).toBe(false);
+  });
+
+  it("reads a foreground command's failure from its exit and reported output", () => {
+    const foreground = (overrides: { exitCode?: number; outputIndicatesFailure?: boolean }) =>
+      onlyActivity({ ...command(), status: "completed" as const, ...overrides }).status;
+
+    expect(foreground({ exitCode: 0 })).toBe("success");
+    expect(foreground({ exitCode: 2 })).toBe("failure");
+    expect(foreground({ outputIndicatesFailure: true })).toBe("failure");
   });
 
   it("reads a background command's status from how it ended", () => {

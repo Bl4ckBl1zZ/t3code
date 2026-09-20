@@ -18,12 +18,15 @@ import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  deriveActivePlanState,
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveRevertTurnCountByUserMessageId,
   findLatestProposedPlan,
   isLatestRunSettled,
   providerErrorPresentation,
   type TimelineEntry,
+  type WorkLogEntry,
+  workEntryIndicatesToolFailure,
   workLogEntryIsVisible,
 } from "./session-logic";
 import { makeThreadProjectionFixture } from "./test-fixtures";
@@ -518,6 +521,30 @@ describe("V2 session presentation", () => {
         completedAt: now,
       }),
     ).toMatchObject({ label: "Provider error after 10/10 retries" });
+  });
+
+  it("preserves independently derived durations for repeated plan-step labels", () => {
+    const projection = makeThreadProjectionFixture();
+    const runId = RunId.make("run-timed-tasks");
+    const plan = {
+      id: PlanId.make("plan-timed-tasks"),
+      threadId: projection.thread.id,
+      runId,
+      nodeId: NodeId.make("node-timed-tasks"),
+      kind: "todo_list" as const,
+      status: "active" as const,
+      steps: [
+        { id: "verify-a", text: "Verify", status: "completed" as const, durationMs: 3_000 },
+        { id: "verify-b", text: "Verify", status: "completed" as const, durationMs: 4_000 },
+        { id: "report", text: "Report", status: "pending" as const },
+      ],
+    };
+
+    expect(deriveActivePlanState({ ...projection, plans: [plan] }, runId)?.steps).toEqual([
+      { step: "Verify", status: "completed", durationMs: 3_000 },
+      { step: "Verify", status: "completed", durationMs: 4_000 },
+      { step: "Report", status: "pending" },
+    ]);
   });
 
   it("selects the latest proposed plan for a run", () => {
@@ -1037,5 +1064,55 @@ describe("V2 session presentation", () => {
       [supersededAttemptId, "superseded"],
       [activeAttemptId, "running"],
     ]);
+  });
+});
+
+describe("workEntryIndicatesToolFailure", () => {
+  const entry = (payload: {
+    readonly outputIndicatesFailure?: boolean;
+    readonly exitCode?: number;
+  }): WorkLogEntry => {
+    const item: Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }> = {
+      id: TurnItemId.make("item-1"),
+      type: "command_execution",
+      threadId: ThreadId.make("thread-1"),
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: "pnpm test",
+      input: "pnpm test",
+      startedAt: DateTime.makeUnsafe("2026-09-20T00:00:00.000Z"),
+      completedAt: DateTime.makeUnsafe("2026-09-20T00:00:01.000Z"),
+      updatedAt: DateTime.makeUnsafe("2026-09-20T00:00:01.000Z"),
+      ...(payload.outputIndicatesFailure === undefined
+        ? {}
+        : { outputIndicatesFailure: payload.outputIndicatesFailure }),
+      ...(payload.exitCode === undefined ? {} : { exitCode: payload.exitCode }),
+    };
+    return {
+      id: "entry-1",
+      createdAt: "2026-09-20T00:00:00.000Z",
+      label: "pnpm test",
+      tone: "tool",
+      toolLifecycleStatus: "completed",
+      structuredPayload: item,
+    };
+  };
+
+  it("treats a command the server flagged as failing as a failure", () => {
+    expect(workEntryIndicatesToolFailure(entry({ outputIndicatesFailure: true }))).toBe(true);
+  });
+
+  it("treats a nonzero exit as a failure even when the item completed", () => {
+    expect(workEntryIndicatesToolFailure(entry({ exitCode: 2 }))).toBe(true);
+  });
+
+  it("leaves a successful command alone", () => {
+    expect(workEntryIndicatesToolFailure(entry({ exitCode: 0 }))).toBe(false);
   });
 });

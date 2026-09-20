@@ -36,6 +36,7 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
+import { runCachePersistence } from "./cachePersistence.ts";
 import {
   isRpcClientError,
   request,
@@ -514,11 +515,20 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
       );
     });
 
-    yield* Stream.fromQueue(persistence).pipe(
-      Stream.debounce("500 millis"),
-      Stream.runForEach(persistPending),
-      Effect.forkScoped,
+    // Registered before the scoped worker fibers so reverse finalizer order
+    // interrupts them first and this flush sees the settled pending config.
+    yield* Effect.addFinalizer(() =>
+      Ref.get(pendingPersistence).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (config) => persist(config).pipe(Effect.asVoid),
+          }),
+        ),
+      ),
     );
+
+    yield* runCachePersistence(persistence, persistPending).pipe(Effect.forkScoped);
 
     yield* subscribe(WS_METHODS.subscribeServerConfig, {
       ...(environmentThemes === true ? { environmentThemes: true } : {}),
@@ -536,17 +546,6 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
         }),
       ),
       Effect.forkScoped,
-    );
-
-    yield* Effect.addFinalizer(() =>
-      Ref.get(pendingPersistence).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.void,
-            onSome: (config) => persist(config).pipe(Effect.asVoid),
-          }),
-        ),
-      ),
     );
 
     return state;
