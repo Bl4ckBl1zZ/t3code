@@ -15,6 +15,8 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
@@ -354,6 +356,33 @@ describe("EnvironmentThreads", () => {
       );
 
       expect(Option.getOrThrow(state.data).thread.title).toBe("Live title");
+    }),
+  );
+
+  it.effect("does not rewrite a deleted thread from a save still sitting in the queue", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const harness = yield* makeHarness().pipe(Effect.provideService(Scope.Scope, scope));
+      yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
+      yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+      yield* TestClock.adjust("500 millis");
+      expect(yield* Ref.get(harness.savedThreads)).toHaveLength(1);
+
+      // Queued inside the write window, so it is still pending when the
+      // deletion lands. Writing it afterwards would resurrect the cache entry.
+      yield* Queue.offer(harness.inputs, titleUpdated("Queued before deletion"));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) && value.data.value.thread.title === "Queued before deletion",
+      );
+      yield* Queue.offer(harness.inputs, deleted());
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+      yield* TestClock.adjust("10 seconds");
+      yield* Scope.close(scope, Exit.void);
+
+      expect(yield* Ref.get(harness.savedThreads)).toHaveLength(1);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
     }),
   );
 

@@ -1710,3 +1710,18 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   the sequence-only repeats. Our `ShellStream.ts` already matched upstream's shape, so the only
   local decision was where in `ws.ts` the filter sits -- first in the pipe, before error mapping,
   as upstream has it.
+
+- `runCachePersistence` from PR #2829 (`3010170d19`) replaces the 500ms debounce on all three
+  client caches (shell, thread, server config): one write shortly after the first change, then at
+  most one every ten seconds. A 500ms debounce is not a throttle -- a stream that never goes quiet
+  for 500ms writes forever, which is exactly what a running turn does. Two related fixes ride
+  along: each flush finalizer now registers before its scoped worker so reverse finalizer order
+  interrupts the worker first and the flush sees settled state, and a thread save still sitting in
+  the queue when a deletion arrives is dropped rather than resurrecting the cache entry. Two
+  adaptations: our shell persist keeps its own loop shape (upstream's rewrite to `persistLatest`
+  is carried, since the semaphore is what makes the lifecycle flush safe), and the `threads.ts`
+  parts of upstream's diff that depend on its `committed` / `snapshotToPersist` structure do not
+  apply -- we already keep encoding off the streaming path through `shouldPersistThread`, so only
+  the worker swap, the finalizer order and the deletion guard were portable. Upstream's
+  threads-sync throttling test measures writes-per-title-update, which our settle-gated persistence
+  does not produce; the deletion-guard test is ported and verified to fail without the guard.
