@@ -255,7 +255,9 @@ interface TimelineRowActivityState {
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
-const TIMELINE_LIST_FADE_HEADER = <div className="h-10 sm:h-12" />;
+const TIMELINE_LIST_FADE_HEADER = (
+  <div className="h-[var(--workspace-titlebar-scroll-fade-height)]" />
+);
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 const EMPTY_TIMELINE_PROVIDERS: ReadonlyArray<ServerProvider> = [];
@@ -3524,7 +3526,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 className={cn(
                   "min-w-0 shrink truncate",
                   headingClass,
-                  shimmerText && "text-shimmer",
+                  shimmerText && "live-tool-shine",
                 )}
               >
                 {heading}
@@ -3539,7 +3541,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-muted-foreground/55",
-                    shimmerText && "text-shimmer",
+                    shimmerText && "live-tool-shine",
                   )}
                 >
                   {preview}
