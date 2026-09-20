@@ -1,6 +1,11 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/unstable/ai";
@@ -9,8 +14,11 @@ import { OrchestratorProjectionError } from "../../orchestration-v2/Orchestrator
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import { McpInvocationContext, type McpInvocationScope } from "../McpInvocationContext.ts";
+import * as EnvironmentHandlers from "./environment/handlers.ts";
+import { EnvironmentToolkit } from "./environment/tools.ts";
 import { OrchestratorToolkit } from "./orchestrator/tools.ts";
 import { PreviewToolkit } from "./preview/tools.ts";
+import { PreviewControlsToolkit } from "./previewControls/tools.ts";
 import { PullRequestsToolkit } from "./pullRequests/tools.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
@@ -27,6 +35,8 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     PreviewToolkit,
     WorktreeToolkit,
     ThreadToolkit,
+    EnvironmentToolkit,
+    PreviewControlsToolkit,
     PullRequestsToolkit,
   ]) {
     for (const tool of Object.values(toolkit.tools)) {
@@ -136,3 +146,22 @@ it.effect("returns a bounded public failure without serializing storage causes",
     ),
   ),
 );
+
+it("keeps MCP preference output allowlisted and Unicode-bounded", () => {
+  const settings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    privateCredential: "must-not-escape",
+    sourceControlWritingStyle: {
+      ...DEFAULT_SERVER_SETTINGS.sourceControlWritingStyle,
+      customInstructions: "🙂".repeat(4001),
+    },
+  };
+  const result = EnvironmentHandlers.preferences(settings);
+  expect(result).not.toHaveProperty("privateCredential");
+  expect(result).not.toHaveProperty("providers");
+  // Truncation counts code points, so an emoji is not cut in half.
+  expect(result.sourceControlWritingStyle).toMatchObject({
+    customInstructions: "🙂".repeat(4000),
+    truncated: true,
+  });
+});

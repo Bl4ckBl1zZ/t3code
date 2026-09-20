@@ -1678,3 +1678,14 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   are `browser`, PR tools are `pull-request`), so the assertion checks the declared icon instead.
   The toolkits upstream registers beside this one -- `project`, `environment`, `previewControls`,
   `attachment`, `device` -- are not carried yet.
+
+- The MCP `environment` and `previewControls` toolkits from PR #2829 come with the thread one:
+  `t3_environment_read` / `t3_environment_preferences_update` and `t3_preview_list` /
+  `t3_preview_close`. One adaptation each. Upstream serializes a preference update against the
+  caller thread's other commands through a shared `ThreadCommandExecutor`; our orchestrator keeps
+  its keyed executor private, so a second one would be a lock over nothing, and `updateSettings`
+  already does its read-modify-write under a write semaphore. And upstream's preview test derives
+  the credential's capability from a per-project `enableAgentBrowserAccess` override this fork has
+  no `projectSettingsOverrides` for, so it states the two capability cases directly. Upstream's
+  `project` and `attachment` toolkits are not carried: they need `ThreadMessageIntake.ts` and
+  `AttachmentClaims.ts`, which are their own port.

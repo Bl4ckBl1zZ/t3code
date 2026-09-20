@@ -141,7 +141,7 @@ selection model-visible without allowing a request that cannot run.
 ## Tool Surface
 
 The orchestrator toolkit below exposes fifteen tools. A separate thread toolkit
-adds seventeen more, documented under [Thread Toolkit](#thread-toolkit).
+adds seventeen more, and environment and preview toolkits add two each.
 
 ### `orchestrator_capabilities`
 
@@ -348,6 +348,24 @@ the target's, which is the same escalation rule delegation uses.
 - **Scheduling.** `run_scheduled_task_now` triggers a scheduled task in the
   calling project immediately. It requires a full-access/default caller, and
   each call is a new manual run.
+
+## Environment And Preview Toolkits
+
+Two smaller toolkits sit beside the thread one.
+
+`t3_environment_read` reports the environment the credential belongs to — its
+id, label, server version and platform — together with an allowlisted subset of
+its preferences. The allowlist is the point: provider credentials and the rest
+of the settings file never appear, and free-text writing-style instructions are
+truncated to 4,000 code points with a `truncated` marker rather than streamed
+whole. `t3_environment_preferences_update` writes that same subset back and
+needs a live full-access/default caller. A credential issued for another
+environment is refused outright.
+
+`t3_preview_list` and `t3_preview_close` page and close the calling thread's
+preview tabs. Both gate on the `preview` capability, which already carries the
+project's browser-access setting, so a credential without it cannot enumerate
+tabs or close one.
 
 ## Delegated Task Lifecycle
 
