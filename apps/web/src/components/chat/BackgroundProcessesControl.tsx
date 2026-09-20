@@ -58,47 +58,49 @@ export const BackgroundProcessesControl = memo(function BackgroundProcessesContr
   return (
     <section
       aria-label={`${processes.length} background ${processes.length === 1 ? "command" : "commands"}`}
-      className={cn(
-        "chat-composer-queue-strip relative z-0 -mb-4 mx-auto w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] px-2 pt-1.5 pb-5",
-        turnInProgress && "opacity-70",
-      )}
+      className="chat-composer-queue-strip relative z-0 -mb-4 mx-auto w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] px-2 pt-1.5 pb-5"
     >
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-        className="flex h-6 w-full items-center gap-1.5 rounded-md px-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
-      >
-        <TerminalIcon className="size-3.5 shrink-0" aria-hidden />
-        <span className="truncate">{label}</span>
-        <span className="rounded-full bg-muted/70 px-1.5 text-[10px] tabular-nums">
-          {processes.length}
-        </span>
-        <span className="ms-auto flex shrink-0 items-center gap-1.5 font-normal text-muted-foreground/65">
-          {/* Self-ticking: the live set does not change while a command runs,
+      {/* The in-turn dim rides the contents, never the strip: opacity on the
+          strip would make it a backdrop root, dropping its glass blur and
+          letting the timeline read straight through the tint. */}
+      <div className={cn(turnInProgress && "opacity-70")}>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="flex h-6 w-full items-center gap-1.5 rounded-md px-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
+        >
+          <TerminalIcon className="size-3.5 shrink-0" aria-hidden />
+          <span className="truncate">{label}</span>
+          <span className="rounded-full bg-muted/70 px-1.5 text-[10px] tabular-nums">
+            {processes.length}
+          </span>
+          <span className="ms-auto flex shrink-0 items-center gap-1.5 font-normal text-muted-foreground/65">
+            {/* Self-ticking: the live set does not change while a command runs,
               so this component does not re-render and a value rendered once
               would sit frozen for the whole wait. */}
-          <LiveDuration
-            format={formatBackgroundElapsed}
-            startedAtMs={oldestStartedAtMs}
-            pausedMs={oldest.item.pausedMs ?? 0}
-            paused={oldestView.paused}
-          />
-          <ChevronDownIcon
-            className={cn("size-3 transition-transform duration-200", expanded && "rotate-180")}
-            aria-hidden
-          />
-        </span>
-      </button>
-      {expanded ? (
-        <div className="max-h-40 overflow-y-auto px-1">
-          {processes.map((process) => (
-            <div key={process.item.id} className="border-border/45 border-t first:border-t-0">
-              <BackgroundProcessRow item={process.item} monitor={process.monitor} />
-            </div>
-          ))}
-        </div>
-      ) : null}
+            <LiveDuration
+              format={formatBackgroundElapsed}
+              startedAtMs={oldestStartedAtMs}
+              pausedMs={oldest.item.pausedMs ?? 0}
+              paused={oldestView.paused}
+            />
+            <ChevronDownIcon
+              className={cn("size-3 transition-transform duration-200", expanded && "rotate-180")}
+              aria-hidden
+            />
+          </span>
+        </button>
+        {expanded ? (
+          <div className="max-h-40 overflow-y-auto px-1">
+            {processes.map((process) => (
+              <div key={process.item.id} className="border-border/45 border-t first:border-t-0">
+                <BackgroundProcessRow item={process.item} monitor={process.monitor} />
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 });

@@ -1644,7 +1644,11 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const legendListRef = useRef<LegendListRef | null>(null);
   const [composerOverlayElement, setComposerOverlayElement] = useState<HTMLDivElement | null>(null);
+  // Chrome that floats on the composer's top edge follows the measured height,
+  // while the timeline inset keeps the taller reservation a resting composer
+  // holds for the height it regains on expand.
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
+  const [timelineComposerInset, setTimelineComposerInset] = useState(0);
   const [composerResting, setComposerResting] = useState(false);
   const [restingControlsHost, setRestingControlsHost] = useState<HTMLDivElement | null>(null);
   const isAtEndRef = useRef(true);
@@ -1656,9 +1660,11 @@ function ChatViewContent(props: ChatViewProps) {
 
   const publishComposerOverlayHeight = useCallback(
     (height: number) => {
-      if (height <= 0) return;
-      setComposerOverlayHeight((current) =>
-        resolveRestingComposerInset(current, Math.ceil(height), composerResting),
+      const measured = Math.ceil(height);
+      if (measured <= 0) return;
+      setComposerOverlayHeight(measured);
+      setTimelineComposerInset((current) =>
+        resolveRestingComposerInset(current, measured, composerResting),
       );
     },
     [composerResting],
@@ -1668,11 +1674,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (!composerOverlayElement) return;
 
     const updateHeight = () => {
-      const nextHeight = Math.ceil(composerOverlayElement.getBoundingClientRect().height);
-      if (nextHeight <= 0) return;
-      setComposerOverlayHeight((currentHeight) =>
-        resolveRestingComposerInset(currentHeight, nextHeight, composerResting),
-      );
+      publishComposerOverlayHeight(composerOverlayElement.getBoundingClientRect().height);
     };
 
     updateHeight();
@@ -1681,7 +1683,7 @@ function ChatViewContent(props: ChatViewProps) {
     const observer = new ResizeObserver(updateHeight);
     observer.observe(composerOverlayElement);
     return () => observer.disconnect();
-  }, [composerOverlayElement, composerResting]);
+  }, [composerOverlayElement, publishComposerOverlayHeight]);
 
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
@@ -5029,11 +5031,11 @@ function ChatViewContent(props: ChatViewProps) {
       return getAnchoredTurnMetrics({
         state,
         anchorIndex,
-        composerOverlayHeight,
+        composerOverlayHeight: timelineComposerInset,
         anchorOffset: CHAT_LIST_ANCHOR_OFFSET,
       });
     },
-    [composerOverlayHeight],
+    [timelineComposerInset],
   );
   const timelineRealContentOverflowsViewport = useCallback(
     (list?: LegendListRef | null) => {
@@ -5058,11 +5060,11 @@ function ChatViewContent(props: ChatViewProps) {
       const realContentBottom = lastRowTop + Math.max(1, lastRowHeight);
       const visibleScrollLength = Math.max(
         0,
-        (state.scrollLength ?? 0) - composerOverlayHeight - CHAT_LIST_ANCHOR_OFFSET,
+        (state.scrollLength ?? 0) - timelineComposerInset - CHAT_LIST_ANCHOR_OFFSET,
       );
       return realContentBottom > visibleScrollLength;
     },
-    [composerOverlayHeight],
+    [timelineComposerInset],
   );
 
   const composerReadingTimeline = useMemo(
@@ -8398,7 +8400,7 @@ function ChatViewContent(props: ChatViewProps) {
                 anchorMessageId={timelineAnchorMessageId}
                 onAnchorReady={onTimelineAnchorReady}
                 onAnchorSizeChanged={onTimelineAnchorSizeChanged}
-                contentInsetEndAdjustment={composerOverlayHeight}
+                contentInsetEndAdjustment={timelineComposerInset}
                 onIsAtEndChange={onIsAtEndChange}
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
                 hideEmptyPlaceholder={isDraftHeroState}
@@ -8699,7 +8701,7 @@ function ChatViewContent(props: ChatViewProps) {
                 key={`${activeThreadKey}:${activePreviewMiniPlayer.tabId}`}
                 threadRef={activeThreadRef}
                 tabId={activePreviewMiniPlayer.tabId}
-                bottomInset={isDraftHeroState ? 0 : composerOverlayHeight}
+                bottomInset={isDraftHeroState ? 0 : timelineComposerInset}
               />
             ) : null}
 
