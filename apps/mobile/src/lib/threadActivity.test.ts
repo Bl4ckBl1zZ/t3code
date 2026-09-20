@@ -776,6 +776,15 @@ describe("background commands", () => {
     expect(threadFeedActivityHasRow(runningForeground)).toBe(false);
   });
 
+  it("reads a foreground command's failure from its exit and reported output", () => {
+    const foreground = (overrides: { exitCode?: number; outputIndicatesFailure?: boolean }) =>
+      onlyActivity({ ...command(), status: "completed" as const, ...overrides }).status;
+
+    expect(foreground({ exitCode: 0 })).toBe("success");
+    expect(foreground({ exitCode: 2 })).toBe("failure");
+    expect(foreground({ outputIndicatesFailure: true })).toBe("failure");
+  });
+
   it("reads a background command's status from how it ended", () => {
     const settled = (overrides: Parameters<typeof backgroundCommand>[1]) =>
       onlyActivity(

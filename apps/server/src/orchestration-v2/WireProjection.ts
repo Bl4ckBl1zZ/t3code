@@ -3,6 +3,7 @@ import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
+import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
 
 const MAX_DETAIL_STRING_BYTES = 32_768;
 const MAX_DYNAMIC_VALUE_BYTES = 16_384;
@@ -50,8 +51,16 @@ function summarizeDynamicValue(value: unknown): unknown {
 
 export function projectTurnItemForWire(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   switch (item.type) {
-    case "command_execution":
-      return { ...item, output: truncateDetail(item.output) };
+    case "command_execution": {
+      // Clients read failure off the output preview, which truncation can cut
+      // the evidence out of. Decide it here, from everything the run produced.
+      const failed =
+        item.outputIndicatesFailure === true ||
+        (item.exitCode !== undefined && item.exitCode !== 0) ||
+        (item.output !== undefined && toolOutputIndicatesFailure(item.output));
+      const projected = { ...item, output: truncateDetail(item.output) };
+      return failed ? { ...projected, outputIndicatesFailure: true } : projected;
+    }
     case "file_change":
       return {
         ...item,

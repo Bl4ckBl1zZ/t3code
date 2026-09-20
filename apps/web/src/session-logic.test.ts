@@ -24,6 +24,8 @@ import {
   isLatestRunSettled,
   providerErrorPresentation,
   type TimelineEntry,
+  type WorkLogEntry,
+  workEntryIndicatesToolFailure,
   workLogEntryIsVisible,
 } from "./session-logic";
 import { makeThreadProjectionFixture } from "./test-fixtures";
@@ -1037,5 +1039,55 @@ describe("V2 session presentation", () => {
       [supersededAttemptId, "superseded"],
       [activeAttemptId, "running"],
     ]);
+  });
+});
+
+describe("workEntryIndicatesToolFailure", () => {
+  const entry = (payload: {
+    readonly outputIndicatesFailure?: boolean;
+    readonly exitCode?: number;
+  }): WorkLogEntry => {
+    const item: Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }> = {
+      id: TurnItemId.make("item-1"),
+      type: "command_execution",
+      threadId: ThreadId.make("thread-1"),
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: "pnpm test",
+      input: "pnpm test",
+      startedAt: DateTime.makeUnsafe("2026-09-20T00:00:00.000Z"),
+      completedAt: DateTime.makeUnsafe("2026-09-20T00:00:01.000Z"),
+      updatedAt: DateTime.makeUnsafe("2026-09-20T00:00:01.000Z"),
+      ...(payload.outputIndicatesFailure === undefined
+        ? {}
+        : { outputIndicatesFailure: payload.outputIndicatesFailure }),
+      ...(payload.exitCode === undefined ? {} : { exitCode: payload.exitCode }),
+    };
+    return {
+      id: "entry-1",
+      createdAt: "2026-09-20T00:00:00.000Z",
+      label: "pnpm test",
+      tone: "tool",
+      toolLifecycleStatus: "completed",
+      structuredPayload: item,
+    };
+  };
+
+  it("treats a command the server flagged as failing as a failure", () => {
+    expect(workEntryIndicatesToolFailure(entry({ outputIndicatesFailure: true }))).toBe(true);
+  });
+
+  it("treats a nonzero exit as a failure even when the item completed", () => {
+    expect(workEntryIndicatesToolFailure(entry({ exitCode: 2 }))).toBe(true);
+  });
+
+  it("leaves a successful command alone", () => {
+    expect(workEntryIndicatesToolFailure(entry({ exitCode: 0 }))).toBe(false);
   });
 });

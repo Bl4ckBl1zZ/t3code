@@ -162,10 +162,19 @@ export function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
 }
 
 export function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
-  return (
+  if (
     entry.tone === "error" ||
     entry.toolLifecycleStatus === "failed" ||
     entry.toolLifecycleStatus === "declined"
+  ) {
+    return true;
+  }
+  // A command that reported a nonzero exit or failing output is a failure even
+  // when the provider closed its item as completed.
+  const item = entry.structuredPayload;
+  return (
+    item?.type === "command_execution" &&
+    (item.outputIndicatesFailure === true || (item.exitCode !== undefined && item.exitCode !== 0))
   );
 }
 

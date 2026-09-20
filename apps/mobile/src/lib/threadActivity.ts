@@ -306,6 +306,16 @@ function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"]
     return item.status === "completed" ? "success" : "neutral";
   }
   if (!itemIsToolLike(item)) return null;
+  // A foreground command can report a nonzero exit, or output the server
+  // recognized as a failure, while the provider still closes it as completed.
+  // Background commands carry a richer ending, read just below.
+  if (
+    item.type === "command_execution" &&
+    item.background !== true &&
+    (item.outputIndicatesFailure === true || (item.exitCode !== undefined && item.exitCode !== 0))
+  ) {
+    return "failure";
+  }
   if (isBackgroundProcessItem(item)) {
     // A background command's status is how it ended, which the item status
     // alone misreads: a nonzero exit can arrive as "completed", and a timeout

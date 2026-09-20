@@ -47,4 +47,43 @@ describe("orchestration V2 wire projection", () => {
     const item = { ...base, input: undefined } satisfies OrchestrationV2TurnItem;
     expect(projectTurnItemForWire(item)).toEqual(item);
   });
+
+  const command = {
+    id: base.id,
+    type: "command_execution" as const,
+    threadId: base.threadId,
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 1,
+    status: "completed" as const,
+    input: "pnpm test",
+    startedAt: base.startedAt,
+    completedAt: base.completedAt,
+    updatedAt: base.updatedAt,
+  };
+
+  it("reports a command failure that truncation would have cut the evidence out of", () => {
+    const output = `${"x".repeat(100_000)}\npnpm: command not found`;
+    const item = { ...command, output } satisfies OrchestrationV2TurnItem;
+    const projected = projectTurnItemForWire(item);
+
+    expect(projected.type === "command_execution" ? projected.output : null).not.toContain(
+      "command not found",
+    );
+    expect(projected).toMatchObject({ outputIndicatesFailure: true });
+  });
+
+  it("reports a nonzero exit even when the provider closed the item as completed", () => {
+    const item = { ...command, exitCode: 2, output: "done" } satisfies OrchestrationV2TurnItem;
+    expect(projectTurnItemForWire(item)).toMatchObject({ outputIndicatesFailure: true });
+  });
+
+  it("leaves a successful command unflagged", () => {
+    const item = { ...command, exitCode: 0, output: "done" } satisfies OrchestrationV2TurnItem;
+    expect(projectTurnItemForWire(item)).toEqual(item);
+  });
 });
