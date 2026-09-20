@@ -1734,3 +1734,9 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   with it; the last one disables a catalog environment, which our catalog entries have no flag
   for, so it removes the environment instead -- the same transition through
   `enabledEnvironmentIds`.
+
+- Mobile shell cache writes now yield to the host between batches of 32 rows (`d2ab8b09bc`),
+  through a `middlewareEncoding` wrapper around the same stored codec rather than a hand-written
+  encoder -- so validation, trimming and unknown-field stripping are unchanged, which the ported
+  tests assert by comparing byte-for-byte against the original codec. Effect's cooperative yield
+  resumes on a microtask, which does not let React Native paint; a `setTimeout(0)` does.
