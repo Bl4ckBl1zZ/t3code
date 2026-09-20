@@ -220,6 +220,10 @@ const turnItems: OrchestrationV2TurnItem[] = [
     diffStr: "@@ -1 +1 @@",
     oldStr: "a",
     newStr: "b",
+    changes: [
+      { operation: "modify", path: "src/index.ts" },
+      { operation: "rename", path: "src/renamed.ts", oldPath: "src/old.ts" },
+    ],
   },
   {
     ...base("item-command"),

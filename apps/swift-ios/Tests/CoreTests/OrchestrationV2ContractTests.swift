@@ -95,6 +95,26 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertEqual(decoded.payload, item.payload)
     }
 
+    func testMultiFileChangesRoundTripAndOldRowsStayReadable() throws {
+        let item = try XCTUnwrap(try projection().turnItems.first { $0.type == "file_change" })
+        guard case let .fileChange(fileName, _, _, _, _, _, changes) = item.payload else {
+            return XCTFail("Missing file change")
+        }
+        XCTAssertEqual(fileName, "src/index.ts")
+        XCTAssertEqual(changes?.map(\.path), ["src/index.ts", "src/renamed.ts"])
+        XCTAssertEqual(changes?.last?.oldPath, "src/old.ts")
+        XCTAssertEqual(try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONEncoder().encode(item)), item)
+
+        // A server that reports only the first file must still decode.
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any])
+        legacy.removeValue(forKey: "changes")
+        let decoded = try JSONDecoder().decode(OrchestrationV2TurnItem.self, from: JSONSerialization.data(withJSONObject: legacy))
+        guard case let .fileChange(_, _, _, _, _, _, decodedChanges) = decoded.payload else {
+            return XCTFail("Missing file change")
+        }
+        XCTAssertNil(decodedChanges)
+    }
+
     func testNativeQuestionChoicesPreserveOpaqueValues() throws {
         let item = try XCTUnwrap(try projection().turnItems.first { $0.type == "user_input_request" })
         guard case let .userInputRequest(_, questions) = item.payload else { return XCTFail("Missing question") }

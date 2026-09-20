@@ -4928,7 +4928,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             let body = ([explanation].compactMap { $0 } + rendered).joined(separator: "\n")
             return message(.tool, body, tool: "Plan")
 
-        case let .fileChange(fileName, additions, deletions, diffStr, _, _):
+        case let .fileChange(fileName, additions, deletions, diffStr, _, _, _):
             var header = fileName
             if let additions, let deletions {
                 header += "  +\(additions) −\(deletions)"

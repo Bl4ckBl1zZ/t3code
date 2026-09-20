@@ -9,6 +9,10 @@ and changed 2 files.” Open the summary to inspect the calls. Repeated edits to
 same path count as one changed file. Failures, active work, subagents and threads the
 agent created remain separately visible. The native iOS app uses the same grouping.
 
+An edit that touches several files at once reads as "Changed 3 files" rather than naming only the
+first, and opening it lists each one with what happened to it -- added, modified, or renamed from
+its old path. Agents that report a single file per edit are unaffected.
+
 Your expansion choices stay in place as you browse the conversation or close and reopen a
 tool group. Web and desktop restore the position within a long tool result. Native iOS
 restores the position within the tool row you were reading. These choices last for the current conversation

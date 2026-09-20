@@ -59,6 +59,43 @@ function activityFor(item: OrchestrationV2TurnItem): ThreadFeedActivity {
 }
 
 describe("buildThreadActivityInspector", () => {
+  it("lists every file a multi-file change touched", () => {
+    const item: OrchestrationV2TurnItem = {
+      ...itemBase("file-change-many"),
+      type: "file_change",
+      fileName: "src/a.ts",
+      changes: [
+        { operation: "modify", path: "src/a.ts" },
+        { operation: "rename", path: "src/c.ts", oldPath: "src/b.ts" },
+      ],
+    };
+
+    const model = buildThreadActivityInspector(
+      activityFor(item),
+      { ...EMPTY_V2_ITEM_SUPPORT, item },
+      sourceThreadId,
+    );
+    expect(model.fileLinks).toEqual([
+      { label: "modify src/a.ts", path: "src/a.ts" },
+      { label: "rename src/b.ts → src/c.ts", path: "src/c.ts" },
+    ]);
+  });
+
+  it("falls back to the named file when a change reports no structure", () => {
+    const item: OrchestrationV2TurnItem = {
+      ...itemBase("file-change-one"),
+      type: "file_change",
+      fileName: "src/only.ts",
+    };
+
+    const model = buildThreadActivityInspector(
+      activityFor(item),
+      { ...EMPTY_V2_ITEM_SUPPORT, item },
+      sourceThreadId,
+    );
+    expect(model.fileLinks).toEqual([{ label: "modify src/only.ts", path: "src/only.ts" }]);
+  });
+
   it("leads a command with its output and exit, keeping lifecycle metadata as details", () => {
     const item: OrchestrationV2TurnItem = {
       ...itemBase("command"),

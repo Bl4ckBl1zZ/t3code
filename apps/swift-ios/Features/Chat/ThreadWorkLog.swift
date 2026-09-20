@@ -94,7 +94,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
 
     /// A `file_change` row headlines its own diffstat.
     public var diffStat: ThreadWorkLogDiffStat? {
-        guard case let .fileChange(_, additions, deletions, _, _, _) = item.payload else {
+        guard case let .fileChange(_, additions, deletions, _, _, _, _) = item.payload else {
             return nil
         }
         let added = additions ?? 0
@@ -138,7 +138,9 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         var files: [String] = []
         switch item.payload {
         case .commandExecution: action = .command
-        case .fileChange(let file, _, _, _, _, _): action = .edit; files = [file]
+        case .fileChange(let file, _, _, _, _, _, let changes):
+            action = .edit
+            files = changes.map { $0.map(\.path) } ?? [file]
         case .fileSearch: action = .codeSearch
         case .webSearch: action = .webSearch
         case .dynamicTool(_, let input, _): action = T3McpToolPresentation.historicalAction(for: item) ?? (DynamicToolInputPreview.resolve(input)?.kind == .path ? .read : .tool)
@@ -284,7 +286,9 @@ public enum ThreadWorkLogPresentation {
             // to a finished turn reads as finished.
             guard liveness.background == true else { return "Command" }
             return liveness.waitKind == "monitor" ? "Waiting for a condition" : "Background command"
-        case let .fileChange(fileName, _, _, _, _, _):
+        case let .fileChange(fileName, _, _, _, _, _, changes):
+            // `fileName` names the first file only, so count when there are more.
+            if let changes, changes.count > 1 { return "Changed \(changes.count) files" }
             return "Changed \(fileName)"
         case .fileSearch:
             return "Searched files"
@@ -340,7 +344,7 @@ public enum ThreadWorkLogPresentation {
                 return backgroundCommandTail(output) ?? (input.isEmpty ? nil : input)
             }
             return input.isEmpty ? nil : input
-        case let .fileChange(fileName, _, _, _, _, _):
+        case let .fileChange(fileName, _, _, _, _, _, _):
             return fileName
         case let .fileSearch(pattern, _):
             return pattern
@@ -1155,7 +1159,7 @@ private struct WorkLogRowButton: View {
     }
 
     private var filePath: (prefix: String, name: String)? {
-        if case let .fileChange(fileName, _, _, _, _, _) = row.item.payload {
+        if case let .fileChange(fileName, _, _, _, _, _, _) = row.item.payload {
             return ThreadWorkspaceFilePath.displayComponents(fileName, workspaceRoot: workspaceRoot)
         }
         if case let .dynamicTool(_, input, _) = row.item.payload,

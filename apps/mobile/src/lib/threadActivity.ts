@@ -412,7 +412,10 @@ function itemSummary(
           : "Background command"
         : "Command";
     case "file_change":
-      return `Changed ${item.fileName}`;
+      // `fileName` names the first file only, so count when there are more.
+      return item.changes !== undefined && item.changes.length > 1
+        ? `Changed ${item.changes.length} files`
+        : `Changed ${item.fileName}`;
     case "file_search":
       return "Searched files";
     case "web_search":

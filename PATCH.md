@@ -1618,3 +1618,11 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   `scripts/generate-swift-contract-fixtures.ts` now emits `orchestrationProtocol.json` and a
   Swift test pins the two together -- a bump in `packages/contracts` fails there instead of
   shipping an iOS build the updated server refuses.
+
+- `file_change.changes` from PR #2829 now renders wherever an item is opened: the web item
+  inspector lists each file with its operation and rename source, the native iOS work log counts
+  them instead of naming only the first, and the mobile inspector does the same. Upstream ships
+  the same consumers and, like us, no producer -- no adapter on either side reports the field
+  yet, so this is the decode-and-render half, which is what lets a fork client read an
+  upstream-shaped server. The SwiftUI payload gained a seventh associated value rather than a
+  named struct, matching the shape of every other case there.

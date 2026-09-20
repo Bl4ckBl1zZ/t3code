@@ -430,7 +430,18 @@
       "deletions": 1,
       "diffStr": "@@ -1 +1 @@",
       "oldStr": "a",
-      "newStr": "b"
+      "newStr": "b",
+      "changes": [
+        {
+          "operation": "modify",
+          "path": "src/index.ts"
+        },
+        {
+          "operation": "rename",
+          "path": "src/renamed.ts",
+          "oldPath": "src/old.ts"
+        }
+      ]
     },
     {
       "id": "item-command",
@@ -1081,7 +1092,18 @@
         "deletions": 1,
         "diffStr": "@@ -1 +1 @@",
         "oldStr": "a",
-        "newStr": "b"
+        "newStr": "b",
+        "changes": [
+          {
+            "operation": "modify",
+            "path": "src/index.ts"
+          },
+          {
+            "operation": "rename",
+            "path": "src/renamed.ts",
+            "oldPath": "src/old.ts"
+          }
+        ]
       }
     },
     {

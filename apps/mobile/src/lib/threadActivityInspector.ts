@@ -208,7 +208,14 @@ export function buildThreadActivityInspector(
       ending = commandEnding(item);
       break;
     case "file_change":
-      fileLinks.push({ label: item.fileName, path: item.fileName });
+      // One item can cover several files. Without the structured list the item
+      // only knows the first one, which is what `fileName` has always been.
+      for (const change of item.changes ?? [{ path: item.fileName, operation: "modify" }]) {
+        fileLinks.push({
+          label: `${change.operation} ${change.oldPath ? `${change.oldPath} → ` : ""}${change.path}`,
+          path: change.path,
+        });
+      }
       if (item.additions !== undefined || item.deletions !== undefined) {
         fields.push({
           label: "Changes",
