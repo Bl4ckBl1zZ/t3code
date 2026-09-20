@@ -28,7 +28,7 @@ export const SubagentsStatusBadge = memo(function SubagentsStatusBadge(props: {
           <div
             role="status"
             aria-label={label}
-            className="chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm"
+            className="chat-status-pill pointer-events-auto flex items-center gap-1.5 rounded-full px-3 py-1 text-muted-foreground text-xs"
           />
         }
       >

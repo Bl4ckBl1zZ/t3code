@@ -839,12 +839,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     );
   }
 
-  .chat-composer-glass {
-    background: color-mix(in srgb, var(--background) var(--glass-opacity), transparent);
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  }
-
   .chat-composer-glass-shell {
     --chat-composer-glass-surface: var(--card);
     --chat-composer-outline: rgb(0 0 0 / 8%);
@@ -1176,7 +1170,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     box-shadow: inset 0 1px rgb(255 255 255 / 4%);
   }
 
-  .panel-glass[data-thread-details-card] {
+  /* Thread details' material: a card tint lifted off the canvas. The floating
+     chat status pills wear it too, so the chrome above the composer reads as
+     the same surface as the panel beside it. */
+  .panel-glass[data-thread-details-card],
+  .chat-status-pill {
     --thread-details-surface: var(--card);
     box-shadow:
       0 4px 16px -4px rgb(0 0 0 / 12%),
@@ -1187,7 +1185,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     background: color-mix(in srgb, var(--thread-details-surface) var(--glass-opacity), transparent);
   }
 
-  .dark .panel-glass[data-thread-details-card] {
+  /* A pill is too small to afford panel-glass's clipped backdrop layer, so it
+     tints its own background from the same surface role. */
+  .chat-status-pill {
+    border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+    background: color-mix(in srgb, var(--thread-details-surface) var(--glass-opacity), transparent);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  }
+
+  .dark .panel-glass[data-thread-details-card],
+  .dark .chat-status-pill {
     --thread-details-surface: color-mix(in srgb, var(--background) 96%, var(--color-white));
     box-shadow:
       0 6px 20px -6px rgb(0 0 0 / 28%),
@@ -1353,7 +1361,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       background: var(--popover) !important;
     }
 
-    .panel-glass[data-thread-details-card]::before {
+    .panel-glass[data-thread-details-card]::before,
+    .chat-status-pill {
       background: var(--thread-details-surface) !important;
     }
   }

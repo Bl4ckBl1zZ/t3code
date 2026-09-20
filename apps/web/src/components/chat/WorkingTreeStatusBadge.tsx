@@ -55,7 +55,7 @@ export const WorkingTreeStatusBadge = memo(function WorkingTreeStatusBadge(props
       role="status"
       aria-label={`${state.filesChanged} files changed, ${state.insertions} additions, ${state.deletions} deletions`}
       className={cn(
-        "chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm",
+        "chat-status-pill pointer-events-auto flex items-center gap-1.5 rounded-full px-3 py-1 text-muted-foreground text-xs",
         className,
       )}
     >
