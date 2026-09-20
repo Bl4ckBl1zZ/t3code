@@ -11,6 +11,7 @@ import {
   ProviderItemId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { OrchestrationClientOrigin } from "./auth.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import type { OrchestrationV2StoredEvent } from "./orchestrationV2.ts";
@@ -18,11 +19,13 @@ import { ProjectScript } from "./project.ts";
 
 /** Metadata retained by the shared application event source. */
 export const ApplicationEventMetadata = Schema.Struct({
+  deferredTurn: Schema.optional(Schema.Boolean),
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
   adapterKey: Schema.optional(TrimmedNonEmptyString),
   requestId: Schema.optional(ApprovalRequestId),
   ingestedAt: Schema.optional(IsoDateTime),
+  origin: Schema.optional(OrchestrationClientOrigin),
 });
 export type ApplicationEventMetadata = typeof ApplicationEventMetadata.Type;
 
@@ -48,6 +51,7 @@ export const ApplicationProjectMetaUpdatedPayload = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  autoPull: Schema.optional(Schema.Boolean),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),

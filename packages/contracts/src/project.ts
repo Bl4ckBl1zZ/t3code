@@ -33,6 +33,8 @@ export const ProjectScript = Schema.Struct({
   command: TrimmedNonEmptyString,
   icon: ProjectScriptIcon,
   runOnWorktreeCreate: Schema.Boolean,
+  /** Start the agent while setup runs unless explicitly disabled. */
+  async: Schema.optional(Schema.Boolean),
   /**
    * When true, the script runs in the worktree right before it is removed.
    * Optional so peers that predate teardown scripts can still decode.
@@ -59,6 +61,8 @@ export const Project = Schema.Struct({
   // Per-project override for where new threads start. Null/absent means
   // "no override": clients fall back to t3.json, then the global setting.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  // Opt-in because background sync performs network I/O and may move the checkout.
+  autoPull: Schema.optional(Schema.Boolean),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -82,30 +86,43 @@ export const ProjectChange = Schema.Union([
 ]);
 export type ProjectChange = typeof ProjectChange.Type;
 
+/** The create inputs shared by the `project.create` mutation and the MCP project service. */
+export const ProjectCreatePayload = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
+  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  scripts: Schema.optional(Schema.Array(ProjectScript)),
+});
+export type ProjectCreatePayload = typeof ProjectCreatePayload.Type;
+
+/** The update inputs shared by the `project.update` mutation and the MCP project service. */
+export const ProjectUpdatePayload = Schema.Struct({
+  title: Schema.optional(TrimmedNonEmptyString),
+  workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  autoPull: Schema.optional(Schema.Boolean),
+  // Absent = leave unchanged; null = clear the override.
+  defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  // Absent = leave unchanged; null = clear the manual icon.
+  faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
+  scripts: Schema.optional(Schema.Array(ProjectScript)),
+});
+export type ProjectUpdatePayload = typeof ProjectUpdatePayload.Type;
+
 export const ProjectMutation = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("project.create"),
     commandId: CommandId,
     projectId: ProjectId,
-    title: TrimmedNonEmptyString,
-    workspaceRoot: TrimmedNonEmptyString,
-    createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
-    defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
-    scripts: Schema.optional(Schema.Array(ProjectScript)),
+    ...ProjectCreatePayload.fields,
   }),
   Schema.Struct({
     type: Schema.Literal("project.update"),
     commandId: CommandId,
     projectId: ProjectId,
-    title: Schema.optional(TrimmedNonEmptyString),
-    workspaceRoot: Schema.optional(TrimmedNonEmptyString),
-    defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
-    // Absent = leave unchanged; null = clear the override.
-    defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
-    // Absent = leave unchanged; null = clear the manual icon.
-    faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-    projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
-    scripts: Schema.optional(Schema.Array(ProjectScript)),
+    ...ProjectUpdatePayload.fields,
   }),
   Schema.Struct({
     type: Schema.Literal("project.delete"),

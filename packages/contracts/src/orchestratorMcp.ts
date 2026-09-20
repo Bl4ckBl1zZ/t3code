@@ -22,6 +22,7 @@ import {
   ScheduledTaskUpsertSchedule,
 } from "./scheduledTask.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import { ThreadLinkedPullRequest, ThreadTitleRegeneration } from "./orchestrationV2.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
@@ -155,6 +156,15 @@ export const OrchestratorMcpDelegatedTaskStatus = Schema.Literals([
 ]);
 export type OrchestratorMcpDelegatedTaskStatus = typeof OrchestratorMcpDelegatedTaskStatus.Type;
 
+export const OrchestratorMcpTerminalDelegatedTaskStatus = Schema.Literals([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+export type OrchestratorMcpTerminalDelegatedTaskStatus =
+  typeof OrchestratorMcpTerminalDelegatedTaskStatus.Type;
+
 export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   task: OrchestratorMcpPrompt.annotate({
     description: "Self-contained task for one delegated child agent/subagent.",
@@ -162,8 +172,16 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   target: Schema.optional(OrchestratorMcpTarget),
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),
-  mode: Schema.optional(Schema.Literals(["async", "wait"])),
-  timeoutMs: Schema.optional(Schema.Number),
+  mode: Schema.optional(
+    Schema.Literals(["async", "wait"]).annotate({
+      description:
+        "Defaults to async. Use wait only when this turn needs the child's result before you can continue.",
+    }),
+  ),
+  timeoutMs: Schema.optional(Schema.Number).annotate({
+    description:
+      "Wait budget for mode=wait only. Default 10 minutes. Elapsing it returns waitTimedOut=true on that call and does not cancel the child.",
+  }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
@@ -176,11 +194,20 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   childRunId: Schema.NullOr(RunId),
   childNodeId: NodeId,
   status: OrchestratorMcpDelegatedTaskStatus,
+  workState: Schema.Literals(["working", "waiting_for_children", "result_available"]),
+  hasPendingChildRuns: Schema.Boolean,
+  latestTerminalRunId: Schema.NullOr(RunId),
+  latestTerminalStatus: Schema.NullOr(OrchestratorMcpTerminalDelegatedTaskStatus),
+  latestTerminalSummary: Schema.NullOr(Schema.String),
+  latestTerminalResultContextTransferId: Schema.NullOr(ContextTransferId),
   providerInstanceId: ProviderInstanceId,
   model: Schema.NullOr(Schema.String),
   summary: Schema.NullOr(Schema.String),
   resultContextTransferId: Schema.NullOr(ContextTransferId),
-  waitTimedOut: Schema.Boolean,
+  waitTimedOut: Schema.Boolean.annotate({
+    description:
+      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later task_status reads return false and use status for liveness.",
+  }),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
@@ -246,16 +273,6 @@ export const OrchestratorMcpCreateThreadsResult = Schema.Struct({
 });
 export type OrchestratorMcpCreateThreadsResult = typeof OrchestratorMcpCreateThreadsResult.Type;
 
-export const OrchestratorMcpThreadStartInput = Schema.Struct({
-  prompt: OrchestratorMcpPrompt,
-  title: Schema.optional(OrchestratorMcpTitle),
-  target: Schema.optional(OrchestratorMcpTarget),
-  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
-  runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
-  interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
-});
-export type OrchestratorMcpThreadStartInput = typeof OrchestratorMcpThreadStartInput.Type;
-
 export const OrchestratorMcpThreadStatus = Schema.Union([
   Schema.Literal("idle"),
   OrchestrationV2RunStatus,
@@ -284,6 +301,7 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   model: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   itemCount: NonNegativeInt,
@@ -303,6 +321,8 @@ export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListRe
 
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
   threadId: ThreadId,
+  itemId: Schema.optional(TurnItemId),
+  textOffset: Schema.optional(NonNegativeInt),
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
@@ -324,6 +344,8 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   model: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+  titleRegeneration: Schema.NullOr(ThreadTitleRegeneration),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   parentThreadId: Schema.NullOr(ThreadId),
@@ -363,6 +385,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
   title: Schema.NullOr(Schema.String),
   text: Schema.NullOr(Schema.String),
   textTruncated: Schema.Boolean,
+  nextTextOffset: Schema.optional(Schema.NullOr(NonNegativeInt)),
   updatedAt: IsoDateTime,
 });
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;

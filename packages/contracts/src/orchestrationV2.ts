@@ -319,6 +319,13 @@ export const ThreadLinkedPullRequest = Schema.Struct({
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 
+/** In-flight title regeneration marker; cleared when a new title lands. */
+export const ThreadTitleRegeneration = Schema.Struct({
+  requestId: CommandId,
+  startedAt: Schema.DateTimeUtc,
+});
+export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
