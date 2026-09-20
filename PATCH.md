@@ -1648,3 +1648,10 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   outer ORDER BY does not change that, so the history is ordered after decoding rather than in the
   query. Upstream's mobile provider icon stack is not carried -- it belongs to a Thread List v2
   rendering layer this fork does not have.
+
+- The Claude adapter now reports `viewedImagePath` on a read of an image file, as PR #2829 does,
+  and `toolGroupAction` counts such a call as a read. The rendering half is deferred, not
+  forgotten: upstream shows the picture inline through `resolveViewedImageAsset`, which needs a
+  `resolveMediaSource` and a `work-log/toolPresentation.ts` this fork does not have, and both
+  belong to the work-log refactor whose add/add conflicts are still open. Until then the field
+  rides the wire -- an upstream-shaped client reading our server gets the picture today.

@@ -62,6 +62,7 @@ import {
   claudeEffectiveQueryPolicyKey,
   claudeMcpQueryOverrides,
   claudeProviderTurnTokenUsage,
+  claudeViewedImagePath,
   claudeQueryMessages,
   claudeRuntimeQueryPolicyForRuntimePolicy,
   loggedClaudeQueryOptions,
@@ -3782,5 +3783,30 @@ describe("ClaudeAdapterV2 context usage", () => {
 
     assert.equal(usage.maxTokens, 200_000);
     assert.equal(usage.usedTokens, 110);
+  });
+});
+
+describe("ClaudeAdapterV2 viewed images", () => {
+  const toolInput = (value: Record<string, unknown>) => ({ type: "record" as const, value });
+
+  it("marks a read of an image file as one the agent looked at", () => {
+    assert.equal(
+      claudeViewedImagePath("read", toolInput({ file_path: "  docs/diagram.png  " })),
+      "docs/diagram.png",
+    );
+    assert.equal(claudeViewedImagePath("read file", toolInput({ path: "shot.jpeg" })), "shot.jpeg");
+  });
+
+  it("ignores reads that are not images, and tools that are not reads", () => {
+    assert.isUndefined(claudeViewedImagePath("read", toolInput({ file_path: "src/index.ts" })));
+    assert.isUndefined(claudeViewedImagePath("write", toolInput({ file_path: "diagram.png" })));
+    assert.isUndefined(claudeViewedImagePath("read", toolInput({})));
+  });
+
+  it("drops a path that could not survive being rendered", () => {
+    assert.isUndefined(claudeViewedImagePath("read", toolInput({ file_path: "a\nb.png" })));
+    assert.isUndefined(
+      claudeViewedImagePath("read", toolInput({ file_path: `${"a".repeat(4_093)}.png` })),
+    );
   });
 });

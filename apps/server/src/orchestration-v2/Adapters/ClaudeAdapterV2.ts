@@ -1,3 +1,4 @@
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { ClaudeUsageLimitListener } from "../../provider/providerUsageLimits.ts";
 import { ModelManifest } from "../../provider/ModelManifest.ts";
 import {
@@ -1479,7 +1480,7 @@ function isClaudeWebSearchOutput(output: unknown): output is WebSearchOutput {
 const ClaudeNativeToolInputRecord = Schema.Record(Schema.String, Schema.Unknown);
 type ClaudeNativeToolInputRecord = typeof ClaudeNativeToolInputRecord.Type;
 
-type ClaudeNativeToolInput =
+export type ClaudeNativeToolInput =
   | {
       readonly type: "record";
       readonly value: ClaudeNativeToolInputRecord;
@@ -1510,6 +1511,25 @@ function claudeNativeToolInputValue(input: ClaudeNativeToolInput): unknown {
 
 function inputRecordValue(input: ClaudeNativeToolInput, key: string): unknown {
   return input.type === "record" ? input.value[key] : undefined;
+}
+
+/**
+ * A read of an image file is the agent looking at a picture, so the timeline can
+ * show it rather than a path buried in a JSON blob. Absurd or multi-line paths
+ * are dropped here rather than at the point one would reach an <img>.
+ */
+export function claudeViewedImagePath(
+  normalizedToolName: string,
+  toolInput: ClaudeNativeToolInput,
+): string | undefined {
+  if (!["read", "read file"].includes(normalizedToolName)) return undefined;
+  const readPath = firstStringInputField(toolInput, ["file_path", "path"])?.trim();
+  return readPath &&
+    readPath.length <= 4096 &&
+    !/[\r\n]/.test(readPath) &&
+    isWorkspaceImagePreviewPath(readPath)
+    ? readPath
+    : undefined;
 }
 
 function firstStringInputField(
@@ -2609,6 +2629,10 @@ export function makeClaudeAdapterV2(
             | "completedAt"
             | "updatedAt"
           >;
+          const viewedImagePath = claudeViewedImagePath(
+            input.classification.normalizedName,
+            input.toolInput,
+          );
           const itemType = input.classification.itemType;
           const webSearchPatterns = webSearchPatternsFromClaudeTool({
             toolInput: input.toolInput,
@@ -2655,6 +2679,7 @@ export function makeClaudeAdapterV2(
                       ...itemBase,
                       type: "dynamic_tool",
                       toolName: input.toolName,
+                      ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
                       input: claudeNativeToolInputValue(input.toolInput),
                       ...(outputValue === undefined ? {} : { output: outputValue }),
                     };
