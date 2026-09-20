@@ -1740,3 +1740,9 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   encoder -- so validation, trimming and unknown-field stripping are unchanged, which the ported
   tests assert by comparing byte-for-byte against the original codec. Effect's cooperative yield
   resumes on a microtask, which does not let React Native paint; a `setTimeout(0)` does.
+
+- Thread shell updates now land in place (`3ccbec0c73`'s `shellReducer.ts` hunk). Removing the row
+  and re-adding it moved every updated thread to the end of the array, so a streaming turn
+  reordered the list on every frame and broke identity for every row after it. The rest of that
+  commit -- narrowed thread subscriptions, `navigationThreadShellsAtom`, the `threadDetail.ts`
+  derived atoms -- stays deferred with the work it belongs to; the atom alone would have no reader.
