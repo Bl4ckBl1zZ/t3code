@@ -30,6 +30,7 @@ import {
   type SnoozeThreadInput,
   type StartThreadTurnInput,
   type StopThreadSessionInput,
+  type ThreadCommandInput,
   type UnarchiveThreadInput,
   type UnpinThreadInput,
   type UnsettleThreadInput,
@@ -48,6 +49,7 @@ import {
   promoteQueuedRun,
   reorderQueuedRun,
   respondToThreadApproval,
+  resumeThreadQueue,
   respondToThreadUserInput,
   revertThreadCheckpoint,
   setThreadInteractionMode,
@@ -281,6 +283,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     editQueuedRun: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:edit-queued-run",
       execute: (input: EditQueuedRunInput) => editQueuedRun(input),
+      scheduler,
+      concurrency,
+    }),
+    resumeThreadQueue: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:resume-queue",
+      execute: (input: ThreadCommandInput) => resumeThreadQueue(input),
       scheduler,
       concurrency,
     }),

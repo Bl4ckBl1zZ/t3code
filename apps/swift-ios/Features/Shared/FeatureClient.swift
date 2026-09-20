@@ -146,6 +146,8 @@ public protocol FeatureClient: AnyObject {
     func promoteQueuedRun(threadID: String, queuedRunID: String, targetRunID: String) async throws
     func cancelQueuedRun(threadID: String, runID: String) async throws
     func editQueuedRun(threadID: String, runID: String, text: String) async throws
+    /// Releases a queue that restart recovery held back.
+    func resumeThreadQueue(threadID: String) async throws
 
     func saveSettings(_ settings: FeatureSettings) async throws
 
@@ -335,6 +337,10 @@ public extension FeatureClient {
 
     func editQueuedRun(threadID: String, runID: String, text: String) async throws {
         throw FeatureCapabilityUnavailable("Queued message editing")
+    }
+
+    func resumeThreadQueue(threadID: String) async throws {
+        throw FeatureCapabilityUnavailable("Queue resume")
     }
 
     func loadReviewFileContents(

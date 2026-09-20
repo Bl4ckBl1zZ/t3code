@@ -8,7 +8,9 @@ import {
   Clock3Icon,
   CornerUpRightIcon,
   ListOrderedIcon,
+  PauseIcon,
   PencilIcon,
+  PlayIcon,
   XIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -32,7 +34,9 @@ export function QueuedRunsControl(props: {
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
   const edit = useAtomCommand(threadEnvironment.editQueuedRun);
+  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue);
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
+  const [resuming, setResuming] = useState(false);
   const [editing, setEditing] = useState<{ runId: RunId; draft: string } | null>(null);
   const workflow = useMemo(
     () => (projection ? deriveThreadQueueWorkflowState(projection) : null),
@@ -63,6 +67,18 @@ export function QueuedRunsControl(props: {
   ];
 
   if (items.length === 0) return null;
+
+  const resumeQueue = async () => {
+    setResuming(true);
+    try {
+      await resume({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId },
+      });
+    } finally {
+      setResuming(false);
+    }
+  };
 
   const move = async (runId: RunId, beforeRunId: RunId | null) => {
     setBusyRunId(runId);
@@ -134,6 +150,24 @@ export function QueuedRunsControl(props: {
           {items.length}
         </span>
       </header>
+      {workflow?.isHeld === true ? (
+        <div className="mb-1 flex items-center gap-1.5 rounded-sm bg-muted/60 px-1.5 py-1 text-[11px] text-muted-foreground">
+          <PauseIcon className="size-3 shrink-0" />
+          <span className="min-w-0 flex-1">
+            Paused when the server restarted. Nothing was lost.
+          </span>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-5 gap-1 px-1.5 text-[11px]"
+            disabled={resuming}
+            onClick={() => void resumeQueue()}
+          >
+            <PlayIcon className="size-3" />
+            Resume
+          </Button>
+        </div>
+      ) : null}
       <ol className="max-h-32 overflow-y-auto px-1">
         {items.map((item, index) => {
           const rowEditing =

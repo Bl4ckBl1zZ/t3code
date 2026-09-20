@@ -1655,3 +1655,13 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   `resolveMediaSource` and a `work-log/toolPresentation.ts` this fork does not have, and both
   belong to the work-log refactor whose add/add conflicts are still open. Until then the field
   rides the wire -- an upstream-shaped client reading our server gets the picture today.
+
+- A server restart no longer throws away queued messages. Our recovery service counted `queued`
+  runs as non-terminal and cancelled every one of them, so restarting the server silently deleted
+  work the user had typed and was waiting on. PR #2829's model is adopted instead: a queued run
+  never reached a provider, so nothing about it is stale -- recovery marks it `queueHeld` and
+  leaves its order, its payload and its execution identity alone. The scheduler treats one held
+  run as holding the whole queue, since they were queued to run in order, and the new
+  `queue.resume` command releases the hold and starts the head in the same dispatch. The affordance
+  is on the existing queue strip on all three clients (web, Expo, SwiftUI); `isHeld` was already
+  derived in `client-runtime` and in the SwiftUI port, and until now nothing could ever set it.

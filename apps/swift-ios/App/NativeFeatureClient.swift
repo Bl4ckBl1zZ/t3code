@@ -1347,6 +1347,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refreshThread(id: route.uiID, client: route.client)
     }
 
+    func resumeThreadQueue(threadID: String) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.resumeThreadQueue(threadID: route.wireID)
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
     func editQueuedRun(threadID: String, runID: String, text: String) async throws {
         let route = try threadRoute(for: threadID)
         _ = try await route.client.editQueuedRun(

@@ -257,6 +257,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "run.restart-continuation.prepare":
     case "run.restart-continuation.clear":
     case "run.interrupt":
+    case "queue.resume":
     case "queued-message.promote-to-steer":
     case "queued-run.reorder":
     case "queued-run.cancel":
@@ -290,6 +291,15 @@ function isBlockingRun(run: OrchestrationV2Run): boolean {
     run.status === "running" ||
     run.status === "waiting"
   );
+}
+
+/**
+ * Restart recovery holds a thread's queue rather than draining it into a
+ * provider the user has not looked at since the server came back. One held run
+ * holds the whole queue: they were meant to run in order.
+ */
+function isHeldQueuedRun(run: OrchestrationV2Run): boolean {
+  return run.status === "queued" && run.queueHeld === true;
 }
 
 /**
@@ -862,7 +872,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
-        projection.runs.some(isBlockingRun)
+        projection.runs.some(isBlockingRun) ||
+        projection.runs.some(isHeldQueuedRun)
       ) {
         return;
       }
@@ -1071,7 +1082,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     for (const thread of shell.threads) {
       const resumedThread = yield* Effect.gen(function* () {
         const projection = yield* projectionStore.getThreadProjection(thread.id);
-        if (projection.runs.some(isBlockingRun) || nextQueuedRun(projection) === undefined) {
+        if (
+          projection.runs.some(isBlockingRun) ||
+          projection.runs.some(isHeldQueuedRun) ||
+          nextQueuedRun(projection) === undefined
+        ) {
           return false;
         }
         yield* threadDispatch.withLock(thread.id, startNextQueuedRun(thread.id));
@@ -5678,6 +5693,39 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     });
 
+  const dispatchQueueResume = (
+    command: Extract<OrchestrationV2Command, { readonly type: "queue.resume" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadProjection(command.threadId)
+        .pipe(
+          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
+        );
+      if (projection.thread.archivedAt !== null || projection.thread.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is not active.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      const emitEvent = emit(events, command);
+      const held = projection.runs.filter(isHeldQueuedRun);
+      for (const run of held) {
+        yield* emitEvent({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          ...(run.rootNodeId === null ? {} : { nodeId: run.rootNodeId }),
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...run, queueHeld: false },
+        });
+      }
+    });
+
   const dispatchQueuedRunReorder = (
     command: Extract<OrchestrationV2Command, { readonly type: "queued-run.reorder" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -7322,6 +7370,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "queued-message.promote-to-steer":
         yield* dispatchQueuedMessagePromoteToSteer(command, events, effects);
         break;
+      case "queue.resume":
+        yield* dispatchQueueResume(command, events);
+        break;
       case "queued-run.reorder":
         yield* dispatchQueuedRunReorder(command, events);
         break;
@@ -7499,6 +7550,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (command.type === "delegated_task.wake-policy") {
       yield* mapDispatchError(command)(offerDelegatedCompletionDeliveries(command.parentThreadId));
+    }
+    // Releasing the hold is the whole point of the command, so drain here
+    // rather than waiting for the next terminal run to notice. The thread lock
+    // is already held by dispatchWithReceipt and is not reentrant.
+    if (command.type === "queue.resume") {
+      yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
     }
 
     return {

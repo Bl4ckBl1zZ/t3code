@@ -2332,6 +2332,102 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("holds a queue across restart and drains it only once resumed", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-queue-hold-thread");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queue-hold-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-queue-hold-project"),
+        title: "Hold the queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-queue-hold",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queue-hold-active-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-queue-hold-active-message"),
+        text: "Keep the provider occupied.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queue-hold-queued-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-queue-hold-queued-message"),
+        text: "Run this next.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const queuedRun = before.runs.find((run) => run.status === "queued");
+      assert.isDefined(queuedRun);
+      const activeRun = before.runs.find((run) => run.id !== queuedRun.id);
+      assert.isDefined(activeRun);
+
+      // Stand in for restart recovery: hold the queue, then finish the run that
+      // was occupying the provider so only the hold can keep the queue parked.
+      const heldAt = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-queue-hold-held"),
+            type: "run.updated",
+            threadId,
+            runId: queuedRun.id,
+            providerInstanceId: queuedRun.providerInstanceId,
+            occurredAt: heldAt,
+            payload: { ...queuedRun, queueHeld: true },
+          },
+          {
+            id: EventId.make("runtime-layer-queue-hold-active-completed"),
+            type: "run.updated",
+            threadId,
+            runId: activeRun.id,
+            ...(activeRun.rootNodeId === null ? {} : { nodeId: activeRun.rootNodeId }),
+            providerInstanceId: activeRun.providerInstanceId,
+            occurredAt: heldAt,
+            payload: { ...activeRun, status: "completed", completedAt: heldAt },
+          },
+        ],
+      });
+
+      assert.equal(yield* orchestrator.resumeQueuedRuns, 0);
+      const stillHeld = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(stillHeld.runs.find((run) => run.id === queuedRun.id)?.status, "queued");
+
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("runtime-layer-queue-hold-resume"),
+        threadId,
+      });
+
+      const afterResume = yield* orchestrator.getThreadProjection(threadId);
+      const resumedRun = afterResume.runs.find((run) => run.id === queuedRun.id);
+      assert.equal(resumedRun?.queueHeld ?? false, false);
+      // Resuming is what starts the head; the user does not have to send again.
+      assert.equal(resumedRun?.status, "starting");
+    }),
+  );
+
   it.effect("edits and removes queued runs", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

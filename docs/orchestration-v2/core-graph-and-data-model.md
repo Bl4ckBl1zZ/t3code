@@ -198,6 +198,7 @@ type Run = {
     | "failed"
     | "cancelled"
     | "rolled_back";
+  queueHeld?: boolean;
   requestedAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -213,6 +214,8 @@ type Run = {
 Only a run with `countsForConversation = true` contributes to the user-visible turn count and checkpoint count.
 
 `providerThreadId` is the provider-native conversation used for this run. This makes mixed-provider app threads explicit: run 1 may be Codex, run 2 may be Claude, and run 3 may return to the original Codex provider thread.
+
+`queueHeld` is set on a `queued` run that restart recovery parked. A queued run never reached a provider, so recovery preserves it rather than cancelling it: the run keeps its `queuePosition`, its attempt and its root node, and the scheduler refuses to start anything on a thread that holds one. The `queue.resume` command clears the flag across the thread's queue and starts the head in the same dispatch.
 
 `contextHandoffId` points to a materialized handoff artifact consumed by this run. A run may also be associated with a broader `ContextTransfer` through the transfer's target/source fields. The handoff is the payload; the transfer is the durable relationship and policy record.
 

@@ -1093,6 +1093,10 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
     /// Explicit position in the thread's queue when the server assigned one.
     /// Absent on runs that were never queued; callers fall back to `ordinal`.
     public let queuePosition: Int?
+    /// Set while restart recovery is holding this queued run. The queue keeps
+    /// its order and its payloads, but nothing drains until the user resumes.
+    /// Defaulted so the memberwise init stays usable from fixtures.
+    public var queueHeld: Bool? = nil
     public let requestedAt: OrchestrationV2Timestamp
     public let startedAt: OrchestrationV2Timestamp?
     public let completedAt: OrchestrationV2Timestamp?

@@ -87,6 +87,17 @@ to reveal them, or focus **Show other notices** with `Tab` and press `Enter` or 
 `Escape` to close the stack and return focus to that control. On a touchscreen, tap the peek to
 open the stack. Interacting with the attached banner or composer does not open the stack.
 
+## Paused queues
+
+Messages you queue behind a running turn sit above the composer and send in order once the agent
+finishes. If the server restarts while messages are still waiting, the queue pauses instead of
+sending: the agent that was working is gone, and you may not want the next message going to a
+fresh one unread. Your messages, their order and their attachments are all kept.
+
+A paused queue says **Paused when the server restarted** above its rows. Edit, reorder or remove
+whatever you want first, then choose **Resume** to start the message at the top and let the rest
+follow. Nothing sends until you do.
+
 ## Prompt stash
 
 Use the default shortcut, `Cmd+S` on macOS or `Ctrl+S` on Windows and Linux, to stash the current

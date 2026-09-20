@@ -126,6 +126,47 @@ describe("thread workflows", () => {
     ]);
   });
 
+  it("reports a queue restart recovery held, without disturbing its order", () => {
+    const runs = [
+      {
+        id: "first",
+        status: "queued",
+        userMessageId: "message-first",
+        providerThreadId: "provider-thread",
+        ordinal: 1,
+        queuePosition: 1,
+      },
+      {
+        id: "second",
+        status: "queued",
+        userMessageId: "message-second",
+        providerThreadId: "provider-thread",
+        ordinal: 2,
+        queuePosition: 2,
+      },
+    ];
+    const projection = {
+      thread: { id: "thread", activeProviderThreadId: "provider-thread" },
+      messages: [
+        { id: "message-first", text: "First" },
+        { id: "message-second", text: "Second" },
+      ],
+      providerTurns: [],
+      providerThreads: [],
+      providerSessions: [],
+    };
+
+    // The hold lands on the head, and covers everything behind it.
+    const held = deriveThreadQueueWorkflowState({
+      ...projection,
+      runs: [{ ...runs[0], queueHeld: true }, runs[1]],
+    } as never);
+    expect(held.isHeld).toBe(true);
+    expect(held.queuedRuns.map(({ run }) => run.id)).toEqual(["first", "second"]);
+
+    expect(deriveThreadQueueWorkflowState({ ...projection, runs } as never).isHeld).toBe(false);
+  });
+
   it("removes only the promoted head from the visible queue", () => {
     const state = deriveThreadQueueWorkflowState({
       thread: { id: "thread", activeProviderThreadId: "provider-thread" },
