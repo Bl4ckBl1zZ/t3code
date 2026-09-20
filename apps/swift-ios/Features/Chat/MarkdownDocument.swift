@@ -36,8 +36,10 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     case codeBlock(language: String?, code: String)
     /// A `t3-html` fence, which renders as a live sandboxed embed rather than
     /// as source. The block carries the fence body verbatim; assembling the
-    /// document around it belongs to `HtmlEmbed`.
-    case htmlEmbed(String)
+    /// document around it belongs to `HtmlEmbed`. `terminated` is false while
+    /// the closing fence has not arrived, which is what keeps half a document
+    /// out of the web view.
+    case htmlEmbed(html: String, terminated: Bool)
     case artifactTemplate(CodexArtifactTemplate)
     case thematicBreak
 }
@@ -152,11 +154,13 @@ private struct MarkdownBlockParser {
     private mutating func parseCodeBlock(opening: FenceMarker) -> MarkdownBlock {
         index += 1
         var codeLines: [String] = []
+        var terminated = false
 
         while index < lines.count {
             let line = lines[index]
             if isClosingFence(line, matching: opening) {
                 index += 1
+                terminated = true
                 break
             }
             codeLines.append(line)
@@ -168,7 +172,7 @@ private struct MarkdownBlockParser {
         // else stay code blocks, so an agent cannot get markup executed by
         // labelling a fence with a language the renderer happens to know.
         if HtmlEmbed.isEmbedLanguage(opening.language) {
-            return .htmlEmbed(code)
+            return .htmlEmbed(html: code, terminated: terminated)
         }
         return .codeBlock(language: opening.language, code: code)
     }

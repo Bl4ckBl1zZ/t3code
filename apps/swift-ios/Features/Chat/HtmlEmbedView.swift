@@ -47,9 +47,26 @@ enum HtmlEmbed {
     /// without limit.
     static let runawayHeightLimit: CGFloat = 20_000
 
-    /// Streaming appends re-render Markdown per token; only reload the web view
-    /// once the fence content has stopped changing.
-    static let settleDelay: Duration = .milliseconds(400)
+    /// Where an embed is in its life.
+    ///
+    /// An embed goes live only once its fence closes. Until then the source is
+    /// half a document, which paints almost nothing — most embeds open with
+    /// `<style>` — while costing a full web view reload per token, so a
+    /// streaming embed used to read as a dead box that popped at the end.
+    enum Phase: Equatable, Sendable {
+        /// The fence closed: the source is final and safe to load.
+        case ready
+        /// The fence is still open and the turn is still going.
+        case building
+        /// The turn ended mid-fence. No embed is coming; say so rather than
+        /// leaving a placeholder breathing forever.
+        case incomplete
+    }
+
+    static func phase(terminated: Bool, isStreaming: Bool) -> Phase {
+        if terminated { return .ready }
+        return isStreaming ? .building : .incomplete
+    }
 
     /// The `window.webkit.messageHandlers` name the reporter script posts to.
     static let heightMessageHandlerName = "t3HtmlEmbedHeight"
@@ -180,6 +197,86 @@ enum HtmlEmbed {
     }
 }
 
+/// Whether the message around a block is still being written.
+///
+/// Set once per message rather than threaded through every block: only the
+/// embed cares, and only to tell "still coming" from "never coming".
+private struct MarkdownIsStreamingKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var markdownIsStreaming: Bool {
+        get { self[MarkdownIsStreamingKey.self] }
+        set { self[MarkdownIsStreamingKey.self] = newValue }
+    }
+}
+
+/// What stands in for an embed whose fence has not closed.
+///
+/// One opacity curve on the whole stack rather than per bar, so the compositor
+/// animates a single layer — the native counterpart of the web app's stepped
+/// skeleton breath. Scene, visibility and reduced-motion changes stop it, the
+/// same discipline every other repeating animation in the app follows.
+private struct HtmlEmbedPlaceholder: View {
+    let isBuilding: Bool
+
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @SwiftUI.Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
+    @State private var dimmed = false
+
+    /// Enough shape to read as a pending embed; fixed, so the card never reflows.
+    private static let barWidths: [CGFloat] = [0.4, 0.8, 0.6]
+    private let barHeight: CGFloat = 10
+    private var animates: Bool { isBuilding && !reduceMotion && visible && scenePhase == .active }
+
+    var body: some View {
+        Group {
+            if isBuilding {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Self.barWidths, id: \.self) { width in
+                        // Proportional to the card, which is the reader's whole
+                        // job here: a container-relative frame would measure the
+                        // transcript instead and overflow the card it sits in.
+                        GeometryReader { proxy in
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(T3Colors.textTertiary.opacity(0.28))
+                                .frame(width: proxy.size.width * width, height: barHeight)
+                        }
+                        .frame(height: barHeight)
+                    }
+                }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 14)
+                .opacity(dimmed ? 0.55 : 1)
+                .accessibilityElement()
+                .accessibilityLabel("Building interactive embed")
+                .onAppear { visible = true; synchronize() }
+                .onDisappear { visible = false; synchronize() }
+                .onChange(of: animates) { synchronize() }
+            } else {
+                Text("The agent stopped before finishing this embed.")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func synchronize() {
+        guard animates else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { dimmed = false }
+            return
+        }
+        withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { dimmed = true }
+    }
+}
+
 /// A live, sandboxed `t3-html` embed rendered inline in the transcript.
 ///
 /// This is the one chat block that genuinely cannot be native SwiftUI:
@@ -188,19 +285,20 @@ enum HtmlEmbed {
 /// sizing — stays SwiftUI.
 struct HtmlEmbedView: View {
     private let html: String
+    private let terminated: Bool
 
     @SwiftUI.Environment(\.colorScheme) private var colorScheme
-    /// Streaming revisions arrive per token. Reloading the web view on each one
-    /// would restart the document mid-keystroke, so the rendered source lags the
-    /// prop by `settleDelay` and only catches up once it stops changing. Seeded
-    /// with the initial value so a completed message renders immediately.
-    @State private var settledHTML: String
+    @SwiftUI.Environment(\.markdownIsStreaming) private var isStreaming
     @State private var inlineHeight = HtmlEmbed.defaultHeight
     @State private var isExpanded = false
 
-    init(html: String) {
+    init(html: String, terminated: Bool) {
         self.html = html
-        _settledHTML = State(initialValue: html)
+        self.terminated = terminated
+    }
+
+    private var phase: HtmlEmbed.Phase {
+        HtmlEmbed.phase(terminated: terminated, isStreaming: isStreaming)
     }
 
     var body: some View {
@@ -209,14 +307,20 @@ struct HtmlEmbedView: View {
             Rectangle()
                 .fill(T3Colors.separator)
                 .frame(height: 1)
-            HtmlEmbedWebView(
-                document: document,
-                isScrollEnabled: false,
-                onReportedHeight: applyReportedHeight
-            )
-            // The embed owns its height rather than scrolling inside a fixed
-            // box: the document reports what it needs and the row grows to it.
-            .frame(height: inlineHeight)
+            if phase == .ready {
+                // The web view mounts once, with final source: no reload per
+                // token, and nothing to measure until there is something to see.
+                HtmlEmbedWebView(
+                    document: document,
+                    isScrollEnabled: false,
+                    onReportedHeight: applyReportedHeight
+                )
+                // The embed owns its height rather than scrolling inside a fixed
+                // box: the document reports what it needs and the row grows to it.
+                .frame(height: inlineHeight)
+            } else {
+                HtmlEmbedPlaceholder(isBuilding: phase == .building)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(T3Colors.surface)
@@ -225,9 +329,6 @@ struct HtmlEmbedView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(T3Colors.border, lineWidth: 1)
         }
-        .task(id: html) {
-            await settleSource()
-        }
         .sheet(isPresented: $isExpanded) {
             expandedEmbed
         }
@@ -235,7 +336,7 @@ struct HtmlEmbedView: View {
 
     private var document: String {
         HtmlEmbed.document(
-            html: settledHTML,
+            html: html,
             theme: colorScheme == .dark ? .dark : .light
         )
     }
@@ -247,17 +348,25 @@ struct HtmlEmbedView: View {
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
-            Button {
-                isExpanded = true
-            } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(T3Typography.control)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .frame(minWidth: 32, minHeight: 32)
+            if phase == .building {
+                Text("Building")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .padding(.trailing, 8)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Expand embed")
-            .accessibilityHint("Opens this embed full screen")
+            if phase == .ready {
+                Button {
+                    isExpanded = true
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(T3Typography.control)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .frame(minWidth: 32, minHeight: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Expand embed")
+                .accessibilityHint("Opens this embed full screen")
+            }
         }
         .padding(.leading, 13)
         .padding(.trailing, 5)
@@ -301,13 +410,6 @@ struct HtmlEmbedView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(T3Colors.surface)
-    }
-
-    private func settleSource() async {
-        guard settledHTML != html else { return }
-        try? await Task.sleep(for: HtmlEmbed.settleDelay)
-        guard !Task.isCancelled else { return }
-        settledHTML = html
     }
 
     private func applyReportedHeight(_ reported: Double) {

@@ -29,7 +29,7 @@ final class HtmlEmbedTests: XCTestCase {
             document.blocks,
             [
                 .paragraph("Before"),
-                .htmlEmbed("<p>Hello</p>\n<button onclick=\"alert(1)\">Go</button>"),
+                .htmlEmbed(html: "<p>Hello</p>\n<button onclick=\"alert(1)\">Go</button>", terminated: true),
                 .paragraph("After"),
             ]
         )
@@ -86,11 +86,12 @@ final class HtmlEmbedTests: XCTestCase {
             """
         )
 
-        XCTAssertEqual(document.blocks, [.htmlEmbed("<p>Tilde</p>")])
+        XCTAssertEqual(document.blocks, [.htmlEmbed(html: "<p>Tilde</p>", terminated: true)])
     }
 
-    /// Streaming shows a fence long before its closing marker arrives; the
-    /// partial body is still an embed (the view debounces before loading it).
+    /// Streaming shows a fence long before its closing marker arrives. The
+    /// partial body is still an embed block, but an unterminated one: the view
+    /// stands a placeholder in for it rather than loading half a document.
     func testUnclosedFenceStillProducesAnEmbed() {
         let document = MarkdownDocument(
             parsing: """
@@ -99,7 +100,7 @@ final class HtmlEmbedTests: XCTestCase {
             """
         )
 
-        XCTAssertEqual(document.blocks, [.htmlEmbed("<p>Still streaming")])
+        XCTAssertEqual(document.blocks, [.htmlEmbed(html: "<p>Still streaming", terminated: false)])
     }
 
     func testRenderedDocumentCarriesTheEmbedThrough() {
@@ -108,7 +109,17 @@ final class HtmlEmbedTests: XCTestCase {
 
         let rendered = cache.documentImmediately(for: revision)
 
-        XCTAssertEqual(rendered?.blocks, [.htmlEmbed("<p>Hi</p>")])
+        XCTAssertEqual(rendered?.blocks, [.htmlEmbed(html: "<p>Hi</p>", terminated: true)])
+    }
+
+    func testPhaseWaitsForTheClosingFenceAndThenStops() {
+        // Mid-turn the embed is still coming; the placeholder breathes.
+        XCTAssertEqual(HtmlEmbed.phase(terminated: false, isStreaming: true), .building)
+        // The turn ended mid-fence: no embed is coming, so the card goes still.
+        XCTAssertEqual(HtmlEmbed.phase(terminated: false, isStreaming: false), .incomplete)
+        // A closed fence is final source even while later blocks stream in.
+        XCTAssertEqual(HtmlEmbed.phase(terminated: true, isStreaming: true), .ready)
+        XCTAssertEqual(HtmlEmbed.phase(terminated: true, isStreaming: false), .ready)
     }
 
     // MARK: Content Security Policy

@@ -138,7 +138,7 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     /// Carried through unrendered: the embed's document is assembled on the
     /// main actor from the current colour scheme, which this render task does
     /// not know and must not capture.
-    case htmlEmbed(String)
+    case htmlEmbed(html: String, terminated: Bool)
     case artifactTemplate(CodexArtifactTemplate)
     case thematicBreak
 }
@@ -382,8 +382,8 @@ final class MarkdownRenderCache: @unchecked Sendable {
             case let .codeBlock(language, code):
                 rendered = .codeBlock(language: language, code: code)
 
-            case let .htmlEmbed(html):
-                rendered = .htmlEmbed(html)
+            case let .htmlEmbed(html, terminated):
+                rendered = .htmlEmbed(html: html, terminated: terminated)
 
             case let .artifactTemplate(template):
                 rendered = .artifactTemplate(template)

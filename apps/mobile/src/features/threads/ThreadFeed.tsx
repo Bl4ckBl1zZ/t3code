@@ -4,6 +4,7 @@ import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { findOpenHtmlEmbedFence } from "@t3tools/client-runtime/html-embed-fence";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/userMessage";
 import { requestThreadFullHistory } from "@t3tools/client-runtime/state/threads";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
@@ -77,7 +78,12 @@ import {
 
 import { AppText as Text } from "../../components/AppText";
 import { CopyTextButton } from "../../components/CopyTextButton";
-import { HtmlEmbedView, isHtmlEmbedLanguage } from "../../components/HtmlEmbedView";
+import {
+  HTML_EMBED_FENCE_LANGUAGE,
+  HtmlEmbedStreamContext,
+  HtmlEmbedView,
+  isHtmlEmbedLanguage,
+} from "../../components/HtmlEmbedView";
 import {
   parseReviewCommentMessageSegments,
   type ReviewInlineComment,
@@ -354,6 +360,56 @@ interface ReviewCommentColors {
 
 function renderMarkdownHtmlEmbed({ html }: { readonly html: string }) {
   return <HtmlEmbedView html={html} />;
+}
+
+/**
+ * Assistant markdown, plus the one thing an embed cannot work out for itself:
+ * whether its own fence has closed yet.
+ *
+ * Only a message that is still writing an embed provides the context, so every
+ * settled message in the transcript renders exactly as it did before.
+ */
+function AssistantMarkdown(props: {
+  readonly text: string;
+  readonly streaming: boolean;
+  readonly styles: MarkdownStyleSet;
+  readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  readonly onLinkPress: (href: string) => void;
+}) {
+  const openFence = useMemo(
+    () =>
+      props.text.includes(HTML_EMBED_FENCE_LANGUAGE) ? findOpenHtmlEmbedFence(props.text) : null,
+    [props.text],
+  );
+  const stream = useMemo(
+    () => ({ openFence, streaming: props.streaming }),
+    [openFence, props.streaming],
+  );
+
+  const markdown = hasNativeSelectableMarkdownText() ? (
+    <SelectableMarkdownText
+      markdown={props.text}
+      skills={props.skills}
+      textStyle={props.styles.nativeTextStyle}
+      renderHtmlEmbed={renderMarkdownHtmlEmbed}
+      onLinkPress={props.onLinkPress}
+    />
+  ) : (
+    <Markdown
+      options={{ gfm: true }}
+      renderers={props.styles.renderers}
+      styles={props.styles.styles}
+      theme={props.styles.theme}
+    >
+      {props.text}
+    </Markdown>
+  );
+
+  if (!openFence) return markdown;
+
+  return (
+    <HtmlEmbedStreamContext.Provider value={stream}>{markdown}</HtmlEmbedStreamContext.Provider>
+  );
 }
 
 const failedMarkdownFaviconHosts = new Set<string>();
@@ -1333,24 +1389,13 @@ function renderFeedEntry(
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
         {message.text.trim().length > 0 ? (
-          hasNativeSelectableMarkdownText() ? (
-            <SelectableMarkdownText
-              markdown={message.text}
-              skills={props.skills}
-              textStyle={styles.nativeTextStyle}
-              renderHtmlEmbed={renderMarkdownHtmlEmbed}
-              onLinkPress={props.onMarkdownLinkPress}
-            />
-          ) : (
-            <Markdown
-              options={{ gfm: true }}
-              renderers={styles.renderers}
-              styles={styles.styles}
-              theme={styles.theme}
-            >
-              {message.text}
-            </Markdown>
-          )
+          <AssistantMarkdown
+            text={message.text}
+            streaming={message.streaming}
+            styles={styles}
+            skills={props.skills}
+            onLinkPress={props.onMarkdownLinkPress}
+          />
         ) : null}
         {attachments.map((attachment) => {
           return (

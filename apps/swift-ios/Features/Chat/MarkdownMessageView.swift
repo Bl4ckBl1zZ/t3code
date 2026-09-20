@@ -42,6 +42,10 @@ struct MarkdownMessageView: View {
             if let displayDocument {
                 MarkdownBlocksView(blocks: highlightedBlocks(displayDocument))
                     .environment(\.markdownGallery, MarkdownGallery.images(in: displayDocument.blocks))
+                    // An unterminated embed means something different mid-turn
+                    // than it does once the turn is over: still coming, or never
+                    // coming. Only the message knows which.
+                    .environment(\.markdownIsStreaming, isStreaming)
             } else {
                 // Parsing waits briefly so token-by-token streaming cancels stale revisions
                 // instead of scheduling work for content the user will never see.
@@ -290,8 +294,8 @@ private struct MarkdownBlockView: View, Equatable {
         case let .codeBlock(language, code, citationRange):
             MarkdownCodeBlockView(language: language, code: code, citationRange: citationRange)
 
-        case let .htmlEmbed(html):
-            HtmlEmbedView(html: html)
+        case let .htmlEmbed(html, terminated):
+            HtmlEmbedView(html: html, terminated: terminated)
 
         case let .artifactTemplate(template):
             NativeArtifactTemplateCard(template: template)

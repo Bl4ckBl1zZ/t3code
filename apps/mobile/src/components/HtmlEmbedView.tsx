@@ -1,5 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import type { OpenHtmlEmbedFence } from "@t3tools/client-runtime/html-embed-fence";
+import { htmlEmbedPhase } from "@t3tools/client-runtime/html-embed-fence";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, View } from "react-native";
+import Animated, {
+  cancelAnimation,
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { AppText as Text } from "./AppText";
@@ -106,10 +117,93 @@ function EmbedWebView(props: {
   );
 }
 
+export interface HtmlEmbedStream {
+  /** The message's unterminated embed fence, if it has one. */
+  readonly openFence: OpenHtmlEmbedFence | null;
+  readonly streaming: boolean;
+}
+
+const SETTLED_STREAM: HtmlEmbedStream = { openFence: null, streaming: false };
+
+/**
+ * How the message around an embed is going.
+ *
+ * Provided only by messages that have an embed still being written, so every
+ * settled message in the transcript keeps the default and re-renders nothing.
+ */
+export const HtmlEmbedStreamContext = createContext<HtmlEmbedStream>(SETTLED_STREAM);
+
+/** Enough shape to read as a pending embed; fixed, so the card never reflows. */
+const PLACEHOLDER_BAR_WIDTHS = ["40%", "80%", "60%"] as const;
+
+/**
+ * What stands in for an embed whose fence has not closed.
+ *
+ * One opacity curve on the whole stack rather than per bar, driven on the UI
+ * thread, so the placeholder costs a single animated layer however many bars
+ * sit under it.
+ */
+function HtmlEmbedPlaceholder(props: { readonly building: boolean }) {
+  const building = props.building;
+  const reducedMotion = useReducedMotion();
+  const breath = useSharedValue(1);
+
+  useEffect(() => {
+    if (!building || reducedMotion) {
+      cancelAnimation(breath);
+      breath.value = 1;
+      return;
+    }
+    breath.value = withRepeat(
+      withTiming(0.55, { duration: 1200, easing: Easing.inOut(Easing.quad) }),
+      -1,
+      true,
+    );
+    return () => cancelAnimation(breath);
+  }, [breath, building, reducedMotion]);
+
+  const breathStyle = useAnimatedStyle(() => ({ opacity: breath.value }));
+
+  if (!building) {
+    // The turn ended mid-fence. There is no embed coming, and a card that kept
+    // breathing would be a spinner that never resolves.
+    return (
+      <Text className="px-3 py-3 text-xs text-foreground-muted">
+        The agent stopped before finishing this embed.
+      </Text>
+    );
+  }
+
+  return (
+    <Animated.View
+      accessibilityRole="progressbar"
+      accessibilityLabel="Building interactive embed"
+      className="gap-2.5 px-3 py-3.5"
+      style={breathStyle}
+    >
+      {PLACEHOLDER_BAR_WIDTHS.map((width) => (
+        <View key={width} className="h-2.5 rounded-sm bg-foreground-muted/20" style={{ width }} />
+      ))}
+    </Animated.View>
+  );
+}
+
 export function HtmlEmbedView(props: { readonly html: string }) {
   const { themeAppearance: theme } = useAppearancePreferences();
+  const stream = useContext(HtmlEmbedStreamContext);
+  const phase = htmlEmbedPhase({
+    openFence: stream.openFence,
+    streaming: stream.streaming,
+    html: props.html,
+  });
+  const isReady = phase === "ready";
   const settledHtml = useSettledValue(props.html, SETTLE_DELAY_MS);
-  const document = useMemo(() => buildHtmlEmbedDocument(settledHtml, theme), [settledHtml, theme]);
+  // Half a document paints almost nothing and costs a full web view reload per
+  // settle, so an unfinished fence never reaches the WebView at all.
+  const document = useMemo(
+    () => (isReady ? buildHtmlEmbedDocument(settledHtml, theme) : ""),
+    [isReady, settledHtml, theme],
+  );
   const [inlineHeight, setInlineHeight] = useState(INLINE_DEFAULT_HEIGHT);
   const [expanded, setExpanded] = useState(false);
   const iconColor = String(useThemeColor("--color-icon-subtle"));
@@ -126,22 +220,31 @@ export function HtmlEmbedView(props: { readonly html: string }) {
         <Text className="flex-1 text-xs text-foreground-muted" numberOfLines={1}>
           Interactive embed
         </Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Expand embed"
-          hitSlop={8}
-          className="size-8 items-center justify-center rounded-md active:opacity-60"
-          onPress={() => setExpanded(true)}
-        >
-          <SymbolView name="arrow.up.left.and.arrow.down.right" size={15} tintColor={iconColor} />
-        </Pressable>
+        {phase === "building" ? (
+          <Text className="px-2 text-xs text-foreground-muted">Building</Text>
+        ) : null}
+        {isReady ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Expand embed"
+            hitSlop={8}
+            className="size-8 items-center justify-center rounded-md active:opacity-60"
+            onPress={() => setExpanded(true)}
+          >
+            <SymbolView name="arrow.up.left.and.arrow.down.right" size={15} tintColor={iconColor} />
+          </Pressable>
+        ) : null}
       </View>
-      <EmbedWebView
-        html={document}
-        scrollEnabled={false}
-        style={{ height: inlineHeight }}
-        onHeight={handleHeight}
-      />
+      {isReady ? (
+        <EmbedWebView
+          html={document}
+          scrollEnabled={false}
+          style={{ height: inlineHeight }}
+          onHeight={handleHeight}
+        />
+      ) : (
+        <HtmlEmbedPlaceholder building={phase === "building"} />
+      )}
       <Modal
         visible={expanded}
         animationType="slide"

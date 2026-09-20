@@ -104,6 +104,38 @@ describe("ChatMarkdown file option chips", () => {
   });
 });
 
+describe("ChatMarkdown interactive embeds", () => {
+  const openFence = 'Intro:\n\n```t3-html\n<style>.a{color:red}</style>\n<div class="a">hi</div>';
+
+  it("keeps half a document out of the frame while the fence is open", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown cwd="/tmp/project" text={openFence} isStreaming />,
+    );
+
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("Building");
+  });
+
+  it("runs the embed as soon as its fence closes, mid-message", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={`${openFence}\n\`\`\`\n\nstill writing`}
+        isStreaming
+      />,
+    );
+
+    expect(html).toContain("<iframe");
+  });
+
+  it("stops waiting when the turn ended mid-fence", () => {
+    const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={openFence} />);
+
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("stopped before finishing this embed");
+  });
+});
+
 describe("ChatMarkdown heading levels", () => {
   it("exposes headings below the host heading without changing their tags", () => {
     const html = renderToStaticMarkup(
