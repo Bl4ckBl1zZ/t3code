@@ -85,6 +85,11 @@ final class ProjectFaviconStore {
 
 /// The repo icon a thread row shows: the project's favicon when it has one,
 /// a name-derived Lucide icon otherwise (and while loading).
+///
+/// The favicon arrives as whatever file the repo keeps — a PNG, an ICO, or an
+/// SVG — so it is decoded through the shared icon store rather than handed to
+/// `AsyncImage`, which has no SVG decoder and would leave those projects on
+/// the derived icon while re-downloading the file on every appearance.
 struct ProjectFaviconBadge<Fallback: View>: View {
     let environmentID: String?
     let workspaceRoot: String?
@@ -95,28 +100,39 @@ struct ProjectFaviconBadge<Fallback: View>: View {
     @ViewBuilder let fallback: Fallback
 
     private let store = ProjectFaviconStore.shared
+    @State private var loaded: (url: URL, image: UIImage?)?
+
+    /// A chosen icon is the project's answer; the repo's own file is never
+    /// resolved or drawn behind it.
+    private var drawsChosenIcon: Bool {
+        projectIcon?.kind == "emoji" || projectIcon?.kind == "lucide"
+    }
+
+    private var faviconURL: URL? {
+        guard !drawsChosenIcon else { return nil }
+        return store.url(
+            environmentID: environmentID,
+            workspaceRoot: workspaceRoot,
+            faviconPath: faviconPath
+        )
+    }
+
+    private var favicon: UIImage? {
+        guard let url = faviconURL else { return nil }
+        if loaded?.url == url { return loaded?.image }
+        return NativeIconImageStore.projectFavicons.cachedImage(for: url)
+    }
 
     var body: some View {
         Group {
-            if let projectIcon, projectIcon.kind == "emoji" || projectIcon.kind == "lucide" {
+            if let projectIcon, drawsChosenIcon {
                 NativeProjectIcon(icon: projectIcon, size: size)
-            } else if let url = store.url(
-                environmentID: environmentID,
-                workspaceRoot: workspaceRoot,
-                faviconPath: faviconPath
-            ) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
-                        automaticFallback
-                    }
-                }
-                .frame(width: size, height: size)
-                .clipShape(RoundedRectangle(cornerRadius: size * 0.25))
+            } else if let favicon {
+                Image(uiImage: favicon)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(RoundedRectangle(cornerRadius: size * 0.25))
             } else {
                 automaticFallback
             }
@@ -124,12 +140,18 @@ struct ProjectFaviconBadge<Fallback: View>: View {
         .task(
             id: (environmentID ?? "") + "|" + (workspaceRoot ?? "") + "|" + (faviconPath ?? "") + "|" + (projectIcon?.kind ?? "")
         ) {
-            guard projectIcon?.kind != "lucide" && projectIcon?.kind != "emoji" else { return }
+            guard !drawsChosenIcon else { return }
             store.resolve(
                 environmentID: environmentID,
                 workspaceRoot: workspaceRoot,
                 faviconPath: faviconPath
             )
+        }
+        .task(id: faviconURL) {
+            guard let url = faviconURL else { return }
+            let image = await NativeIconImageStore.projectFavicons.image(for: url)
+            guard !Task.isCancelled else { return }
+            loaded = (url, image)
         }
         .accessibilityHidden(true)
     }
