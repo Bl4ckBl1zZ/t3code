@@ -433,7 +433,21 @@ public final class FeatureRootModel {
         }
     }
 
+    /// True while a thread exists only as a queued creation in this device's
+    /// outbox. The server has never seen its id, so there is nothing to load
+    /// or stream for it until delivery lands.
+    public func isAwaitingCreation(_ threadID: String) -> Bool {
+        pendingThreadsByID[threadID] != nil
+    }
+
     public func detail(for id: String, force: Bool = false) async -> FeatureThreadDetail? {
+        // Asking the server for a thread it has never been told about answers
+        // "no such thread", which reads as a deleted thread rather than one
+        // still on its way there. The optimistic transcript stands in until
+        // `isAwaitingCreation` turns false.
+        if isAwaitingCreation(id) {
+            return details[id]
+        }
         if !force, let cached = details[id] {
             return cached
         }
@@ -1268,14 +1282,18 @@ public final class FeatureRootModel {
                         )
                         guard !Task.isCancelled,
                               outboxGeneration == generation else { return false }
-                        if !(await completeQueuedSubmission(submission)) {
-                            needsRetry = true
-                        }
+                        // The server's row lands before the optimistic one is
+                        // retired. Retiring first leaves the thread in neither
+                        // list across the outbox write, and a snapshot arriving
+                        // in that gap reads the open thread as deleted.
                         if thread.id != submission.threadID {
                             removeThread(id: submission.threadID)
                             removeDetail(id: submission.threadID)
                         }
                         upsert(thread)
+                        if !(await completeQueuedSubmission(submission)) {
+                            needsRetry = true
+                        }
                     } else {
                         try await client.sendMessage(
                             threadID: submission.threadID,
