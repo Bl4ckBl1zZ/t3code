@@ -298,6 +298,9 @@ export function threadFeedActivityHasRow(activity: ThreadFeedActivity): boolean 
 }
 
 function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"] {
+  // The item status describes this record; the notification's own outcome
+  // describes the work it is reporting on, which is what the row means.
+  if (item.type === "notification") return item.outcome === "failed" ? "failure" : null;
   if (item.type === "error") {
     if (item.status === "failed") return "failure";
     return item.status === "completed" ? "success" : "neutral";
@@ -320,6 +323,7 @@ function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"]
 }
 
 function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
+  if (item.type === "notification") return "zap";
   switch (item.type) {
     case "reasoning":
       return "agent";
@@ -347,6 +351,7 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
       return "hammer";
     case "run_interrupt_request":
     case "run_interrupt_result":
+    case "system_notice":
       return "warning";
     case "error":
       return "alert";
@@ -377,6 +382,8 @@ function itemSummary(
   item: OrchestrationV2TurnItem,
   toolPresentation: T3McpToolPresentation | null = null,
 ): string {
+  if (item.type === "notification") return item.summary;
+  if (item.type === "system_notice") return item.message;
   const title = item.title?.trim();
   if (title) return toolPresentation?.displayName ?? capitalizePhrase(title);
   switch (item.type) {
@@ -462,7 +469,10 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
         : `${item.files.length} changed files`;
     case "run_interrupt_request":
     case "run_interrupt_result":
+    case "system_notice":
       return item.message || null;
+    case "notification":
+      return item.detail ?? null;
     case "error":
       // Provider failures arrive wrapped in adapter names, run ids and
       // provider-thread ids. Present the operational next step instead.

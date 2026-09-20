@@ -63,6 +63,7 @@ export const PROVIDER_OPTIONS: Array<{
 ];
 
 export type WorkLogToolLifecycleStatus =
+  | "idle"
   | "inProgress"
   | "completed"
   | "failed"
@@ -374,6 +375,8 @@ function projectedWorkEntryStatus(
       return "inProgress";
     case "completed":
       return "completed";
+    case "idle":
+      return "idle";
     case "failed":
       return "failed";
     case "cancelled":
