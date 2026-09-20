@@ -205,6 +205,11 @@ the conversation and in **Settings** → **Connections**. Follow the action show
 be able to update and reconnect the server for you, or it may ask you to update the desktop app or
 run a copied command on the server machine.
 
+A version gap is usually only a warning. If the two ends no longer speak the same conversation
+protocol at all, T3 Code stops before connecting and says which side to update, rather than opening
+a session that misreads what the other end sends. A server that predates this check still connects
+normally.
+
 If T3 Connect cannot connect, check the date and time on both devices, then try again.
 
 Finish active work before updating because the server restarts briefly. For step-by-step guidance,

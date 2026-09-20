@@ -99,6 +99,15 @@ final class ClientConnectionIdentityTests: XCTestCase {
         XCTAssertEqual(query["clientOsMajorVersion"], "27")
         XCTAssertEqual(query["clientDeviceModel"], "iPhone17,2")
         XCTAssertEqual(items.filter { $0.name == "clientSurface" }.count, 1)
+        // The server turns away an upgrade that names a protocol it cannot
+        // speak, so this has to ride on every socket, exactly once.
+        XCTAssertEqual(
+            query[OrchestrationProtocol.queryItemName],
+            String(OrchestrationProtocol.version)
+        )
+        XCTAssertEqual(
+            items.filter { $0.name == OrchestrationProtocol.queryItemName }.count, 1
+        )
     }
 
     private func queryDictionary(_ items: [URLQueryItem]) -> [String: String] {

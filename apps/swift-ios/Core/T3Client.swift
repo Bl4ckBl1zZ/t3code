@@ -54,6 +54,10 @@ public actor T3Client {
             // first: the base URL is user-supplied and a reconnect reuses it.
             query.removeAll { ClientConnectionIdentity.queryItemNames.contains($0.name) }
             query.append(contentsOf: connectionIdentity.queryItems)
+            // Named so a server that has moved past this protocol turns the
+            // upgrade away instead of handing us frames we cannot decode.
+            query.removeAll { $0.name == OrchestrationProtocol.queryItemName }
+            query.append(OrchestrationProtocol.queryItem)
             components.queryItems = query
             guard let url = components.url else { throw PairingURLError.invalidURL }
             return url

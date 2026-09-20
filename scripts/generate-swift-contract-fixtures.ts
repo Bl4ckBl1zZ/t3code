@@ -1,3 +1,4 @@
+import { ORCHESTRATION_PROTOCOL_VERSION } from "../packages/contracts/src/environment.ts";
 import { WsHermesWorkModelAuthCancelRpc } from "../packages/contracts/src/rpc.ts";
 import { OrchestrationV2ProviderSession } from "../packages/contracts/src/orchestrationV2.ts";
 import { HermesWorkSetupState } from "../packages/contracts/src/hermesWorkSetup.ts";
@@ -1985,3 +1986,25 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(hermesWorkPath, hermesWorkFixture);
+
+// The Swift client mirrors the protocol version by hand. Pin it here so a bump
+// in `packages/contracts` fails the Swift test instead of shipping a build the
+// new server turns away.
+const orchestrationProtocolPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "orchestrationProtocol.json",
+);
+const orchestrationProtocolFixture = `${JSON.stringify(
+  { version: ORCHESTRATION_PROTOCOL_VERSION },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(orchestrationProtocolPath) ||
+    NodeFS.readFileSync(orchestrationProtocolPath, "utf8") !== orchestrationProtocolFixture
+  ) {
+    console.error("[swift-fixtures] orchestrationProtocol.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(orchestrationProtocolPath, orchestrationProtocolFixture);

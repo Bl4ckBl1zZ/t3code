@@ -1583,11 +1583,8 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   line, which upstream has no equivalent of, because that single line is the whole payload of
   our background-command strip. Every other command sends no output at all, matching upstream:
   a finished command keeps its exit code and `outputIndicatesFailure`, not its transcript.
-  Protocol negotiation is
-  ported but deliberately uncalled: our servers advertise no `orchestrationProtocolVersion`, so
-  enforcing version 2 today would reject every existing fork server, including remote,
-  Tailscale and T3 Connect ones. `connection/compatibility.ts` gains callers only in the change
-  that makes our server advertise the version. Upstream's keyset thread paging
+  Protocol negotiation lands in a later commit,
+  described below. Upstream's keyset thread paging
   (`OrchestrationV2ThreadBoundedSnapshot`, `threadHistoryHttp`) and its V1 `subagentRuntime`
   bridge remain unadopted, per the entries above.
 
@@ -1605,3 +1602,19 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   Upstream's `CodexTurnTokenUsage`/`ClaudeTurnTokenUsage` accumulators are not carried: they
   feed a V1 usage-record surface this fork does not have. The native iOS client has a
   `FeatureContextMeter` but is still never handed a reading, as upstream's is not either.
+
+- Protocol negotiation from PR #2829 is now wired up on both ends, tolerant in the one place
+  upstream is strict. Our server advertises `orchestrationProtocolVersion` on its descriptor and
+  turns away a `/ws` upgrade with HTTP 426; every client announces the version on the socket URL,
+  and pairing refuses a server that names a protocol we cannot speak. The divergence is what
+  _silence_ means: upstream reads an unlabeled server or client as version 1, a genuinely
+  different protocol its builds cannot speak, and blocks. Every fork server and client shipped so
+  far already speaks this wire and simply never said so, so treating silence as incompatible
+  would strand every deployment that has not updated yet -- including the remote, Tailscale and
+  T3 Connect servers a user cannot reach from the client that just refused to connect. Both ends
+  therefore block only on an explicitly named mismatch. Upstream's registry-wide
+  `setCompatibility` sweep and its cloud-environment connect lists are not carried; they need
+  registry surface this fork does not have. The SwiftUI client mirrors the constant by hand, so
+  `scripts/generate-swift-contract-fixtures.ts` now emits `orchestrationProtocol.json` and a
+  Swift test pins the two together -- a bump in `packages/contracts` fails there instead of
+  shipping an iOS build the updated server refuses.

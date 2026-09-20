@@ -173,7 +173,7 @@ describe("ConnectionResolver", () => {
         label: "Primary",
         httpBaseUrl: "http://127.0.0.1:3777",
         socketUrl:
-          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct",
+          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=2",
         httpAuthorization: null,
         target,
       });
@@ -211,7 +211,7 @@ describe("ConnectionResolver", () => {
       });
 
       expect(yield* broker.prepare(catalogEntry(target))).toMatchObject({
-        socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop",
+        socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=2",
         httpAuthorization: { _tag: "Bearer", token: "desktop-bearer" },
         target,
       });
@@ -275,7 +275,7 @@ describe("ConnectionResolver", () => {
         environmentId: ENVIRONMENT_ID,
         label: "Authorized relay environment",
         httpBaseUrl: ENDPOINT.httpBaseUrl,
-        socketUrl: "wss://authorized.example.test/ws?wsTicket=dpop",
+        socketUrl: "wss://authorized.example.test/ws?wsTicket=dpop&orchestrationProtocol=2",
         httpAuthorization: {
           _tag: "Dpop",
           accessToken: "dpop-access-token",
