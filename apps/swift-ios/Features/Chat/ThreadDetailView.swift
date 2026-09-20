@@ -43,6 +43,10 @@ public struct ThreadDetailView: View {
     @State private var feedbackFailure: String?
     @State private var workConversationFailure: String?
     @State private var didRestoreDraft = false
+    /// This thread was entered while its creation was still in the outbox, so
+    /// its optimistic transcript is already on screen and the load that follows
+    /// delivery is a swap rather than an opening.
+    @State private var openedFromOutbox = false
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var toolSurface: FeatureThreadToolSurface?
     /// A pending checkpoint restore, previewed in a sheet before it commits.
@@ -145,12 +149,22 @@ public struct ThreadDetailView: View {
                 attachments = []
             }
         }
-        .task(id: thread.id) {
+        // Keyed on the creation phase as well as the id: a thread started on
+        // this device opens straight from the outbox, and only becomes
+        // loadable — transcript and live stream — once its creation reaches
+        // the server. That second pass swaps the optimistic transcript for the
+        // real one without an opening spinner over content already on screen,
+        // and leaves the draft alone so it cannot overwrite what was typed
+        // while creation was in flight.
+        .task(id: threadLoadPhase) {
             let restoreBaseline = composerDraft
             let restoreKey = draftKey
-            isLoading = true
+            openedFromOutbox = openedFromOutbox || model.isAwaitingCreation(thread.id)
+            isLoading = !openedFromOutbox
             _ = await model.detail(for: thread.id, force: true)
-            await restoreDraft(from: restoreBaseline, key: restoreKey)
+            if !didRestoreDraft {
+                await restoreDraft(from: restoreBaseline, key: restoreKey)
+            }
             isLoading = false
         }
         .onChange(of: composerFocused) { if composerFocused { readingHistoryThreadID = nil } }
@@ -329,6 +343,13 @@ public struct ThreadDetailView: View {
 
     private var currentThread: FeatureThread {
         detail?.thread ?? thread
+    }
+
+    /// Identifies what can be loaded for this thread right now. A thread still
+    /// queued in the outbox exists only on this device, so the phase changes —
+    /// and the load runs — when the server takes it over.
+    private var threadLoadPhase: String {
+        model.isAwaitingCreation(thread.id) ? "\(thread.id)#queued" : thread.id
     }
 
     /// The turn in flight, resolved once for the two surfaces that report it:

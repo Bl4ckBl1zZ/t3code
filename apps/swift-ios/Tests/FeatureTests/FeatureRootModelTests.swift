@@ -588,6 +588,83 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func testQueuedThreadCreationServesItsOptimisticTranscript() async {
+        let client = FeatureClientStub()
+        client.snapshot = disconnectedProjectSnapshot()
+        client.loadThreadError = URLError(.badServerResponse)
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        guard let pending = await model.startTask(
+            NewTaskRequest(
+                projectID: "project-1",
+                prompt: "Ship the icons",
+                selection: .init(providerID: "codex", modelID: "gpt-5.6-sol"),
+                runtimeMode: .fullAccess,
+                interactionMode: .standard
+            )
+        ) else {
+            Issue.record("The queued creation did not produce a thread")
+            return
+        }
+        await model.waitForCurrentOutboxDelivery()
+
+        #expect(model.isAwaitingCreation(pending.id))
+        let detail = await model.detail(for: pending.id, force: true)
+        // The server has never heard of this id, so asking it would only raise
+        // an alert about a thread that is still on its way out.
+        #expect(client.loadThreadCallCount == 0)
+        #expect(model.errorMessage == nil)
+        #expect(detail?.messages.map(\.text) == ["Ship the icons"])
+    }
+
+    @Test
+    func testDeliveredThreadCreationBecomesLoadable() async {
+        let client = FeatureClientStub()
+        client.snapshot = disconnectedProjectSnapshot()
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        guard let pending = await model.startTask(
+            NewTaskRequest(
+                projectID: "project-1",
+                prompt: "Ship the icons",
+                selection: .init(providerID: "codex", modelID: "gpt-5.6-sol"),
+                runtimeMode: .fullAccess,
+                interactionMode: .standard
+            )
+        ) else {
+            Issue.record("The queued creation did not produce a thread")
+            return
+        }
+        await model.waitForCurrentOutboxDelivery()
+        let created = FeatureThread(
+            id: pending.id,
+            projectID: "project-1",
+            environmentID: "environment-1",
+            title: "Ship the icons"
+        )
+        client.createdThread = created
+        client.threadDetail = FeatureThreadDetail(
+            thread: created,
+            messages: [
+                FeatureMessage(id: "message-1", role: .user, text: "Ship the icons"),
+                FeatureMessage(id: "message-2", role: .assistant, text: "On it"),
+            ]
+        )
+        client.snapshot = connectedProjectSnapshot()
+
+        await model.reload()
+        await model.waitForCurrentOutboxDelivery()
+
+        #expect(!model.isAwaitingCreation(pending.id))
+        let detail = await model.detail(for: pending.id, force: true)
+        #expect(client.loadThreadCallCount == 1)
+        #expect(model.errorMessage == nil)
+        #expect(detail?.messages.map(\.text) == ["Ship the icons", "On it"])
+    }
+
+    @Test
     func testNewTaskStartsThreadAndFirstTurnAtomically() async {
         let client = FeatureClientStub()
         let created = FeatureThread(
@@ -1189,6 +1266,39 @@ struct FeatureRootModelTests {
     }
 }
 
+/// One project on one saved environment, with the connection state the outbox
+/// reads to decide between holding a creation and delivering it.
+private func projectSnapshot(connected: Bool) -> FeatureSnapshot {
+    FeatureSnapshot(
+        connection: .init(state: connected ? .connected : .disconnected),
+        environments: [
+            .init(
+                id: "environment-1",
+                name: "Studio",
+                endpoint: "https://studio.example",
+                isActive: true,
+                connectionState: connected ? .connected : .disconnected
+            ),
+        ],
+        projects: [
+            .init(
+                id: "project-1",
+                environmentID: "environment-1",
+                name: "Native",
+                path: "/native"
+            ),
+        ]
+    )
+}
+
+private func disconnectedProjectSnapshot() -> FeatureSnapshot {
+    projectSnapshot(connected: false)
+}
+
+private func connectedProjectSnapshot() -> FeatureSnapshot {
+    projectSnapshot(connected: true)
+}
+
 @MainActor
 private func testRootModel(client: FeatureClientStub) -> FeatureRootModel {
     FeatureRootModel(
@@ -1327,6 +1437,7 @@ private final class FeatureClientStub: FeatureClient {
     var removedEnvironmentID: String?
     var beforeSendMessage: (() throws -> Void)?
     var loadThreadError: (any Error)?
+    var loadThreadCallCount = 0
     var loadEarlierCallCount = 0
     var resolvedInputID: String?
     var resolvedInputAnswers: [String: FeatureInputAnswer]?
@@ -1441,6 +1552,7 @@ private final class FeatureClientStub: FeatureClient {
     func deleteThread(id: String) async throws { if let deleteError { throw deleteError } }
 
     func loadThread(id: String) async throws -> FeatureThreadDetail {
+        loadThreadCallCount += 1
         if let loadThreadError {
             throw loadThreadError
         }
