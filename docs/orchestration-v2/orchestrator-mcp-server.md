@@ -140,7 +140,8 @@ selection model-visible without allowing a request that cannot run.
 
 ## Tool Surface
 
-The server exposes eleven orchestration tools.
+The orchestrator toolkit below exposes fifteen tools. A separate thread toolkit
+adds seventeen more, documented under [Thread Toolkit](#thread-toolkit).
 
 ### `orchestrator_capabilities`
 
@@ -313,6 +314,40 @@ Interrupts a selected active run through the normal V2 `run.interrupt` command.
 Without `runId`, it selects the newest interruptible run. A terminal run is
 returned unchanged, and a thread with no active provider turn returns
 `no_active_run`.
+
+## Thread Toolkit
+
+A second toolkit covers what a caller does to a thread that already exists.
+Every tool resolves the caller's credential first and then the thread, so a
+`threadId` argument can only ever name a thread in the caller's own project;
+omitting it means the calling thread. Writes additionally require a live
+full-access caller whose runtime and interaction modes are at least as broad as
+the target's, which is the same escalation rule delegation uses.
+
+- **Organizing.** `t3_thread_organize` pins, snoozes, settles, archives or marks
+  a thread unread through the ordinary lifecycle commands. `snooze` requires
+  `snoozedUntil`; nothing here schedules future work.
+- **The queue.** `t3_queue_list` pages queued messages in delivery order and
+  `t3_queue_read` returns up to 16,000 characters of one. `t3_queue_edit`,
+  `t3_queue_cancel`, `t3_queue_reorder` and `t3_queue_promote_to_steer` are the
+  same commands the composer's queue strip issues, with the same rules — a run
+  that is no longer queued is rejected, and steering needs a steerable turn.
+- **Pending questions.** `t3_pending_request_list` and `t3_pending_request_read`
+  surface unanswered user-input requests, and `t3_pending_request_respond`
+  answers one. Approval requests are deliberately absent: an agent cannot
+  approve its own permission prompt.
+- **Configuration.** `t3_thread_configuration` reads a thread's model selection
+  and modes; `t3_thread_configure` sets the calling thread's selection only.
+  Permission modes are not settable here.
+- **Lineage.** `t3_thread_fork` and `t3_thread_merge_back` run the existing fork
+  and merge-back commands, and `t3_thread_transfers` reads transfer status.
+  Acceptance means the command committed, not that a provider turn finished.
+- **Search.** `t3_thread_search` runs the app's bounded thread search and then
+  drops matches outside the calling project, so it may return fewer results than
+  `limit`. It is not paginated and is not exhaustive.
+- **Scheduling.** `run_scheduled_task_now` triggers a scheduled task in the
+  calling project immediately. It requires a full-access/default caller, and
+  each call is a new manual run.
 
 ## Delegated Task Lifecycle
 

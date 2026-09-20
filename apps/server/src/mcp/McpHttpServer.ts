@@ -35,6 +35,8 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { ThreadToolkitHandlersLive } from "./toolkits/thread/handlers.ts";
+import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
@@ -406,6 +408,10 @@ export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(Orchestrato
   Layer.provide(OrchestratorMcpService.layer),
 );
 
+export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
+  Layer.provide(ThreadToolkitHandlersLive),
+);
+
 export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
   Layer.provide(WorktreeToolkitHandlersLive),
   Layer.provide(WorktreeMcpService.layer),
@@ -426,6 +432,7 @@ const McpTransportLive = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   OrchestratorToolkitRegistrationLive,
+  ThreadToolkitRegistrationLive,
   WorktreeToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

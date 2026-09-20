@@ -1665,3 +1665,16 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   `queue.resume` command releases the hold and starts the head in the same dispatch. The affordance
   is on the existing queue strip on all three clients (web, Expo, SwiftUI); `isHeld` was already
   derived in `client-runtime` and in the SwiftUI port, and until now nothing could ever set it.
+
+- The MCP thread toolkit from PR #2829 is adopted whole: seventeen tools covering thread
+  organization, the message queue, pending user questions, model configuration, fork and
+  merge-back, transfers, search and scheduled-task run-now, plus the `threadAccess.ts` helpers
+  they share. The presentation half was already here -- every one of these tool names had a
+  label, icon and summary action in `t3McpToolPresentation.ts` and no server ever published the
+  tool. `resolveRuntimeMode` and `resolveInteractionMode` are now exported from
+  `OrchestratorMcpService` so the shared access helpers can enforce the same escalation rule
+  delegation does. Upstream's `toolkits/core.test.ts` comes with it, adapted in one place: it
+  asserts every published tool brands as `t3-code`, where we brand by tool family (preview tools
+  are `browser`, PR tools are `pull-request`), so the assertion checks the declared icon instead.
+  The toolkits upstream registers beside this one -- `project`, `environment`, `previewControls`,
+  `attachment`, `device` -- are not carried yet.

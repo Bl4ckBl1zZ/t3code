@@ -445,7 +445,7 @@ function interactionModeRank(mode: ProviderInteractionMode): number {
   return mode === "plan" ? 0 : 1;
 }
 
-function resolveRuntimeMode(
+export function resolveRuntimeMode(
   parentMode: RuntimeMode,
   requested: OrchestratorMcpRuntimeMode | undefined,
 ): Effect.Effect<RuntimeMode, OrchestratorMcpFailure> {
@@ -460,7 +460,7 @@ function resolveRuntimeMode(
     : Effect.succeed(resolved);
 }
 
-function resolveInteractionMode(
+export function resolveInteractionMode(
   parentMode: ProviderInteractionMode,
   requested: OrchestratorMcpInteractionMode | undefined,
 ): Effect.Effect<ProviderInteractionMode, OrchestratorMcpFailure> {
