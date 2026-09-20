@@ -1702,3 +1702,11 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   entry were already here with nothing publishing the tool. Upstream additionally surfaces the
   linked pull request on `t3_thread_list` / `t3_thread_read` results and an in-flight title
   regeneration on thread detail; those consumers are not carried yet.
+
+- `dedupeShellEnrichment` from PR #2829 (`ce81504087`) is ported verbatim with its tests. Repository
+  identity resolution re-sends the projects metadata on every batch completion, so a subscriber
+  that had already been told the answer kept being told it again over the socket; the filter keeps
+  the initial and resume frames, keeps every real change and every project delta, and drops only
+  the sequence-only repeats. Our `ShellStream.ts` already matched upstream's shape, so the only
+  local decision was where in `ws.ts` the filter sits -- first in the pipe, before error mapping,
+  as upstream has it.
