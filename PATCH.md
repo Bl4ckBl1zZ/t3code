@@ -1695,3 +1695,10 @@ runtime is added. Authentication tests use synthetic credentials and mocked tran
   `GitWorkflowService.listRefs`. Ported verbatim; the fork's `handlers.ts` keeps its
   `satisfies`-checked handler object rather than upstream's inline `toLayer` literal, so the entry
   was inserted there. Its presentation entry was already in `t3McpToolPresentation.ts`.
+
+- `t3_thread_update` and its `ThreadMetadataMcpService` from PR #2829 are adopted verbatim,
+  including the service's tests: rename, regenerate title, and link/unlink a pull request, with
+  `clientRequestId` replaying the same command receipt. The contract types and the presentation
+  entry were already here with nothing publishing the tool. Upstream additionally surfaces the
+  linked pull request on `t3_thread_list` / `t3_thread_read` results and an in-flight title
+  regeneration on thread detail; those consumers are not carried yet.

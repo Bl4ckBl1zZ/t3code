@@ -35,6 +35,7 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import { EnvironmentHandlersLive } from "./toolkits/environment/handlers.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import { PreviewControlsHandlersLive } from "./toolkits/previewControls/handlers.ts";
@@ -410,6 +411,7 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
 export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
   Layer.provide(OrchestratorToolkitHandlersLive),
   Layer.provide(OrchestratorMcpService.layer),
+  Layer.provide(ThreadMetadataMcpService.layer),
 );
 
 export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(

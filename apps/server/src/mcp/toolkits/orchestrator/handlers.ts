@@ -3,8 +3,15 @@ import * as Effect from "effect/Effect";
 
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
 import { OrchestratorMcpService } from "../../OrchestratorMcpService.ts";
+import { ThreadMetadataMcpService } from "../../ThreadMetadataMcpService.ts";
 
 const handlers = {
+  t3_thread_update: (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext;
+      const service = yield* ThreadMetadataMcpService;
+      return yield* service.update(scope, input);
+    }),
   orchestrator_capabilities: () =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;

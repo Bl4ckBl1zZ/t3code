@@ -140,7 +140,7 @@ selection model-visible without allowing a request that cannot run.
 
 ## Tool Surface
 
-The orchestrator toolkit below exposes fifteen tools. A separate thread toolkit
+The orchestrator toolkit below exposes sixteen tools. A separate thread toolkit
 adds seventeen more, a workspace toolkit adds three, and environment and
 preview toolkits add two each.
 
@@ -286,6 +286,19 @@ provenance. MCP-created threads and user-role messages use `createdBy: "agent"`
 and `creationSource: "mcp"`; provider output uses `creationSource: "provider"`.
 Actor and ingress are separate so agent-authored user-role messages remain
 distinguishable from human-authored messages.
+
+### `t3_thread_update`
+
+Updates metadata for the calling thread or another thread in the same project.
+The typed actions are `rename`, `regenerate_title`, `link_pull_request`, and
+`unlink_pull_request`. A link input supplies the repository, number, and URL;
+the server records the target thread's project ID. Branch and workspace changes
+are outside this tool.
+
+The result includes the command ID and durable event sequence together with the
+resultant title, title-regeneration marker, and linked pull request. Reusing a
+`clientRequestId` for the same action and thread replays the same command
+receipt.
 
 ### `t3_thread_send`
 
