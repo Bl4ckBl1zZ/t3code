@@ -11,6 +11,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import {
   CheckpointRollbackServiceV2,
@@ -19,6 +20,7 @@ import {
 import { EventSinkV2 } from "./EventSink.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
 import { ProjectionStoreReadError, ProjectionStoreV2 } from "./ProjectionStore.ts";
+import type { ProviderAdapterV2RollbackThreadInput } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 
@@ -422,3 +424,94 @@ it.effect("leaves a runless rollback marker so the discarded work stays visible"
     });
   }).pipe(Effect.provide(testLayer));
 });
+
+it.effect.each([{ targetOrdinal: 0 }, { targetOrdinal: 1 }])(
+  "skips turns an earlier rollback already removed when rewinding to run %s",
+  ({ targetOrdinal }) => {
+    const threadId = ThreadId.make("thread:rollback-repeat");
+    const providerThreadId = ProviderThreadId.make("provider-thread:rollback-repeat");
+    const providerSessionId = ProviderSessionId.make("provider-session:rollback-repeat");
+    const checkpointId = CheckpointId.make("checkpoint:rollback-repeat");
+    const scopeId = CheckpointScopeId.make("checkpoint-scope:rollback-repeat");
+    const providerInstanceId = ProviderInstanceId.make("provider_rollback_repeat");
+    const providerThread = {
+      id: providerThreadId,
+      providerSessionId,
+      providerInstanceId,
+      driver: "codex",
+    };
+    const counts: Array<number> = [];
+    const projection = {
+      thread: {
+        activeProviderThreadId: providerThreadId,
+        modelSelection: { instanceId: providerInstanceId, model: "test-model" },
+      },
+      providerThreads: [providerThread],
+      providerSessions: [],
+      // Turn 3 remains in the audit history after an earlier rollback.
+      providerTurns: [1, 2, 3].map((ordinal) => ({
+        id: `turn-${ordinal}`,
+        providerThreadId,
+        runAttemptId: `attempt-${ordinal}`,
+        ordinal,
+        status: "completed",
+      })),
+      attempts: [1, 2, 3].map((ordinal) => ({ id: `attempt-${ordinal}`, runId: `run-${ordinal}` })),
+      nodes: [],
+      runs: [1, 2, 3].map((ordinal) => ({
+        id: `run-${ordinal}`,
+        ordinal,
+        status: ordinal === 3 ? "rolled_back" : "completed",
+        providerInstanceId,
+        rootNodeId: null,
+        activeAttemptId: `attempt-${ordinal}`,
+      })),
+      checkpoints: [
+        {
+          id: checkpointId,
+          scopeId,
+          status: "ready",
+          appRunOrdinal: targetOrdinal,
+          runId: null,
+          nodeId: "node-1",
+          files: [],
+        },
+      ],
+      checkpointScopes: [{ id: scopeId }],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const testLayer = checkpointRollbackServiceLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(CheckpointServiceV2)({
+            restore: () => Effect.void,
+            deleteStaleRefs: () => Effect.void,
+          }),
+          Layer.mock(EventSinkV2)({ write: (() => Effect.void) as never }),
+          idAllocatorLayer,
+          Layer.mock(ProjectionStoreV2)({
+            getThreadRecords: () => Effect.succeed(projection),
+          }),
+          Layer.mock(ProviderSessionManagerV2)({
+            open: (() =>
+              Effect.succeed({
+                rollbackThread: (input: ProviderAdapterV2RollbackThreadInput) =>
+                  resolveCodexRollbackTurnCount(input).pipe(
+                    Effect.map((count) => {
+                      counts.push(count);
+                      return { providerThread };
+                    }),
+                  ),
+              })) as never,
+          }),
+          Layer.mock(RuntimePolicyV2)({ resolve: (() => Effect.succeed({})) as never }),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const service = yield* CheckpointRollbackServiceV2;
+      yield* service.execute({ threadId, providerThreadId, checkpointId, scopeId });
+      assert.deepEqual(counts, [2 - targetOrdinal]);
+    }).pipe(Effect.provide(testLayer));
+  },
+);
