@@ -3,7 +3,11 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { type CursorSettings, type ModelSelection } from "@t3tools/contracts";
+import {
+  type CursorSettings,
+  type ModelSelection,
+  type ProviderSetupError,
+} from "@t3tools/contracts";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
@@ -22,6 +26,7 @@ import {
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
 import { cursorSdkModelSelection } from "../provider/cursorSdkModel.ts";
+import type { CursorAuth } from "../provider/CursorAuth.ts";
 
 const CURSOR_TIMEOUT_MS = 180_000;
 
@@ -51,6 +56,8 @@ function emptyCursorSdkResultDetail(result: RunResult): string {
 export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")((
   cursorSettings: CursorSettings,
   environment?: NodeJS.ProcessEnv,
+  resolveApiKey?: Effect.Effect<string, ProviderSetupError>,
+  withAccess?: CursorAuth["withAccess"],
 ) => {
   const resolvedEnvironment = environment ?? process.env;
 
@@ -63,11 +70,13 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")((
         });
       }
 
-      const apiKey = resolvedEnvironment.CURSOR_API_KEY?.trim();
+      const apiKey = resolveApiKey
+        ? yield* resolveApiKey
+        : resolvedEnvironment.CURSOR_API_KEY?.trim();
       if (!apiKey) {
         return yield* new TextGenerationError({
           operation,
-          detail: "Cursor API key is required. Add CURSOR_API_KEY in provider settings.",
+          detail: "Sign in with Cursor or add CURSOR_API_KEY in provider settings.",
         });
       }
 
@@ -147,6 +156,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")((
         }),
       );
     }).pipe(
+      (effect) => (withAccess ? withAccess(effect) : effect),
+      Effect.scoped,
       Effect.mapError((cause) =>
         isTextGenerationError(cause)
           ? cause

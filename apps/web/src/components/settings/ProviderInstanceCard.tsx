@@ -1,5 +1,6 @@
 import { HermesSetup } from "../HermesSetup";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
+import { CursorSetupSection } from "./CursorSetupSection";
 import { readProviderConfigString } from "./providerSettingsFields";
 import type { EnvironmentId } from "@t3tools/contracts";
 
@@ -1075,6 +1076,15 @@ export function ProviderInstanceCard({
                 binaryPath={readProviderConfigString(instance.config, "binaryPath")}
                 authMethod={readAntigravityAuthMethod(instance.config)}
                 onEnable={() => updateEnabled(true)}
+              />
+            ) : driverKind === "cursor" && environmentId ? (
+              <CursorSetupSection
+                environmentId={environmentId}
+                environmentLabel={environmentLabel ?? "this environment"}
+                instanceId={instanceId}
+                provider={liveProvider}
+                enabled={enabled}
+                readOnly={readOnly}
               />
             ) : null}
             {driverOption ? (
