@@ -29,7 +29,11 @@ import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
 import { subagentOrbSeed, type SubagentTurnItem } from "./SubagentsStatusBadge.logic";
-import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
+import {
+  PROVIDER_ICON_BY_PROVIDER,
+  getTriggerDisplayModelName,
+  providerTextColorClassName,
+} from "./providerIconUtils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
@@ -437,7 +441,14 @@ function HandoffEndpoint(props: {
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
       {Icon === null ? null : <Icon aria-hidden="true" className="size-3 shrink-0" />}
-      <span className="max-w-40 truncate">{label}</span>
+      <span
+        className={cn(
+          "max-w-40 truncate font-medium",
+          entry === undefined ? undefined : providerTextColorClassName(entry.driverKind),
+        )}
+      >
+        {label}
+      </span>
     </span>
   );
 }
