@@ -110,3 +110,5 @@ export const SET_SNAP_SHOT_ANIMATION_DESTINATION_CHANNEL =
   "desktop:set-snap-shot-animation-destination";
 export const DISMISS_SNAP_SHOT_ANIMATION_CHANNEL = "desktop:dismiss-snap-shot-animation";
 export const ACKNOWLEDGE_SNAP_SHOT_CHANNEL = "desktop:acknowledge-snap-shot";
+
+export const PREVIEW_RECORDING_INPUT_CHANNEL = "desktop:preview-recording-input";

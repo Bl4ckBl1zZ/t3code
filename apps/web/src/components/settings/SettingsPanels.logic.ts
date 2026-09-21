@@ -115,6 +115,8 @@ export type BrowserDefaultSettings = Pick<
   | "browserDefaultZoomFactor"
   | "browserDefaultAppearance"
   | "browserRecordingFrameRate"
+  | "browserRecordingShowKeyPresses"
+  | "browserRecordingShowMousePresses"
   | "browserAutoShowFloatingPreview"
 >;
 
@@ -155,6 +157,8 @@ export function getChangedBrowserSettingLabels(settings: BrowserDefaultSettings)
     ...(settings.browserRecordingFrameRate !== DEFAULT_UNIFIED_SETTINGS.browserRecordingFrameRate
       ? ["Recording frame rate"]
       : []),
+    ...(settings.browserRecordingShowKeyPresses ? ["Recording key presses"] : []),
+    ...(settings.browserRecordingShowMousePresses ? ["Recording mouse presses"] : []),
     ...(settings.browserAutoShowFloatingPreview !==
     DEFAULT_UNIFIED_SETTINGS.browserAutoShowFloatingPreview
       ? ["Floating preview"]

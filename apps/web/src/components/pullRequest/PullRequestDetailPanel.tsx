@@ -94,6 +94,7 @@ import {
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { MiddleTruncate } from "../ui/middle-truncate";
 import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
@@ -663,6 +664,9 @@ export function PullRequestDetailPanel({
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [refreshToken, setRefreshToken] = useState(0);
   const [isInvalidating, setIsInvalidating] = useState(false);
+  // One word for "the host is being asked again", whichever of the two halves is in flight:
+  // the invalidation round trip, then the detail read it kicks off.
+  const refreshing = isInvalidating || detailQuery.isPending;
   const refreshFromHost = useCallback(async () => {
     setIsInvalidating(true);
     try {
@@ -1527,24 +1531,27 @@ export function PullRequestDetailPanel({
                 <MenuTrigger
                   render={
                     <Button
-                      aria-label="More pull request actions"
+                      aria-label={
+                        refreshing ? "Refreshing pull request" : "More pull request actions"
+                      }
                       className="size-6"
                       size="icon-xs"
                       variant="ghost-muted"
                     />
                   }
                 >
-                  <MoreHorizontalIcon className="size-4" />
+                  {/* The refresh lives in this menu, so while one runs the trigger wears the
+                      spinning glyph in place of the dots: the reader sees the panel is fetching
+                      without a control appearing or the row shifting. */}
+                  {refreshing ? (
+                    <RefreshIcon refreshing className="size-4" />
+                  ) : (
+                    <MoreHorizontalIcon className="size-4" />
+                  )}
                 </MenuTrigger>
                 <MenuPopup align="end" side="bottom" className="min-w-72">
-                  <MenuItem
-                    disabled={isInvalidating || detailQuery.isPending}
-                    onClick={() => void refreshFromHost()}
-                  >
-                    <RefreshIcon
-                      className="size-3.5"
-                      refreshing={isInvalidating || detailQuery.isPending}
-                    />
+                  <MenuItem disabled={refreshing} onClick={() => void refreshFromHost()}>
+                    <RefreshIcon className="size-3.5" refreshing={refreshing} />
                     Refresh
                   </MenuItem>
                   <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
@@ -1768,7 +1775,9 @@ export function PullRequestDetailPanel({
                                 className="size-3 shrink-0"
                               />
                             ) : null}
-                            <code className="min-w-0 truncate">{detail.baseBranch}</code>
+                            <code className="flex min-w-0">
+                              <MiddleTruncate value={detail.baseBranch} showTitle={false} />
+                            </code>
                           </span>
                         }
                       />
@@ -1794,7 +1803,9 @@ export function PullRequestDetailPanel({
                     <Tooltip>
                       <TooltipTrigger
                         render={
-                          <code className="min-w-0 flex-1 truncate">{detail.headBranch}</code>
+                          <code className="flex min-w-0 flex-1">
+                            <MiddleTruncate value={detail.headBranch} showTitle={false} />
+                          </code>
                         }
                       />
                       <TooltipPopup side="top">{detail.headBranch}</TooltipPopup>
@@ -1940,7 +1951,9 @@ export function PullRequestDetailPanel({
                                 className="size-3 shrink-0"
                               />
                             ) : null}
-                            <code className="min-w-0 truncate">{detail.baseBranch}</code>
+                            <code className="flex min-w-0">
+                              <MiddleTruncate value={detail.baseBranch} showTitle={false} />
+                            </code>
                           </span>
                         }
                       />

@@ -21,6 +21,7 @@ import {
   CodexAdapterV2Driver,
   CodexAppServerClientFactory,
 } from "./CodexAdapterV2.ts";
+import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 
 export class CodexReplayTranscriptDecodeError extends Schema.TaggedErrorClass<CodexReplayTranscriptDecodeError>()(
   "CodexReplayTranscriptDecodeError",
@@ -99,10 +100,9 @@ export function makeReplayServerConfig(
       traceMaxFiles: 10,
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
-      otlpExportIntervalMs: 10_000,
+      otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+      otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
       otlpServiceName: "t3-server",
-      otlpHeaders: undefined,
-      otlpProtocol: "http/json",
       mode: "web",
       port: 0,
       host: undefined,

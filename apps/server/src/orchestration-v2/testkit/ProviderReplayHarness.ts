@@ -61,6 +61,7 @@ import {
   type OrchestratorV2Scenario,
   type OrchestratorV2ScenarioResult,
 } from "./OrchestratorScenario.ts";
+import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 
 export function makeReplayServerConfig(
   scenario: string,
@@ -107,10 +108,9 @@ export function makeReplayServerConfig(
       traceMaxFiles: 10,
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
-      otlpExportIntervalMs: 10_000,
+      otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+      otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
       otlpServiceName: "t3-server",
-      otlpHeaders: undefined,
-      otlpProtocol: "http/json",
       mode: "web",
       port: 0,
       host: undefined,

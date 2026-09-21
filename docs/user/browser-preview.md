@@ -12,5 +12,9 @@ connection. Recordings up to 50 MB are supported. If a transfer fails, the deskt
 available; retry or make a shorter recording. Keep both desktop and server updated for remote
 recording support.
 
+On desktop, **Settings → Integrations** can show key presses and mouse presses in new
+recordings. Both are off by default, and password fields are never shown. The recorded cursor
+follows the page's own pointer, so it stays aligned with what was clicked.
+
 Agents can request text-only page snapshots or include an image. Large text responses are
 bounded, while structured page metadata remains available for precise page inspection.
