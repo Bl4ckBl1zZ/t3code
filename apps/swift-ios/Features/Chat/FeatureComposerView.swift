@@ -29,9 +29,10 @@ struct FeatureComposerSendBlocker {
 /// The glass composer shared by threads and the compose sheets.
 ///
 /// One r=26 glass rect in two rows: the draft owns the first, and the second
-/// holds the plus menu, the model chip, Plan, the context ring and a single
-/// trailing slot that is the mic while the draft is empty, the ink send arrow
-/// once there is something to send, and the ink stop circle while a turn runs.
+/// holds the plus menu, the model chip (with Plan/Build inside its menu), the
+/// context ring and a single trailing slot that is the mic while the draft is
+/// empty, the ink send arrow once there is something to send, and the ink
+/// stop circle while a turn runs.
 struct FeatureComposerView: View {
     /// True while the file importer is on screen. Presenting it resigns the
     /// keyboard, and the composer needs to know a presentation it just opened
@@ -656,7 +657,7 @@ struct FeatureComposerView: View {
         return dynamicTypeSize.isAccessibilitySize ? 4 : 7
     }
 
-    /// Row two: plus, model chip, Plan, then the context ring and the one
+    /// Row two: plus and the model chip, then the context ring and the one
     /// trailing slot. While recording the leading controls dim in place rather
     /// than leaving, so nothing moves under the finger holding the mic.
     private var controlsRow: some View {
@@ -668,12 +669,9 @@ struct FeatureComposerView: View {
                     providers: providers,
                     threadSelection: threadSelection,
                     canSetUpAgents: providerSetup != nil,
-                    onOpen: { taskSettings = $0 }
+                    onOpen: { taskSettings = $0 },
+                    interactionMode: showsInteractionModeChoice ? interactionMode : nil
                 )
-                if showsInteractionModeToggle {
-                    interactionModeToggle
-                        .fixedSize()
-                }
             }
             .opacity(voice.state.isBusy ? 0.4 : 1)
             .allowsHitTesting(!voice.state.isBusy)
@@ -1183,32 +1181,11 @@ struct FeatureComposerView: View {
 
     // MARK: - Plan
 
-    /// Hidden entirely for providers that ignore the mode — a switch that
-    /// changes nothing is worse than no switch.
-    private var showsInteractionModeToggle: Bool {
+    /// Plan/Build lives in the model chip's menu. Hidden entirely for providers
+    /// that ignore the mode — a switch that changes nothing is worse than no
+    /// switch.
+    private var showsInteractionModeChoice: Bool {
         interactionMode != nil && activeProvider?.supportsPlanMode == true
-    }
-
-    private var isPlanMode: Bool {
-        interactionMode?.wrappedValue == .plan
-    }
-
-    /// Plan is the mode that changes what the agent is allowed to do, so it is
-    /// the one that reads as switched on; Build is the quiet default.
-    private var interactionModeToggle: some View {
-        Toggle(
-            isOn: Binding(
-                get: { isPlanMode },
-                set: { interactionMode?.wrappedValue = $0 ? .plan : .standard }
-            )
-        ) {
-            Text("Plan")
-        }
-        .toggleStyle(ComposerCapsuleToggleStyle())
-        .t3SensoryFeedback(.selection, trigger: isPlanMode)
-        .accessibilityLabel("Plan mode")
-        .accessibilityHint("The agent proposes a plan before it changes anything")
-        .accessibilityIdentifier("composer-interaction-mode")
     }
 
     // MARK: - Model
@@ -1407,29 +1384,6 @@ private struct ComposerHistoryError {
     init(_ title: String, _ error: Error) {
         self.title = title
         self.message = error.localizedDescription
-    }
-}
-
-/// Plan as a capsule: neutral when off, an accent wash when on.
-private struct ComposerCapsuleToggleStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Button {
-            configuration.isOn.toggle()
-        } label: {
-            configuration.label
-                .font(T3Typography.supportingStrong)
-                .foregroundStyle(configuration.isOn ? T3Colors.accent : T3Colors.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule().fill(configuration.isOn ? T3Colors.accent.opacity(0.16) : T3Colors.subtleStrong)
-                )
-                .frame(minHeight: T3Metrics.minimumTapTarget)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityValue(configuration.isOn ? "On" : "Off")
-        .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
     }
 }
 
