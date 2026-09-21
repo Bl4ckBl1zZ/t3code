@@ -1,17 +1,22 @@
 import SwiftUI
 
-/// The composer's model chip: the current model's name, opening a menu for
-/// quick switching, the model's own options, and the full task settings.
+/// The composer's model chip: the current model with its reasoning level,
+/// opening a menu for quick switching, the model's own options, Plan/Build,
+/// and the full task settings.
 ///
 /// A real menu rather than a sheet trigger: the everyday change (a different
-/// favorite, a different effort) is one tap from the composer, and only the
-/// rarer ones ("All Models…", "More Settings…") open the task-settings sheet.
+/// favorite, a different effort, Plan) is one tap from the composer, and only
+/// the rarer ones ("All Models…", "More Settings…") open the task-settings
+/// sheet.
 struct ComposerModelChip: View {
     @Binding var selection: FeatureSelection?
     let providers: [FeatureProvider]
     let threadSelection: FeatureSelection?
     let canSetUpAgents: Bool
     let onOpen: (TaskSettingsEntry) -> Void
+    /// The thread's Plan/Build mode, or nil where the surface or provider has
+    /// no mode to choose.
+    var interactionMode: Binding<FeatureInteractionMode>?
 
     @AppStorage(ModelPickerMemory.favoritesKey) private var favoriteStorage = ""
     @AppStorage(ModelPickerMemory.recentsKey) private var recentStorage = ""
@@ -30,6 +35,7 @@ struct ComposerModelChip: View {
             chipLabel(resolved)
         }
         .menuOrder(.fixed)
+        .t3SensoryFeedback(.selection, trigger: isPlanMode)
         .accessibilityLabel("Model")
         .accessibilityValue(accessibilityValue(resolved))
         .accessibilityIdentifier("composer-model-chip")
@@ -53,6 +59,19 @@ struct ComposerModelChip: View {
             Text(resolved.model?.name ?? resolved.active?.modelID ?? "Choose Model")
                 .lineLimit(1)
                 .truncationMode(.tail)
+            // The name truncates first: the reasoning level and Plan are the
+            // settings people come to the chip to check.
+            if let reasoning = resolved.reasoning {
+                Text("· \(reasoning)")
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if isPlanMode {
+                Text("· Plan")
+                    .foregroundStyle(T3Colors.accent)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
             if resolved.isUnavailable {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .imageScale(.small)
@@ -76,7 +95,12 @@ struct ComposerModelChip: View {
             model: resolved.model,
             selections: resolved.active?.options ?? []
         )
-        return resolved.isUnavailable ? "\(summary), unavailable" : summary
+        let described = isPlanMode ? "\(summary), Plan mode" : summary
+        return resolved.isUnavailable ? "\(described), unavailable" : described
+    }
+
+    private var isPlanMode: Bool {
+        interactionMode?.wrappedValue == .plan
     }
 
     // MARK: - Menu
@@ -118,6 +142,12 @@ struct ComposerModelChip: View {
                 }
             }
 
+            if let interactionMode {
+                Section {
+                    modePicker(interactionMode)
+                }
+            }
+
             Section {
                 if !resolved.isLocked {
                     Button("All Models…", systemImage: "cpu") { onOpen(.models) }
@@ -125,6 +155,22 @@ struct ComposerModelChip: View {
                 Button("More Settings…", systemImage: "slider.horizontal.3") { onOpen(.settings) }
             }
         }
+    }
+
+    /// Build is the quiet default; Plan changes what the agent may do, so the
+    /// chip names it while it is on.
+    private func modePicker(_ mode: Binding<FeatureInteractionMode>) -> some View {
+        Picker(selection: mode) {
+            Label("Build", systemImage: "hammer")
+                .tag(FeatureInteractionMode.standard)
+            Label("Plan", systemImage: "list.bullet.clipboard")
+                .tag(FeatureInteractionMode.plan)
+        } label: {
+            Label("Mode", systemImage: mode.wrappedValue == .plan ? "list.bullet.clipboard" : "hammer")
+            Text(mode.wrappedValue == .plan ? "Plan" : "Build")
+        }
+        .pickerStyle(.menu)
+        .accessibilityIdentifier("composer-interaction-mode")
     }
 
     @ViewBuilder
@@ -217,6 +263,8 @@ private struct ResolvedModel {
     let available: [DailyUXModelOption]
     /// The thread's provider fixes the model for the life of the thread.
     let isLocked: Bool
+    /// The reasoning or effort level the chip shows beside the model name.
+    let reasoning: String?
 
     init(providers: [FeatureProvider], active: FeatureSelection?, threadSelection: FeatureSelection?) {
         let normalized = ProviderModelCatalogNormalizer.normalized(providers)
@@ -230,6 +278,9 @@ private struct ResolvedModel {
         isLocked = threadSelection.flatMap { thread in
             normalized.first { $0.id == thread.providerID }?.requiresNewThreadForModelChange
         } ?? false
+        reasoning = activeProvider?.isAvailable == true
+            ? model.flatMap { DailyUXModelOptions.reasoningSummary(for: $0, selections: active?.options ?? []) }
+            : nil
     }
 
     /// A model is chosen, but its provider cannot run it right now.

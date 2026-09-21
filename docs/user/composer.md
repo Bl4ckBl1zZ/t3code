@@ -51,9 +51,11 @@ On mobile, the model picker shows each OpenCode model's upstream provider, such 
 GitHub Copilot, or OpenCode Zen, beneath its name. Search by that provider name to narrow the list
 when starting a thread or changing an existing thread's model.
 
-In the native iOS app, tap the model name below the message field to switch between favorite and
-recent models or change the model's options. Choose **All Models…** for the full list, or **More
-Settings…** for everything else about the task. With a hardware keyboard, press `Cmd+Return` to
+In the native iOS app, the model name below the message field is followed by its reasoning level,
+such as **High**. Tap it to switch between favorite and recent models or change the model's options.
+For providers with Plan mode, choose **Mode** in the same menu to switch between **Build** and
+**Plan**; while Plan is on, the model name shows **Plan** beside it. Choose **All Models…** for the
+full list, or **More Settings…** for everything else about the task. With a hardware keyboard, press `Cmd+Return` to
 send.
 
 ## Reading with a compact composer
