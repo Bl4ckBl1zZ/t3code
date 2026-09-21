@@ -20,9 +20,11 @@ import {
 } from "@t3tools/contracts";
 import type { ThreadRunSummary } from "@t3tools/client-runtime/state/shell";
 import {
+  resolveT3McpToolDefinition,
   resolveT3McpToolPresentation,
   type T3McpToolPresentation,
 } from "@t3tools/shared/t3McpToolPresentation";
+import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
 import { orchestrationV2TimelineDayKey } from "@t3tools/shared/orchestrationV2Timeline";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -795,6 +797,38 @@ function deriveTurnFolds(input: {
   return foldsByAnchorEntryId;
 }
 
+// Delegation already has a durable child card. Remove its tool row only after
+// the returned task ID identifies that child; pending calls can share a prompt.
+function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
+  const childrenByRun = new Map<RunId, Set<string>>();
+  for (const entry of entries) {
+    if (entry.kind !== "event" || entry.projectedItem.item.type !== "subagent") continue;
+    const item = entry.projectedItem.item;
+    if (item.origin !== "app_owned" || item.runId === null) continue;
+    const children = childrenByRun.get(item.runId) ?? new Set<string>();
+    children.add(item.subagentId);
+    childrenByRun.set(item.runId, children);
+  }
+  if (childrenByRun.size === 0) return entries;
+  return entries.filter((entry) => {
+    if (entry.kind !== "work" || workEntryIndicatesToolFailure(entry.entry)) return true;
+    const item = entry.entry.projectedItem?.item ?? entry.entry.structuredPayload;
+    if (
+      item?.type !== "dynamic_tool" ||
+      item.runId === null ||
+      (item.status !== "running" && item.status !== "completed") ||
+      resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "delegate"
+    )
+      return true;
+    const output = compactDynamicToolOutput(item.output);
+    if (output?.isError) return true;
+    if (output?.taskId !== undefined) {
+      return !childrenByRun.get(item.runId)?.has(output.taskId);
+    }
+    return true;
+  });
+}
+
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   timelineClearedAt?: string | null;
@@ -818,9 +852,11 @@ export function deriveMessagesTimelineRows(input: {
     input.timelineClearedAt === null || input.timelineClearedAt === undefined
       ? Number.NaN
       : Date.parse(input.timelineClearedAt);
-  const timelineEntries = Number.isFinite(timelineClearedAtMs)
-    ? input.timelineEntries.filter((entry) => Date.parse(entry.createdAt) > timelineClearedAtMs)
-    : input.timelineEntries;
+  const timelineEntries = withoutSubagentDelegationRows(
+    Number.isFinite(timelineClearedAtMs)
+      ? input.timelineEntries.filter((entry) => Date.parse(entry.createdAt) > timelineClearedAtMs)
+      : input.timelineEntries,
+  );
   if (Number.isFinite(timelineClearedAtMs) && input.timelineClearedAt) {
     nextRows.push({
       kind: "chat-cleared",

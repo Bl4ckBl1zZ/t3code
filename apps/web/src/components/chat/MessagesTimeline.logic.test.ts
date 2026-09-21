@@ -1310,6 +1310,87 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("hides a delegation tool row once its returned task id names a child card", () => {
+    const runId = "turn-1" as never;
+    const child = (id: string) => ({
+      id,
+      kind: "event" as const,
+      createdAt: "2026-01-01T00:00:01Z",
+      projectedItem: {
+        position: 0,
+        visibility: "local" as const,
+        sourceThreadId: "thread-1" as never,
+        sourceItemId: `item-${id}` as never,
+        item: {
+          id: `item-${id}`,
+          threadId: "thread-1",
+          runId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "running",
+          title: `Subagent ${id}`,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: {},
+          type: "subagent",
+          origin: "app_owned",
+          subagentId: id,
+          childThreadId: null,
+          prompt: id,
+        },
+      } as never,
+    });
+    const delegation = (id: string, taskId: string, failed = false) => ({
+      id,
+      kind: "work" as const,
+      createdAt: "2026-01-01T00:00:02Z",
+      entry: {
+        id,
+        createdAt: "2026-01-01T00:00:02Z",
+        label: "Delegated a child task",
+        tone: failed ? ("error" as const) : ("tool" as const),
+        itemType: "dynamic_tool" as const,
+        toolLifecycleStatus: failed ? ("failed" as const) : ("completed" as const),
+        projectedItem: {
+          item: {
+            id,
+            runId,
+            type: "dynamic_tool",
+            status: failed ? "failed" : "completed",
+            toolName: "t3-code.delegate_task",
+            input: { task: taskId },
+            output: { content: JSON.stringify({ taskId }), structuredContent: { taskId } },
+          },
+        } as never,
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        child("a"),
+        delegation("delegate-a", "a"),
+        delegation("unmatched", "other-child"),
+        child("c"),
+        delegation("failed", "c", true),
+      ],
+      latestRun: null,
+      isWorking: false,
+      alwaysExpandActivity: true,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    const visibleTools = rows.flatMap((row) =>
+      row.kind === "work" ? row.groupedEntries.map((entry) => entry.id) : [],
+    );
+    expect(visibleTools).toContain("unmatched");
+    expect(visibleTools).toContain("failed");
+    expect(visibleTools).not.toContain("delegate-a");
+  });
+
   it("leaves a lone subagent card as its own event row", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
