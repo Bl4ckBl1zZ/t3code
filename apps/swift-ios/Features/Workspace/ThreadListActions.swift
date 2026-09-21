@@ -46,6 +46,13 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
     /// action is omitted rather than offered and refused.
     public let titleRegenerationSupported: Bool
     public let isRegeneratingTitle: Bool
+    /// False while a provider run is attached: archiving would detach it (see
+    /// ``ThreadArchive``). The item stays in place, disabled, with the reason.
+    public let canArchive: Bool
+    /// A handoff script for this row is already being generated.
+    public let isGeneratingHandoffScript: Bool
+    /// When a snoozed row wakes, shown under Unsnooze.
+    public let snoozedUntil: Date?
 
     public init(
         isArchived: Bool = false,
@@ -61,7 +68,10 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         hasWorktreePath: Bool = true,
         hasBranch: Bool = true,
         titleRegenerationSupported: Bool = false,
-        isRegeneratingTitle: Bool = false
+        isRegeneratingTitle: Bool = false,
+        canArchive: Bool = true,
+        isGeneratingHandoffScript: Bool = false,
+        snoozedUntil: Date? = nil
     ) {
         self.isArchived = isArchived
         self.canTogglePin = canTogglePin
@@ -77,6 +87,9 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         self.hasBranch = hasBranch
         self.titleRegenerationSupported = titleRegenerationSupported
         self.isRegeneratingTitle = isRegeneratingTitle
+        self.canArchive = canArchive
+        self.isGeneratingHandoffScript = isGeneratingHandoffScript
+        self.snoozedUntil = snoozedUntil
     }
 }
 
@@ -123,10 +136,13 @@ public enum ThreadRowMenuActions {
         }
         if context.handoffScriptSupported {
             children.append(
+                // Generation takes seconds; the entry says so rather than
+                // looking like a tap that did nothing.
                 ThreadRowMenuAction(
                     id: copyHandoffScriptActionID,
-                    title: "Handoff script",
-                    symbol: "doc.text"
+                    title: context.isGeneratingHandoffScript ? "Generating…" : "Handoff Script",
+                    symbol: "doc.text",
+                    disabled: context.isGeneratingHandoffScript
                 )
             )
         }
@@ -181,7 +197,12 @@ public enum ThreadRowMenuActions {
             if context.offersParking, context.snoozeSupported {
                 actions.append(
                     context.isSnoozed
-                        ? ThreadRowMenuAction(id: unsnoozeActionID, title: "Unsnooze", symbol: "bell")
+                        ? ThreadRowMenuAction(
+                            id: unsnoozeActionID,
+                            title: "Unsnooze",
+                            subtitle: context.snoozedUntil.map { "Wakes \(HomeRowDate.wake($0, now: now))" },
+                            symbol: "bell"
+                        )
                         : ThreadRowMenuAction(
                             id: snoozeActionID,
                             title: "Snooze",
@@ -236,7 +257,9 @@ public enum ThreadRowMenuActions {
                 : ThreadRowMenuAction(
                     id: archiveActionID,
                     title: "Archive",
+                    subtitle: context.canArchive ? nil : "Stop the run to archive",
                     symbol: "archivebox",
+                    disabled: !context.canArchive,
                     separatorBefore: true
                 )
         )
@@ -290,21 +313,22 @@ public enum ThreadCopy {
         return trimmed
     }
 
+    /// The HUD a copy shows; the message is what VoiceOver users would miss.
     public static func confirmation(for target: ThreadCopyTarget) -> ThreadListActionAlert {
         switch target {
         case .path:
             return ThreadListActionAlert(
-                title: "Path copied",
+                title: "Path Copied",
                 message: "The thread's workspace path is on the clipboard."
             )
         case .branch:
             return ThreadListActionAlert(
-                title: "Branch copied",
+                title: "Branch Copied",
                 message: "The thread's branch name is on the clipboard."
             )
         case .threadID:
             return ThreadListActionAlert(
-                title: "Thread ID copied",
+                title: "Thread ID Copied",
                 message: "The thread's identifier is on the clipboard."
             )
         }
@@ -372,7 +396,7 @@ public final class ThreadListActions {
             return .handoffScript(
                 script: script,
                 alert: ThreadListActionAlert(
-                    title: "Handoff script copied",
+                    title: "Handoff Script Copied",
                     message: "Paste it into a new agent session to continue this thread."
                 )
             )

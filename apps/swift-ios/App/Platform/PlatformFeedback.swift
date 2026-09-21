@@ -41,6 +41,23 @@ enum PlatformThreadTransitionClassifier {
 final class PlatformHapticEngine {
     static let shared = PlatformHapticEngine()
 
+    /// Mirrors Settings → Haptics; the root keeps it current so feature views
+    /// can fire feedback without threading the setting through.
+    var isEnabled = true
+
+    func play(_ kind: PlatformFeedbackKind) {
+        emit(kind, enabled: isEnabled)
+    }
+
+    func playSelection() {
+        selection(enabled: isEnabled)
+    }
+
+    func playImpact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
+        guard isEnabled else { return }
+        UIImpactFeedbackGenerator(style: style).impactOccurred()
+    }
+
     func emit(_ kind: PlatformFeedbackKind, enabled: Bool) {
         guard enabled else { return }
         let generator = UINotificationFeedbackGenerator()

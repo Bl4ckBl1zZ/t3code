@@ -38,6 +38,31 @@ final class PullRequestActionTests: XCTestCase {
         let unknown = PullRequestActionLogic.offered(try detail(["autoMergeEnabled": NSNull()]))
         XCTAssertFalse(unknown.contains(.disableAutoMerge)); XCTAssertFalse(unknown.contains(.enableAutoMerge))
     }
+    func testThePrimaryIsTheStatesNextStep() throws {
+        XCTAssertEqual(PullRequestActionLogic.primary(try detail(), canResolveInAgent: true), .action(.merge))
+        XCTAssertEqual(PullRequestActionLogic.primary(try detail(["isDraft": true]), canResolveInAgent: true), .action(.ready))
+        XCTAssertEqual(PullRequestActionLogic.primary(try detail(["state": "closed"]), canResolveInAgent: true), .action(.reopen))
+        // A merged request has no main next step; revert stays in the menu.
+        XCTAssertNil(PullRequestActionLogic.primary(try detail(["state": "merged"]), canResolveInAgent: true))
+    }
+    func testConflictsMakeTheAgentThePrimaryWhereThereIsOne() throws {
+        let conflicting = try detail(["mergeability": "conflicting"])
+        XCTAssertEqual(PullRequestActionLogic.primary(conflicting, canResolveInAgent: true), .resolveConflicts)
+        XCTAssertNil(PullRequestActionLogic.primary(conflicting, canResolveInAgent: false))
+    }
+    func testTheMenuLeavesOutThePrimaryAndPutsCloseLast() throws {
+        let value = try detail()
+        let menu = PullRequestActionLogic.menuActions(value, primary: .action(.merge))
+        XCTAssertFalse(menu.contains(.merge))
+        if menu.contains(.close) { XCTAssertEqual(menu.last, .close) }
+        XCTAssertFalse(NativePullRequestAction.close.needsReview)
+    }
+    func testMethodsUseTheHostsWording() {
+        XCTAssertEqual(PullRequestActionLogic.methodLabel("squash"), "Squash and Merge")
+        XCTAssertEqual(PullRequestActionLogic.methodLabel("merge"), "Create a Merge Commit")
+        XCTAssertEqual(PullRequestActionLogic.methodLabel("rebase"), "Rebase and Merge")
+        XCTAssertEqual(NativePullRequestAction.merge.failureTitle, "Couldn't Merge")
+    }
     func testCurrentBaseHasNoUpdateAction() throws {
         XCTAssertFalse(PullRequestActionLogic.offered(try detail(["baseComparison": "up-to-date"])).contains(.updateBranch))
     }

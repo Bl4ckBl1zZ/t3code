@@ -1,5 +1,6 @@
 import ImageIO
 import PhotosUI
+import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
@@ -35,7 +36,7 @@ struct FeatureAttachmentPreparationState: Equatable {
     }
 }
 
-/// The attachment sources, shared with the composer so its in-pill morph menu
+/// The attachment sources, shared with the composer so its plus menu
 /// can name them. The pickers are mutually exclusive, so one optional value
 /// rather than three booleans.
 enum FeatureAttachmentSource: Equatable {
@@ -58,14 +59,13 @@ struct FeatureImageAttachmentPicker: View {
     /// the keyboard, and if the composer collapsed on that focus loss it would
     /// remove this view -- and tear down the presentation it just started.
     @Binding var isPresentingSource: Bool
-    /// The composer's morph menu asks for a source through this binding rather
+    /// The composer's plus menu asks for a source through this binding rather
     /// than by calling into the view: the presentations live here, and the
-    /// menu's buttons live in the pill this view is hidden behind.
+    /// menu lives in the composer's own controls row.
     @Binding var requestedSource: FeatureAttachmentSource?
-    /// Set when the composer owns an in-pill morph menu: the plus toggles that
-    /// menu instead of opening a system context menu.
-    let onToggleMenu: (() -> Void)?
-    let isMenuOpen: Bool
+    /// False when the composer draws its own plus menu and this view only hosts
+    /// the presentations it asks for.
+    let showsControl: Bool
     let maximumCount: Int
     /// Whether the selected model accepts *images*. Documents are read off disk
     /// by the agent rather than sent to the vision endpoint, so they stay
@@ -88,8 +88,7 @@ struct FeatureImageAttachmentPicker: View {
         preparationState: Binding<FeatureAttachmentPreparationState>,
         isPresentingSource: Binding<Bool> = .constant(false),
         requestedSource: Binding<FeatureAttachmentSource?> = .constant(nil),
-        onToggleMenu: (() -> Void)? = nil,
-        isMenuOpen: Bool = false,
+        showsControl: Bool = true,
         maximumCount: Int = 8,
         isEnabled: Bool = true
     ) {
@@ -97,27 +96,28 @@ struct FeatureImageAttachmentPicker: View {
         _preparationState = preparationState
         _isPresentingSource = isPresentingSource
         _requestedSource = requestedSource
-        self.onToggleMenu = onToggleMenu
-        self.isMenuOpen = isMenuOpen
+        self.showsControl = showsControl
         self.maximumCount = maximumCount
         self.isEnabled = isEnabled
     }
 
-    /// Matches the send button's disc so the two ends of the composer toolbar
-    /// read as one control set: a glass secondary next to a filled primary.
-
     var body: some View {
-        control
-        .buttonStyle(.plain)
-        .animation(
-            .spring(response: 0.32, dampingFraction: 0.72),
-            value: preparationState.isPreparing
-        )
-        .disabled(!canAdd)
-        .opacity(canAdd ? 1 : 0.3)
-        .accessibilityLabel(attachmentAccessibilityLabel)
-        .accessibilityIdentifier("image-attachment-picker")
-        .accessibilityHint(attachmentAccessibilityHint)
+        Group {
+            if showsControl {
+                control
+                    .buttonStyle(.plain)
+                    .disabled(!canAdd)
+                    .opacity(canAdd ? 1 : 0.3)
+                    .accessibilityLabel(attachmentAccessibilityLabel)
+                    .accessibilityIdentifier("image-attachment-picker")
+                    .accessibilityHint(attachmentAccessibilityHint)
+            } else {
+                // Presentation host only: the composer's plus menu is the control.
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
+        }
         .onAppear {
             #if DEBUG
             print("ATTACH appear instance=\(instanceID) source=\(String(describing: activeSource))")
@@ -198,52 +198,32 @@ struct FeatureImageAttachmentPicker: View {
         }
     }
 
-    /// The plus. With a composer-owned morph menu it is a plain toggle that
-    /// rotates into an X while the menu is up; without one it falls back to a
-    /// system context menu.
-    @ViewBuilder
+    /// The plus, opening a system menu of sources.
     private var control: some View {
-        if let onToggleMenu {
-            Button(action: onToggleMenu) {
-                glyph
-                    .rotationEffect(.degrees(isMenuOpen ? 45 : 0))
-                    .animation(
-                        .spring(response: 0.32, dampingFraction: 0.72),
-                        value: isMenuOpen
-                    )
+        Menu {
+            Button { present(.photoLibrary) } label: {
+                Label("Photo Library", systemImage: "photo.on.rectangle")
             }
-        } else {
-            Menu {
-                Button { present(.photoLibrary) } label: {
-                    Label("Photo Library", systemImage: "photo.on.rectangle")
-                }
-                .disabled(!isEnabled)
+            .disabled(!isEnabled)
+            if Source.cameraAvailable {
                 Button { present(.camera) } label: {
                     Label("Camera", systemImage: "camera")
                 }
-                .disabled(!isEnabled || !Source.cameraAvailable)
-                Button { present(.files) } label: {
-                    Label("Files", systemImage: "folder")
-                }
-            } label: {
-                glyph
+                .disabled(!isEnabled)
             }
-            // The composer sits at the bottom, so the menu opens upward;
-            // `.priority` ordering would flip the list and put Files on top.
-            .menuOrder(.fixed)
+            Button { present(.files) } label: {
+                Label("Files", systemImage: "folder")
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.title3)
+                .foregroundStyle(T3Colors.textPrimary)
+                .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                .contentShape(Rectangle())
         }
-    }
-
-    /// A bare glyph, not a chip: the plus is the pill's quietest control and
-    /// any container around it competes with the send circle at the other end
-    /// of the row.
-    private var glyph: some View {
-        Image(systemName: preparationState.isPreparing ? "hourglass" : "plus")
-            .font(.system(size: 21, weight: .regular))
-            .foregroundStyle(T3Colors.textPrimary)
-            .contentTransition(.symbolEffect(.replace))
-            .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
-            .contentShape(Rectangle())
+        // The composer sits at the bottom, so the menu opens upward;
+        // `.priority` ordering would flip the list and put Files on top.
+        .menuOrder(.fixed)
     }
 
     /// Each presentation is driven by the one `activeSource`, so the sources
@@ -394,24 +374,158 @@ struct FeatureImageAttachmentPicker: View {
     }
 }
 
+/// An image the composer could not prepare. It stays in the strip as a tile
+/// with Retry and Remove instead of vanishing, so a photo that failed to
+/// download or decode is never dropped without the reader knowing.
+struct FeatureAttachmentFailure: Identifiable, Equatable {
+    enum Source: Equatable {
+        /// Captured or already-loaded bytes that failed to process.
+        case data(Data)
+        /// A library pick whose bytes never arrived (an iCloud download, say).
+        case photo(PhotosPickerItem)
+    }
+
+    let id = UUID()
+    let source: Source
+    let message: String
+}
+
+/// The draft's attachments as a row of tiles, followed by one failed tile per
+/// image that could not be prepared and one spinner tile per item still being
+/// prepared. Tapping a tile previews it with Quick Look.
 struct FeatureAttachmentStrip: View {
     @Binding var attachments: [FeatureDraftAttachment]
+    var pendingCount = 0
+    var failures: [FeatureAttachmentFailure] = []
+    var onRetry: (FeatureAttachmentFailure) -> Void = { _ in }
+    var onRemoveFailure: (FeatureAttachmentFailure) -> Void = { _ in }
+
+    @State private var previewURL: URL?
 
     var body: some View {
-        if !attachments.isEmpty {
+        if !attachments.isEmpty || pendingCount > 0 || !failures.isEmpty {
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
                     ForEach(attachments) { attachment in
-                        FeatureAttachmentChip(attachment: attachment) {
-                            attachments.removeAll { $0.id == attachment.id }
-                        }
+                        FeatureAttachmentChip(
+                            attachment: attachment,
+                            onPreview: { preview(attachment) },
+                            onRemove: { attachments.removeAll { $0.id == attachment.id } }
+                        )
+                    }
+                    ForEach(failures) { failure in
+                        FeatureAttachmentFailureTile(
+                            failure: failure,
+                            onRetry: { onRetry(failure) },
+                            onRemove: { onRemoveFailure(failure) }
+                        )
+                    }
+                    ForEach(0..<pendingCount, id: \.self) { _ in
+                        FeatureAttachmentPendingTile()
                     }
                 }
                 .padding(.horizontal, 1)
             }
             .scrollIndicators(.hidden)
             .accessibilityLabel("\(attachments.count) attachments")
+            .quickLookPreview($previewURL)
         }
+    }
+
+    /// Quick Look reads files, so the draft's bytes are written to a scratch
+    /// copy under the attachment's own name first, off the main thread.
+    private func preview(_ attachment: FeatureDraftAttachment) {
+        let data = attachment.data
+        let name = attachment.filename
+        let folder = attachment.id.uuidString
+        Task {
+            let url = await Task.detached(priority: .userInitiated) { () -> URL? in
+                let directory = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("attachment-previews", isDirectory: true)
+                    .appendingPathComponent(folder, isDirectory: true)
+                let file = directory.appendingPathComponent(name.isEmpty ? "Attachment" : name)
+                do {
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try data.write(to: file, options: .atomic)
+                    return file
+                } catch {
+                    return nil
+                }
+            }.value
+            previewURL = url
+        }
+    }
+}
+
+/// Tile geometry shared by every tile kind, concentric with the r=26 composer
+/// at its 12pt inset.
+private enum FeatureAttachmentTileMetrics {
+    static let side: CGFloat = 64
+    static let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+}
+
+/// The small remove control on a tile's corner, with a full 44pt target.
+private struct FeatureAttachmentRemoveBadge: View {
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.title3)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(T3Colors.background, T3Colors.textSecondary)
+                .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .offset(x: 13, y: -13)
+        .accessibilityLabel(label)
+    }
+}
+
+private struct FeatureAttachmentPendingTile: View {
+    var body: some View {
+        ProgressView()
+            .frame(width: FeatureAttachmentTileMetrics.side, height: FeatureAttachmentTileMetrics.side)
+            .background(T3Colors.subtle, in: FeatureAttachmentTileMetrics.shape)
+            .padding(.top, 11)
+            .padding(.trailing, 11)
+            .accessibilityLabel("Preparing attachment")
+            .accessibilityIdentifier("attachment-preparing")
+    }
+}
+
+private struct FeatureAttachmentFailureTile: View {
+    let failure: FeatureAttachmentFailure
+    let onRetry: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        Button(action: onRetry) {
+            VStack(spacing: 4) {
+                Image(systemName: "exclamationmark.circle")
+                    .font(.title3)
+                    .foregroundStyle(T3Colors.warning)
+                Text("Retry")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(T3Colors.textPrimary)
+            }
+            .frame(width: FeatureAttachmentTileMetrics.side, height: FeatureAttachmentTileMetrics.side)
+            .background(T3Colors.subtle, in: FeatureAttachmentTileMetrics.shape)
+            .overlay {
+                FeatureAttachmentTileMetrics.shape.strokeBorder(T3Colors.warning.opacity(0.5), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Couldn’t add image. Retry")
+        .accessibilityHint(failure.message)
+        .overlay(alignment: .topTrailing) {
+            FeatureAttachmentRemoveBadge(label: "Remove failed image", action: onRemove)
+        }
+        .padding(.top, 11)
+        .padding(.trailing, 11)
+        .accessibilityIdentifier("composer-attachment-failed")
     }
 }
 
@@ -441,6 +555,7 @@ enum FeatureAttachmentGlyph {
 /// showing a placeholder that never resolved.
 private struct FeatureAttachmentChip: View {
     let attachment: FeatureDraftAttachment
+    let onPreview: () -> Void
     let onRemove: () -> Void
     @State private var image: UIImage?
 
@@ -452,7 +567,7 @@ private struct FeatureAttachmentChip: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        Button(action: onPreview) {
             Group {
                 if kind == .image {
                     if let image {
@@ -467,24 +582,21 @@ private struct FeatureAttachmentChip: View {
                     documentTile
                 }
             }
-            .frame(width: 58, height: 58)
+            .frame(width: FeatureAttachmentTileMetrics.side, height: FeatureAttachmentTileMetrics.side)
             .background(T3Colors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 22, height: 22)
-                    .background(.black.opacity(0.78), in: Circle())
-                    .frame(
-                        width: T3Metrics.minimumTapTarget,
-                        height: T3Metrics.minimumTapTarget
-                    )
-                    .contentShape(Rectangle())
-            }
-            .offset(x: 11, y: -11)
-            .accessibilityLabel("Remove \(attachment.filename)")
+            .clipShape(FeatureAttachmentTileMetrics.shape)
+            .contentShape(FeatureAttachmentTileMetrics.shape)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(attachment.filename)
+        .accessibilityHint("Opens a preview")
+        .contextMenu {
+            Text(attachment.filename)
+            Button("Preview", systemImage: "eye", action: onPreview)
+            Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)
+        }
+        .overlay(alignment: .topTrailing) {
+            FeatureAttachmentRemoveBadge(label: "Remove \(attachment.filename)", action: onRemove)
         }
         .padding(.top, 11)
         .padding(.trailing, 11)
@@ -506,15 +618,15 @@ private struct FeatureAttachmentChip: View {
                     name: attachment.filename
                 )
             )
-            .font(.system(size: 17, weight: .medium))
+            .font(.title3)
             Text(attachment.filename)
-                .font(.system(size: 9, weight: .medium))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
+                .font(.caption2)
+                .lineLimit(1)
                 .truncationMode(.middle)
+                .minimumScaleFactor(0.8)
         }
         .foregroundStyle(T3Colors.textSecondary)
-        .padding(.horizontal, 5)
+        .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

@@ -16,11 +16,20 @@ enum PullRequestHandoffKind: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .ask: "Ask about this pull request"
-        case .explain: "Explain changes"
-        case .findings: "Fix review findings and failing checks"
-        case .conflicts: "Resolve conflicts"
-        case .checkout: "Check out pull request"
+        case .ask: "Ask About This Pull Request"
+        case .explain: "Explain Changes"
+        case .findings: "Fix Review Findings and Failing Checks"
+        case .conflicts: "Resolve Conflicts"
+        case .checkout: "Check Out Pull Request"
+        }
+    }
+    var systemImage: String {
+        switch self {
+        case .ask: "questionmark.bubble"
+        case .explain: "text.magnifyingglass"
+        case .findings: "wrench.and.screwdriver"
+        case .conflicts: "arrow.triangle.merge"
+        case .checkout: "arrow.down.circle"
         }
     }
     var needsCheckout: Bool { self == .findings || self == .conflicts || self == .checkout }
@@ -133,17 +142,38 @@ extension EnvironmentValues {
     }
 }
 
-struct PullRequestSelectionMenu: View {
+/// "Ask Agent", "Explain" and "Fix This …" for one comment, check or line
+/// range. Placed in a row's `.contextMenu`, so the rows themselves stay free of
+/// a repeated button.
+struct PullRequestSelectionMenuItems: View {
     let selection: PullRequestHandoffSelection
     @SwiftUI.Environment(\.pullRequestSelectionHandoff) private var handoff
     var body: some View {
         if let handoff {
+            Button("Ask Agent", systemImage: "questionmark.bubble") { handoff.perform(.ask, selection) }
+            Button("Explain", systemImage: "text.magnifyingglass") { handoff.perform(.explain, selection) }
+            if selection.kind != .code {
+                Button(selection.kind == .check ? "Fix This Check" : "Fix This Finding", systemImage: "wrench.and.screwdriver") {
+                    handoff.perform(.findings, selection)
+                }
+            }
+        }
+    }
+}
+
+/// The same items as a visible menu, for the line-selection bar where there
+/// is no row to long-press.
+struct PullRequestSelectionMenu: View {
+    let selection: PullRequestHandoffSelection
+    @SwiftUI.Environment(\.pullRequestSelectionHandoff) private var handoff
+    var body: some View {
+        if handoff != nil {
             Menu {
-                Button("Ask agent") { handoff.perform(.ask, selection) }
-                Button("Explain") { handoff.perform(.explain, selection) }
-                if selection.kind != .code { Button("Fix this finding") { handoff.perform(.findings, selection) } }
-            } label: { Image(systemName: "text.bubble").frame(minWidth: 44, minHeight: 44) }
-                .accessibilityLabel("Open \(selection.label) in agent")
+                PullRequestSelectionMenuItems(selection: selection)
+            } label: {
+                Label("Ask Agent", systemImage: "text.bubble")
+            }
+            .accessibilityLabel("Open \(selection.label) in agent")
         }
     }
 }

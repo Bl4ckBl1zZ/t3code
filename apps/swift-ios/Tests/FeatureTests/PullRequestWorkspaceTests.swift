@@ -100,6 +100,35 @@ final class PullRequestWorkspaceTests: XCTestCase {
         XCTAssertEqual(NativePullRequestPreferences.read("broken"), .init())
     }
 
+    /// Search and sort are not filters: only a scope or a narrowing filter
+    /// fills the filter button.
+    func testOnlyScopesAndNarrowingFiltersCountAsActiveFilters() {
+        var preferences = NativePullRequestPreferences()
+        XCTAssertFalse(preferences.hasActiveFilters)
+        preferences.query = "tabs"; preferences.sort = "oldest"
+        XCTAssertFalse(preferences.hasActiveFilters)
+        preferences.draft = "hide"
+        XCTAssertTrue(preferences.hasActiveFilters)
+        preferences = NativePullRequestPreferences(); preferences.projectID = "p"
+        XCTAssertTrue(preferences.hasActiveFilters)
+    }
+
+    func testSavedScopeExplainsWhyItIsUnavailable() {
+        let offline = FeatureEnvironment(id: "studio", name: "Studio", endpoint: "http://studio", connectionState: .disconnected, supportsPullRequests: true)
+        let unsupported = FeatureEnvironment(id: "pi", name: "Pi", endpoint: "http://pi", connectionState: .connected, supportsPullRequests: false)
+        let online = FeatureEnvironment(id: "mac", name: "Mac", endpoint: "http://mac", connectionState: .connected, supportsPullRequests: true)
+        var preferences = NativePullRequestPreferences()
+        XCTAssertNil(preferences.unavailableScopeDescription(environments: [online], projects: []))
+        preferences.environmentID = "pi"
+        XCTAssertEqual(preferences.unavailableScopeDescription(environments: [online, unsupported], projects: []), "Pi can't list pull requests. Choose another scope or show every project.")
+        preferences.environmentID = "gone"
+        XCTAssertEqual(preferences.unavailableScopeDescription(environments: [online], projects: []), "The saved environment isn't available. Reconnect it or show every project.")
+        preferences.environmentID = "mac"; preferences.projectID = "missing"
+        XCTAssertEqual(preferences.unavailableScopeDescription(environments: [online, offline], projects: []), "The saved project isn't available. Reconnect its environment or show every project.")
+        preferences.projectID = nil
+        XCTAssertEqual(preferences.summary(environments: [online], projects: []), "Mac · Open · Everyone · Merge readiness")
+    }
+
     func testPartialEnvironmentFailuresKeepHealthyRows() async {
         let manager = PullRequestWorkspaceTestManager()
         let success = page([entry(1)])

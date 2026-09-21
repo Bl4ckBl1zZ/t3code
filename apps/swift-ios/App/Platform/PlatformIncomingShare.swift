@@ -414,85 +414,116 @@ struct PlatformIncomingShareDestinationSheet: View {
     let projects: [FeatureProject]
     let environments: [FeatureEnvironment]
     let isImporting: Bool
+    /// The project the share is importing into, which carries the spinner
+    /// while the other rows dim.
+    var importingProjectID: String?
     let onCancel: () -> Void
     let onSelect: (FeatureProject) -> Void
+
+    @State private var query = ""
 
     var body: some View {
         NavigationStack {
             List {
-                if !summary.isEmpty {
+                if !summary.isEmpty, query.isEmpty {
                     Section {
                         Text(summary)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
+                            .font(T3Typography.threadBody)
+                            .foregroundStyle(T3Colors.textSecondary)
                             .lineLimit(3)
                     }
-                    .listRowBackground(Color(uiColor: .systemBackground))
+                    .t3GroupedRow()
                 }
 
-                Section("Choose a project") {
-                    ForEach(projects) { project in
-                        Button {
-                            onSelect(project)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "folder")
-                                    .foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(project.name)
-                                        .font(.body.weight(.semibold))
-                                        .foregroundStyle(.primary)
-                                    if let environmentName = environmentName(for: project) {
-                                        Text(environmentName)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                if isImporting {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else {
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.tertiary)
-                                }
+                Section {
+                    ForEach(filteredProjects) { project in
+                        projectRow(project)
+                    }
+                } header: {
+                    Text("Choose a Project")
+                } footer: {
+                    if !envelope.warnings.isEmpty, query.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(envelope.warnings, id: \.self) { warning in
+                                Label(warning, systemImage: "exclamationmark.triangle")
                             }
-                            .frame(minHeight: 48)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isImporting)
-                        .listRowBackground(Color(uiColor: .systemBackground))
-                    }
-                }
-
-                if !envelope.warnings.isEmpty {
-                    Section {
-                        ForEach(envelope.warnings, id: \.self) { warning in
-                            Label(warning, systemImage: "exclamationmark.triangle")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
                         }
                     }
-                    .listRowBackground(Color(uiColor: .systemBackground))
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Color(uiColor: .systemBackground))
-            .navigationTitle("Start a task")
+            .listStyle(.insetGrouped)
+            .t3GroupedListBackground()
+            .overlay {
+                if filteredProjects.isEmpty, !query.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                }
+            }
+            .searchable(text: $query, prompt: "Projects")
+            .navigationTitle("Start a Task")
             .navigationBarTitleDisplayMode(.inline)
+            .t3NavigationChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                        .disabled(isImporting)
+                    cancelButton.disabled(isImporting)
                 }
             }
         }
-        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(isImporting)
+    }
+
+    private func projectRow(_ project: FeatureProject) -> some View {
+        let isTarget = importingProjectID == project.id
+        return Button {
+            onSelect(project)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "folder")
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(project.name)
+                        .font(T3Typography.homeTitle)
+                        .foregroundStyle(T3Colors.textPrimary)
+                    if let environmentName = environmentName(for: project) {
+                        Text(environmentName)
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textSecondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if isImporting, isTarget {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Importing")
+                }
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isImporting)
+        .opacity(isImporting && !isTarget ? 0.4 : 1)
+        .t3GroupedRow()
+    }
+
+    @ViewBuilder
+    private var cancelButton: some View {
+        if #available(iOS 26, *) {
+            Button(role: .cancel, action: onCancel)
+        } else {
+            Button("Cancel", role: .cancel, action: onCancel)
+        }
+    }
+
+    private var filteredProjects: [FeatureProject] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return projects }
+        return projects.filter {
+            $0.name.localizedCaseInsensitiveContains(needle)
+                || (environmentName(for: $0)?.localizedCaseInsensitiveContains(needle) ?? false)
+        }
     }
 
     private var summary: String {

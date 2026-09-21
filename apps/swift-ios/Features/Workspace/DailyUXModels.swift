@@ -337,8 +337,25 @@ struct DailyUXSidebarIndex {
         query: String,
         contentMatchIDs: Set<String> = []
     ) -> [FeatureThread] {
+        let groups = matchingThreadGroups(
+            candidates,
+            snapshot: snapshot,
+            query: query,
+            contentMatchIDs: contentMatchIDs
+        )
+        return groups.titles + groups.messages
+    }
+
+    /// ``matchingThreads(_:snapshot:query:contentMatchIDs:)`` kept in its two
+    /// halves, so a list can head the message matches as their own section.
+    static func matchingThreadGroups(
+        _ candidates: [FeatureThread],
+        snapshot: FeatureSnapshot,
+        query: String,
+        contentMatchIDs: Set<String> = []
+    ) -> (titles: [FeatureThread], messages: [FeatureThread]) {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedQuery.isEmpty else { return [] }
+        guard !normalizedQuery.isEmpty else { return ([], []) }
         // Aggregate snapshots can include legacy fixtures with duplicate raw IDs.
         // Native projects are environment-scoped, while this defensive reduce
         // keeps search non-crashing for older callers during migration.
@@ -362,7 +379,7 @@ struct DailyUXSidebarIndex {
                 contentMatches.append(thread)
             }
         }
-        return titleMatches + contentMatches
+        return (titleMatches, contentMatches)
     }
 }
 
@@ -484,7 +501,7 @@ enum HomeThreadStatus: String, Sendable, Equatable {
     case ready
 }
 
-/// The T3 Work inbox row's leading lozenge. See ``FeatureThread/workInboxBadge``.
+/// The T3 Work inbox row's leading status pill. See ``FeatureThread/workInboxBadge``.
 enum WorkInboxBadge: String, Sendable, Equatable, CaseIterable {
     case needsYou
     case working
@@ -500,9 +517,9 @@ enum WorkInboxBadge: String, Sendable, Equatable, CaseIterable {
         }
     }
 
-    /// Whether the row earns the accent rail down its leading edge. Only work
-    /// that is blocked on the user does: a rail on every row is a rail on none,
-    /// and the point is that the inbox can be triaged in one pass.
+    /// Whether the row earns the leading attention dot. Only work that is
+    /// blocked on the user does: a dot on every row is a dot on none, and the
+    /// point is that the inbox can be triaged in one pass.
     var wantsAttentionRail: Bool {
         self == .needsYou
     }

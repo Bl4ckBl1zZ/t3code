@@ -67,7 +67,7 @@ private struct RelatedThreadRow: View {
             onOpenThread(threadID)
         } label: {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     leadingGlyph
                         .frame(width: 20, height: 20)
 
@@ -76,23 +76,27 @@ private struct RelatedThreadRow: View {
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    HStack(spacing: 1) {
+                    HStack(spacing: 6) {
                         if let meta = presentation.meta {
                             Text(verbatim: meta)
                                 .font(ChatTimelineStyle.small)
                                 .foregroundStyle(T3Colors.textTertiary)
-                                .padding(.trailing, 4)
                         }
-                        WorkRowStatusGlyph(status: presentation.status)
+                        // Words, not a glyph: "Failed" and "Working" are what a
+                        // fan-out of agents is scanned for.
+                        if let status = presentation.status {
+                            Text(verbatim: status == .running ? "Working" : status.accessibilityLabel)
+                                .font(ChatTimelineStyle.small)
+                                .foregroundStyle(status == .failed ? T3Colors.danger : T3Colors.textTertiary)
+                        }
                         if canOpen {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(ChatTimelineStyle.small.weight(.semibold))
                                 .foregroundStyle(T3Colors.textTertiary)
-                                .frame(width: 16, height: 16)
                         }
                     }
                 }
-                .frame(minHeight: 36)
+                .frame(minHeight: T3Metrics.minimumTapTarget)
 
                 // Strictly one line: a fan-out of agents is scanned, not read.
                 // Plain text even while the agent runs, since that can be minutes.
@@ -102,9 +106,8 @@ private struct RelatedThreadRow: View {
                         .foregroundStyle(T3Colors.textTertiary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .padding(.leading, 26)
-                        .padding(.top, -6)
-                        .padding(.bottom, 4)
+                        .padding(.leading, 28)
+                        .padding(.bottom, 6)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -134,7 +137,7 @@ private struct RelatedThreadRow: View {
             AgentOrb(seed: seed, size: 16, state: orbState)
         } else {
             Image(systemName: presentation.symbol)
-                .font(.system(size: 14, weight: .medium))
+                .font(ChatTimelineStyle.bodyStrong)
                 .foregroundStyle(T3Colors.textTertiary)
                 .accessibilityHidden(true)
         }

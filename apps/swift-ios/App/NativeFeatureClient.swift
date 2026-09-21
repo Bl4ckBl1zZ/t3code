@@ -206,14 +206,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func pair(endpoint: String, token: String?) async throws {
         let pairedClient: T3Client
+        let identity = PairingClientIdentity.current
         if let token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            pairedClient = try await runtime.pair(
-                host: endpoint,
-                code: token,
-                clientLabel: "T3 Code Swift"
-            )
+            pairedClient = try await runtime.pair(host: endpoint, code: token, client: identity)
         } else {
-            pairedClient = try await runtime.pair(url: endpoint, clientLabel: "T3 Code Swift")
+            pairedClient = try await runtime.pair(url: endpoint, client: identity)
         }
         await adoptEnvironment(pairedClient.environment, client: pairedClient)
         startPolling(pairedClient, reason: "pair")
@@ -248,9 +245,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         guard descriptor.environmentId == credential.environmentID else {
             throw T3ConnectRelayError.environmentMismatch
         }
+        let identity = PairingClientIdentity.current
         let authorization = try await t3ConnectController.managedAuthorizer.exchange(
             credential,
-            clientLabel: "T3 Code SwiftUI"
+            clientLabel: identity.label,
+            deviceType: identity.deviceType
         )
         guard authorization.environmentID == descriptor.environmentId,
               authorization.endpoint == credential.endpoint,
@@ -2569,6 +2568,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         action: FeatureSourceControlAction,
         message: String?
     ) async throws -> FeatureSourceControlStatus {
+        try await performSourceControlAction(
+            threadID: threadID,
+            action: action,
+            message: message,
+            onProgress: { _ in }
+        )
+    }
+
+    func performSourceControlAction(
+        threadID: String,
+        action: FeatureSourceControlAction,
+        message: String?,
+        onProgress: @escaping (FeatureSourceControlProgress) -> Void
+    ) async throws -> FeatureSourceControlStatus {
         let route = try threadRoute(for: threadID)
         let client = route.client
         let context = try workspaceContext(route: route)
@@ -2576,16 +2589,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         if action == .pull {
             _ = try await client.pull(cwd: context.cwd)
         } else {
-            let progress = try await client.runGitAction(
+            let events = try await client.runGitAction(
                 cwd: context.cwd,
                 threadID: route.wireID,
                 action: NativeWorkspaceMapper.gitAction(action),
                 commitMessage: message
             )
-            for try await event in progress {
+            var progress = FeatureSourceControlProgress()
+            for try await event in events {
                 if event.kind == "action_failed" {
                     throw RPCError.remote(event.message ?? "The source-control action failed.")
                 }
+                let changed = progress.apply(
+                    kind: event.kind,
+                    phases: event.phases,
+                    phase: event.phase,
+                    label: event.label,
+                    hookName: event.hookName
+                )
+                if changed { onProgress(progress) }
             }
         }
 
@@ -4708,6 +4730,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         } else if !userInputs.isEmpty {
             mappedThread.state = .waitingForInput
         }
+        // Same gate the shell mapper applies, so the open thread's row never
+        // offers an archive the list would refuse.
+        mappedThread.archiveBlockedByLiveRun = !ThreadArchive.canArchive(
+            latestRun.map { ThreadArchive.Runtime(status: $0.status, activeRunID: projection.activeRunID) }
+        )
         // Shell parity, from the projection's own transcript. This row lands in
         // the same list as the shell mapper's rows, and the list's shelf
         // assignment reads `lastActivityAt` while the row itself shows
@@ -5262,7 +5289,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             backgroundWorkCount: (thread.backgroundProcessCount ?? 0)
                 + (thread.activeAgentCount ?? 0),
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
-            interactionMode: mapInteractionMode(thread.interactionMode)
+            interactionMode: mapInteractionMode(thread.interactionMode),
+            archiveBlockedByLiveRun: !ThreadArchive.canArchive(shell: thread)
         )
     }
 

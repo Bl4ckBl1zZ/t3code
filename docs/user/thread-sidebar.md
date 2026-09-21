@@ -75,8 +75,10 @@ be selected again. The option is hidden when the connected environment needs a s
 Threads with unsent text or attachments show a **Draft** badge. Long-press a thread and choose
 **Discard draft** to clear it after confirmation, including when its composer is open.
 
-Tap **Select threads** or choose **Select thread** from a row’s menu, then select rows to snooze,
-unpin or delete together. Delete asks for confirmation; unpin follows your confirmation preference.
+Choose **⋯ → Select Threads** on Home, choose **Select** from a row’s menu, or swipe across rows
+with two fingers, then select rows to snooze, settle, archive, pin or unpin, or delete together from
+the bar at the bottom. Each action is available when it applies to at least one selected thread.
+Delete asks for confirmation; unpin follows your confirmation preference.
 Successful rows leave the selection. Failed rows stay selected so you can retry. Deleting thread
 history does not remove worktree files from the environment. Threads that cannot be snoozed,
 such as queued threads or Work's Main thread, stay selected when you snooze a selection.
@@ -85,15 +87,21 @@ On iOS, **Snooze → Custom…** in a thread's menu or in the selection bar open
 date and time in your device's time zone, or a duration in minutes, hours or days. Durations
 start when you tap **Snooze**.
 
-Home search on iOS also matches message content on connected environments. Title, project and
-pull request matches come first; message matches follow with the matching line under the row.
+On iOS, swipe a Home row from the left to pin or snooze it, or from the right to settle or delete
+it. Delete asks for confirmation. A thread that is still running can't be archived; its menu says
+why.
+
+Tap the magnifying glass on Home to search. Choose **Code**, **Work** or **Chat** under the search
+field to change what you search; it starts on the tab you are in. Home search also matches message
+content on connected environments. Title, project and pull request matches come first; message
+matches follow in a **Messages** section with the matching line under the row.
 
 ## Arrange active threads on native iOS
 
-On supporting environments, choose **Arrange threads** above the Code or Work task list. Drag
+On supporting environments, choose **⋯ → Arrange Threads** on the Code or Work tab. Drag
 the handles, or use VoiceOver's **Move up** and **Move down** actions. The order is saved to the
 environment, so other connected devices see it too. Project filters leave other threads alone.
-New and reopened threads appear above arranged threads. **Reset to newest first** removes the
+New and reopened threads appear above arranged threads. **Reset to Newest First** removes the
 manual order for the displayed active threads. Pinned threads retain their separate order.
 
 On web and desktop, drop files onto a thread row or search result to open that thread and attach
@@ -124,7 +132,7 @@ Archived rows and batch-selection mode do not accept drops.
 
 Current servers move finished or inactive threads into **Settled** even when no client is open.
 These settings belong to the selected environment and apply to every connected device. On native
-iOS, open **Settings → Thread organization**, choose the machine, and configure merge settlement
+iOS, open **Settings → Shared Preferences**, tap the title to choose the machine, and configure merge settlement
 or an inactivity period from 1 to 90 days. Turn off inactivity settlement to keep quiet threads
 active indefinitely. Older servers keep their existing device-local behavior.
 

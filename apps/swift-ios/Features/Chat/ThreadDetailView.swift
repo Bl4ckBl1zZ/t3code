@@ -3,17 +3,18 @@ import UIKit
 
 public struct ThreadDetailView: View {
     @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @SwiftUI.Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @Bindable var model: FeatureRootModel
     let thread: FeatureThread
     let submitMessage: (FeatureMessageSubmission) async -> Bool
-    let onNavigateBack: () -> Void
     /// Opening a related thread — a subagent card, a fork divider, a lineage row
     /// — is the navigator's job: this view is inside someone else's stack and
     /// only reports which thread was asked for. `isArchived` routes to the
     /// archive, which is the only place an archived thread can be shown.
     let onOpenRelatedThread: (_ threadID: String, _ isArchived: Bool) -> Void
+    /// Leaves this thread once it no longer exists, such as after Delete. The
+    /// system back button covers ordinary navigation.
+    let onNavigateBack: () -> Void
     @State private var nativeToolIcons = NativeAppToolIconStore()
     @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
@@ -34,9 +35,20 @@ public struct ThreadDetailView: View {
     /// in a run. See `pendingHandoffItem`.
     @State private var pendingProviderSwitch: PendingProviderSwitch?
     @State private var isSending = false
+    /// Previous/next turn, from the keyboard shortcuts and the transcript's
+    /// accessibility actions.
     @State private var turnNavigationRequest = 0
+    @State private var scrollToLatestRequest = 0
+    /// Something landed below while the reader was scrolled into history.
+    @State private var hasActivityBelow = false
+    /// The first load of a thread with nothing cached. A cached thread renders
+    /// at once and refreshes under the reader, so this never covers content.
     @State private var isLoading = true
-    @State private var sendFailed = false
+    @State private var isRetryingLoad = false
+    /// Drives the subtitle's working duration, which only moves by minutes.
+    @State private var subtitleNow = Date()
+    @State private var isConfirmingUnpin = false
+    @State private var pullRequestPreview: PullRequestLinkTarget?
     /// The provider's answer to `/feedback`: the id it filed the report under,
     /// which is the only handle the reader has for quoting it later.
     @State private var feedbackReceipt: String?
@@ -89,54 +101,48 @@ public struct ThreadDetailView: View {
         .onChange(of: isSwappingDraft) { if !isSwappingDraft { consumePullRequestPrompt() } }
     }
 
-    private var threadContent: some View {
+    /// The screen and its bars. Split from `threadContent` so neither
+    /// modifier chain is long enough to stall the type checker.
+    private var threadChrome: some View {
         Group {
-            if isLoading {
-                FeatureThreadOpeningView(isRefreshing: detail != nil)
-            } else if let detail {
-                timeline(detail)
+            // One branch for loading and loaded, so the bar and composer the
+            // reader already sees are not rebuilt when the transcript lands.
+            if detail != nil || isLoading {
+                timeline(detail ?? FeatureThreadDetail(thread: currentThread), isLoading: detail == nil)
             } else {
-                ContentUnavailableView(
-                    "Thread unavailable",
-                    systemImage: "exclamationmark.bubble",
-                    description: Text("The thread could not be loaded.")
-                )
+                unavailableView
             }
         }
         .background(T3Colors.background)
         .environment(\.nativeAppToolIconContext, nativeToolIconContext)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let submission = model.outboxSubmissions.first(where: { $0.threadID == thread.id }) {
-                Label(model.outboxStatus(submission), systemImage: "tray.and.arrow.up")
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(T3Colors.subtle)
-            }
-        }
+        .navigationTitle(currentThread.title)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(false)
+        .modifier(ThreadHeaderModifier(title: currentThread.title, subtitle: headerSubtitle))
         .t3NavigationChrome()
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                threadHeaderTitle
-            }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     toolSurface = .details
                 } label: {
-                    Image(systemName: "line.3.horizontal.decrease")
-                        // Explicit: a bare toolbar button falls back to the
-                        // accent tint, which read as a random blue icon.
-                        .foregroundStyle(T3Colors.textPrimary)
+                    Label("Thread Details", systemImage: "info.circle")
                 }
-                .tint(T3Colors.textPrimary)
-                .accessibilityLabel("Thread details")
                 .accessibilityIdentifier("thread-details-button")
+                threadActionsMenu
             }
         }
+        .background { keyboardShortcuts }
+        .confirmationDialog("Unpin this thread?", isPresented: $isConfirmingUnpin, titleVisibility: .visible) {
+            Button("Unpin", role: .destructive) { setPinned(false) }
+        }
+        .sheet(item: $pullRequestPreview) { target in
+            if let context = pullRequestContext {
+                PullRequestLinkPreview(target: target, context: context)
+            }
+        }
+    }
+
+    private var threadContent: some View {
+        threadChrome
         .task(id: "\(currentThread.projectID):\(currentSelection?.providerID ?? ""):\(threadWorkspaceRoot ?? "")") {
             guard let instanceID = currentSelection?.providerID,
                   threadProviders.first(where: { $0.id == instanceID })?.driver == "antigravity" else { return }
@@ -156,16 +162,35 @@ public struct ThreadDetailView: View {
         // real one without an opening spinner over content already on screen,
         // and leaves the draft alone so it cannot overwrite what was typed
         // while creation was in flight.
+        //
+        // A detail cached from an earlier visit renders immediately; the
+        // forced refresh then lands in place rather than behind a spinner.
         .task(id: threadLoadPhase) {
             let restoreBaseline = composerDraft
             let restoreKey = draftKey
             openedFromOutbox = openedFromOutbox || model.isAwaitingCreation(thread.id)
-            isLoading = !openedFromOutbox
+            isLoading = detail == nil && !openedFromOutbox
             _ = await model.detail(for: thread.id, force: true)
             if !didRestoreDraft {
                 await restoreDraft(from: restoreBaseline, key: restoreKey)
             }
             isLoading = false
+        }
+        // The subtitle reports the working time in minutes, so it wakes once a
+        // minute while a turn runs and never otherwise.
+        .task(id: subtitleClockStart) {
+            guard let start = subtitleClockStart else { return }
+            while !Task.isCancelled {
+                subtitleNow = .now
+                let intoMinute = Date.now.timeIntervalSince(start).truncatingRemainder(dividingBy: 60)
+                try? await Task.sleep(for: .seconds(max(1, 60 - intoMinute)))
+            }
+        }
+        .onChange(of: currentThread.state == .failed) { _, failed in
+            if failed { PlatformHapticEngine.shared.play(.error) }
+        }
+        .onChange(of: hasFailedDelivery) { _, failed in
+            if failed { PlatformHapticEngine.shared.play(.error) }
         }
         .onChange(of: composerFocused) { if composerFocused { readingHistoryThreadID = nil } }
         .onChange(of: draft) { scheduleDraftSave() }
@@ -177,7 +202,7 @@ public struct ThreadDetailView: View {
         .sheet(item: $citationPreview) { citation in
             AssistantCitationPreview(citation: citation) { openCitationSource(citation) }
         }
-        .alert("Quoted response", isPresented: Binding(get: { citationError != nil }, set: { if !$0 { citationError = nil } })) {
+        .alert("Quote Unavailable", isPresented: Binding(get: { citationError != nil }, set: { if !$0 { citationError = nil } })) {
             Button("OK") { citationError = nil }
         } message: { Text(citationError ?? "") }
         .sheet(item: $restoreRequest) { request in
@@ -198,99 +223,77 @@ public struct ThreadDetailView: View {
             )
         }
         .sheet(item: $toolSurface) { surface in
-            NavigationStack {
-                switch surface {
-                case .details:
-                    ThreadDetailsSheet(
-                        thread: currentThread,
-                        environment: threadEnvironment,
-                        project: threadProject,
-                        client: model.client,
-                        onNavigate: navigateFromDetails,
-                        onReconnect: {
-                            guard let environmentID = threadEnvironment?.id else { return }
-                            Task { _ = await model.activateEnvironment(environmentID) }
-                        },
-                        // The project's actions, listed as run rows under
-                        // Workspace beside Files and Terminal.
-                        scripts: threadProject?.scripts ?? [],
-                        onRunScript: runProjectScript,
-                        // The same projection the transcript renders, so the
-                        // sheet's Background Tasks and Lineage sections cannot
-                        // disagree with the rows above them.
-                        turnItems: detail?.timelineItems.map(\.item) ?? [],
-                        relationships: relationships,
-                        onMergeBack: mergeBack,
-                        onDetachSession: detachSession,
-                        onTogglePin: {
-                            Task {
-                                await model.setPinned(
-                                    thread.id,
-                                    pinned: currentThread.pinnedAt == nil
-                                )
-                            }
-                        },
-                        confirmThreadUnpin: model.snapshot.settings.confirmThreadUnpin,
-                        onReload: {
-                            Task { _ = await model.detail(for: thread.id, force: true) }
-                        },
-                        onToggleArchive: {
-                            // Dismiss first: an archived thread leaves the
-                            // stack this sheet is presented over.
-                            toolSurface = nil
-                            Task {
-                                await model.setArchived(
-                                    thread.id,
-                                    archived: !currentThread.isArchived
-                                )
-                            }
-                        },
-                        isChatConversation: currentThread.workInboxRole == "chat",
-                        isHermesConversation: ModelOptions.isHermesProvider(currentThread.providerID, in: environmentProviders),
-                        activeProviderSessionID: detail?.workflow.providerSession?.id
-                    )
-                case let .files(path, line):
-                    FeatureFilesView(
-                        client: model.client,
-                        threadID: thread.id,
-                        initialPath: path,
-                        initialLine: line,
-                        workspaceMutationID: WorkspaceMutationRevision.latest((model.details[thread.id]?.timelineItems ?? []).lazy.map {
-                            WorkspaceMutationItem(sourceThreadID: $0.sourceThreadId, itemID: $0.item.id,
-                                type: $0.item.type, status: $0.item.status.rawValue, updatedAt: $0.item.base.updatedAt)
-                        })
-                    )
-                case let .review(filePath):
-                    FeatureReviewView(
-                        client: model.client,
-                        threadID: thread.id,
-                        selection: model.reviewSelection,
-                        initialFilePath: filePath
-                    )
-                case .sourceControl:
-                    FeatureSourceControlView(client: model.client, threadID: thread.id)
-                case let .terminal(terminalID):
-                    FeatureTerminalView(
-                        client: model.client,
-                        threadID: thread.id,
-                        initialTerminalID: terminalID
-                    )
+            if let tool = surface.tool {
+                // A deep link from the transcript: the tool on its own, at the
+                // place the link named. From Details the same tools push.
+                NavigationStack {
+                    workspaceToolView(tool)
+                        .t3SheetToolbar(.close)
                 }
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
+                .presentationDetents([.large])
+            } else {
+                ThreadDetailsSheet(
+                    thread: currentThread,
+                    environment: threadEnvironment,
+                    project: threadProject,
+                    client: model.client,
+                    onExit: exitFromDetails,
+                    onReconnect: {
+                        guard let environmentID = threadEnvironment?.id else { return }
+                        Task { _ = await model.activateEnvironment(environmentID) }
+                    },
+                    // The project's actions, listed as run rows under
+                    // Workspace beside Files and Terminal.
+                    scripts: threadProject?.scripts ?? [],
+                    onRunScript: runProjectScript,
+                    // The same projection the transcript renders, so the
+                    // sheet's Background Tasks and Lineage sections cannot
+                    // disagree with the rows above them.
+                    turnItems: detail?.timelineItems.map(\.item) ?? [],
+                    relationships: relationships,
+                    onMergeBack: detailsMergeBack,
+                    onDetachSession: {
+                        try await model.client.stopThreadSession(threadID: thread.id)
+                        _ = await model.detail(for: thread.id, force: true)
+                    },
+                    onTogglePin: {
+                        Task {
+                            await model.setPinned(
+                                thread.id,
+                                pinned: currentThread.pinnedAt == nil
+                            )
+                        }
+                    },
+                    confirmThreadUnpin: model.snapshot.settings.confirmThreadUnpin,
+                    onReload: {
+                        _ = await model.detail(for: thread.id, force: true)
+                    },
+                    onToggleArchive: {
+                        // Dismiss first: an archived thread leaves the
+                        // stack this sheet is presented over.
                         toolSurface = nil
-                    }
-                }
+                        Task {
+                            await model.setArchived(
+                                thread.id,
+                                archived: !currentThread.isArchived
+                            )
+                        }
+                    },
+                    onRename: { title in
+                        Task { await model.renameThread(thread.id, title: title) }
+                    },
+                    onDelete: {
+                        toolSurface = nil
+                        Task {
+                            if await model.deleteThread(thread.id) { onNavigateBack() }
+                        }
+                    },
+                    isChatConversation: currentThread.workInboxRole == "chat",
+                    isHermesConversation: ModelOptions.isHermesProvider(currentThread.providerID, in: environmentProviders),
+                    activeProviderSessionID: detail?.workflow.providerSession?.id,
+                    toolView: workspaceToolView
+                )
             }
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-        .alert("Message not sent", isPresented: $sendFailed) {
-            Button("OK") {}
-        } message: {
-            Text("Your draft is still here. Check your connection and try again.")
         }
         .alert(
             "Feedback sent",
@@ -302,13 +305,14 @@ public struct ThreadDetailView: View {
             Button("Copy ID") {
                 UIPasteboard.general.string = feedbackReceipt
                 feedbackReceipt = nil
+                T3HUD.show("Copied", systemImage: "doc.on.doc")
             }
             Button("Done", role: .cancel) { feedbackReceipt = nil }
         } message: {
             Text(feedbackReceipt.map { "Thread ID: \($0)" } ?? "")
         }
         .alert(
-            "Feedback not sent",
+            "Feedback Not Sent",
             isPresented: Binding(
                 get: { feedbackFailure != nil },
                 set: { if !$0 { feedbackFailure = nil } }
@@ -318,23 +322,9 @@ public struct ThreadDetailView: View {
         } message: {
             Text(feedbackFailure ?? "")
         }
-        .alert("Could not start conversation", isPresented: Binding(get: { workConversationFailure != nil }, set: { if !$0 { workConversationFailure = nil } })) {
+        .alert("Couldn't Start Conversation", isPresented: Binding(get: { workConversationFailure != nil }, set: { if !$0 { workConversationFailure = nil } })) {
             Button("OK") { workConversationFailure = nil }
         } message: { Text(workConversationFailure ?? "") }
-        .simultaneousGesture(edgeBackGesture)
-    }
-
-    private var edgeBackGesture: some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .local)
-            .onEnded { value in
-                guard horizontalSizeClass == .compact,
-                      value.startLocation.x <= 24,
-                      value.translation.width >= 72,
-                      abs(value.translation.height) <= abs(value.translation.width) * 0.7 else {
-                    return
-                }
-                onNavigateBack()
-            }
     }
 
     private var detail: FeatureThreadDetail? {
@@ -383,235 +373,410 @@ public struct ThreadDetailView: View {
         )
     }
 
-    private var threadHeaderTitle: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(currentThread.title)
-                .font(T3Typography.navigationTitle)
-                .foregroundStyle(T3Colors.textPrimary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(1)
+    // MARK: - Header
 
-            HStack(spacing: 5) {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.branch")
-                    Text(headerBranch)
-                        .lineLimit(1)
-                    if let environmentName = currentThread.homeEnvironmentLabel(in: model.snapshot) {
-                        Text("·")
-                        Text(environmentName)
-                            .lineLimit(1)
-                    }
-                }
-                .lineLimit(1)
-                .truncationMode(.tail)
+    private var headerSubtitle: ThreadHeaderSubtitle {
+        ThreadHeaderSubtitle.resolve(
+            thread: currentThread,
+            environmentName: currentThread.homeEnvironmentLabel(in: model.snapshot),
+            connection: threadConnectionState,
+            now: subtitleNow
+        )
+    }
 
-                Spacer(minLength: 6)
+    /// When the subtitle's working clock starts, or nil when there is no clock
+    /// to keep: the thread is not working, or the server has not said since
+    /// when.
+    private var subtitleClockStart: Date? {
+        currentThread.homeStatus == .working ? currentThread.workingStartedAt : nil
+    }
 
-                // The per-second timeline only exists for the live working
-                // duration; idle threads render a static status instead of
-                // waking every second forever. While a turn is in flight the
-                // composer's status band carries that timer, so the header
-                // neither duplicates it nor wakes for it.
-                Group {
-                    if workingStatus == nil, currentThread.homeStatus == .working {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            headerStatus(at: context.date)
+    /// How the thread's environment is reachable right now. The active
+    /// environment's socket is authoritative when the aggregate probe has not
+    /// caught up with it.
+    private var threadConnectionState: FeatureConnection.State? {
+        guard let environment = threadEnvironment else { return nil }
+        if environment.connectionState == .connected
+            || (environment.isActive && model.snapshot.connection.state == .connected) {
+            return .connected
+        }
+        return environment.connectionState
+            ?? (environment.isActive ? model.snapshot.connection.state : nil)
+    }
+
+    private var isEnvironmentOffline: Bool {
+        threadConnectionState == .disconnected
+    }
+
+    private var isChatConversation: Bool {
+        currentThread.workInboxRole == "chat"
+    }
+
+    /// The thread actions a reader reaches for most, one tap from the bar.
+    /// Details keeps the full picture behind the info button.
+    private var threadActionsMenu: some View {
+        Menu {
+            if currentThread.supportsPinning != false {
+                Section {
+                    Button(
+                        currentThread.pinnedAt == nil ? "Pin" : "Unpin",
+                        systemImage: currentThread.pinnedAt == nil ? "pin" : "pin.slash"
+                    ) {
+                        if currentThread.pinnedAt != nil, model.snapshot.settings.confirmThreadUnpin {
+                            isConfirmingUnpin = true
+                        } else {
+                            setPinned(currentThread.pinnedAt == nil)
                         }
-                    } else {
-                        headerStatus(at: .now)
                     }
                 }
-                .fixedSize(horizontal: true, vertical: false)
             }
-            .font(T3Typography.navigationMetadata)
-            .foregroundStyle(T3Colors.textTertiary)
-        }
-        .frame(maxWidth: horizontalSizeClass == .compact ? 260 : 460, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
-    }
-
-    @ViewBuilder
-    private func headerStatus(at now: Date) -> some View {
-        HStack(spacing: 5) {
-            if let icon = headerStatusIcon {
-                Image(systemName: icon)
+            if !isChatConversation {
+                Section {
+                    Button("Files", systemImage: "folder") { toolSurface = .files(path: nil, line: nil) }
+                    Button("Review Changes", systemImage: "doc.text.magnifyingglass") { toolSurface = .review(filePath: nil) }
+                    Button("Source Control", systemImage: "arrow.triangle.branch") { toolSurface = .sourceControl }
+                    Button("Terminal", systemImage: "terminal") { toolSurface = .terminal(terminalID: nil) }
+                }
             }
-            if workingStatus == nil, let duration = currentThread.homeWorkingDuration(at: now) {
-                Text(duration)
-                    .monospaced()
-                    .monospacedDigit()
-            } else {
-                Text(currentThread.homeStatusLabel ?? "Ready")
-            }
-        }
-        .font(T3Typography.status)
-        .foregroundStyle(headerStatusColor)
-        .lineLimit(1)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var headerBranch: String {
-        if let branch = currentThread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !branch.isEmpty {
-            return branch
-        }
-        if let path = currentThread.worktreePath,
-           !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: path).lastPathComponent
-        }
-        return "workspace"
-    }
-
-    private var headerStatusIcon: String? {
-        switch currentThread.homeStatus {
-        case .working, .background: "circle.dotted"
-        case .done: "checkmark.circle"
-        case .failed: "exclamationmark.circle"
-        case .approval, .input, .ready: nil
-        }
-    }
-
-    private var headerStatusColor: Color {
-        switch currentThread.homeStatus {
-        case .working: T3Colors.statusRunning
-        // The running hue, dimmed: nothing is generating, something is merely
-        // still out there.
-        case .background: T3Colors.statusRunning.opacity(0.8)
-        case .approval: T3Colors.warning
-        case .input: T3Colors.statusInput
-        case .failed: T3Colors.danger
-        case .done: T3Colors.success
-        case .ready: T3Colors.textTertiary
-        }
-    }
-
-    private func timeline(_ detail: FeatureThreadDetail) -> some View {
-        let isWorking = detail.thread.state == .working || detail.thread.state == .queued
-        return Group {
-            if detail.messages.isEmpty, detail.timelineItems.isEmpty, !isWorking {
-                ContentUnavailableView(
-                    "Ready for a task",
-                    systemImage: "sparkles",
-                    description: Text("Tell the agent what you want to build.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                FeatureTranscriptCollectionView(
-                    threadID: thread.id,
-                    // Projected rows name their source thread with a wire id, so
-                    // the rollback affordance has to compare against one.
-                    wireThreadID: thread.wireID ?? thread.id,
-                    markdownMedia: MarkdownMediaContext(
-                        threadID: thread.id,
-                        client: model.client
-                    ),
-                    pullRequests: threadEnvironment?.supportsPullRequests == true ? MarkdownPullRequestContext(threadID: thread.id, client: model.client) : nil,
-                    onRollback: { target in
-                        // Preview first, never fire-and-forget: the sheet
-                        // shows the computed blast radius, owns progress, and
-                        // surfaces failures instead of swallowing them.
-                        restoreRequest = CheckpointRestoreRequest.make(
-                            target: target,
-                            timelineItems: detail.timelineItems
-                        )
-                    },
-                    detail: detailWithPendingHandoff(detail),
-                    renderUpdate: model.detailRenderUpdates[thread.id],
-                    dynamicTypeSize: dynamicTypeSize,
-                    topContentInset: bannerHeight,
-                    bottomContentInset: composerHeight,
-                    canLoadEarlier: detail.page?.hasMore == true,
-                    isLoadingEarlier: detail.page?.isLoading == true,
-                    workspaceRoot: threadWorkspaceRoot,
-                    alwaysExpandActivity: model.snapshot.settings.alwaysExpandActivity,
-                    onLoadEarlier: {
-                        Task { await model.loadEarlierTurns(for: thread.id) }
-                    },
-                    onDismissKeyboard: dismissKeyboard,
-                    onOpenThread: openRelatedThread,
-                    onOpenFile: openFile,
-                    onOpenURL: { openURL($0) },
-                    onOpenDiff: openDiff,
-                    citationNavigation: model.pendingAssistantCitation.flatMap { request in
-                        request.citation.threadId == (thread.wireID ?? thread.id) && request.citation.environmentId == threadEnvironment?.id ? request : nil
-                    },
-                    onCitationComplete: { request, error in
-                        guard model.pendingAssistantCitation?.id == request.id else { return }
-                        model.pendingAssistantCitation = nil
-                        citationError = error
-                    },
-                    onOpenCitation: { citationPreview = $0 },
-                    citationContext: threadEnvironment?.supportsAssistantCitations == true ? AssistantCitationContext(
-                        environmentId: threadEnvironment?.id ?? "", threadId: thread.wireID ?? thread.id,
-                        onCite: { citation in
-                            guard !isSending else { return }
-                            draft += (draft.isEmpty || draft.last?.isWhitespace == true ? "" : " ") + citation.marker
-                        }) : nil,
-                    onUseTemplate: { template in
-                        guard !isSending else { return }
-                        let prompt = template.prompt
-                        if !draft.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(prompt) {
-                            draft += (draft.isEmpty || draft.last?.isWhitespace == true ? "" : " ") + prompt
+            if pullRequestContext != nil, !linkedPullRequestTargets.isEmpty {
+                Section {
+                    ForEach(linkedPullRequestTargets) { target in
+                        Button("Pull Request #\(String(target.number))", systemImage: "arrow.triangle.pull") {
+                            pullRequestPreview = target
                         }
-                        composerFocused = true
-                    },
-                    navigationRequest: turnNavigationRequest,
-                    onReadingHistoryChanged: { reading in
-                        let next = reading ? thread.id : nil
-                        if readingHistoryThreadID != next { readingHistoryThreadID = next }
-                    }
-                )
-                // Container only: the transcript runs on under the glass
-                // composer to the screen edge, but still rises for the
-                // keyboard.
-                .ignoresSafeArea(.container, edges: .bottom)
-            }
-        }
-        .overlay(alignment: .top) {
-            relationshipsBanner
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: TranscriptBannerHeightKey.self,
-                            value: proxy.size.height
-                        )
                     }
                 }
+            }
+            Section {
+                if currentThread.supportsSnooze != false,
+                   let until = currentThread.snoozedUntil, until > .now {
+                    Button("Unsnooze", systemImage: "moon.zzz") {
+                        Task { _ = await model.setSnoozed(thread.id, until: nil) }
+                    }
+                }
+                Button("Reload", systemImage: "arrow.clockwise") {
+                    Task { _ = await model.detail(for: thread.id, force: true) }
+                }
+                Button(
+                    currentThread.isArchived ? "Unarchive" : "Archive",
+                    systemImage: currentThread.isArchived ? "tray.and.arrow.up" : "archivebox"
+                ) {
+                    Task { await model.setArchived(thread.id, archived: !currentThread.isArchived) }
+                }
+            }
+        } label: {
+            Label("Thread Actions", systemImage: "ellipsis")
         }
-        .onPreferenceChange(TranscriptBannerHeightKey.self) { height in
-            bannerHeight = height
+        .accessibilityIdentifier("thread-actions-menu")
+    }
+
+    private func setPinned(_ pinned: Bool) {
+        Task { _ = await model.setPinned(thread.id, pinned: pinned) }
+    }
+
+    private var pullRequestContext: MarkdownPullRequestContext? {
+        threadEnvironment?.supportsPullRequests == true
+            ? MarkdownPullRequestContext(threadID: thread.id, client: model.client)
+            : nil
+    }
+
+    /// Pull requests pinned to the thread, previewed from the actions menu with
+    /// the same sheet a link in the transcript opens.
+    private var linkedPullRequestTargets: [PullRequestLinkTarget] {
+        currentThread.allLinkedPullRequests.compactMap { URL(string: $0.url).flatMap(PullRequestLinkTarget.init) }
+    }
+
+    /// Shortcuts a hardware keyboard shows in the iPad command overlay.
+    /// Buttons rather than menu items, because a toolbar menu's items only
+    /// register while it is open.
+    private var keyboardShortcuts: some View {
+        Group {
+            Button("Thread Details") { toolSurface = .details }
+                .keyboardShortcut("i", modifiers: .command)
+            Button("Previous Turn") { turnNavigationRequest -= 1 }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            Button("Next Turn") { turnNavigationRequest += 1 }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            Button("Send Message") { send() }
+                .keyboardShortcut(.return, modifiers: .command)
+            if currentThread.state == .working || currentThread.state == .queued {
+                Button("Stop") { Task { await model.cancelTurn(threadID: thread.id) } }
+                    .keyboardShortcut(".", modifiers: .command)
+            }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: - Unavailable
+
+    /// No cached copy and the load failed. The way forward depends on why: an
+    /// unreachable environment needs a reconnect, anything else a retry.
+    private var unavailableView: some View {
+        let environmentName = currentThread.homeEnvironmentLabel(in: model.snapshot)
+        return ContentUnavailableView {
+            if isEnvironmentOffline, let environmentName {
+                Label("\(environmentName) Is Offline", systemImage: "wifi.slash")
+            } else {
+                Label("Thread Unavailable", systemImage: "exclamationmark.bubble")
+            }
+        } description: {
+            if isEnvironmentOffline {
+                Text("Reconnect to load this thread.")
+            } else if let environmentName {
+                Text("This thread couldn't be loaded from \(environmentName).")
+            } else {
+                Text("This thread couldn't be loaded.")
+            }
+        } actions: {
+            Button(action: retryLoad) {
+                if isRetryingLoad {
+                    ProgressView()
+                } else {
+                    Text(isEnvironmentOffline ? "Reconnect" : "Try Again")
+                }
+            }
+            .t3ProminentButtonStyle()
+            .disabled(isRetryingLoad)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func retryLoad() {
+        guard !isRetryingLoad else { return }
+        isRetryingLoad = true
+        Task {
+            if isEnvironmentOffline, let environmentID = threadEnvironment?.id {
+                _ = await model.activateEnvironment(environmentID)
+            }
+            _ = await model.detail(for: thread.id, force: true)
+            isRetryingLoad = false
+        }
+    }
+
+    // MARK: - Outbox
+
+    /// Captions for this thread's messages still in the outbox, keyed by the
+    /// optimistic message id each submission minted.
+    private var outboxCaptions: [String: ThreadMessageCaption] {
+        var captions: [String: ThreadMessageCaption] = [:]
+        for submission in model.outboxSubmissions where submission.threadID == thread.id {
+            captions[submission.identity.messageID] = .outbox(
+                model.outboxDelivery(submission),
+                hasAttachments: !submission.attachments.isEmpty
+            )
+        }
+        return captions
+    }
+
+    private var hasFailedDelivery: Bool {
+        model.outboxSubmissions.contains {
+            $0.threadID == thread.id && model.outboxDelivery($0) == .failed
+        }
+    }
+
+    // MARK: - Timeline
+
+    private var isReadingHistory: Bool {
+        readingHistoryThreadID == thread.id
+    }
+
+    /// The transcript and the chrome that floats over it: the connection and
+    /// agents bars under the navigation bar, and the dock — jump to latest,
+    /// queue, tasks and composer — over the bottom edge.
+    private func timeline(_ detail: FeatureThreadDetail, isLoading: Bool) -> some View {
+        ZStack(alignment: .top) {
+            transcriptArea(detail, isLoading: isLoading)
+
             VStack(spacing: 0) {
-                queueSurfaces
-                ComposerTasksView(detail: detail)
-                if !detail.messages.isEmpty || !detail.timelineItems.isEmpty || isWorking {
-                    HStack(spacing: 16) {
-                        Button("Previous turn", systemImage: "arrow.up") { turnNavigationRequest -= 1 }
-                        Button("Next turn", systemImage: "arrow.down") { turnNavigationRequest += 1 }
+                if isEnvironmentOffline, let environmentID = threadEnvironment?.id {
+                    ThreadConnectionBanner(
+                        environmentName: currentThread.homeEnvironmentLabel(in: model.snapshot) ?? "This environment"
+                    ) {
+                        _ = await model.activateEnvironment(environmentID)
                     }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.bordered)
-                    .padding(10)
-                    .background(.regularMaterial, in: Capsule())
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.trailing, 18)
                 }
-                composer(detail)
+                relationshipsBanner
             }
+            .frame(maxWidth: T3Metrics.readingWidth)
+            .frame(maxWidth: .infinity)
             .background {
                 GeometryReader { proxy in
                     Color.clear.preference(
-                        key: TranscriptComposerHeightKey.self,
+                        key: TranscriptBannerHeightKey.self,
                         value: proxy.size.height
                     )
                 }
             }
         }
+        .onPreferenceChange(TranscriptBannerHeightKey.self) { height in
+            bannerHeight = height
+        }
+        .threadDock {
+            T3GlassContainer(spacing: 12) {
+                VStack(spacing: 8) {
+                    if isReadingHistory, !isLoading {
+                        ThreadJumpToLatestButton(hasNewContent: hasActivityBelow) {
+                            scrollToLatestRequest += 1
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.trailing, 16)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    }
+                    // Measured without the jump button: it floats over rows the
+                    // reader has scrolled away from, so it must not move the
+                    // transcript's bottom inset.
+                    VStack(spacing: 0) {
+                        queueSurfaces
+                        ComposerTasksView(detail: detail)
+                        if currentThread.isArchived {
+                            ThreadArchivedBar {
+                                await model.setArchived(thread.id, archived: false)
+                                PlatformHapticEngine.shared.play(.success)
+                            }
+                        } else {
+                            composer(detail)
+                        }
+                    }
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: TranscriptComposerHeightKey.self,
+                                value: proxy.size.height
+                            )
+                        }
+                    }
+                }
+                // One reading column on iPad: the dock shares the transcript's
+                // measure instead of spanning the whole detail pane.
+                .frame(maxWidth: T3Metrics.readingWidth)
+                .frame(maxWidth: .infinity)
+                .animation(.snappy, value: isReadingHistory)
+            }
+        }
         .onPreferenceChange(TranscriptComposerHeightKey.self) { height in
             composerHeight = height
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptArea(_ detail: FeatureThreadDetail, isLoading: Bool) -> some View {
+        let isWorking = detail.thread.state == .working || detail.thread.state == .queued
+        if isLoading {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("Loading thread")
+                .accessibilityIdentifier("thread-opening-state")
+        } else if detail.messages.isEmpty, detail.timelineItems.isEmpty, !isWorking {
+            ContentUnavailableView(
+                "Ready for a Task",
+                systemImage: "sparkles",
+                description: Text("Tell the agent what you want to build.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Squeezed behind the keyboard it only competes with the draft.
+            .opacity(composerFocused ? 0 : 1)
+            .animation(.easeOut(duration: 0.2), value: composerFocused)
+        } else {
+            FeatureTranscriptCollectionView(
+                threadID: thread.id,
+                // Projected rows name their source thread with a wire id, so
+                // the rollback affordance has to compare against one.
+                wireThreadID: thread.wireID ?? thread.id,
+                markdownMedia: MarkdownMediaContext(
+                    threadID: thread.id,
+                    client: model.client
+                ),
+                pullRequests: pullRequestContext,
+                onRollback: { target in
+                    // Preview first, never fire-and-forget: the sheet
+                    // shows the computed blast radius, owns progress, and
+                    // surfaces failures instead of swallowing them.
+                    restoreRequest = CheckpointRestoreRequest.make(
+                        target: target,
+                        timelineItems: detail.timelineItems
+                    )
+                },
+                detail: detailWithPendingHandoff(detail),
+                renderUpdate: model.detailRenderUpdates[thread.id],
+                dynamicTypeSize: dynamicTypeSize,
+                topContentInset: bannerHeight,
+                bottomContentInset: composerHeight,
+                canLoadEarlier: detail.page?.hasMore == true,
+                isLoadingEarlier: detail.page?.isLoading == true,
+                workspaceRoot: threadWorkspaceRoot,
+                alwaysExpandActivity: model.snapshot.settings.alwaysExpandActivity,
+                outboxCaptions: outboxCaptions,
+                onLoadEarlier: {
+                    Task { await model.loadEarlierTurns(for: thread.id) }
+                },
+                onOpenThread: openRelatedThread,
+                onOpenFile: openFile,
+                onOpenURL: { openURL($0) },
+                onOpenDiff: openDiff,
+                onRetrySend: { model.retryOutbox() },
+                onRetryTurn: retryLastMessage,
+                citationNavigation: model.pendingAssistantCitation.flatMap { request in
+                    request.citation.threadId == (thread.wireID ?? thread.id) && request.citation.environmentId == threadEnvironment?.id ? request : nil
+                },
+                onCitationComplete: { request, error in
+                    guard model.pendingAssistantCitation?.id == request.id else { return }
+                    model.pendingAssistantCitation = nil
+                    citationError = error
+                },
+                onOpenCitation: { citationPreview = $0 },
+                citationContext: threadEnvironment?.supportsAssistantCitations == true ? AssistantCitationContext(
+                    environmentId: threadEnvironment?.id ?? "", threadId: thread.wireID ?? thread.id,
+                    onCite: { citation in
+                        guard !isSending else { return }
+                        draft += (draft.isEmpty || draft.last?.isWhitespace == true ? "" : " ") + citation.marker
+                    }) : nil,
+                onUseTemplate: { template in
+                    guard !isSending else { return }
+                    let prompt = template.prompt
+                    if !draft.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(prompt) {
+                        draft += (draft.isEmpty || draft.last?.isWhitespace == true ? "" : " ") + prompt
+                    }
+                    composerFocused = true
+                },
+                navigationRequest: turnNavigationRequest,
+                scrollToLatestRequest: scrollToLatestRequest,
+                onReadingHistoryChanged: { reading in
+                    let next = reading ? thread.id : nil
+                    if readingHistoryThreadID != next { readingHistoryThreadID = next }
+                },
+                onActivityBelowChanged: { hasActivity in
+                    if hasActivityBelow != hasActivity { hasActivityBelow = hasActivity }
+                }
+            )
+            // The transcript runs on under the glass composer to the screen
+            // edge, and on iOS 26 under the glass navigation bar too; the
+            // collection view adds both bars back as content insets. Container
+            // only, so it still rises for the keyboard.
+            .ignoresSafeArea(.container, edges: Self.transcriptBleedEdges)
+        }
+    }
+
+    /// iOS 26 bars are glass, so the transcript scrolls beneath the top one as
+    /// well; earlier systems keep the opaque bar and stop at it.
+    private static var transcriptBleedEdges: Edge.Set {
+        if #available(iOS 26, *) { [.top, .bottom] } else { .bottom }
+    }
+
+    /// Resends the last message the reader wrote, for a turn that failed. Text
+    /// only: its attachments already live on the server with the failed turn.
+    private func retryLastMessage() {
+        guard !isSending,
+              let last = detail?.messages.last(where: { $0.role == .user && !$0.isAgentAuthored }),
+              !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        isSending = true
+        Task {
+            let sent = await submitMessage(
+                FeatureMessageSubmission(threadID: thread.id, text: last.text, selection: currentSelection)
+            )
+            if !sent { PlatformHapticEngine.shared.play(.error) }
+            isSending = false
         }
     }
 
@@ -626,9 +791,36 @@ public struct ThreadDetailView: View {
             relationships: relationships,
             backgroundCommands: backgroundCommands,
             onOpenThread: onOpenRelatedThread,
-            onMerge: mergeBack,
-            onDetach: detachSession
+            onMerge: lineageMergeBack,
+            onDetach: lineageDetach
         )
+    }
+
+    /// The lineage sheet's merge. Throws so the sheet (the surface on screen
+    /// when this runs) can say why it failed.
+    private func lineageMergeBack() async throws {
+        guard let relationships,
+              let targetThreadID = relationships.mergeTargetThreadID,
+              let runID = relationships.latestMergeBackRunID else {
+            throw ThreadLineageActionUnavailable.nothingToMerge
+        }
+        try await model.client.mergeThreadBack(
+            sourceThreadID: thread.id,
+            targetThreadID: targetThreadID,
+            runID: runID
+        )
+        _ = await model.detail(for: thread.id, force: true)
+    }
+
+    /// Refreshes either way: a failed stop may still have ended the session.
+    private func lineageDetach() async throws {
+        do {
+            try await model.client.stopThreadSession(threadID: thread.id)
+        } catch {
+            _ = await model.detail(for: thread.id, force: true)
+            throw error
+        }
+        _ = await model.detail(for: thread.id, force: true)
     }
 
     /// Background commands for the open thread, finished ones included so the bar
@@ -653,7 +845,7 @@ public struct ThreadDetailView: View {
                 queuedRuns: state.queuedRuns,
                 isHeld: state.isHeld,
                 canReorder: state.canReorder,
-                dispatchingRunID: nil,
+                dispatchingRunID: state.dispatchingRunID,
                 busyRunID: queueBusyRunID,
                 steerTargetRunID: state.canPromoteToSteer ? state.activeRun?.id : nil,
                 onReorder: { target in
@@ -867,18 +1059,17 @@ public struct ThreadDetailView: View {
 
     // MARK: - Lineage
 
-    /// The thread's lineage, as much of it as the feature layer can see.
+    /// The thread's lineage: parents and forks, context transfers, subagents,
+    /// and the merge-back and detach affordances that depend on its runs and
+    /// provider session.
     ///
-    /// Subagent edges come from the transcript's own `subagent` items, remapped
-    /// onto the feature-scoped child thread ids the detail resolved — that
-    /// remap is the whole point of ``FeatureThreadDetail/subagentChildThreadIDs``
-    /// and it is what makes a card in the timeline and a row in the banner point
-    /// at the same thread.
-    ///
-    /// Fork and transfer edges stay missing: they need
-    /// `thread.lineage.parentThreadId` and the projection's context-transfer
-    /// table, neither of which `FeatureThreadDetail` carries. So do merge-back
-    /// and detach, which need the thread's runs and its provider session.
+    /// The projection's workflow carries all of it, feature-scoped, and
+    /// ``FeatureThreadWorkflow/relationships(relatedThreads:additionalSubagents:)``
+    /// is what reads it. Subagent edges recovered from the transcript's own
+    /// `subagent` items join them, remapped onto the child ids the detail
+    /// resolved, which is what makes a card in the timeline and a row in the
+    /// banner point at the same thread. A client with no projection gets the
+    /// transcript's subagents alone.
     private var relationships: ThreadRelationshipsModel? {
         guard let detail else { return nil }
         let subagents = detail.timelineItems.compactMap { projected in
@@ -894,8 +1085,25 @@ public struct ThreadDetailView: View {
                 )
             }
         }
-        guard !subagents.isEmpty else { return nil }
 
+        if let lineage = detail.workflow.thread {
+            var relatedIDs = Set(subagents.compactMap(\.childThreadID))
+            relatedIDs.formUnion(detail.workflow.subagents.compactMap(\.childThreadID))
+            for transfer in detail.workflow.transfers {
+                relatedIDs.insert(transfer.sourceThreadID)
+                relatedIDs.insert(transfer.targetThreadID)
+            }
+            if let parentID = lineage.forkedFromRunThreadID ?? lineage.parentThreadID {
+                relatedIDs.insert(parentID)
+            }
+            relatedIDs.remove(lineage.id)
+            let related = model.snapshot.threads
+                .filter { relatedIDs.contains($0.id) }
+                .map(relationshipShell)
+            return detail.workflow.relationships(relatedThreads: related, additionalSubagents: subagents)
+        }
+
+        guard !subagents.isEmpty else { return nil }
         let current = relationshipShell(currentThread)
         let relatedIDs = Set(subagents.compactMap(\.childThreadID))
         let related = model.snapshot.threads
@@ -909,6 +1117,9 @@ public struct ThreadDetailView: View {
         )
     }
 
+    /// A snapshot thread as the graph reads it. The snapshot carries no parent
+    /// ids, so these shells contribute titles and availability, never edges of
+    /// their own.
     private func relationshipShell(_ thread: FeatureThread) -> ThreadRelationshipShell {
         // The graph speaks run statuses, which is what `subagentOrbState` reads.
         let status: String = switch thread.state {
@@ -927,30 +1138,6 @@ public struct ThreadDetailView: View {
             // thread has no timestamp on this layer's model.
             archivedAt: thread.isArchived ? "archived" : nil
         )
-    }
-
-    private func mergeBack() async -> Bool {
-        guard let relationships,
-              let targetThreadID = relationships.mergeTargetThreadID,
-              let runID = relationships.latestMergeBackRunID else {
-            return false
-        }
-        do {
-            try await model.client.mergeThreadBack(
-                sourceThreadID: thread.id,
-                targetThreadID: targetThreadID,
-                runID: runID
-            )
-        } catch {
-            return false
-        }
-        _ = await model.detail(for: thread.id, force: true)
-        return true
-    }
-
-    private func detachSession() async {
-        try? await model.client.stopThreadSession(threadID: thread.id)
-        _ = await model.detail(for: thread.id, force: true)
     }
 
     // MARK: - Queue
@@ -981,30 +1168,75 @@ public struct ThreadDetailView: View {
         }
     }
 
-    private func runProjectScript(_ script: ProjectScript) async throws {
-        if let terminalID = try await model.client.performProjectScript(threadID: thread.id, script: script) {
-            toolSurface = .terminal(terminalID: terminalID)
+    /// Runs a project action and returns the terminal that accepted it, which
+    /// Details pushes so the output of what was just started is on screen.
+    private func runProjectScript(_ script: ProjectScript) async throws -> String? {
+        try await model.client.performProjectScript(threadID: thread.id, script: script)
+    }
+
+    /// Rows that leave the thread close Details first: their destination is
+    /// not inside it. Everything else Details pushes in its own stack.
+    private func exitFromDetails(_ exit: ThreadDetailsExit) {
+        toolSurface = nil
+        switch exit {
+        case .connections:
+            model.setConnectionManagementPresented(true)
+        case let .thread(id, isArchived):
+            onOpenRelatedThread(id, isArchived)
         }
     }
 
-    /// Sheets stack over the thread, so a row that opens another surface swaps
-    /// the presented sheet rather than pushing a second one on top of it.
-    private func navigateFromDetails(_ destination: ThreadDetailsDestination) {
-        switch destination {
-        case .connections:
-            toolSurface = nil
-            model.setConnectionManagementPresented(true)
-        case .files:
-            toolSurface = .files(path: nil, line: nil)
-        case .review:
-            toolSurface = .review(filePath: nil)
+    /// Details' merge back. It throws so the sheet can say why a merge did not
+    /// happen. Nil when there is nothing to merge.
+    private var detailsMergeBack: (() async throws -> Void)? {
+        guard let relationships,
+              let targetThreadID = relationships.mergeTargetThreadID,
+              let runID = relationships.latestMergeBackRunID else { return nil }
+        return {
+            try await model.client.mergeThreadBack(
+                sourceThreadID: thread.id,
+                targetThreadID: targetThreadID,
+                runID: runID
+            )
+            _ = await model.detail(for: thread.id, force: true)
+        }
+    }
+
+    /// A workspace tool, pushed inside Details or presented on its own by a
+    /// deep link from the transcript.
+    @ViewBuilder
+    private func workspaceToolView(_ tool: ThreadDetailsWorkspaceTool) -> some View {
+        switch tool {
+        case let .files(path, line):
+            FeatureFilesView(
+                client: model.client,
+                threadID: thread.id,
+                initialPath: path,
+                initialLine: line,
+                workspaceMutationID: WorkspaceMutationRevision.latest((model.details[thread.id]?.timelineItems ?? []).lazy.map {
+                    WorkspaceMutationItem(sourceThreadID: $0.sourceThreadId, itemID: $0.item.id,
+                        type: $0.item.type, status: $0.item.status.rawValue, updatedAt: $0.item.base.updatedAt)
+                })
+            )
+        case let .review(filePath):
+            FeatureReviewView(
+                client: model.client,
+                threadID: thread.id,
+                selection: model.reviewSelection,
+                initialFilePath: filePath
+            )
         case .sourceControl:
-            toolSurface = .sourceControl
-        case .terminal:
-            toolSurface = .terminal(terminalID: nil)
-        case let .thread(id, isArchived):
-            toolSurface = nil
-            onOpenRelatedThread(id, isArchived)
+            FeatureSourceControlView(
+                client: model.client,
+                threadID: thread.id,
+                reviewSelection: model.reviewSelection
+            )
+        case let .terminal(terminalID):
+            FeatureTerminalView(
+                client: model.client,
+                threadID: thread.id,
+                initialTerminalID: terminalID
+            )
         }
     }
 
@@ -1262,7 +1494,10 @@ public struct ThreadDetailView: View {
                 attachments = pendingAttachments + attachments.filter {
                     !pendingIDs.contains($0.id)
                 }
-                sendFailed = true
+                // The restored draft is the visible state; a real error has
+                // already been raised by the model. No second alert.
+                PlatformHapticEngine.shared.play(.error)
+                AccessibilityNotification.Announcement("Message not sent. Your draft is still here.").post()
                 composerFocused = true
             }
             isSending = false
@@ -1355,37 +1590,19 @@ public struct ThreadDetailView: View {
 
 }
 
-private struct FeatureThreadOpeningView: View {
-    let isRefreshing: Bool
-
-    var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.regular)
-            Text(isRefreshing ? "Refreshing thread…" : "Loading thread…")
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textSecondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(T3Colors.background)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("thread-opening-state")
-    }
-}
-
 /// A sheet over the thread, and where inside it to land.
 ///
-/// The two workspace surfaces carry a destination because the transcript can
-/// deep-link into them: a file link names a file and sometimes a line, and a
-/// changed-files chip names one file of a diff. The identity below includes that
-/// destination, so opening the same surface at a different place re-presents it
-/// rather than reusing a sheet already pointed somewhere else.
+/// Details is the hub: Source Control and Terminal are only reached by pushing
+/// inside it. Files and Review are also opened directly, because the
+/// transcript deep-links into them: a file link names a file and sometimes a
+/// line, and a changed-files chip names one file of a diff. The identity below
+/// includes that destination, so opening the same surface at a different place
+/// re-presents it rather than reusing a sheet already pointed somewhere else.
 private enum FeatureThreadToolSurface: Identifiable {
     case details
     case files(path: String?, line: Int?)
     case review(filePath: String?)
     case sourceControl
-    /// Opens the exact session that accepted a project action.
     case terminal(terminalID: String?)
 
     var id: String {
@@ -1395,6 +1612,17 @@ private enum FeatureThreadToolSurface: Identifiable {
         case let .review(filePath): "review:\(filePath ?? "")"
         case .sourceControl: "sourceControl"
         case let .terminal(terminalID): "terminal:\(terminalID ?? "")"
+        }
+    }
+
+    /// The workspace tool a deep link presents on its own; nil for Details.
+    var tool: ThreadDetailsWorkspaceTool? {
+        switch self {
+        case .details: nil
+        case let .files(path, line): .files(path: path, line: line)
+        case let .review(filePath): .review(filePath: filePath)
+        case .sourceControl: .sourceControl
+        case let .terminal(terminalID): .terminal(terminalID: terminalID)
         }
     }
 }
@@ -1464,7 +1692,9 @@ enum FeatureComposerDraftRestoration {
 /// renders, so the recycled collection view can decide what changed by comparing
 /// entries and nothing else.
 enum ThreadTimelineEntry: Identifiable, Equatable {
-    case message(FeatureMessage)
+    /// `caption` is the quiet line under a user bubble: its delivery while it
+    /// is in the outbox, otherwise how it entered the run.
+    case message(FeatureMessage, caption: ThreadMessageCaption? = nil)
     case turnFold(ThreadTurnFold)
     case lifecycle(Lifecycle)
     case workLog(WorkLog)
@@ -1496,7 +1726,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
 
     var id: String {
         switch self {
-        case let .message(message): "message:\(message.id)"
+        case let .message(message, _): "message:\(message.id)"
         case let .turnFold(fold): fold.id
         case let .lifecycle(lifecycle): lifecycle.id
         case let .workLog(workLog): workLog.id
@@ -1508,7 +1738,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     /// not parse, which drops the divider rather than the row under it.
     var date: Date? {
         switch self {
-        case let .message(message): message.createdAt
+        case let .message(message, _): message.createdAt
         case let .turnFold(fold): fold.date
         case let .lifecycle(lifecycle): lifecycle.date
         case let .workLog(workLog): workLog.date
@@ -1528,16 +1758,18 @@ enum ThreadTimelineFeed {
         for detail: FeatureThreadDetail,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
+        let activeRunID = detail.workflow.queueState.activeRun?.id
         var result = entries(
             timelineItems: detail.timelineItems,
             messages: detail.messages,
             runs: detail.timelineRuns,
             support: detail.itemSupport,
             subagentChildThreadIDs: detail.subagentChildThreadIDs,
+            liveRun: ThreadWorkLogLiveRun(threadState: detail.thread.state, activeRunID: activeRunID),
             calendar: calendar
         )
         if detail.thread.state == .working, case var .workLog(work)? = result.last {
-            work.liveEntryID = ThreadLiveWorkFocus.selection(items: work.rows.map(\.liveFocusItem), activeRunID: detail.workflow.queueState.activeRun?.id)
+            work.liveEntryID = ThreadLiveWorkFocus.selection(items: work.rows.map(\.liveFocusItem), activeRunID: activeRunID)
             result[result.count - 1] = .workLog(work)
         }
         return result
@@ -1549,6 +1781,7 @@ enum ThreadTimelineFeed {
         runs: [LifecycleTimelineRun] = [],
         support: [String: ThreadActivityItemSupport] = [:],
         subagentChildThreadIDs: [String: String] = [:],
+        liveRun: ThreadWorkLogLiveRun = .unscoped,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
         var messagesByID: [String: FeatureMessage] = [:]
@@ -1608,8 +1841,19 @@ enum ThreadTimelineFeed {
             openLifecycle.removeAll(keepingCapacity: true)
         }
 
+        // One Stop is one boundary: a request whose run already reports the
+        // result says nothing the result does not.
+        var interruptedRunIDs = Set<String>()
+        for projected in timelineItems where projected.item.type == "run_interrupt_result" {
+            if let runID = projected.item.base.runId { interruptedRunIDs.insert(runID) }
+        }
+
         for projected in timelineItems {
             let item = projected.item
+            if item.type == "run_interrupt_request",
+               let runID = item.base.runId, interruptedRunIDs.contains(runID) {
+                continue
+            }
             if item.type == "user_message" || item.type == "assistant_message" {
                 // An empty bubble is not a row — an assistant message before its
                 // first token, say — and skipping it must not split the work
@@ -1617,7 +1861,7 @@ enum ThreadTimelineFeed {
                 guard let message = messagesByID[item.id], !message.isEmptyBubble else { continue }
                 closeWork()
                 closeLifecycle()
-                entries.append(.message(message))
+                entries.append(.message(message, caption: ThreadMessageCaption.origin(of: item)))
                 continue
             }
             if ThreadLifecycle.isLifecycleTimelineItem(item) {
@@ -1626,7 +1870,7 @@ enum ThreadTimelineFeed {
                 continue
             }
             closeLifecycle()
-            openWork.append(ThreadWorkLogRow.make(projected))
+            openWork.append(ThreadWorkLogRow.make(projected, liveRun: liveRun))
         }
         closeWork()
         closeLifecycle()
@@ -1653,7 +1897,7 @@ enum ThreadTimelineFeed {
         }
         for message in messages
         where !projectedItemIDs.contains(message.id) && !message.isEmptyBubble {
-            entries.append(.message(message))
+            entries.append(.message(message, caption: nil))
         }
 
         // A duplicate identifier is fatal to a diffable data source, so identity
@@ -1714,17 +1958,20 @@ private struct ThreadTimelineEntryView: View {
     let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
     let onOpenURL: (URL) -> Void
     let onOpenDiff: (String, String?) -> Void
+    var onRetrySend: () -> Void = {}
+    var onRetryTurn: (() -> Void)? = nil
 
     var onToggleFold: (String) -> Void = { _ in }
 
     var body: some View {
         switch entry {
         case let .turnFold(fold):
+            let steps = ThreadWorkLogRow.stepCount(fold.hiddenIDs.count)
             Button { onToggleFold(fold.runID) } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: fold.isExpanded ? "chevron.up" : "chevron.down")
                     Text(fold.label).font(T3Typography.supportingStrong)
-                    Text("\(fold.hiddenIDs.count)").font(T3Typography.supporting).foregroundStyle(T3Colors.textTertiary)
+                    Text("· \(steps)").font(T3Typography.supporting).foregroundStyle(T3Colors.textTertiary)
+                    TimelineDisclosureChevron(isExpanded: fold.isExpanded)
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(T3Colors.textSecondary)
@@ -1732,12 +1979,14 @@ private struct ThreadTimelineEntryView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(fold.isExpanded ? "Hide" : "Show") earlier work. \(fold.label)")
+            .accessibilityLabel("\(fold.label), \(steps)")
+            .accessibilityValue(fold.isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier(fold.id)
             .padding(.bottom, ChatTimelineStyle.entrySpacing)
 
-        case let .message(message):
-            FeatureMessageView(message: message)
+        case let .message(message, caption):
+            FeatureMessageView(message: message, caption: caption, onRetrySend: onRetrySend)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, ChatTimelineStyle.entrySpacing)
 
@@ -1771,6 +2020,7 @@ private struct ThreadTimelineEntryView: View {
                 onOpenURL: onOpenURL,
                 onOpenDiff: onOpenDiff,
                 onRollback: onRollback,
+                onRetryTurn: onRetryTurn,
                 alwaysExpandActivity: alwaysExpandActivity
             )
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1805,8 +2055,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let detail: FeatureThreadDetail
     let renderUpdate: FeatureDetailRenderUpdate?
     let dynamicTypeSize: DynamicTypeSize
-    /// Keeps the first rows clear of the floating banner while still letting
-    /// them scroll underneath it, which is the whole point of the glass.
+    /// Keeps the first rows clear of the floating banners while still letting
+    /// them scroll underneath, which is the whole point of the glass. The
+    /// collection adds the navigation bar itself when it runs under it.
     let topContentInset: CGFloat
     let bottomContentInset: CGFloat
     let canLoadEarlier: Bool
@@ -1817,19 +2068,26 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     /// context alone: a preference change has to reconfigure cells that are
     /// already on screen.
     let alwaysExpandActivity: Bool
+    /// Delivery captions for messages still in this device's outbox, keyed by
+    /// message id. Folded into the rows so a status change reconfigures only
+    /// the bubble it belongs to.
+    var outboxCaptions: [String: ThreadMessageCaption] = [:]
     let onLoadEarlier: () -> Void
-    let onDismissKeyboard: () -> Void
     let onOpenThread: (String) -> Void
     let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
     let onOpenURL: (URL) -> Void
     let onOpenDiff: (String, String?) -> Void
+    var onRetrySend: () -> Void = {}
+    var onRetryTurn: (() -> Void)? = nil
     var citationNavigation: AssistantCitationNavigationRequest? = nil
     var onCitationComplete: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
     var onOpenCitation: (AssistantCitation) -> Void = { _ in }
     var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
     var navigationRequest: Int = 0
+    var scrollToLatestRequest: Int = 0
     var onReadingHistoryChanged: (Bool) -> Void = { _ in }
+    var onActivityBelowChanged: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -1841,11 +2099,16 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             collectionViewLayout: Self.makeLayout()
         )
         collectionView.alwaysBounceVertical = true
-        collectionView.keyboardDismissMode = .onDrag
+        // Interactive, like Messages: the keyboard follows the finger down
+        // instead of snapping away the moment the transcript moves.
+        collectionView.keyboardDismissMode = .interactive
         collectionView.delaysContentTouches = false
         collectionView.contentInsetAdjustmentBehavior = .never
         collectionView.isPrefetchingEnabled = true
         collectionView.accessibilityIdentifier = "thread-transcript"
+        if #available(iOS 26, *) {
+            collectionView.topEdgeEffect.style = .soft
+        }
         context.coordinator.connect(to: collectionView)
         // Assigns the background now and again on every palette change; the
         // token dies with the coordinator, so it cannot outlive this view.
@@ -1856,21 +2119,17 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     }
 
     func updateUIView(_ collectionView: UICollectionView, context: Context) {
-        // Assigned rather than left to `contentInsetAdjustmentBehavior`, which
-        // is `.never` here so the bottom-anchoring subclass owns its geometry.
-        // That subclass folds `adjustedContentInset.top` into its viewport
-        // model, so changing this restores the bottom anchor rather than
-        // jumping the scroll.
-        if abs(collectionView.contentInset.top - topContentInset) > 0.5 {
-            collectionView.contentInset.top = topContentInset
-        }
-        // The bottom inset goes through the subclass rather than being assigned
-        // here: the collection ignores the container safe area to run under the
-        // glass composer, and the home-indicator overlap it must add back is
-        // only current inside its own layout pass.
-        (collectionView as? BottomAnchoredTranscriptCollectionView)?
-            .floatingBottomInset = bottomContentInset
+        // Both insets go through the subclass rather than being assigned here:
+        // the collection ignores the container safe area to run under the
+        // glass bars, and the bar and home-indicator overlaps it must add back
+        // are only current inside its own layout pass. It folds
+        // `adjustedContentInset` into its viewport model, so a change restores
+        // the bottom anchor rather than jumping the scroll.
+        let transcript = collectionView as? BottomAnchoredTranscriptCollectionView
+        transcript?.floatingTopInset = topContentInset
+        transcript?.floatingBottomInset = bottomContentInset
         context.coordinator.onReadingHistoryChanged = onReadingHistoryChanged
+        context.coordinator.onActivityBelowChanged = onActivityBelowChanged
         context.coordinator.update(
             threadID: threadID,
             detail: detail,
@@ -1879,6 +2138,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             canLoadEarlier: canLoadEarlier,
             isLoadingEarlier: isLoadingEarlier,
             alwaysExpandActivity: alwaysExpandActivity,
+            outboxCaptions: outboxCaptions,
             rowContext: Coordinator.RowContext(
                 currentThreadID: threadID,
                 currentWireThreadID: wireThreadID,
@@ -1892,15 +2152,17 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onOpenFile: onOpenFile,
                 onOpenURL: onOpenURL,
                 onOpenDiff: onOpenDiff,
+                onRetrySend: onRetrySend,
+                onRetryTurn: onRetryTurn,
                 onOpenCitation: onOpenCitation,
                 citationContext: citationContext,
                 onUseTemplate: onUseTemplate
             ),
             onLoadEarlier: onLoadEarlier,
-            onDismissKeyboard: onDismissKeyboard,
             in: collectionView
         )
         context.coordinator.navigate(request: navigationRequest, in: collectionView)
+        context.coordinator.scrollToLatest(request: scrollToLatestRequest, in: collectionView)
         context.coordinator.navigateCitation(citationNavigation, completion: onCitationComplete, in: collectionView)
     }
 
@@ -1960,6 +2222,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
             var onOpenURL: (URL) -> Void = { _ in }
             var onOpenDiff: (String, String?) -> Void = { _, _ in }
+            var onRetrySend: () -> Void = {}
+            var onRetryTurn: (() -> Void)?
             var onOpenCitation: (AssistantCitation) -> Void = { _ in }
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
@@ -2001,14 +2265,14 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             guard let request = citationRequest, !applyingSnapshot, let dataSource else { return }
             let citation = request.citation
             if let entryID = orderedIDs.first(where: {
-                guard case let .message(message) = entriesByID[$0] else { return false }
+                guard case let .message(message, _) = entriesByID[$0] else { return false }
                 return (message.wireMessageID ?? message.id) == citation.messageId && message.role == .assistant
             }), let path = dataSource.indexPath(for: entryID) {
                 (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
                 collectionView.layoutIfNeeded()
                 collectionView.scrollToItem(at: path, at: .top, animated: !UIAccessibility.isReduceMotionEnabled)
                 var sourceMatches = false
-                if case let .message(message) = entriesByID[entryID] {
+                if case let .message(message, _) = entriesByID[entryID] {
                     let document = MarkdownRenderCache.shared.documentImmediately(for: MarkdownContentRevision(message.text))
                     sourceMatches = AssistantCitationTextRange.resolve(in: document?.citationText ?? message.text, quote: citation.text,
                         start: citation.start, end: citation.end, prefix: citation.prefix, suffix: citation.suffix) != nil
@@ -2043,12 +2307,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             navigateTurn(forward: forward, in: collectionView)
         }
 
-        private func navigateTurn(forward: Bool, in collectionView: UICollectionView, allowLoad: Bool = true) {
+        private var lastScrollToLatestRequest = 0
+
+        func scrollToLatest(request: Int, in collectionView: UICollectionView) {
+            guard request != lastScrollToLatestRequest else { return }
+            lastScrollToLatestRequest = request
+            scrollToBottom(collectionView, animated: !UIAccessibility.isReduceMotionEnabled)
+        }
+
+        fileprivate func navigateTurn(forward: Bool, in collectionView: UICollectionView, allowLoad: Bool = true) {
             guard let dataSource else { return }
             collectionView.layoutIfNeeded()
             let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
             let candidates = orderedIDs.compactMap { id -> (IndexPath, CGFloat)? in
-                guard case let .message(message) = entriesByID[id], message.role == .user, !message.isAgentAuthored,
+                guard case let .message(message, _) = entriesByID[id], message.role == .user, !message.isAgentAuthored,
                       let path = dataSource.indexPath(for: id),
                       let frame = collectionView.layoutAttributesForItem(at: path)?.frame else { return nil }
                 return (path, frame.minY)
@@ -2070,11 +2342,16 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentAlwaysExpandActivity = false
         private var currentCanLoadEarlier = false
         private var currentIsLoadingEarlier = false
+        private var currentOutboxCaptions: [String: ThreadMessageCaption] = [:]
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
         private var rowContext = RowContext()
         private var onLoadEarlier: (() -> Void)?
-        private var onDismissKeyboard: (() -> Void)?
+        /// Set when scrolling near the top asked for earlier turns, cleared
+        /// when that load settles, so one approach asks once.
+        private var requestedEarlierTurns = false
+        private var reportedActivityBelow = false
         var onReadingHistoryChanged: (Bool) -> Void = { _ in }
+        var onActivityBelowChanged: (Bool) -> Void = { _ in }
         var themeRefresh: T3ThemeRefresh?
 
         deinit {
@@ -2086,7 +2363,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 [weak self] cell, _, entryID in
                 if entryID == FeatureTranscriptCollectionView.loadEarlierID {
                     cell.contentConfiguration = UIHostingConfiguration {
-                        FeatureLoadEarlierTurnsButton(
+                        FeatureLoadEarlierTurnsRow(
                             isLoading: self?.currentIsLoadingEarlier == true,
                             onLoad: { self?.onLoadEarlier?() }
                         )
@@ -2117,6 +2394,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                         onOpenFile: context.onOpenFile,
                         onOpenURL: context.onOpenURL,
                         onOpenDiff: context.onOpenDiff,
+                        onRetrySend: context.onRetrySend,
+                        onRetryTurn: context.onRetryTurn,
                         onToggleFold: { [weak self] in self?.toggleFold($0) }
                     )
                     // A recycled cell keeps the SwiftUI state of whatever it
@@ -2159,6 +2438,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             }
             collectionView.prefetchDataSource = self
             collectionView.delegate = self
+            // Previous and next turn for VoiceOver; hardware keyboards get
+            // the same moves as shortcuts on the thread screen.
+            collectionView.accessibilityCustomActions = [
+                UIAccessibilityCustomAction(name: "Previous turn") { [weak self, weak collectionView] _ in
+                    guard let self, let collectionView else { return false }
+                    self.navigateTurn(forward: false, in: collectionView)
+                    return true
+                },
+                UIAccessibilityCustomAction(name: "Next turn") { [weak self, weak collectionView] _ in
+                    guard let self, let collectionView else { return false }
+                    self.navigateTurn(forward: true, in: collectionView)
+                    return true
+                },
+            ]
         }
 
         func update(
@@ -2169,24 +2462,23 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             canLoadEarlier: Bool,
             isLoadingEarlier: Bool,
             alwaysExpandActivity: Bool,
+            outboxCaptions: [String: ThreadMessageCaption],
             rowContext: RowContext,
             onLoadEarlier: @escaping () -> Void,
-            onDismissKeyboard: @escaping () -> Void,
             in collectionView: UICollectionView
         ) {
             guard let dataSource else { return }
             let iconEnvironmentChanged = self.rowContext.nativeAppIcons?.environmentID != rowContext.nativeAppIcons?.environmentID
             self.rowContext = rowContext
             self.onLoadEarlier = onLoadEarlier
-            self.onDismissKeyboard = onDismissKeyboard
 
             rebuildForFold = { [weak self, weak collectionView] in
                 guard let self, let collectionView else { return }
                 self.update(threadID: threadID, detail: detail, renderUpdate: renderUpdate,
                     dynamicTypeSize: dynamicTypeSize, canLoadEarlier: canLoadEarlier,
                     isLoadingEarlier: isLoadingEarlier, alwaysExpandActivity: alwaysExpandActivity,
-                    rowContext: rowContext, onLoadEarlier: onLoadEarlier,
-                    onDismissKeyboard: onDismissKeyboard, in: collectionView)
+                    outboxCaptions: outboxCaptions, rowContext: rowContext,
+                    onLoadEarlier: onLoadEarlier, in: collectionView)
             }
             let foldChoiceChanged = renderedFoldChoiceRevision != foldChoiceRevision
             let threadChanged = currentThreadID != threadID
@@ -2199,8 +2491,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let revisionChanged = currentDetailRevision != renderUpdate?.revision
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
+            let outboxChanged = currentOutboxCaptions != outboxCaptions
+            if currentIsLoadingEarlier, !isLoadingEarlier { requestedEarlierTurns = false }
             guard threadChanged || typeSizeChanged || expansionPreferenceChanged
-                || revisionChanged || loadEarlierChanged || foldChoiceChanged else { return }
+                || revisionChanged || loadEarlierChanged || foldChoiceChanged
+                || outboxChanged else { return }
 
             // Always the whole feed. An item's shape depends on its neighbours —
             // a new tool call joins the work group above it, a subagent card
@@ -2212,7 +2507,12 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let folded = ThreadTimelineFoldPresentation.apply(entries: fullEntries, detail: detail,
                 expandedRunIDs: expandedRunIDs, alwaysExpand: alwaysExpandActivity)
             hiddenCitationRunIDs = folded.hiddenCitationRunIDs
-            let state = entryState(folded.entries)
+            let captioned = outboxCaptions.isEmpty ? folded.entries : folded.entries.map { entry in
+                guard case let .message(message, _) = entry,
+                      let delivery = outboxCaptions[message.id] else { return entry }
+                return .message(message, caption: delivery)
+            }
+            let state = entryState(captioned)
             renderedFoldChoiceRevision = foldChoiceRevision
             let newIDs = state.ids
             let idsChanged = state.idsChanged
@@ -2225,6 +2525,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             currentAlwaysExpandActivity = alwaysExpandActivity
             currentCanLoadEarlier = canLoadEarlier
             currentIsLoadingEarlier = isLoadingEarlier
+            currentOutboxCaptions = outboxCaptions
             guard threadChanged || idsChanged || !changedIDs.isEmpty
                 || loadEarlierChanged else { return }
 
@@ -2246,6 +2547,13 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 && newIDs.count > previousIDs.count
                 && Array(newIDs.suffix(previousIDs.count)) == previousIDs
             let shouldFollowBottom = isInitialLoad || (wasNearBottom && !foldChoiceChanged)
+            // The coordinator is the one place that knows a new row landed
+            // while the reader was elsewhere; the jump button shows it.
+            if threadChanged {
+                reportActivityBelow(false)
+            } else if lastIDChanged, !wasNearBottom, !prependedMessages {
+                reportActivityBelow(true)
+            }
             let prependAnchor = !shouldFollowBottom
                 && (foldChoiceChanged || prependedMessages || (loadEarlierChanged && !canLoadEarlier))
                 ? visibleAnchor(in: collectionView, dataSource: dataSource)
@@ -2399,7 +2707,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         /// The message behind an entry, or nil for a row that renders no
         /// Markdown and therefore has nothing worth warming.
         private func prefetchableMessage(for entryID: String) -> FeatureMessage? {
-            guard case let .message(message) = entriesByID[entryID],
+            guard case let .message(message, _) = entriesByID[entryID],
                   !message.text.isEmpty,
                   message.state != .streaming,
                   message.role == .user || message.role == .assistant else {
@@ -2488,7 +2796,25 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let target = CGPoint(x: collectionView.contentOffset.x, y: geometry.bottomOffset)
             collectionView.setContentOffset(target, animated: animated)
             (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = true
-            onReadingHistoryChanged(false)
+            reportReadingHistory(false)
+            reportActivityBelow(false)
+        }
+
+        /// The host compares before it writes, so a scroll costs it one state
+        /// change per crossing of the threshold rather than one per frame. Not
+        /// deduplicated here: focusing the composer clears the host's flag
+        /// behind this coordinator's back.
+        private func reportReadingHistory(_ reading: Bool) {
+            onReadingHistoryChanged(reading)
+        }
+
+        private func reportActivityBelow(_ hasActivity: Bool) {
+            guard reportedActivityBelow != hasActivity else { return }
+            reportedActivityBelow = hasActivity
+            onActivityBelowChanged(hasActivity)
+            if hasActivity {
+                UIAccessibility.post(notification: .announcement, argument: "New activity below")
+            }
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -2497,8 +2823,26 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 citationCompletion(request, nil)
             }
             (scrollView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
-            scrollView.window?.endEditing(false)
-            onDismissKeyboard?()
+        }
+
+        /// Plain arithmetic per frame, and only while the reader moves the
+        /// transcript: whether they have left the bottom, and whether they
+        /// have come close enough to the top to fetch earlier turns.
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard scrollView.isDragging || scrollView.isDecelerating,
+                  let collectionView = scrollView as? UICollectionView else { return }
+            let nearBottom = isNearBottom(collectionView)
+            reportReadingHistory(!nearBottom)
+            if nearBottom { reportActivityBelow(false) }
+
+            // Earlier turns arrive before the reader reaches the edge; the
+            // prepend keeps what is on screen in place.
+            guard currentCanLoadEarlier, !currentIsLoadingEarlier, !requestedEarlierTurns else { return }
+            let distanceFromTop = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+            if distanceFromTop < scrollView.bounds.height * 0.75 {
+                requestedEarlierTurns = true
+                onLoadEarlier?()
+            }
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -2516,32 +2860,34 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             }
             let nearBottom = isNearBottom(collectionView)
             collectionView.maintainsBottomAnchor = nearBottom
-            onReadingHistoryChanged(!nearBottom)
+            reportReadingHistory(!nearBottom)
+            if nearBottom { reportActivityBelow(false) }
         }
     }
 }
 
-private struct FeatureLoadEarlierTurnsButton: View {
+/// The top of a transcript with more history. Scrolling near it loads the
+/// earlier turns on its own; the button stays for VoiceOver and for a reader
+/// who stops short of the edge.
+private struct FeatureLoadEarlierTurnsRow: View {
     let isLoading: Bool
     let onLoad: () -> Void
 
     var body: some View {
-        Button(action: onLoad) {
-            HStack(spacing: 7) {
-                if isLoading {
-                    Image(systemName: "ellipsis")
-                        .font(T3Typography.supporting.weight(.semibold))
-                }
-                Text(isLoading ? "Loading earlier turns…" : "Load earlier turns")
+        Group {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Loading earlier turns")
+            } else {
+                Button("Load Earlier Turns", action: onLoad)
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textSecondary)
+                    .buttonStyle(.plain)
             }
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: T3Metrics.minimumTapTarget)
         }
-        .buttonStyle(.plain)
-        .disabled(isLoading)
-        .accessibilityLabel(isLoading ? "Loading earlier turns" : "Load earlier turns")
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: T3Metrics.minimumTapTarget)
     }
 }
 
@@ -2678,7 +3024,17 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
     /// which recurses until UIKit's re-entrancy assertion kills the app.
     var floatingBottomInset: CGFloat = 0 {
         didSet {
-            if abs(floatingBottomInset - oldValue) > 0.5 { applyBottomInset() }
+            if abs(floatingBottomInset - oldValue) > 0.5 { applyInsets() }
+        }
+    }
+
+    /// The measured height of the bars floating over the top of the
+    /// transcript. Folded into `contentInset.top` together with the safe-area
+    /// overlap, which is the navigation bar where the transcript runs under it
+    /// (iOS 26) and zero where it stops at an opaque bar.
+    var floatingTopInset: CGFloat = 0 {
+        didSet {
+            if abs(floatingTopInset - oldValue) > 0.5 { applyInsets() }
         }
     }
 
@@ -2691,21 +3047,23 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        applyBottomInset()
+        applyInsets()
     }
 
-    private func applyBottomInset() {
-        let target = floatingBottomInset + safeAreaInsets.bottom
-        guard abs(contentInset.bottom - target) > 0.5 else { return }
+    private func applyInsets() {
+        let top = floatingTopInset + safeAreaInsets.top
+        let bottom = floatingBottomInset + safeAreaInsets.bottom
+        guard abs(contentInset.top - top) > 0.5 || abs(contentInset.bottom - bottom) > 0.5 else { return }
         // The invariant documented on `floatingBottomInset`, actually enforced:
         // UIKit calls `safeAreaInsetsDidChange` from inside the layout pass
         // whenever the keyboard moves, so the setter alone does not keep inset
         // writes out of it. Land the write on the next turn instead.
         guard !isInLayoutPass else {
-            DispatchQueue.main.async { [weak self] in self?.applyBottomInset() }
+            DispatchQueue.main.async { [weak self] in self?.applyInsets() }
             return
         }
-        contentInset.bottom = target
+        if abs(contentInset.top - top) > 0.5 { contentInset.top = top }
+        if abs(contentInset.bottom - bottom) > 0.5 { contentInset.bottom = bottom }
     }
 
     override func layoutSubviews() {
@@ -2862,6 +3220,16 @@ private struct FeatureLocalAttachmentThumbnail: View {
 
 struct FeatureMessageView: View {
     let message: FeatureMessage
+    /// The line under a user bubble. A message still waiting on its echo reads
+    /// as sending even before the outbox has said more.
+    var caption: ThreadMessageCaption? = nil
+    var onRetrySend: () -> Void = {}
+
+    private var resolvedCaption: ThreadMessageCaption? {
+        if caption?.isDelivery == true { return caption }
+        if message.state == .queued { return .sending(uploading: false) }
+        return caption
+    }
 
     /// Tail at the top-leading corner — the mirror of the user bubble's
     /// bottom-trailing tail.
@@ -2915,52 +3283,58 @@ struct FeatureMessageView: View {
         case .user:
             HStack {
                 Spacer(minLength: 44)
-                VStack(alignment: .leading, spacing: 10) {
-                    FeatureMessageAttachmentsView(attachments: message.attachments)
-                    if !message.text.isEmpty {
-                        ReviewContextMessageText(
-                            source: message.text,
-                            isStreaming: message.state == .streaming
+                VStack(alignment: .trailing, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        FeatureMessageAttachmentsView(attachments: message.attachments)
+                        if !message.text.isEmpty {
+                            ReviewContextMessageText(
+                                source: message.text,
+                                isStreaming: message.state == .streaming
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .frame(maxWidth: T3Metrics.readingWidth * 0.88, alignment: .leading)
+                    .background(
+                        T3Colors.subtleStrong,
+                        in: UnevenRoundedRectangle(
+                            topLeadingRadius: 16,
+                            bottomLeadingRadius: 16,
+                            bottomTrailingRadius: 4,
+                            topTrailingRadius: 16,
+                            style: .continuous
                         )
+                    )
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("You")
+                    .accessibilityValue(accessibilityValue)
+
+                    if let resolvedCaption {
+                        ThreadMessageCaptionView(caption: resolvedCaption, onRetry: onRetrySend)
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .frame(maxWidth: T3Metrics.readingWidth * 0.88, alignment: .leading)
-                .background(
-                    T3Colors.subtleStrong,
-                    in: UnevenRoundedRectangle(
-                        topLeadingRadius: 16,
-                        bottomLeadingRadius: 16,
-                        bottomTrailingRadius: 4,
-                        topTrailingRadius: 16
-                    )
-                )
             }
-            .accessibilityLabel("You")
-            .accessibilityValue(accessibilityValue)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("message-\(message.id)")
         case .assistant:
+            // No "Working" line over a streaming reply: the composer band and
+            // the subtitle already say it, and neither scrolls away.
             VStack(alignment: .leading, spacing: 10) {
-                if message.state == .streaming {
-                    HStack(spacing: 6) {
-                        Image(systemName: "circle.dotted")
-                        Text("Working")
-                    }
-                    .font(T3Typography.supportingStrong)
-                    .foregroundStyle(T3Colors.statusRunning)
-                }
                 FeatureMessageAttachmentsView(attachments: message.attachments)
                 if !message.text.isEmpty {
                     MarkdownMessageView(
                         message.text,
                         isStreaming: message.state == .streaming,
-                        citationMessageID: message.wireMessageID
+                        citationMessageID: message.wireMessageID,
+                        timestamp: message.createdAt
                     )
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Assistant")
             .accessibilityIdentifier("message-\(message.id)")
         case .tool:
             DisclosureGroup {

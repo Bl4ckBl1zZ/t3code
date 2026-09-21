@@ -188,8 +188,10 @@ public enum VoiceIntegrationLabels {
         case .connected: return "Connected"
         case .validating: return "Validating"
         case .invalid: return "Error"
-        case .notConfigured, .unavailable:
-            return status.configured ? "Unavailable" : "Not configured"
+        // A client or server without the capability can never connect, so it
+        // must not read as a setup step the reader has yet to take.
+        case .unavailable: return "Unavailable"
+        case .notConfigured: return status.configured ? "Unavailable" : "Not Set Up"
         }
     }
 

@@ -145,15 +145,21 @@ extension View {
     /// `tint` colors the glass itself rather than painting over it, so a
     /// tinted control still refracts what is behind it. The pre-26 fallback has
     /// no such trick and settles for a translucent wash over the material.
+    ///
+    /// `interactive` is for glass that is itself the tap target: it scales and
+    /// shimmers under the finger on iOS 26 and is ignored before that.
     @ViewBuilder
     func t3GlassEffect(
         _ prominence: T3Glass.Prominence = .regular,
         tint: Color? = nil,
+        interactive: Bool = false,
         in shape: some Shape
     ) -> some View {
         if #available(iOS 26, *) {
             glassEffect(
-                (prominence == .clear ? Glass.clear : Glass.regular).tint(tint),
+                (prominence == .clear ? Glass.clear : Glass.regular)
+                    .tint(tint)
+                    .interactive(interactive),
                 in: shape
             )
         } else {
@@ -193,8 +199,30 @@ struct T3GlassContainer<Content: View>: View {
 }
 
 extension View {
+    /// Navigation bar treatment for every pushed screen and sheet.
+    ///
+    /// iOS 26 draws the bar as Liquid Glass with a scroll-edge effect, so this
+    /// deliberately leaves it alone there: painting a background would turn the
+    /// glass back into an opaque slab. Earlier systems keep the opaque themed
+    /// bar, which is what the palette was designed against.
+    @ViewBuilder
     func t3NavigationChrome() -> some View {
-        toolbarBackground(T3Colors.sheet, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+        if #available(iOS 26, *) {
+            self
+        } else {
+            toolbarBackground(T3Colors.sheet, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+        }
+    }
+
+    /// The 1pt palette rim that glass surfaces draw only before iOS 26, where a
+    /// blur material has no edge of its own. Real glass already carries one.
+    @ViewBuilder
+    func t3GlassRim(in shape: some InsettableShape, color: Color = T3Colors.border) -> some View {
+        if #available(iOS 26, *) {
+            self
+        } else {
+            overlay { shape.strokeBorder(color, lineWidth: 1) }
+        }
     }
 }

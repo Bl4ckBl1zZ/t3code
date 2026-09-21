@@ -7,6 +7,8 @@ enum PullRequestReactionLogic {
         ["thumbs-up": "👍", "thumbs-down": "👎", "laugh": "😄", "hooray": "🎉", "confused": "😕", "heart": "❤️", "rocket": "🚀", "eyes": "👀"][content] ?? content
     }
     static func label(_ content: String) -> String { content.replacingOccurrences(of: "-", with: " ") }
+    /// A menu item's title: "Thumbs Up" rather than the wire's "thumbs-up".
+    static func title(_ content: String) -> String { label(content).capitalized }
     static func actors(_ reaction: PullRequestReaction) -> String {
         let names = reaction.viewerHasReacted && reaction.actors.count < reaction.count ? ["You"] + reaction.actors : reaction.actors
         let shown = Array(names.prefix(min(3, max(0, reaction.count))))

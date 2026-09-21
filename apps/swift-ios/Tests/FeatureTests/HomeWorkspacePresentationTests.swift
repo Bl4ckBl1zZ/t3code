@@ -294,13 +294,13 @@ final class HomeWorkspacePresentationTests: XCTestCase {
                 guard case let .workSectionHeader(header) = item else { return nil }
                 return header.label
             },
-            ["Main", "Needs you", "Active"]
+            ["Main", "Needs You", "Active"]
         )
         XCTAssertEqual(
             headerFollowedByRows(items),
             [
                 HeaderRows(label: "Main", rows: ["main"]),
-                HeaderRows(label: "Needs you", rows: ["blocked"]),
+                HeaderRows(label: "Needs You", rows: ["blocked"]),
                 HeaderRows(label: "Active", rows: ["active"]),
             ]
         )
@@ -323,20 +323,85 @@ final class HomeWorkspacePresentationTests: XCTestCase {
         XCTAssertEqual(Set(threadIDs(items)), ["first", "second"])
     }
 
-    func testAnEmptyWorkInboxDrawsNoHeadersAtAll() {
-        let items = collectionView(
+    /// An empty inbox is one empty state and nothing else: no inbox headers,
+    /// no shelf headers counting zero.
+    func testAnEmptyWorkInboxDrawsOnlyItsEmptyState() {
+        var view = collectionView(
             presentation(snapshot(threads: []), workspace: .work),
             workspace: .work
+        )
+        let empty = HomeEmptyState.resolve(
+            workspace: .work,
+            hasCreationProjects: true,
+            filteredProjectName: nil,
+            hermesReady: true
+        )
+        view.emptyState = empty
+
+        XCTAssertEqual(view.collectionItems, [.empty(empty)])
+    }
+
+    /// Placeholders stand in for the whole list while the first snapshot
+    /// loads, under the banner, never alongside an empty state.
+    func testPlaceholdersReplaceTheListWhileLoading() {
+        var view = collectionView(
+            presentation(snapshot(threads: []), workspace: .code),
+            workspace: .code
+        )
+        view.isPlaceholder = true
+        view.emptyState = HomeEmptyState.resolve(
+            workspace: .code,
+            hasCreationProjects: false,
+            filteredProjectName: nil,
+            hermesReady: true
+        )
+        let banner = HomeConnectionBanner(
+            tone: .warning,
+            title: "Connecting to Mac…",
+            message: "Changes you make are queued.",
+            offersReconnect: false
+        )
+        view.banner = banner
+
+        XCTAssertEqual(view.collectionItems, [.banner(banner)] + (0..<6).map(HomeCollectionItem.placeholder))
+    }
+
+    /// Shelves with nothing on them are not drawn; pinned rows get their own
+    /// heading and the rest sit under Active.
+    func testEmptyShelvesAreNotDrawnAndPinnedRowsAreHeaded() {
+        var pinned = thread(id: "pinned", providerID: "claude")
+        pinned.pinnedAt = .now
+        let items = collectionView(
+            presentation(snapshot(threads: [pinned, thread(id: "active", providerID: "claude")]), workspace: .code),
+            workspace: .code
         ).collectionItems
 
         XCTAssertFalse(items.contains { item in
-            if case .workSectionHeader = item { return true }
+            if case .shelfHeader = item { return true }
             return false
         })
-        XCTAssertTrue(items.contains { item in
-            if case .empty(.active) = item { return true }
-            return false
-        })
+        XCTAssertEqual(
+            items.compactMap { item -> String? in
+                guard case let .sectionTitle(title) = item else { return nil }
+                return title
+            },
+            ["Pinned", "Active"]
+        )
+        XCTAssertEqual(threadIDs(items), ["pinned", "active"])
+    }
+
+    /// An archived thread found by search says so; the Archived shelf does
+    /// not repeat it on every row.
+    func testArchivedSearchResultsCarryTheArchivedBadge() {
+        let snapshot = snapshot(threads: [
+            thread(id: "alpha-archived", providerID: "claude", isArchived: true),
+            thread(id: "alpha-live", providerID: "claude"),
+        ])
+        let presentation = HomePresentation(snapshot: snapshot, workspace: .code, query: "alpha", projectID: nil, now: .now)
+        let items = collectionView(presentation, workspace: .code, query: "alpha").collectionItems
+
+        XCTAssertEqual(rowContext(for: "alpha-archived", in: items)?.showsArchivedBadge, true)
+        XCTAssertEqual(rowContext(for: "alpha-live", in: items)?.showsArchivedBadge, false)
     }
 
     // MARK: - Helpers

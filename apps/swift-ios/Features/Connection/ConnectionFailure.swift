@@ -26,28 +26,42 @@ public struct ConnectionFailure: Equatable, Sendable {
     }
 }
 
-struct ConnectionFailureView: View {
+/// A connection failure as the first section of an inset-grouped list, so it
+/// scrolls and refreshes with the list: what happened, Try Again, and the
+/// technical details for a bug report.
+struct ConnectionFailureSection: View {
+    let title: String
     let failure: ConnectionFailure
     let isRetrying: Bool
     let retry: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(failure.message, systemImage: "wifi.exclamationmark")
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textPrimary)
-            DisclosureGroup("Technical details") {
+        Section {
+            ConnectionProblemRow(
+                title: title,
+                message: failure.message,
+                systemImage: "wifi.exclamationmark"
+            )
+            Button(action: retry) {
+                HStack {
+                    Text("Try Again")
+                    Spacer()
+                    if isRetrying {
+                        ProgressView()
+                    }
+                }
+            }
+            .tint(T3Colors.accent)
+            .disabled(isRetrying)
+            DisclosureGroup("Technical Details") {
                 Text(failure.details)
                     .font(.caption.monospaced())
+                    .foregroundStyle(T3Colors.textSecondary)
                     .textSelection(.enabled)
             }
-            Button("Retry connection", action: retry)
-                .buttonStyle(.bordered)
-                .disabled(isRetrying)
+            .foregroundStyle(T3Colors.textPrimary)
         }
-        .padding(16)
-        .background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 16)
+        .t3GroupedRow()
         .accessibilityIdentifier("connection-failure-guidance")
     }
 }

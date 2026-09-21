@@ -1,13 +1,13 @@
 import AVFoundation
-import Photos
+import PhotosUI
 import SwiftUI
 import UIKit
 
 // The in-chat media window: instead of full-screen system pickers, the
 // composer pill morphs into a tall card that hosts either a live camera or the
-// photo library grid. Taking a photo freezes it in the window and collapses
-// the card into the attachment thumbnail; the grid confirms by being slid
-// down. Files keep the native document picker.
+// system photo picker, inline. Taking a photo freezes it in the window and
+// collapses the card into the attachment thumbnail; the picker confirms with
+// its "Add Photos" button. Files keep the native document picker.
 
 /// What the composer pill is currently morphed into.
 enum ComposerMediaSurface: Equatable {
@@ -28,9 +28,14 @@ final class ComposerCameraEngine: NSObject, AVCapturePhotoCaptureDelegate,
     private var position: AVCaptureDevice.Position = .back
     private var configured = false
     private let onPhoto: @Sendable (Data) -> Void
+    private let onFailure: @Sendable () -> Void
 
-    init(onPhoto: @escaping @Sendable (Data) -> Void) {
+    init(
+        onPhoto: @escaping @Sendable (Data) -> Void,
+        onFailure: @escaping @Sendable () -> Void
+    ) {
         self.onPhoto = onPhoto
+        self.onFailure = onFailure
     }
 
     func start() {
@@ -57,7 +62,10 @@ final class ComposerCameraEngine: NSObject, AVCapturePhotoCaptureDelegate,
 
     func capture() {
         queue.async {
-            guard self.session.isRunning else { return }
+            guard self.session.isRunning else {
+                self.onFailure()
+                return
+            }
             self.output.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
         }
     }
@@ -87,7 +95,10 @@ final class ComposerCameraEngine: NSObject, AVCapturePhotoCaptureDelegate,
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?
     ) {
-        guard error == nil, let data = photo.fileDataRepresentation() else { return }
+        guard error == nil, let data = photo.fileDataRepresentation() else {
+            onFailure()
+            return
+        }
         onPhoto(data)
     }
 }
@@ -113,9 +124,14 @@ private struct ComposerCameraPreview: UIViewRepresentable {
     func updateUIView(_ view: PreviewView, context: Context) {}
 }
 
-/// The camera occupying the media window: live preview, shutter, flip, back.
+/// The camera occupying the media window: live preview, shutter, flip, close.
 /// A taken photo freezes in place; the composer collapses the window into the
 /// attachment thumbnail a beat later.
+///
+/// The card is always dark, like every camera, so the permission copy and the
+/// glass controls stay legible over the black backdrop in light mode too. The
+/// close button is there in every state: a denied permission is a way out plus
+/// a way to Settings, never a dead end.
 struct ComposerCameraWindow: View {
     let onClose: () -> Void
     /// Fired once per shot, after the freeze has had a moment to read.
@@ -124,6 +140,8 @@ struct ComposerCameraWindow: View {
     @State private var engine: ComposerCameraEngineBox?
     @State private var capturedImage: UIImage?
     @State private var authorization: AVAuthorizationStatus = .notDetermined
+    @State private var captureFailed = false
+    @State private var failureCount = 0
 
     /// `@State` needs an identity-stable wrapper for the engine, whose init
     /// captures a closure over this view's state.
@@ -143,19 +161,30 @@ struct ComposerCameraWindow: View {
                     .scaledToFill()
                     .transition(.opacity)
             } else if authorization == .denied || authorization == .restricted {
-                mediaPermissionPrompt(
-                    title: "Camera access is off",
-                    message: "Allow camera access in Settings to take photos here."
-                )
+                ContentUnavailableView {
+                    Label("Camera Access Is Off", systemImage: "camera")
+                } description: {
+                    Text("Allow camera access in Settings to take photos here.")
+                } actions: {
+                    Button("Open Settings", action: openSettings)
+                        .t3ProminentButtonStyle()
+                }
             } else if let engine {
                 ComposerCameraPreview(session: engine.engine.session)
+            } else {
+                // Under the system permission prompt: a static spinner rather
+                // than an empty black box.
+                ProgressView()
+                    .tint(.white)
             }
 
-            if capturedImage == nil, authorization == .authorized {
+            if capturedImage == nil {
                 controls
             }
         }
         .clipped()
+        .environment(\.colorScheme, .dark)
+        .t3SensoryFeedback(.error, trigger: failureCount)
         .task { await startCamera() }
         .onDisappear { engine?.engine.stop() }
         .accessibilityIdentifier("composer-camera-window")
@@ -163,40 +192,60 @@ struct ComposerCameraWindow: View {
 
     private var controls: some View {
         VStack {
-            Spacer()
-            ZStack {
-                HStack {
-                    mediaRoundButton(systemImage: "chevron.left", label: "Close camera") {
-                        onClose()
-                    }
-                    Spacer()
-                    mediaRoundButton(
-                        systemImage: "arrow.trianglehead.2.clockwise.rotate.90",
-                        label: "Switch camera"
-                    ) {
-                        engine?.engine.flip()
-                    }
-                }
-
-                Button {
-                    engine?.engine.capture()
-                } label: {
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 64, height: 64)
-                        .overlay {
-                            Circle()
-                                .stroke(Color.white.opacity(0.4), lineWidth: 4)
-                                .padding(-6)
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Take photo")
-                .accessibilityIdentifier("composer-camera-shutter")
+            HStack {
+                mediaGlassButton(systemImage: "xmark", label: "Close camera", action: onClose)
+                Spacer()
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 16)
+            Spacer()
+            if authorization == .authorized {
+                if captureFailed {
+                    Text("Couldn’t take photo")
+                        .font(T3Typography.supportingStrong)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .t3GlassEffect(.clear, in: Capsule())
+                        .padding(.bottom, 10)
+                        .accessibilityAddTraits(.isStaticText)
+                }
+                ZStack {
+                    HStack {
+                        Spacer()
+                        mediaGlassButton(
+                            systemImage: "arrow.trianglehead.2.clockwise.rotate.90",
+                            label: "Switch camera"
+                        ) {
+                            engine?.engine.flip()
+                        }
+                    }
+
+                    Button {
+                        captureFailed = false
+                        PlatformHapticEngine.shared.playImpact(.medium)
+                        engine?.engine.capture()
+                    } label: {
+                        Circle()
+                            .fill(.white)
+                            .frame(width: 64, height: 64)
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.white.opacity(0.4), lineWidth: 4)
+                                    .padding(-6)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Take photo")
+                    .accessibilityIdentifier("composer-camera-shutter")
+                }
+            }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+    }
+
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     private func startCamera() async {
@@ -208,18 +257,26 @@ struct ComposerCameraWindow: View {
         guard authorization == .authorized, engine == nil else { return }
 
         let box = ComposerCameraEngineBox(
-            engine: ComposerCameraEngine { data in
-                Task { @MainActor in
-                    guard capturedImage == nil else { return }
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        capturedImage = UIImage(data: data)
+            engine: ComposerCameraEngine(
+                onPhoto: { data in
+                    Task { @MainActor in
+                        guard capturedImage == nil else { return }
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            capturedImage = UIImage(data: data)
+                        }
+                        // Let the freeze land before the window collapses into
+                        // the attachment thumbnail.
+                        try? await Task.sleep(for: .milliseconds(450))
+                        onCapture(data)
                     }
-                    // Let the freeze land before the window collapses into the
-                    // attachment thumbnail.
-                    try? await Task.sleep(for: .milliseconds(450))
-                    onCapture(data)
+                },
+                onFailure: {
+                    Task { @MainActor in
+                        captureFailed = true
+                        failureCount += 1
+                    }
                 }
-            }
+            )
         )
         engine = box
         box.engine.start()
@@ -228,342 +285,98 @@ struct ComposerCameraWindow: View {
 
 // MARK: - Photo library
 
-/// The photo grid occupying the media window. Multi-select, confirmed with the
-/// Done button or by sliding the window down.
+/// The system photo picker, inline in the media window.
+///
+/// It runs out of process, so it needs no photo-library permission and shows
+/// the whole library — albums, search and all — while the app only ever sees
+/// the photos that were picked. Selection is ordered and capped by the picker
+/// itself; the ink button confirms.
 struct ComposerPhotoLibraryWindow: View {
     /// How many more images the draft can take.
     let maximumSelectable: Int
-    /// The selected images' original data, in selection order. Empty means the
-    /// window was dismissed without picking anything.
-    let onConfirm: ([Data]) -> Void
+    let onClose: () -> Void
+    /// The picked items, in selection order.
+    let onConfirm: ([PhotosPickerItem]) -> Void
 
-    @State private var assets: [PHAsset] = []
-    @State private var selectedIDs: [String] = []
-    @State private var authorization: PHAuthorizationStatus = .notDetermined
-    @State private var isLoadingSelection = false
-    @State private var dragOffset: CGFloat = 0
-
-    private let imageManager = PHCachingImageManager()
-
-    private var selectedAssets: [PHAsset] {
-        selectedIDs.compactMap { id in assets.first { $0.localIdentifier == id } }
-    }
+    @State private var selection: [PhotosPickerItem] = []
 
     var body: some View {
-        VStack(spacing: 0) {
-            grabber
-
-            if authorization == .denied || authorization == .restricted {
-                mediaPermissionPrompt(
-                    title: "Photos access is off",
-                    message: "Allow photo access in Settings to pick images here."
-                )
-                .frame(maxHeight: .infinity)
-            } else {
-                grid
-            }
+        PhotosPicker(
+            selection: $selection,
+            maxSelectionCount: max(1, maximumSelectable),
+            selectionBehavior: .ordered,
+            matching: .images,
+            // The composer re-encodes every upload to JPEG anyway, so asking
+            // Photos for a compatible representation avoids shipping a
+            // ProRAW/HEIF original across XPC first.
+            preferredItemEncoding: .compatible
+        ) {
+            Text("Choose Photos")
         }
-        .background(T3Colors.background)
-        .overlay(alignment: .bottom) {
-            if authorization != .denied, authorization != .restricted {
-                windowControls
-            }
-        }
-        .overlay {
-            if isLoadingSelection {
-                ZStack {
-                    T3Colors.background.opacity(0.6)
-                    ProgressView()
-                }
-            }
-        }
-        .offset(y: max(0, dragOffset))
-        .task { await loadLibrary() }
+        .photosPickerStyle(.inline)
+        .photosPickerDisabledCapabilities(.selectionActions)
+        .photosPickerAccessoryVisibility(.hidden, edges: .all)
+        .t3SensoryFeedback(.selection, trigger: selection.count)
+        .overlay(alignment: .bottom) { windowControls }
         .accessibilityIdentifier("composer-photo-window")
     }
 
-    /// The whole header is the dismiss handle: drag it down past the threshold
-    /// and the window confirms whatever is selected.
-    private var grabber: some View {
-        VStack(spacing: 7) {
-            Capsule()
-                .fill(T3Colors.subtleStrong)
-                .frame(width: 38, height: 5)
-            Text(grabberHint)
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textSecondary)
-                .contentTransition(.numericText())
-                .animation(.easeOut(duration: 0.15), value: selectedIDs.count)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 52)
-        .contentShape(Rectangle())
-        .gesture(
-            // Global space, not local: the drag offsets this very view, so a
-            // local-space translation would chase its own movement and jitter.
-            DragGesture(minimumDistance: 6, coordinateSpace: .global)
-                .onChanged { value in
-                    dragOffset = value.translation.height
-                }
-                .onEnded { value in
-                    if value.translation.height > 96 {
-                        confirm()
-                    } else {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            dragOffset = 0
-                        }
-                    }
-                }
-        )
-        .accessibilityLabel(grabberHint)
-        .accessibilityHint("Swipe down to confirm")
-        .accessibilityAction { confirm() }
-    }
-
-    /// The window's two explicit exits, floating over the grid on glass:
-    /// cancel at the left, confirm at the right. The slide-down gesture still
-    /// confirms — this is the same decision for the thumb that never finds it.
+    /// Cancel at the left, confirm at the right, floating over the picker.
     private var windowControls: some View {
         T3GlassContainer(spacing: 12) {
             HStack(spacing: 12) {
-                Button { onConfirm([]) } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(T3Colors.textPrimary)
-                        .frame(width: 46, height: 46)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .t3GlassEffect(.clear, in: Circle())
-                .accessibilityLabel("Close without adding photos")
+                mediaGlassButton(
+                    systemImage: "xmark",
+                    label: "Close without adding photos",
+                    prominence: .regular,
+                    action: onClose
+                )
                 .accessibilityIdentifier("composer-photo-cancel")
 
                 Spacer(minLength: 0)
 
-                Button { confirm() } label: {
-                    Text("Done")
-                        .font(T3Typography.control.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 22)
-                        .frame(height: 46)
-                        .contentShape(Capsule())
+                Button {
+                    onConfirm(selection)
+                } label: {
+                    Text(confirmTitle)
+                        .contentTransition(.numericText())
+                        .animation(.easeOut(duration: 0.15), value: selection.count)
                 }
-                .buttonStyle(.plain)
-                .t3GlassEffect(tint: T3Colors.accent, in: Capsule())
-                .accessibilityLabel(
-                    selectedIDs.isEmpty
-                        ? "Done"
-                        : "Done, add \(selectedIDs.count) photo\(selectedIDs.count == 1 ? "" : "s")"
-                )
+                .t3ProminentButtonStyle()
+                .disabled(selection.isEmpty)
                 .accessibilityIdentifier("composer-photo-done")
             }
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 18)
+        .padding(.bottom, 16)
     }
 
-    private var grabberHint: String {
-        selectedIDs.isEmpty
-            ? "Slide down to close"
-            : "Slide down to add \(selectedIDs.count) photo\(selectedIDs.count == 1 ? "" : "s")"
-    }
-
-    private var grid: some View {
-        GeometryReader { proxy in
-            let columns = 3
-            let spacing: CGFloat = 2
-            let side = (proxy.size.width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
-            ScrollView {
-                LazyVGrid(
-                    columns: Array(
-                        repeating: GridItem(.fixed(side), spacing: spacing),
-                        count: columns
-                    ),
-                    spacing: spacing
-                ) {
-                    ForEach(assets, id: \.localIdentifier) { asset in
-                        photoCell(asset, side: side)
-                    }
-                }
-                // Clears the floating controls, so the last row is reachable
-                // rather than parked under the Done button.
-                .padding(.bottom, 82)
-            }
-            .scrollIndicators(.hidden)
-        }
-    }
-
-    private func photoCell(_ asset: PHAsset, side: CGFloat) -> some View {
-        let order = selectedIDs.firstIndex(of: asset.localIdentifier)
-        return Button {
-            toggle(asset)
-        } label: {
-            ComposerPhotoThumbnail(asset: asset, side: side, manager: imageManager)
-                .overlay {
-                    if order != nil {
-                        Rectangle()
-                            .fill(Color.black.opacity(0.32))
-                    }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if let order {
-                        Text("\(order + 1)")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 22, height: 22)
-                            .background(T3Colors.accent, in: Circle())
-                            .overlay { Circle().stroke(.white, lineWidth: 1.5) }
-                            .padding(5)
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(order == nil ? "Photo" : "Photo, selected")
-    }
-
-    private func toggle(_ asset: PHAsset) {
-        if let index = selectedIDs.firstIndex(of: asset.localIdentifier) {
-            selectedIDs.remove(at: index)
-            return
-        }
-        guard selectedIDs.count < maximumSelectable else { return }
-        selectedIDs.append(asset.localIdentifier)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    }
-
-    private func loadLibrary() async {
-        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        if status == .notDetermined {
-            _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-        }
-        authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        guard authorization == .authorized || authorization == .limited else { return }
-
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.fetchLimit = 600
-        let fetched = PHAsset.fetchAssets(with: .image, options: options)
-        var rows: [PHAsset] = []
-        rows.reserveCapacity(fetched.count)
-        fetched.enumerateObjects { asset, _, _ in rows.append(asset) }
-        assets = rows
-    }
-
-    private func confirm() {
-        guard !isLoadingSelection else { return }
-        let picks = selectedAssets
-        guard !picks.isEmpty else {
-            onConfirm([])
-            return
-        }
-        isLoadingSelection = true
-        Task { @MainActor in
-            var datas: [Data] = []
-            for asset in picks {
-                if let data = await Self.imageData(for: asset) {
-                    datas.append(data)
-                }
-            }
-            isLoadingSelection = false
-            onConfirm(datas)
-        }
-    }
-
-    private static func imageData(for asset: PHAsset) async -> Data? {
-        await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.deliveryMode = .highQualityFormat
-            var resumed = false
-            PHImageManager.default().requestImageDataAndOrientation(
-                for: asset,
-                options: options
-            ) { data, _, _, _ in
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume(returning: data)
-            }
-        }
-    }
-}
-
-/// One grid thumbnail, resolved through the caching manager.
-private struct ComposerPhotoThumbnail: View {
-    let asset: PHAsset
-    let side: CGFloat
-    let manager: PHCachingImageManager
-
-    @State private var image: UIImage?
-
-    var body: some View {
-        ZStack {
-            T3Colors.subtle
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            }
-        }
-        .frame(width: side, height: side)
-        .clipped()
-        // `clipped` trims pixels, not hit-testing: without this, the
-        // scaled-to-fill overflow of every thumbnail steals taps from the
-        // cells beside it.
-        .contentShape(Rectangle())
-        .task(id: asset.localIdentifier) {
-            let scale = UIScreen.main.scale
-            let target = CGSize(width: side * scale, height: side * scale)
-            let options = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.deliveryMode = .opportunistic
-            manager.requestImage(
-                for: asset,
-                targetSize: target,
-                contentMode: .aspectFill,
-                options: options
-            ) { result, _ in
-                if let result {
-                    Task { @MainActor in image = result }
-                }
-            }
+    private var confirmTitle: String {
+        switch selection.count {
+        case 0: "\(max(1, maximumSelectable)) max"
+        case 1: "Add 1 Photo"
+        default: "Add \(selection.count) Photos"
         }
     }
 }
 
 // MARK: - Shared chrome
 
-private func mediaPermissionPrompt(title: String, message: String) -> some View {
-    VStack(spacing: 10) {
-        Text(title)
-            .font(T3Typography.control.weight(.semibold))
-            .foregroundStyle(T3Colors.textPrimary)
-        Text(message)
-            .font(T3Typography.supporting)
-            .foregroundStyle(T3Colors.textSecondary)
-            .multilineTextAlignment(.center)
-        Button("Open Settings") {
-            guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-            UIApplication.shared.open(url)
-        }
-        .font(T3Typography.supporting.weight(.semibold))
-        .buttonStyle(.bordered)
-    }
-    .padding(24)
-}
-
-private func mediaRoundButton(
+/// A round glass control floating over the camera or picker.
+private func mediaGlassButton(
     systemImage: String,
     label: String,
+    prominence: T3Glass.Prominence = .clear,
     action: @escaping () -> Void
 ) -> some View {
     Button(action: action) {
         Image(systemName: systemImage)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
-            .background(.black.opacity(0.45), in: Circle())
+            .font(.body.weight(.semibold))
+            .foregroundStyle(prominence == .clear ? Color.white : T3Colors.textPrimary)
+            .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+            .contentShape(Circle())
     }
     .buttonStyle(.plain)
+    .t3GlassEffect(prominence, interactive: true, in: Circle())
     .accessibilityLabel(label)
 }

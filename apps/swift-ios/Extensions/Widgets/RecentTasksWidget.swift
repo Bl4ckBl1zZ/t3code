@@ -18,8 +18,9 @@ private struct T3TaskWidgetProvider: TimelineProvider {
 
     func getTimeline(in _: Context, completion: @escaping (Timeline<T3TaskWidgetEntry>) -> Void) {
         let now = Date()
-        let entry = T3TaskWidgetEntry(date: now, snapshot: T3TaskWidgetSnapshotStore.load())
-        completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(15 * 60))))
+        let snapshot = T3TaskWidgetSnapshotStore.load()
+        let entry = T3TaskWidgetEntry(date: now, snapshot: snapshot)
+        completion(Timeline(entries: [entry], policy: .after(snapshot.nextRefresh(after: now))))
     }
 }
 
@@ -33,20 +34,30 @@ struct T3RecentTasksWidget: Widget {
         }
         .configurationDisplayName("T3 Code Tasks")
         .description("See active and recent T3 Code tasks at a glance.")
-        .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
+        .supportedFamilies([
+            .systemSmall, .systemMedium, .systemLarge,
+            .accessoryRectangular, .accessoryInline, .accessoryCircular,
+        ])
     }
 }
 
 private struct T3TaskWidgetView: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.widgetRenderingMode) private var renderingMode
     let entry: T3TaskWidgetEntry
 
     var body: some View {
         switch family {
         case .systemMedium:
-            mediumView
+            listView(limit: 3)
+        case .systemLarge:
+            listView(limit: 6)
         case .accessoryRectangular:
-            accessoryView
+            rectangularView
+        case .accessoryInline:
+            inlineView
+        case .accessoryCircular:
+            circularView
         default:
             smallView
         }
@@ -62,119 +73,205 @@ private struct T3TaskWidgetView: View {
         }
     }
 
+    /// Most urgent task first. A small widget has one tap target, so the whole
+    /// widget opens that task (or New Task when there is none).
     private var smallView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 6) {
             if let task = orderedTasks.first {
-                Link(destination: task.nativeDeepLinkURL ?? T3WidgetURLs.newTask) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Label(task.status, systemImage: task.phase.systemImage)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(task.phase.tint)
-                            .lineLimit(1)
-                        Text(task.threadTitle)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(2)
-                        Text(task.projectTitle)
-                            .font(.system(size: 11, weight: .medium))
+                HStack(spacing: 4) {
+                    statusLabel(task)
+                    Spacer(minLength: 4)
+                    if orderedTasks.count > 1 {
+                        Text("+\(orderedTasks.count - 1)")
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
                     }
                 }
+                Spacer(minLength: 0)
+                Text(task.threadTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(3)
+                    .privacySensitive()
+                detailLine(task)
             } else {
+                Spacer(minLength: 0)
                 emptyState
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .widgetURL(orderedTasks.first?.nativeDeepLinkURL ?? T3WidgetURLs.newTask)
+    }
+
+    /// Medium and large: a count header with a real New Task link, then one
+    /// link per task. Taps elsewhere open the most urgent task.
+    private func listView(limit: Int) -> some View {
+        let tasks = Array(orderedTasks.prefix(limit))
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(summary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Link(destination: T3WidgetURLs.newTask) {
+                    Image(systemName: "plus")
+                        .font(.footnote.weight(.bold))
+                        .frame(width: 28, height: 28)
+                        .background(.quaternary, in: Circle())
+                }
+                .accessibilityLabel("New Task")
+            }
+            if tasks.isEmpty {
+                Spacer(minLength: 0)
+                emptyState
+                Spacer(minLength: 0)
+            } else {
+                ForEach(Array(tasks.enumerated()), id: \.element.id) { index, task in
+                    Link(destination: task.nativeDeepLinkURL ?? T3WidgetURLs.newTask) {
+                        taskRow(task)
+                    }
+                    if index < tasks.count - 1 {
+                        Divider()
+                    }
+                }
+                Spacer(minLength: 0)
             }
         }
         .widgetURL(orderedTasks.first?.nativeDeepLinkURL ?? T3WidgetURLs.newTask)
     }
 
-    private var mediumView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
-            if orderedTasks.isEmpty {
-                Spacer(minLength: 0)
-                emptyState
-                Spacer(minLength: 0)
-            } else {
-                ForEach(Array(orderedTasks.prefix(3).enumerated()), id: \.element.id) { index, task in
-                    Link(destination: task.nativeDeepLinkURL ?? T3WidgetURLs.newTask) {
-                        HStack(spacing: 8) {
-                            Image(systemName: task.phase.systemImage)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(task.phase.tint)
-                                .frame(width: 15)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(task.threadTitle)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Text(task.projectTitle)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: 6)
-                            Text(task.status)
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(task.phase.tint)
-                                .lineLimit(1)
-                        }
-                    }
-                    if index < min(orderedTasks.count, 3) - 1 {
-                        Divider()
-                    }
-                }
+    private func taskRow(_ task: T3RelayAgentActivityAggregateRow) -> some View {
+        let isStale = task.isStale(at: entry.date)
+        return HStack(spacing: 8) {
+            Image(systemName: task.phase.systemImage)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(phaseColor(task, isStale: isStale))
+                .widgetAccentable()
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(task.threadTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .privacySensitive()
+                detailLine(task)
             }
+            Spacer(minLength: 6)
+            Text(isStale ? "No update" : task.status)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(phaseColor(task, isStale: isStale))
+                .widgetAccentable()
+                .lineLimit(1)
         }
+        .opacity(isStale ? 0.55 : 1)
     }
 
-    private var accessoryView: some View {
+    /// "Project · 3 hr ago", so data that stopped updating reads as old.
+    private func detailLine(_ task: T3RelayAgentActivityAggregateRow) -> some View {
+        var parts = [task.projectTitle]
+        if let since = task.phaseSince {
+            parts.append(since.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
+        }
+        return Text(parts.joined(separator: " · "))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .privacySensitive()
+    }
+
+    private func statusLabel(_ task: T3RelayAgentActivityAggregateRow) -> some View {
+        let isStale = task.isStale(at: entry.date)
+        return Label(isStale ? "No update" : task.status, systemImage: task.phase.systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(phaseColor(task, isStale: isStale))
+            .widgetAccentable()
+            .lineLimit(1)
+    }
+
+    private var rectangularView: some View {
         Group {
             if let task = orderedTasks.first {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label(task.status, systemImage: task.phase.systemImage)
+                VStack(alignment: .leading, spacing: 1) {
+                    Label(task.isStale(at: entry.date) ? "No update" : task.status, systemImage: task.phase.systemImage)
                         .font(.caption.weight(.semibold))
+                        .widgetAccentable()
                     Text(task.threadTitle)
-                        .font(.caption2.weight(.medium))
+                        .font(.caption)
                         .lineLimit(1)
+                        .privacySensitive()
+                    detailLine(task)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                Label("New task", systemImage: "square.and.pencil")
+                Label(isNeverSynced ? "Open T3 Code" : "All done", systemImage: "square.and.pencil")
                     .font(.caption.weight(.semibold))
             }
         }
         .widgetURL(orderedTasks.first?.nativeDeepLinkURL ?? T3WidgetURLs.newTask)
     }
 
-    private var header: some View {
-        HStack(spacing: 6) {
-            Text("T3")
-                .font(.system(size: 14, weight: .black, design: .rounded))
-                .foregroundStyle(.primary)
-            Text("Code")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 6)
-            Link(destination: T3WidgetURLs.newTask) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
+    /// Next to the date: "1 waiting · 2 working".
+    private var inlineView: some View {
+        Label(summary, systemImage: orderedTasks.first?.phase.systemImage ?? "checkmark.circle")
+            .widgetURL(orderedTasks.first?.nativeDeepLinkURL ?? T3WidgetURLs.newTask)
+    }
+
+    /// The number of agents that need you or are working.
+    private var circularView: some View {
+        let active = orderedTasks.filter { $0.phase.isActive }
+        return ZStack {
+            AccessoryWidgetBackground()
+            VStack(spacing: 0) {
+                Image(systemName: orderedTasks.first?.phase.systemImage ?? "checkmark")
+                    .font(.caption.weight(.semibold))
+                    .widgetAccentable()
+                Text("\(active.count)")
+                    .font(.title3.weight(.semibold))
+                    .contentTransition(.numericText())
             }
-            .accessibilityLabel("New task")
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(summary)
+        .widgetURL(orderedTasks.first?.nativeDeepLinkURL ?? T3WidgetURLs.newTask)
     }
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Ready for a task")
-                .font(.system(size: 14, weight: .semibold))
+            Label(isNeverSynced ? "Not connected" : "All done", systemImage: isNeverSynced ? "bolt.horizontal.circle" : "checkmark.circle")
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
-            Text("Tap to start in T3 Code")
-                .font(.system(size: 11, weight: .medium))
+            Text(isNeverSynced ? "Open T3 Code to connect to your server." : "Tap to start a new task.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// "1 waiting · 2 working", or the outcome when nothing is active.
+    private var summary: String {
+        let waiting = orderedTasks.filter(\.needsAttention).count
+        let working = orderedTasks.filter { $0.phase == .running || $0.phase == .starting }.count
+        let failed = orderedTasks.filter { $0.phase == .failed }.count
+        var parts: [String] = []
+        if waiting > 0 { parts.append("\(waiting) waiting") }
+        if working > 0 { parts.append("\(working) working") }
+        if failed > 0 { parts.append("\(failed) failed") }
+        if parts.isEmpty { return isNeverSynced ? "T3 Code" : "All done" }
+        return parts.joined(separator: " · ")
+    }
+
+    /// A snapshot the app never wrote: nothing to report yet, as opposed to
+    /// nothing happening.
+    private var isNeverSynced: Bool {
+        entry.snapshot.updatedAt.isEmpty
+    }
+
+    /// Phase colors carry the widget's whole signal in full color. On tinted
+    /// and clear Home Screens the system flattens color, so the accentable
+    /// glyph and status take the tint and everything else steps down by opacity.
+    private func phaseColor(_ task: T3RelayAgentActivityAggregateRow, isStale: Bool) -> Color {
+        if isStale { return .secondary }
+        return renderingMode == .fullColor ? task.phase.tint : .primary
     }
 }
 
@@ -191,34 +288,53 @@ private extension T3AgentActivityPhase {
         case .completed, .stale: 3
         }
     }
+
+    var isActive: Bool {
+        switch self {
+        case .starting, .running, .waitingForApproval, .waitingForInput: true
+        case .completed, .failed, .stale: false
+        }
+    }
 }
 
 private extension T3TaskWidgetSnapshot {
-    static let preview = T3TaskWidgetSnapshot(
-        updatedAt: "2026-08-01T12:00:00.000Z",
-        tasks: [
-            T3RelayAgentActivityAggregateRow(
-                environmentId: "preview",
-                threadId: "one",
-                projectTitle: "t3code",
-                threadTitle: "Polish native task list",
-                modelTitle: "GPT-5.6 Sol",
-                phase: .running,
-                status: "Working",
-                updatedAt: "2026-08-01T12:00:00.000Z",
-                deepLink: "/preview/one"
-            ),
-            T3RelayAgentActivityAggregateRow(
-                environmentId: "preview",
-                threadId: "two",
-                projectTitle: "uploadthing",
-                threadTitle: "Review multipart recovery",
-                modelTitle: "Claude Opus 5",
-                phase: .waitingForApproval,
-                status: "Approval",
-                updatedAt: "2026-08-01T11:59:00.000Z",
-                deepLink: "/preview/two"
-            ),
-        ]
-    )
+    /// The next time the widget has to redraw: the regular refresh, or sooner
+    /// when a working row is about to go stale, so it dims on time.
+    func nextRefresh(after now: Date) -> Date {
+        let regular = now.addingTimeInterval(15 * 60)
+        let nextStale = tasks.compactMap(\.staleDeadline).filter { $0 > now }.min()
+        return min(regular, nextStale ?? regular)
+    }
+
+    /// Gallery sample, timestamped now so its rows never read as stale.
+    static var preview: T3TaskWidgetSnapshot {
+        let now = Date().ISO8601Format()
+        return T3TaskWidgetSnapshot(
+            updatedAt: now,
+            tasks: [
+                T3RelayAgentActivityAggregateRow(
+                    environmentId: "preview",
+                    threadId: "one",
+                    projectTitle: "t3code",
+                    threadTitle: "Polish native task list",
+                    modelTitle: "GPT-5.6 Sol",
+                    phase: .running,
+                    status: "Working",
+                    updatedAt: now,
+                    deepLink: "/preview/one"
+                ),
+                T3RelayAgentActivityAggregateRow(
+                    environmentId: "preview",
+                    threadId: "two",
+                    projectTitle: "uploadthing",
+                    threadTitle: "Review multipart recovery",
+                    modelTitle: "Claude Opus 5",
+                    phase: .waitingForApproval,
+                    status: "Approval",
+                    updatedAt: now,
+                    deepLink: "/preview/two"
+                ),
+            ]
+        )
+    }
 }

@@ -15,9 +15,9 @@ struct FeatureBrowserDocumentView: View {
             DocumentWebView(url: refreshedURL ?? url, loading: $loading, failure: $failure).id(attempt)
             if let failure {
                 ContentUnavailableView {
-                    Label("Preview unavailable", systemImage: "doc.badge.ellipsis")
+                    Label("Preview Unavailable", systemImage: "doc.badge.ellipsis")
                 } description: { Text(failure) } actions: {
-                    Button("Reload") {
+                    Button("Try Again") {
                         let generation = UUID()
                         retryGeneration = generation
                         Task {
@@ -55,7 +55,7 @@ private struct DocumentWebView: UIViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.isOpaque = false
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = T3Colors.uiBackground
         view.allowsBackForwardNavigationGestures = false
         view.load(URLRequest(url: url))
         return view
@@ -93,7 +93,6 @@ private struct DocumentWebView: UIViewRepresentable {
 }
 
 struct FeatureDocumentAttachmentPreview: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
     let attachment: FeatureMessageAttachment
     let resolve: @MainActor (FeatureMessageAttachment) async throws -> URL
     @State private var url: URL?
@@ -106,16 +105,16 @@ struct FeatureDocumentAttachmentPreview: View {
                 if let url { FeatureBrowserDocumentView(url: url, refreshURL: { try await resolve(attachment) }) }
                 else if let error {
                     ContentUnavailableView {
-                        Label("Document unavailable", systemImage: "doc.badge.ellipsis")
+                        Label("Document Unavailable", systemImage: "doc.badge.ellipsis")
                     } description: { Text(error) } actions: {
-                        Button("Retry") { attempt += 1 }
+                        Button("Try Again") { attempt += 1 }
                         if let download = attachment.url { Link("Download file", destination: download) }
                     }
                 } else { ProgressView("Opening document…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             }
             .background(T3Colors.background).navigationTitle(attachment.name)
             .navigationBarTitleDisplayMode(.inline).t3NavigationChrome()
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            .t3SheetToolbar(.close)
         }
         .task(id: attempt) {
             error = nil

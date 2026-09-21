@@ -1,7 +1,12 @@
 import Foundation
 
 struct ComposerPromptHistory {
-    struct Entry: Identifiable, Equatable { let id: String; let prompt: String }
+    struct Entry: Identifiable, Equatable {
+        let id: String
+        let prompt: String
+        /// When it was sent, for the relative time under each recent prompt.
+        var date: Date? = nil
+    }
     private(set) var position: Entry?
 
     static func entries(_ messages: [FeatureMessage]) -> [Entry] {
@@ -10,7 +15,7 @@ struct ComposerPromptHistory {
             let prompt = recallable(message.text)
             guard !prompt.isEmpty else { continue }
             if result.last?.prompt == prompt { result.removeLast() }
-            result.append(Entry(id: message.id, prompt: prompt))
+            result.append(Entry(id: message.id, prompt: prompt, date: message.createdAt))
         }
         return result
     }

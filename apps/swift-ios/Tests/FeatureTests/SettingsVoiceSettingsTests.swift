@@ -71,7 +71,19 @@ final class SettingsVoiceSettingsTests: XCTestCase {
                 OpenRouterIntegrationStatus(configured: false, state: .notConfigured),
                 isLoaded: true
             ),
-            "Not configured"
+            "Not Set Up"
+        )
+    }
+
+    /// A client without the capability reports `.unavailable` with no key. It
+    /// can never connect, so it must not read as a setup step.
+    func testAnUnsupportedClientReadsAsUnavailableRatherThanNotSetUp() {
+        XCTAssertEqual(
+            VoiceIntegrationLabels.connection(
+                OpenRouterIntegrationStatus(configured: false, state: .unavailable),
+                isLoaded: true
+            ),
+            "Unavailable"
         )
     }
 

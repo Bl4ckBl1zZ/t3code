@@ -1927,13 +1927,20 @@ public actor EnvironmentRuntime {
     }
 
     @discardableResult
-    public func pair(url: String, clientLabel: String? = nil) async throws -> T3Client {
+    public func pair(
+        url: String,
+        client identity: PairingClientIdentity = PairingClientIdentity(label: nil)
+    ) async throws -> T3Client {
         let service = PairingService(
             transport: httpTransport,
             environmentStore: environmentStore,
             credentialStore: credentialStore
         )
-        let environment = try await service.pair(url: url, label: clientLabel)
+        let environment = try await service.pair(
+            url: url,
+            label: identity.label,
+            deviceType: identity.deviceType
+        )
         try await environmentStore.setActiveEnvironment(id: environment.id)
         return await client(for: environment)
     }
@@ -1942,14 +1949,19 @@ public actor EnvironmentRuntime {
     public func pair(
         host: String,
         code: String,
-        clientLabel: String? = nil
+        client identity: PairingClientIdentity = PairingClientIdentity(label: nil)
     ) async throws -> T3Client {
         let service = PairingService(
             transport: httpTransport,
             environmentStore: environmentStore,
             credentialStore: credentialStore
         )
-        let environment = try await service.pair(host: host, code: code, label: clientLabel)
+        let environment = try await service.pair(
+            host: host,
+            code: code,
+            label: identity.label,
+            deviceType: identity.deviceType
+        )
         try await environmentStore.setActiveEnvironment(id: environment.id)
         return await client(for: environment)
     }

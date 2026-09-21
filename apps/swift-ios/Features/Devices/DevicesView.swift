@@ -5,7 +5,7 @@ public struct DevicesView: View {
 
     @State private var sessions: [FeatureDeviceSession] = []
     @State private var isLoading = true
-    @State private var isRevoking = false
+    @State private var revokingIDs = Set<String>()
     @State private var errorMessage: String?
     @State private var revokeTarget: FeatureDeviceSession?
     @State private var showingRevokeOthers = false
@@ -17,26 +17,30 @@ public struct DevicesView: View {
     public var body: some View {
         Group {
             if isLoading, sessions.isEmpty {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Loading devices")
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textSecondary)
-                }
+                ProgressView("Loading Devices…")
+                    .foregroundStyle(T3Colors.textSecondary)
             } else if let errorMessage, sessions.isEmpty {
-                ContentUnavailableView {
-                    Label("Couldn’t load devices", systemImage: "exclamationmark.circle")
-                } description: {
-                    Text(errorMessage)
-                } actions: {
-                    Button("Try again") {
-                        Task { await reload() }
+                if DeviceManagementErrorCopy.isPermissionDenied(errorMessage) {
+                    ContentUnavailableView {
+                        Label("No Access to Devices", systemImage: "lock")
+                    } description: {
+                        Text(errorMessage)
                     }
-                    .buttonStyle(.borderedProminent)
+                } else {
+                    ContentUnavailableView {
+                        Label("Couldn’t Load Devices", systemImage: "exclamationmark.circle")
+                    } description: {
+                        Text(errorMessage)
+                    } actions: {
+                        Button("Try Again") {
+                            Task { await reload() }
+                        }
+                        .t3ProminentButtonStyle()
+                    }
                 }
             } else if sessions.isEmpty {
                 ContentUnavailableView {
-                    Label("No devices found", systemImage: "laptopcomputer.and.iphone")
+                    Label("No Devices Found", systemImage: "laptopcomputer.and.iphone")
                 } description: {
                     Text("Device sessions will appear here when this server supports access management.")
                 }
@@ -47,7 +51,8 @@ public struct DevicesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(T3Colors.background)
         .navigationTitle("Devices")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)
+        .t3NavigationChrome()
         .toolbar {
             if !otherSessions.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
@@ -55,60 +60,61 @@ public struct DevicesView: View {
                         Button(role: .destructive) {
                             showingRevokeOthers = true
                         } label: {
-                            Label("Remove all other devices", systemImage: "rectangle.stack.badge.minus")
+                            Label("Remove All Other Devices", systemImage: "rectangle.stack.badge.minus")
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Label("Device Actions", systemImage: Self.menuSymbol)
                     }
-                    .disabled(isRevoking)
-                    .accessibilityLabel("Device actions")
+                    .disabled(!revokingIDs.isEmpty)
+                    .confirmationDialog(
+                        "Remove all other devices?",
+                        isPresented: $showingRevokeOthers,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Remove \(otherSessions.count) Devices", role: .destructive) {
+                            Task { await revokeOthers() }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Every other phone, tablet, browser, and desktop will be signed out.")
+                    }
                 }
             }
         }
         .task {
             await reload()
         }
-        .alert(
-            "Remove this device?",
-            isPresented: Binding(
-                get: { revokeTarget != nil },
-                set: { if !$0 { revokeTarget = nil } }
-            ),
-            presenting: revokeTarget
-        ) { device in
-            Button("Remove access", role: .destructive) {
-                Task { await revoke(device) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { device in
-            Text("\(device.displayName) will need a new pairing code to reconnect.")
-        }
-        .confirmationDialog(
-            "Remove all other devices?",
-            isPresented: $showingRevokeOthers,
-            titleVisibility: .visible
-        ) {
-            Button("Remove \(otherSessions.count) devices", role: .destructive) {
-                Task { await revokeOthers() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Every other phone, tablet, browser, and desktop will be signed out.")
-        }
     }
 
     private var deviceList: some View {
         List {
-            if let currentSession {
-                Section("THIS DEVICE") {
-                    DeviceSessionRow(session: currentSession)
+            if let errorMessage {
+                Section {
+                    ConnectionProblemRow(
+                        title: "Couldn’t Update Devices",
+                        message: errorMessage,
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    Button("Try Again") {
+                        Task { await reload() }
+                    }
+                    .tint(T3Colors.accent)
+                    .disabled(isLoading)
                 }
+                .t3GroupedRow()
+            }
+
+            if let currentSession {
+                Section("This Device") {
+                    DeviceSessionRow(session: currentSession, isRevoking: false)
+                }
+                .t3GroupedRow()
             }
 
             if !otherSessions.isEmpty {
-                Section("OTHER DEVICES") {
+                Section {
                     ForEach(otherSessions) { session in
-                        DeviceSessionRow(session: session)
+                        DeviceSessionRow(session: session, isRevoking: revokingIDs.contains(session.id))
                             .contentShape(Rectangle())
                             .swipeActions {
                                 Button("Remove", role: .destructive) {
@@ -119,41 +125,44 @@ public struct DevicesView: View {
                                 Button(role: .destructive) {
                                     revokeTarget = session
                                 } label: {
-                                    Label("Remove access", systemImage: "trash")
+                                    Label("Remove Access", systemImage: "trash")
                                 }
                             }
+                            .confirmationDialog(
+                                "Remove “\(session.displayName)”?",
+                                isPresented: Binding(
+                                    get: { revokeTarget?.id == session.id },
+                                    set: { if !$0 { revokeTarget = nil } }
+                                ),
+                                titleVisibility: .visible
+                            ) {
+                                Button("Remove Access", role: .destructive) {
+                                    Task { await revoke(session) }
+                                }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text("It will need a new pairing code to reconnect.")
+                            }
                     }
+                } header: {
+                    Text("Other Devices")
+                } footer: {
+                    Text("Swipe or touch and hold a device to remove its access.")
                 }
-            }
-
-            if let errorMessage {
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label(errorMessage, systemImage: "exclamationmark.circle")
-                            .font(T3Typography.control)
-                            .foregroundStyle(.orange)
-                        Button("Try again") {
-                            Task { await reload() }
-                        }
-                        .font(T3Typography.control.weight(.semibold))
-                    }
-                    .padding(.vertical, 4)
-                }
+                .t3GroupedRow()
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(T3Colors.background)
+        .listStyle(.insetGrouped)
+        .t3GroupedListBackground()
         .refreshable {
             await reload()
         }
-        .overlay(alignment: .top) {
-            if isRevoking {
-                ProgressView()
-                    .padding(.top, 12)
-                    .accessibilityLabel("Updating device access")
-            }
-        }
+    }
+
+    /// iOS 26 glass toolbars use the bare ellipsis; the circled one belongs to
+    /// the older opaque bars.
+    private static var menuSymbol: String {
+        if #available(iOS 26, *) { "ellipsis" } else { "ellipsis.circle" }
     }
 
     private var currentSession: FeatureDeviceSession? {
@@ -180,11 +189,9 @@ public struct DevicesView: View {
 
     @MainActor
     private func revoke(_ session: FeatureDeviceSession) async {
-        isRevoking = true
-        defer {
-            isRevoking = false
-            revokeTarget = nil
-        }
+        revokingIDs.insert(session.id)
+        revokeTarget = nil
+        defer { revokingIDs.remove(session.id) }
         do {
             try await manager.revokeDeviceSession(id: session.id)
             sessions.removeAll { $0.id == session.id }
@@ -196,8 +203,9 @@ public struct DevicesView: View {
 
     @MainActor
     private func revokeOthers() async {
-        isRevoking = true
-        defer { isRevoking = false }
+        let others = Set(otherSessions.map(\.id))
+        revokingIDs.formUnion(others)
+        defer { revokingIDs.subtract(others) }
         do {
             try await manager.revokeOtherDeviceSessions()
             sessions.removeAll { !$0.isCurrent }
@@ -210,55 +218,69 @@ public struct DevicesView: View {
 
 private struct DeviceSessionRow: View {
     let session: FeatureDeviceSession
+    let isRevoking: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 13) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: session.deviceType.systemImage)
-                .font(.system(size: 19, weight: .medium))
-                .foregroundStyle(session.isCurrent ? .green : .secondary)
-                .frame(width: 26, height: 26)
+                .font(.title3)
+                .foregroundStyle(T3Colors.textSecondary)
+                .frame(width: 28)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text(session.displayName)
-                        .font(T3Typography.homeTitle)
+                        .foregroundStyle(T3Colors.textPrimary)
                     if session.isCurrent {
-                        Text("Current")
-                            .font(T3Typography.supportingStrong)
-                            .foregroundStyle(.green)
-                    } else if session.isConnected {
-                        Text("Online")
-                            .font(T3Typography.supportingStrong)
-                            .foregroundStyle(.green)
+                        Text("This Device")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(T3Colors.success)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(T3Colors.success.opacity(0.14), in: Capsule())
                     }
                 }
 
-                if !session.platformDescription.isEmpty {
-                    Text(session.platformDescription)
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textSecondary)
-                }
-
-                Text(lastSeenDescription)
+                Text(summary)
                     .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
+                    .foregroundStyle(T3Colors.textTertiary)
 
                 if let ipAddress = session.ipAddress, !ipAddress.isEmpty {
                     Text(ipAddress)
-                        .font(T3Typography.tool)
-                        .foregroundStyle(T3Colors.textSecondary)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(T3Colors.textTertiary)
                 }
             }
             Spacer(minLength: 8)
+            if isRevoking {
+                ProgressView()
+                    .accessibilityLabel("Removing access")
+            }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 2)
+        .opacity(isRevoking ? 0.6 : 1)
         .accessibilityElement(children: .combine)
     }
 
-    private var lastSeenDescription: String {
-        if session.isConnected {
-            return "Active now"
+    /// "Online · macOS · Chrome", or the platform then when it was last seen.
+    private var summary: AttributedString {
+        var parts: [AttributedString] = []
+        if session.isConnected, !session.isCurrent {
+            var online = AttributedString("Online")
+            online.foregroundColor = T3Colors.success
+            parts.append(online)
         }
-        return "Last seen \(session.lastSeenAt.formatted(.relative(presentation: .named)))"
+        if !session.platformDescription.isEmpty {
+            parts.append(AttributedString(session.platformDescription))
+        }
+        if session.isConnected {
+            if session.isCurrent { parts.append(AttributedString("Active now")) }
+        } else {
+            parts.append(AttributedString(session.lastSeenAt.formatted(.relative(presentation: .named))))
+        }
+        return parts.enumerated().reduce(into: AttributedString()) { result, part in
+            if part.offset > 0 { result += AttributedString(" · ") }
+            result += part.element
+        }
     }
 }

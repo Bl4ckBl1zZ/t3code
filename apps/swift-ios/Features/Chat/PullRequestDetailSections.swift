@@ -17,6 +17,8 @@ enum PullRequestStatusTone: Equatable, Sendable {
     case danger
     case warning
     case accent
+    /// Merged: done and accepted, which is neither live nor refused.
+    case merged
     case neutral
 }
 
@@ -47,8 +49,8 @@ enum PullRequestReviewOutcome: Equatable, Sendable {
     var label: String {
         switch self {
         case .approved: "Approved"
-        case .changesRequested: "Changes requested"
-        case .dismissed: "Review dismissed"
+        case .changesRequested: "Changes Requested"
+        case .dismissed: "Review Dismissed"
         }
     }
 
@@ -100,6 +102,50 @@ struct PullRequestReviewerRow: Identifiable, Equatable, Sendable {
     let entry: PullRequestReviewOutcomeEntry?
 }
 
+/// One check with its position in the host's list, which is its identity:
+/// matrix jobs repeat a name, and a name alone collides.
+struct PullRequestCheckEntry: Identifiable, Equatable, Sendable {
+    let id: Int
+    let check: PullRequestCheck
+}
+
+/// The Checks section of the detail sheet, grouped by what needs the reader.
+struct PullRequestChecksSummary: Equatable, Sendable {
+    /// Failed and action-required checks, failures first.
+    let attention: [PullRequestCheckEntry]
+    let running: [PullRequestCheckEntry]
+    /// Passed, skipped, neutral and cancelled: nothing to do, so collapsed.
+    let settled: [PullRequestCheckEntry]
+
+    var total: Int { attention.count + running.count + settled.count }
+    var isAllPassing: Bool { attention.isEmpty && running.isEmpty && total > 0 }
+
+    /// "All checks passed", or the counts that need attention, worst first.
+    var headline: String {
+        if isAllPassing { return "All checks passed" }
+        let failing = attention.filter { $0.check.status == .failure }.count
+        let actionRequired = attention.count - failing
+        var parts: [String] = []
+        if failing > 0 { parts.append("\(failing) failing") }
+        if actionRequired > 0 { parts.append("\(actionRequired) need\(actionRequired == 1 ? "s" : "") action") }
+        if !running.isEmpty { parts.append("\(running.count) in progress") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Segment sizes for the proportional bar, in draw order.
+    var segments: [(tone: PullRequestStatusTone, count: Int)] {
+        let failing = attention.filter { $0.check.status == .failure }.count
+        let warning = attention.count - failing + running.count
+        let passed = settled.filter { $0.check.status == .success }.count
+        return [
+            (PullRequestStatusTone.danger, failing),
+            (.warning, warning),
+            (.success, passed),
+            (.neutral, settled.count - passed),
+        ].filter { $0.count > 0 }
+    }
+}
+
 /// One row of the Timeline tab: the conversation and the commits, merged into
 /// a single chronology.
 struct PullRequestTimelineEntry: Identifiable, Equatable, Sendable {
@@ -125,14 +171,24 @@ enum PullRequestDetailSections {
         }
     }
 
-    /// Open reads as live, merged takes the accent, closed as refused. A draft
-    /// is not live yet, so it recedes.
+    /// Open reads as live, merged as accepted, closed as refused. A draft is
+    /// not live yet, so it recedes. Every pull-request surface reads this one
+    /// map, so a state never changes color between screens.
     static func stateTone(state: PullRequestState, isDraft: Bool) -> PullRequestStatusTone {
         if isDraft, state == .open { return .neutral }
         switch state {
         case .open: return .success
         case .closed: return .danger
-        case .merged: return .accent
+        case .merged: return .merged
+        }
+    }
+
+    static func stateSymbol(state: PullRequestState, isDraft: Bool) -> String {
+        if isDraft, state == .open { return "circle.dashed" }
+        switch state {
+        case .open: return "arrow.triangle.pull"
+        case .closed: return "xmark.circle"
+        case .merged: return "arrow.triangle.merge"
         }
     }
 
@@ -143,6 +199,37 @@ enum PullRequestDetailSections {
     static func statsLine(_ detail: PullRequestDetail) -> String {
         let files = detail.changedFiles == 1 ? "1 file" : "\(detail.changedFiles) files"
         return "+\(detail.additions) −\(detail.deletions) · \(files)"
+    }
+
+    /// The header's second line: repository and number. The title is the
+    /// headline, so the number is not repeated in front of it.
+    static func repositoryLine(_ detail: PullRequestDetail) -> String {
+        "#\(detail.number) · \(detail.repository)"
+    }
+
+    /// Size, then who wrote it — or, once merged, when it landed.
+    static func headerMeta(_ detail: PullRequestDetail, now: Date = .now) -> String {
+        var parts = [statsLine(detail)]
+        if detail.state == .merged, let mergedAt = detail.mergedAt, let when = relativeLabel(mergedAt, now: now) {
+            parts.append("merged \(when)")
+        } else if let author = detail.author {
+            parts.append("by \(author.login)")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// "Auto-Merge · Squash", or just "Auto-Merge" when the host did not say how.
+    static func autoMergeLabel(_ detail: PullRequestDetail) -> String? {
+        guard detail.state == .open, detail.autoMergeEnabled == true else { return nil }
+        guard let method = detail.autoMergeMethod, !method.isEmpty else { return "Auto-Merge" }
+        return "Auto-Merge · \(method.capitalized)"
+    }
+
+    /// "3 commits behind main" for the behind-base banner.
+    static func behindLabel(_ detail: PullRequestDetail) -> String? {
+        guard detail.state == .open, detail.baseComparison == "behind" else { return nil }
+        guard let count = detail.behindBy else { return "Behind \(detail.baseBranch)" }
+        return "\(count) \(count == 1 ? "commit" : "commits") behind \(detail.baseBranch)"
     }
 
     // MARK: - Checks
@@ -166,6 +253,31 @@ enum PullRequestDetailSections {
         case .failure: .danger
         case .skipped, .neutral, .cancelled: .neutral
         }
+    }
+
+    /// Checks regrouped by what the reader has to do about them: failures
+    /// first, then runs still going, then everything settled, each group in
+    /// host order. Identity is the host position, because matrix jobs share a
+    /// name.
+    static func checksSummary(_ checks: [PullRequestCheck]) -> PullRequestChecksSummary {
+        let entries = checks.enumerated().map { PullRequestCheckEntry(id: $0.offset, check: $0.element) }
+        func rank(_ status: PullRequestCheckStatus) -> Int? {
+            switch status {
+            case .failure: 0
+            case .actionRequired: 1
+            default: nil
+            }
+        }
+        let attention = entries
+            .filter { rank($0.check.status) != nil }
+            .sorted { (rank($0.check.status) ?? 0, $0.id) < (rank($1.check.status) ?? 0, $1.id) }
+        return PullRequestChecksSummary(
+            attention: attention,
+            running: entries.filter { $0.check.status == .pending },
+            settled: entries.filter {
+                [.success, .skipped, .neutral, .cancelled].contains($0.check.status)
+            }
+        )
     }
 
     // MARK: - Review verdicts
@@ -321,7 +433,8 @@ enum PullRequestDetailSections {
     static func reviewStateLabel(_ comment: PullRequestComment) -> String? {
         guard comment.kind == .review, let state = comment.reviewState,
               !state.isEmpty, reviewOutcome(comment) == nil else { return nil }
-        return state.replacingOccurrences(of: "_", with: " ").lowercased()
+        let words = state.replacingOccurrences(of: "_", with: " ").lowercased()
+        return words.prefix(1).uppercased() + words.dropFirst()
     }
 
     // MARK: - Dates

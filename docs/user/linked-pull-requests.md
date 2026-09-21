@@ -46,8 +46,8 @@ available on web, desktop and iOS.
 Project choices combine checkouts of the same repository on one machine and distinguish
 matching names across machines.
 
-On iOS, choose **Pull requests** below the Code sidebar’s project filter to browse across your
-connected environments. Open **Filters and sorting** to choose an environment, project, host,
+On iOS, choose **⋯ → Pull Requests** on Home to browse across your connected environments. Tap
+the filter button to choose an environment, project, host,
 state, involvement, draft/review/check status, author, or labels. Filters and sort order are
 remembered. Pull down to refresh, or choose **Load more** for older requests.
 
@@ -84,13 +84,16 @@ selected comparison. **Show changed hunks** returns to the compact diff. If the 
 you were reading, refresh it before expanding. When the host withheld the hunks, you can switch
 between labelled previous and new file versions; those snapshots are not presented as a diff.
 
-The iOS **Actions** menu offers the operations your host and account allow: merge, mark ready,
-convert to draft, close/reopen, update the branch, and enable/disable auto-merge. Merge choices
-follow repository settings. Review the target branch and method before merging or updating;
+On iOS, the PR's next step appears as one button in the toolbar: **Ready for Review**, **Merge**,
+**Reopen**, or **Resolve Conflicts** when an agent can take it. The **More** (⋯) menu beside it
+offers the other operations your host and account allow: convert to draft, update the branch,
+enable/disable auto-merge, and close, which is always last. Merge choices follow repository
+settings and use the host's own names, such as **Squash and Merge**. Review the target branch and method before merging or updating;
 auto-merge can finish immediately when the host’s requirements already pass. Conflict, base
 freshness and enabled auto-merge status appear below the PR heading.
 
-**Refresh from host** reloads current details and code. Pulling down in the PR workspace refreshes
+**Refresh from host**, or pulling down on the PR, reloads current details and code without
+clearing what is already shown. Pulling down in the PR workspace refreshes
 its host listings, including the signed-in identity and change counts.
 
 On iOS, **Edit pull request** changes the title or description when your host and permissions allow

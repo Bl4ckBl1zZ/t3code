@@ -19,4 +19,10 @@ or falling behind the retained tail restores the current tail once. Hidden web
 terminal drawers pause canvas rendering while continuing to receive output and
 answer terminal queries; revealing a drawer redraws its current screen.
 
+In the native iOS app, open a terminal from a thread's **Details → Terminal**. Tap the title to switch
+sessions or start a new one. If the connection drops, for example when the computer reconnects, the
+terminal dims its output, shows **Reconnecting…**, and reattaches by itself. When a terminal can't
+start, the bar at the bottom offers **Retry**, **Restart** or **Start**. The terminal's colors follow
+your T3 Code theme. With a hardware keyboard, `Cmd+K` clears and `Cmd+T` opens a new terminal.
+
 Terminal activity uses the native resource monitor to detect running commands. If the monitor is unavailable, process scanning falls back automatically and slows down after repeated failures to avoid excessive CPU use. Normal detection resumes when the monitor recovers.

@@ -33,65 +33,129 @@ struct ProjectIconPickerView: View {
         return term.isEmpty ? Self.popular : Array(NativeProjectIconCatalog.shared.names.filter { $0.contains(term) }.prefix(60))
     }
 
+    private var hasChanges: Bool {
+        selected != project.projectIcon || resetsFile
+    }
+
+    /// Already showing the automatic icon: nothing for Reset to undo.
+    private var isAutomatic: Bool {
+        selected == nil && (resetsFile || project.projectIcon == nil)
+    }
+
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    if let errorMessage { SettingsErrorBanner(message: errorMessage) }
-                    HStack(spacing: 14) {
-                        if selected == nil, !resetsFile, project.faviconPath != nil {
-                            ProjectFaviconBadge(environmentID: project.environmentID, workspaceRoot: project.path,
-                                faviconPath: project.faviconPath, projectTitle: project.name, size: 32) {
-                                Image(systemName: "folder")
-                            }
-                        } else {
-                            NativeProjectIcon(icon: selected ?? ProjectIconDefaults.select(title: project.name, workspaceRoot: project.path), size: 32)
-                        }
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(project.name).font(T3Typography.supportingStrong)
-                            Text(selected == nil ? (!resetsFile ? project.faviconPath ?? "Automatic" : "Automatic") : selected?.emoji ?? selected?.name ?? "Icon")
-                                .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                        }
-                        Spacer()
-                        Button("Reset") { selected = nil; resetsFile = true }.frame(minHeight: 44)
+            Form {
+                Section {
+                    preview
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                } footer: {
+                    if let errorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(T3Colors.danger)
                     }
-                    SettingsSection(title: "Color") {
-                        ProjectIconColorChoices(selected: $color) { value in
-                            if selected?.kind == "lucide" { selected?.color = value }
-                        }.padding(12)
+                }
+                Section("Color") {
+                    ProjectIconColorChoices(selected: $color) { value in
+                        if selected?.kind == "lucide" { selected?.color = value }
                     }
-                    SettingsSection(title: "Icons") {
-                        TextField("Search icons", text: $query).textInputAutocapitalization(.never)
-                            .autocorrectionDisabled().padding(12)
+                    .t3GroupedRow()
+                }
+                Section("Icons") {
+                    if names.isEmpty {
+                        ContentUnavailableView.search(text: query)
+                            .t3GroupedRow()
+                    } else {
                         LazyVGrid(columns: columns, spacing: 8) {
                             ForEach(names, id: \.self) { name in
                                 iconButton(ProjectIconOverride(kind: "lucide", name: name, color: color), label: name.replacingOccurrences(of: "-", with: " "))
                             }
-                        }.padding(12)
-                        if names.isEmpty { Text("No icons found.").foregroundStyle(T3Colors.textSecondary).padding(12) }
+                        }
+                        .padding(.vertical, 4)
+                        .t3GroupedRow()
                     }
-                    SettingsSection(title: "Emoji") {
-                        HStack {
-                            TextField("Enter an emoji", text: $emojiInput).onChange(of: emojiInput) {
+                }
+                Section("Emoji") {
+                    HStack {
+                        TextField("Any Emoji", text: $emojiInput)
+                            .onChange(of: emojiInput) {
                                 if let emoji = ProjectIconEmoji.first(in: emojiInput) { selected = .init(kind: "emoji", emoji: emoji) }
                             }
-                            if let emoji = ProjectIconEmoji.first(in: emojiInput) { Text(emoji) }
-                        }.padding(12)
-                        LazyVGrid(columns: columns, spacing: 8) {
-                            ForEach(emojis, id: \.self) { emoji in iconButton(.init(kind: "emoji", emoji: emoji), label: emoji) }
-                        }.padding(12)
+                        if let emoji = ProjectIconEmoji.first(in: emojiInput) { Text(emoji) }
                     }
-                }.padding(18).disabled(pending)
-            }
-            .background(T3Colors.background)
-            .navigationTitle("Project icon").navigationBarTitleDisplayMode(.inline).t3NavigationChrome()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.disabled(pending || (selected == project.projectIcon && !resetsFile))
+                    .t3GroupedRow()
+                    LazyVGrid(columns: columns, spacing: 8) {
+                        ForEach(emojis, id: \.self) { emoji in iconButton(.init(kind: "emoji", emoji: emoji), label: emoji) }
+                    }
+                    .padding(.vertical, 4)
+                    .t3GroupedRow()
                 }
-            }.interactiveDismissDisabled(pending)
+                Section {
+                    Button("Use Automatic Icon") {
+                        selected = nil
+                        resetsFile = true
+                    }
+                    .disabled(isAutomatic)
+                    .t3GroupedRow()
+                } footer: {
+                    Text("Removes the chosen icon, so the project shows its own favicon or a default glyph.")
+                }
+            }
+            .t3GroupedListBackground()
+            .disabled(pending)
+            .searchable(
+                text: $query,
+                placement: .navigationBarDrawer(displayMode: .always),
+                prompt: "Search Icons"
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .navigationTitle("Project Icon")
+            .navigationBarTitleDisplayMode(.inline)
+            .t3NavigationChrome()
+            .t3SheetToolbar(
+                .cancel,
+                confirm: T3SheetConfirmation(
+                    title: "Save",
+                    isEnabled: hasChanges,
+                    isBusy: pending,
+                    action: { Task { await save() } }
+                ),
+                hasChanges: hasChanges || pending
+            )
         }
+    }
+
+    private var preview: some View {
+        VStack(spacing: 8) {
+            Group {
+                if selected == nil, !resetsFile, project.faviconPath != nil {
+                    ProjectFaviconBadge(environmentID: project.environmentID, workspaceRoot: project.path,
+                        faviconPath: project.faviconPath, projectTitle: project.name, size: 64) {
+                        Image(systemName: "folder")
+                    }
+                } else {
+                    NativeProjectIcon(icon: selected ?? ProjectIconDefaults.select(title: project.name, workspaceRoot: project.path), size: 64)
+                }
+            }
+            .accessibilityHidden(true)
+            Text(project.name)
+                .font(T3Typography.supportingStrong)
+                .foregroundStyle(T3Colors.textPrimary)
+            Text(selectionDescription)
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textSecondary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var selectionDescription: String {
+        guard let selected else {
+            return !resetsFile && project.faviconPath != nil ? "Favicon" : "Automatic"
+        }
+        return selected.emoji ?? selected.name?.replacingOccurrences(of: "-", with: " ") ?? "Icon"
     }
 
     private func iconButton(_ icon: ProjectIconOverride, label: String) -> some View {
@@ -107,9 +171,16 @@ struct ProjectIconPickerView: View {
     private func save() async {
         guard !pending else { return }
         pending = true
+        errorMessage = nil
         defer { pending = false }
-        do { try await manager.setProjectIcon(projectID: project.id, icon: selected); dismiss() }
-        catch { errorMessage = error.localizedDescription }
+        do {
+            try await manager.setProjectIcon(projectID: project.id, icon: selected)
+            PlatformHapticEngine.shared.play(.success)
+            dismiss()
+        } catch {
+            PlatformHapticEngine.shared.play(.error)
+            errorMessage = error.localizedDescription
+        }
     }
 }
 
@@ -123,7 +194,13 @@ private struct ProjectIconColorChoices: View {
                 Button { selected = name; onSelect(name) } label: {
                     Circle().fill(NativeProjectIconPalette.color(name, dark: colorScheme == .dark))
                         .frame(width: 24, height: 24)
-                        .overlay { if selected == name { Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(.white) } }
+                        .overlay {
+                            if selected == name {
+                                Image(systemName: "checkmark")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.white)
+                            }
+                        }
                         .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel(name.capitalized)
                     .accessibilityAddTraits(selected == name ? .isSelected : [])

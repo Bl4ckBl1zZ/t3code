@@ -25,6 +25,10 @@ T3 Code from other apps through the system share sheet. Mobile uploads happen wh
 sends, so queued messages keep their files until they deliver. Select a received file on mobile
 to save it or open it in another app through the system share sheet.
 
+In the native iOS app, **+** offers **Camera**, **Photos** and **Files**. Photos opens the system
+picker, so T3 Code never asks for access to your photo library. If an image can't be attached, it
+stays in the composer with **Retry**. Tap any attachment to preview it.
+
 Select a video attachment before or after sending to play it. Web and desktop use the browser's
 built-in controls. In the React Native mobile client, videos open in a full-screen player with
 native playback controls. Supported videos show a thumbnail in the conversation and composer.
@@ -47,6 +51,11 @@ On mobile, the model picker shows each OpenCode model's upstream provider, such 
 GitHub Copilot, or OpenCode Zen, beneath its name. Search by that provider name to narrow the list
 when starting a thread or changing an existing thread's model.
 
+In the native iOS app, tap the model name below the message field to switch between favorite and
+recent models or change the model's options. Choose **All Models…** for the full list, or **More
+Settings…** for everything else about the task. With a hardware keyboard, press `Cmd+Return` to
+send.
+
 ## Reading with a compact composer
 
 On desktop-sized web and desktop windows, scrolling through a conversation compacts a
@@ -58,8 +67,10 @@ expand it again. Multiline drafts, open questions, approvals, and errors stay ex
 Turn this off with **Settings → General → Collapse composer while scrolling**. This
 preference does not change the native iOS composer's touch and voice gestures.
 
-In the native iOS app, the up and down arrows above the composer jump between your
-sent messages. They stay above the composer as it expands or the keyboard opens.
+In the native iOS app, a round jump-to-latest button appears above the composer while you
+scroll back through a conversation, with a dot when something new arrives below. With a
+hardware keyboard, `Option+Cmd+Up` and `Option+Cmd+Down` jump between your turns; VoiceOver
+offers the same moves as **Previous turn** and **Next turn** actions.
 
 ## Changing projects
 
@@ -120,6 +131,12 @@ controls return with the text inserted at the selection where recording started.
 is open when you start, it stays open during voice input. You can review and edit the text before
 you send it.
 
+In the native iOS app, you can also touch and hold the microphone while you speak. The hint reads
+**Release to transcribe**: letting go puts the text into your draft, and nothing is sent until you
+tap send. Slide up until it reads **Release to cancel** to discard the recording. If you leave New
+Chat, New Conversation or New Task before transcription finishes, the text is saved for that same
+screen and never appears in a different one.
+
 The first use can download Apple's speech model and needs a network connection. Later transcription
 works offline for that language. A recording can be up to five minutes long. Canceling voice input,
 leaving the screen, or an audio interruption discards the new recording and keeps the existing draft
@@ -148,8 +165,9 @@ worktree** is selected, each background thread creates its own worktree.
 
 ## Drafts and prompt history on native iOS
 
-Use the composer’s history menu to stash an unsent draft, restore it, or swap it with the current
-draft. A stash includes attachments and stays on this device for the same thread or new-task
+Use the composer’s **+** menu to stash an unsent draft (**Stash Draft**), restore one (**Stashed
+Drafts**), or reuse a sent prompt (**Recent Prompts**). With a hardware keyboard, `Cmd+S` stashes
+the current draft. A stash includes attachments and stays on this device for the same thread or new-task
 project. Recent sent prompts restore text only, excluding context attached automatically at send
 time. Stash edited text first to avoid overwriting it with a recalled prompt.
 
@@ -173,12 +191,15 @@ available.
 
 ## Native iOS drafts and queued tasks
 
-Open **Drafts** above the task list to keep several new tasks in progress. **New draft** starts
+Choose **⋯ → Drafts** on Home to keep several new tasks in progress. **New draft** starts
 another draft; selecting a saved draft restores its text, model choice and files. Swipe to delete
 a draft you no longer need. Drafts stay on this device.
 
 Sending a new task opens it immediately while its files upload and the environment accepts the
-message. The **Outbox** in Drafts shows queued, uploading, sending and failed submissions.
+message. If a new task or conversation can't be sent yet, for example because you are offline, no
+base branch is chosen, or no computer can run it, send stays disabled and the composer says why,
+with a button to fix it when there is one. Closing **New Task** with unsent text offers **Delete
+Draft** or **Save Draft**; closing **New Chat** or **New Conversation** asks before discarding. The **Outbox** in Drafts shows queued, uploading, sending and failed submissions.
 Use **Retry queued** after a failure, or remove a queued submission to cancel it before delivery.
 A submission already being sent cannot be cancelled from the outbox.
 
@@ -186,8 +207,7 @@ On supporting environments, agent questions accept files alongside each answer. 
 with the question they answer and are delivered to the agent as a follow-up message. An
 asynchronous question also offers **Dismiss**; questions that block the agent require an answer.
 
-The previous and next controls above the native composer jump between your turns. Going back
-past the loaded history requests earlier turns. Tap an image to browse the images in its message;
+On native iOS, jumping to an earlier turn past the loaded history requests earlier turns. Tap an image to browse the images in its message;
 the gallery offers **Share original** and **Save image**.
 
 Native iOS remembers **Fast** on or off separately for each environment and provider account.
@@ -205,7 +225,11 @@ collapse the stack.
 
 On web and desktop, the timeline minimap includes **Previous turn** and **Next turn**
 buttons. They follow the turn at your reading position; keyboard focus on the rail
-starts there too. iPhone and iPad offer the same navigation in the thread menu.
+starts there too. iPhone and iPad offer the same navigation with `Option+Cmd+Up` and `Option+Cmd+Down` and as
+VoiceOver actions.
+
+On native iOS, a long approval command scrolls inside the request, and **Show Full** opens all of
+it, so the decision buttons stay on screen.
 
 Codex app-access requests show the choices supplied by the app, including session or
 permanent permission when offered. The label states how long access lasts. Canceling
@@ -223,9 +247,10 @@ Expand Tasks to inspect the current plan. Each finished task shows how long it t
 when the agent picked it up; the task in progress reads "now". Approval requests and questions open
 in the same attached area, with their actions beside the request. Notices keep their own stack.
 
-On native iOS, use **Prompt history → Stash draft** to save up to 20 drafts for the current
-thread. The Stash tab opens the saved list. Restoring moves any unsent text and attachments
-into the stash first. Removing a saved draft asks for confirmation. Existing single-slot
+On native iOS, choose **+ → Stash Draft** to save up to 20 drafts for the current thread, and
+**+ → Stashed Drafts** to open the saved list. Tap a draft to restore it; restoring moves any unsent
+text and attachments into the stash first. Swipe to remove a saved draft, which asks for
+confirmation. Existing single-slot
 stashes remain available after updating.
 
 Completed web conversations keep the final response visible. Expand **Worked for…** to read

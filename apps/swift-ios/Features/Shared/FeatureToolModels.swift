@@ -142,6 +142,8 @@ public struct FeatureFileContent: Sendable, Equatable, Codable {
 public enum FeatureFilePreviewKind: Sendable, Equatable {
     case video
     case browserDocument
+    /// Downloaded and shown in Quick Look: documents that are not text.
+    case quickLook
     case image
     case markdown
     case source
@@ -150,7 +152,10 @@ public enum FeatureFilePreviewKind: Sendable, Equatable {
     public static func infer(path: String, language: String? = nil) -> Self {
         let fileExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
         if ["mp4", "mov", "m4v", "webm"].contains(fileExtension) { return .video }
-        if ["pdf", "html", "htm", "svg"].contains(fileExtension) { return .browserDocument }
+        // HTML and SVG stay in the web view: Quick Look renders SVG poorly and
+        // an HTML page is the thing a reader wants to see run.
+        if ["html", "htm", "svg"].contains(fileExtension) { return .browserDocument }
+        if quickLookExtensions.contains(fileExtension) { return .quickLook }
         if imageExtensions.contains(fileExtension) { return .image }
         if language?.lowercased() == "markdown" || ["md", "mdx"].contains(fileExtension) {
             return .markdown
@@ -160,7 +165,13 @@ public enum FeatureFilePreviewKind: Sendable, Equatable {
     }
 
     private static let imageExtensions: Set<String> = [
-        "avif", "gif", "ico", "jpeg", "jpg", "png", "webp",
+        "avif", "bmp", "gif", "heic", "heif", "ico", "jpeg", "jpg", "png", "tif", "tiff", "webp",
+    ]
+
+    /// Formats the server cannot read as text but Quick Look can show.
+    private static let quickLookExtensions: Set<String> = [
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "key", "pages", "numbers",
+        "rtf", "rtfd", "csv", "usdz", "reality", "mp3", "m4a", "wav", "aac", "aiff",
     ]
 
     private static let sourceExtensions: Set<String> = [
@@ -205,6 +216,30 @@ public struct FeatureSourceLine: Identifiable, Sendable, Equatable, Hashable, Co
 /// A bounded, language-aware lexer for file previews. It runs once when a file loads;
 /// SwiftUI receives immutable line plans and performs no regex or token work while scrolling.
 public enum FeatureSourceHighlighter {
+    /// The highlighter's language for a file, from its extension. Shared by
+    /// file previews (via the workspace mapper) and review diffs.
+    public static func language(forPath path: String) -> String? {
+        switch URL(fileURLWithPath: path).pathExtension.lowercased() {
+        case "swift": "swift"
+        case "ts", "tsx": "typescript"
+        case "js", "jsx", "mjs", "cjs": "javascript"
+        case "json": "json"
+        case "md", "mdx": "markdown"
+        case "css", "scss": "css"
+        case "html", "htm": "html"
+        case "xml", "svg": "xml"
+        case "sh", "zsh", "bash": "shell"
+        case "py": "python"
+        case "rs": "rust"
+        case "go": "go"
+        case "rb": "ruby"
+        case "sql": "sql"
+        case "toml": "toml"
+        case "yml", "yaml": "yaml"
+        default: nil
+        }
+    }
+
     public static func lines(text: String, language: String?) -> [FeatureSourceLine] {
         let sourceLines = text.split(separator: "\n", omittingEmptySubsequences: false)
         let highlightsContent = text.utf8.count <= 512 * 1_024
@@ -1020,19 +1055,31 @@ public struct FeatureSourceControlStatus: Sendable, Equatable, Codable {
         self.isBusy = isBusy
     }
 
+    /// Whether any changed file is mid-merge. Committing would record the
+    /// conflict markers, so commit actions wait until these are resolved.
+    public var hasConflicts: Bool {
+        files.contains { $0.state == .conflicted }
+    }
+
+    /// The actions that make sense right now, most common first.
+    ///
+    /// Publishing needs a branch (a detached HEAD has nothing to push) and a
+    /// primary remote. A pull request needs both and a branch other than the
+    /// default one, which would be asking to merge the default branch into
+    /// itself.
     public var availableActions: [FeatureSourceControlAction] {
         guard isRepository, !isBusy else { return [] }
+        let canPublish = hasPrimaryRemote && branch != nil
+        let canOpenPullRequest = canPublish && !isDefaultRef && pullRequest == nil
         var actions: [FeatureSourceControlAction] = []
-        if hasWorkingTreeChanges || !files.isEmpty {
+        if hasWorkingTreeChanges || !files.isEmpty, !hasConflicts {
+            if canPublish { actions.append(.commitAndPush) }
             actions.append(.commit)
-            actions.append(.commitAndPush)
-            if pullRequest == nil {
-                actions.append(.commitPushAndCreatePullRequest)
-            }
+            if canOpenPullRequest { actions.append(.commitPushAndCreatePullRequest) }
         }
-        if aheadCount > 0 { actions.append(.push) }
+        if canPublish, aheadCount > 0 { actions.append(.push) }
         if behindCount > 0 { actions.append(.pull) }
-        if pullRequest == nil { actions.append(.createPullRequest) }
+        if canOpenPullRequest { actions.append(.createPullRequest) }
         return actions
     }
 }

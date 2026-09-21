@@ -83,7 +83,8 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
     public func exchange(
         _ credential: T3ConnectManagedEnvironmentCredential,
         scopes: [String] = standardScopes,
-        clientLabel: String? = nil
+        clientLabel: String? = nil,
+        deviceType: PairingClientIdentity.DeviceType = .mobile
     ) async throws -> T3ConnectEnvironmentAccessToken {
         guard let httpBaseURL = credential.endpoint.httpBaseURL else {
             throw T3ConnectRelayError.invalidConfiguration(
@@ -104,7 +105,7 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
             "subject_token_type": "urn:t3:params:oauth:token-type:environment-bootstrap",
             "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
             "scope": scopes.joined(separator: " "),
-            "client_device_type": "mobile",
+            "client_device_type": deviceType.rawValue,
             "client_os": ProcessInfo.processInfo.operatingSystemVersionString,
         ]
         if let clientLabel, !clientLabel.isEmpty {

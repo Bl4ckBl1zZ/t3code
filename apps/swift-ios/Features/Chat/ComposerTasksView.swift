@@ -29,7 +29,7 @@ struct ComposerTasksView: View {
                         Text(steps.first(where: { $0.status == "running" })?.text ?? "Tasks")
                             .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                         Text("\(steps.filter { $0.status == "completed" }.count)/\(steps.count)").monospacedDigit()
-                        Image(systemName: "chevron.down").rotationEffect(.degrees(expanded ? 180 : 0))
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down").contentTransition(.symbolEffect(.replace))
                     }
                     .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
                     .padding(12).contentShape(Rectangle())
@@ -52,7 +52,8 @@ struct ComposerTasksView: View {
                     }.frame(maxHeight: 180)
                 }
             }
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .t3GlassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .t3GlassRim(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             .padding(.horizontal, 24)
             .onChange(of: activeRunID) { _, _ in expanded = false }
         }

@@ -70,7 +70,7 @@ final class ThreadListActionsTests: XCTestCase {
             ["copy-path", "copy-branch", "copy-handoff-script", "copy-thread-id"]
         )
         // Nesting must not rename the ids the row dispatches on.
-        XCTAssertEqual(copy?.children.map(\.title), ["Path", "Branch", "Handoff script", "Thread ID"])
+        XCTAssertEqual(copy?.children.map(\.title), ["Path", "Branch", "Handoff Script", "Thread ID"])
     }
 
     func testCopyTargetsWithNothingToCopyAreOmittedRatherThanOffered() {
@@ -240,7 +240,7 @@ final class ThreadListActionsTests: XCTestCase {
             .handoffScript(
                 script: "# Handoff",
                 alert: ThreadListActionAlert(
-                    title: "Handoff script copied",
+                    title: "Handoff Script Copied",
                     message: "Paste it into a new agent session to continue this thread."
                 )
             )
@@ -288,7 +288,7 @@ final class ThreadListActionsTests: XCTestCase {
             .handoffScript(
                 script: "# Other",
                 alert: ThreadListActionAlert(
-                    title: "Handoff script copied",
+                    title: "Handoff Script Copied",
                     message: "Paste it into a new agent session to continue this thread."
                 )
             )

@@ -43,6 +43,42 @@ public enum WorkRowStatus: Equatable, Sendable {
     }
 }
 
+/// Which in-flight rows are still going.
+///
+/// An item only runs while the run that owns it does. One a crashed or
+/// interrupted run never closed stays non-terminal forever, and reads as
+/// stopped rather than as work in progress.
+public struct ThreadWorkLogLiveRun: Equatable, Sendable {
+    /// Whether any run of the thread is in flight.
+    public let isActive: Bool
+    /// The run in flight, when the projection names one. Nil scopes nothing.
+    public let activeRunID: String?
+
+    /// Every in-flight row counts as running, for callers with no thread state
+    /// to scope by.
+    public static let unscoped = ThreadWorkLogLiveRun(isActive: true, activeRunID: nil)
+
+    public init(isActive: Bool, activeRunID: String?) {
+        self.isActive = isActive
+        self.activeRunID = activeRunID
+    }
+
+    init(threadState: FeatureThreadState, activeRunID: String?) {
+        let stateIsActive = switch threadState {
+        case .queued, .working, .waitingForApproval, .waitingForInput: true
+        case .idle, .failed, .completed: false
+        }
+        self.init(isActive: stateIsActive || activeRunID != nil, activeRunID: activeRunID)
+    }
+
+    /// Whether an in-flight item from `runID` is still going.
+    func owns(runID: String?) -> Bool {
+        guard isActive else { return false }
+        guard let activeRunID, let runID else { return true }
+        return runID == activeRunID
+    }
+}
+
 /// One line of the work log: what a turn item did, in the terms a reader scans.
 public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     public enum Icon: String, Equatable, Sendable {
@@ -84,10 +120,15 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
     /// Rows that open a related thread and therefore earn a card surface.
     public let prominent: Bool
     public let status: Status?
-    /// The item has not reached a terminal status. See `shimmers` for which of
-    /// these rows animate.
+    /// The item has not reached a terminal status. See `isRunning` for which of
+    /// these are actually still going.
     public let inProgress: Bool
+    /// In flight on paper, but the run that owned it ended without closing it.
+    public let isStranded: Bool
     public let projectedItem: OrchestrationV2ProjectedTurnItem
+
+    /// What an approval or question row is waiting for, while it waits.
+    public enum Waiting: Equatable, Sendable { case approval, input }
 
     public var item: OrchestrationV2TurnItem { projectedItem.item }
     var activityIcon: ToolActivityIcon? { icon == .pullRequest ? nil : item.toolIcon ?? item.toolSource?.icon }
@@ -112,24 +153,36 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         return liveness.background == true && !item.status.isTerminal
     }
 
-    /// In-flight rows sweep a highlight, except a background command: it can
-    /// stay in flight for an hour, and a sweep that long pegs the GPU. Its
-    /// changing last line of output is the live signal instead.
-    public var shimmers: Bool { inProgress && !isLiveBackgroundCommand }
+    /// Still going: in flight and owned by a run that is. Nothing on a running
+    /// row repaints; it carries the running tint, and the live focus row
+    /// bounces its symbol once when the step changes.
+    public var isRunning: Bool { inProgress && !isStranded }
+
+    /// An approval or question the agent is blocked on. Static: it can wait
+    /// for hours, and the answer happens in the composer panel.
+    public var waiting: Waiting? {
+        guard isRunning else { return nil }
+        switch item.payload {
+        case .approvalRequest: return .approval
+        case .userInputRequest: return .input
+        default: return nil
+        }
+    }
 
     /// The row's trailing glyph. Success is the default outcome, so only
-    /// deviations earn one — and a live background command, neutral only
-    /// because it has not finished, is not stopped.
+    /// deviations earn one. A running row is not stopped, whatever its
+    /// provisional status says; a stranded one is.
     var trailingStatus: WorkRowStatus? {
+        if isStranded { return .stopped }
         switch status {
-        case .failure: .failed
-        case .neutral: isLiveBackgroundCommand ? nil : .stopped
-        case .success, nil: nil
+        case .failure: return .failed
+        case .neutral: return inProgress ? nil : .stopped
+        case .success, nil: return nil
         }
     }
 
     var liveFocusItem: ThreadLiveWorkItem {
-        ThreadLiveWorkItem(id: id, runID: runID, running: inProgress, successful: status == .success,
+        ThreadLiveWorkItem(id: id, runID: runID, running: isRunning, successful: status == .success,
             background: isLiveBackgroundCommand, boundary: prominent || status == .failure || item.type == "error" || item.type == "compaction")
     }
 
@@ -147,12 +200,23 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         default: action = .tool
         }
         return ThreadHistoricalWorkItem(action: action, files: files, successful: toolLike && status == .success,
-            running: inProgress, persistent: prominent || isLiveBackgroundCommand || item.type == "compaction", source: item.toolSource)
+            running: isRunning, persistent: prominent || isLiveBackgroundCommand || item.type == "compaction", source: item.toolSource)
     }
 
-    public static func make(_ row: OrchestrationV2ProjectedTurnItem) -> ThreadWorkLogRow {
+    public static func make(
+        _ row: OrchestrationV2ProjectedTurnItem,
+        liveRun: ThreadWorkLogLiveRun = .unscoped
+    ) -> ThreadWorkLogRow {
         let item = row.item
         let toolDisplayName = T3McpToolPresentation.displayName(for: item)
+        let inProgress = !item.status.isTerminal
+        // A background command outlives its turn on purpose, so it is never
+        // stranded by the turn ending.
+        let isBackground: Bool = if case let .commandExecution(_, _, _, liveness) = item.payload {
+            liveness.background == true
+        } else {
+            false
+        }
         return ThreadWorkLogRow(
             id: "\(row.visibility.rawValue):\(row.sourceThreadId):\(row.sourceItemId)",
             createdAt: item.base.startedAt ?? item.base.updatedAt,
@@ -163,7 +227,8 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
             toolLike: ThreadWorkLogPresentation.isToolLike(item),
             prominent: ThreadWorkLogPresentation.isProminent(item),
             status: ThreadWorkLogPresentation.status(item),
-            inProgress: !item.status.isTerminal,
+            inProgress: inProgress,
+            isStranded: inProgress && !isBackground && !liveRun.owns(runID: item.base.runId),
             projectedItem: row
         )
     }
@@ -215,6 +280,11 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
             deletions += stat.deletions
         }
         return ThreadWorkLogDiffStat(additions: additions, deletions: deletions)
+    }
+
+    /// "1 step" / "7 steps": a bare count next to the live row said nothing.
+    public static func stepCount(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "step" : "steps")"
     }
 
     /// Ported from thread-work-log-labels.ts.
@@ -888,21 +958,41 @@ struct WorkRowStatusGlyph: View {
     var failureTint: Color = T3Colors.danger
 
     var body: some View {
-        if let status {
-            Image(systemName: symbolName(status))
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(status == .failed ? failureTint : T3Colors.textTertiary)
-                .frame(width: 16, height: 16)
+        switch status {
+        case .stopped:
+            // A word, not a dash: a bare minus read as a divider.
+            Text(verbatim: "Stopped")
+                .font(ChatTimelineStyle.small)
+                .foregroundStyle(T3Colors.textTertiary)
                 .accessibilityHidden(true)
+        case .failed:
+            Image(systemName: "exclamationmark.circle")
+                .font(ChatTimelineStyle.small.weight(.medium))
+                .foregroundStyle(failureTint)
+                .accessibilityHidden(true)
+        case .running:
+            Image(systemName: "ellipsis")
+                .font(ChatTimelineStyle.small.weight(.medium))
+                .foregroundStyle(T3Colors.textTertiary)
+                .accessibilityHidden(true)
+        case nil:
+            EmptyView()
         }
     }
+}
 
-    private func symbolName(_ status: WorkRowStatus) -> String {
-        switch status {
-        case .running: "ellipsis"
-        case .failed: "exclamationmark.circle"
-        case .stopped: "minus"
-        }
+/// The one disclosure convention in the transcript: a trailing chevron that
+/// turns down when open, the way `DisclosureGroup` draws it.
+struct TimelineDisclosureChevron: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(ChatTimelineStyle.small.weight(.semibold))
+            .foregroundStyle(T3Colors.textTertiary)
+            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .animation(.snappy, value: isExpanded)
+            .accessibilityHidden(true)
     }
 }
 
@@ -920,9 +1010,11 @@ struct ThreadWorkLog: View {
     var onOpenThread: (String) -> Void = { _ in }
     var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
     var onOpenURL: (URL) -> Void = { _ in }
-    /// Checkpoint id and, when a chip was tapped, the file to select.
+    /// Checkpoint id and, when a file row was tapped, the file to select.
     var onOpenDiff: (String, String?) -> Void = { _, _ in }
     var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
+    /// Resends the last user message after a failed turn.
+    var onRetryTurn: (() -> Void)? = nil
     /// `FeatureSettings.alwaysExpandActivity`: the log opens unfolded and every
     /// row opens with it, the way a provider CLI leaves its scrollback alone.
     var alwaysExpandActivity: Bool = false
@@ -933,8 +1025,6 @@ struct ThreadWorkLog: View {
     private var history: ThreadWorkLogHistory {
         (sharedHistory ?? localHistory).entry("\(currentThreadID):\(rows.first?.id ?? "empty")")
     }
-    private var historyKey: String { "\(currentThreadID):\(rows.first?.id ?? "empty")" }
-    @State private var copiedRowID: String?
 
     private var isExpanded: Bool { history.groupExpanded ?? alwaysExpandActivity }
 
@@ -960,41 +1050,35 @@ struct ThreadWorkLog: View {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                if !onlyToolRows {
-                    Text(verbatim: "work log")
-                        .font(ChatTimelineStyle.smallStrong)
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .padding(.bottom, 2)
-                }
-
                 if let focus = visibleCandidates.first(where: { $0.id == liveEntryID }) {
-                    Button { history.groupExpanded = !isExpanded } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
-                            ThreadToolActivityIcon(icon: focus.activityIcon, fallback: focus.icon.symbolName)
-                            Text(focus.summary).lineLimit(1).shimmering(focus.shimmers).frame(maxWidth: .infinity, alignment: .leading)
-                            Text("\(visibleCandidates.count)").monospacedDigit().foregroundStyle(T3Colors.textTertiary)
-                        }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
-                    }.buttonStyle(.plain).accessibilityLabel("\(focus.summary), \(visibleCandidates.count) tool calls")
-                        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                    focusRow(focus)
                     if isExpanded {
                         expandedHistory
                     } else {
                         ForEach(visibleCandidates.filter(\.isLiveBackgroundCommand)) { rowView($0) }
                     }
                 } else if let summary = historicalSummary {
-                    Button { history.groupExpanded = !isExpanded } label: {
+                    Button { toggleGroup() } label: {
                         HStack(spacing: 8) {
                             ThreadToolActivityIcon(icon: visibleCandidates.allSatisfy { $0.icon != .pullRequest && $0.item.toolSource?.key != nil && $0.item.toolSource?.key == visibleCandidates.first?.item.toolSource?.key } ? visibleCandidates.first?.item.toolSource?.icon : nil, fallback: Set(visibleCandidates.map(\.icon)).count == 1 ? (visibleCandidates.first?.icon.symbolName ?? "hammer") : "hammer")
+                                .foregroundStyle(T3Colors.textTertiary)
+                                .frame(width: 20)
                             Text(summary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(.caption)
-                        }.font(ChatTimelineStyle.smallStrong).foregroundStyle(T3Colors.textSecondary).frame(minHeight: 44)
-                    }.buttonStyle(.plain).accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                            TimelineDisclosureChevron(isExpanded: isExpanded)
+                        }
+                        .font(ChatTimelineStyle.bodyStrong)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .frame(minHeight: T3Metrics.minimumTapTarget)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
                     if isExpanded {
                         expandedHistory
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: 0) {
                         ForEach(displayedRows) { row in rowView(row) }
                     }
                 }
@@ -1008,9 +1092,47 @@ struct ThreadWorkLog: View {
         }
     }
 
+    /// The live row: what the agent is doing now, in the running tint. Its
+    /// symbol bounces once when the step changes; nothing on it loops.
+    private func focusRow(_ focus: ThreadWorkLogRow) -> some View {
+        let count = ThreadWorkLogRow.stepCount(visibleCandidates.count)
+        return Button { toggleGroup() } label: {
+            HStack(spacing: 8) {
+                ThreadToolActivityIcon(icon: focus.activityIcon, fallback: focus.icon.symbolName)
+                    .foregroundStyle(focus.isRunning ? T3Colors.statusRunning : T3Colors.textTertiary)
+                    .symbolEffect(.bounce, value: liveEntryID)
+                    .frame(width: 20)
+                WorkLogRowText(row: focus, workspaceRoot: workspaceRoot)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(verbatim: count)
+                    .font(ChatTimelineStyle.small)
+                    .monospacedDigit()
+                    .foregroundStyle(T3Colors.textTertiary)
+                TimelineDisclosureChevron(isExpanded: isExpanded)
+            }
+            .font(ChatTimelineStyle.bodyStrong)
+            .foregroundStyle(T3Colors.textSecondary)
+            .frame(minHeight: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(focus.summary), \(count)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+    }
+
+    /// Every row, inline. A nested scroll view here trapped the transcript's
+    /// own scrolling, and the transcript already recycles whole groups.
     private var expandedHistory: some View {
-        ThreadWorkLogExpandedHistory(rows: visibleCandidates, history: history, rowContent: rowView)
-            .id(historyKey)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(visibleCandidates) { row in rowView(row) }
+        }
+    }
+
+    private func toggleGroup() {
+        withAnimation(.snappy) { history.groupExpanded = !isExpanded }
     }
 
     @ViewBuilder
@@ -1024,13 +1146,14 @@ struct ThreadWorkLog: View {
                 onToggle: { toggleRow(row.id) },
                 onOpenDiff: { onOpenDiff(checkpointID, $0) }
             )
+        } else if row.item.type == "error" {
+            ProviderErrorCallout(row: row, onRetry: onRetryTurn)
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 WorkLogRowButton(
                     row: row,
                     workspaceRoot: workspaceRoot,
                     isExpanded: isRowExpanded(row.id),
-                    isCopied: copiedRowID == row.id,
                     onToggle: { toggleRow(row.id) },
                     onCopy: { copy(row) }
                 )
@@ -1067,19 +1190,12 @@ struct ThreadWorkLog: View {
                 }
             }
             .background {
-                if row.prominent { prominentRowSurface }
+                if row.prominent {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T3Colors.surface)
+                }
             }
             .padding(.bottom, row.prominent ? 8 : 0)
         }
-    }
-
-    private var prominentRowSurface: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(T3Colors.surface)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(T3Colors.border, lineWidth: 1)
-            )
     }
 
     private var overflowToggle: some View {
@@ -1087,29 +1203,24 @@ struct ThreadWorkLog: View {
         let noun = ThreadWorkLogRow.overflowNoun(onlyToolRows: onlyToolRows, count: hiddenCount)
         let stats = ThreadWorkLogRow.totalDiffStat(hiddenRows)
         return Button {
-            history.groupExpanded = !isExpanded
+            toggleGroup()
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .frame(width: 20)
-                Text(verbatim: isExpanded
-                    ? "Show fewer \(noun)"
-                    : "+\(hiddenCount) previous \(noun)")
+            HStack(spacing: 8) {
+                Text(verbatim: isExpanded ? "Show fewer \(noun)" : "\(hiddenCount) more \(noun)")
                     .font(ChatTimelineStyle.bodyStrong)
                     .foregroundStyle(T3Colors.textSecondary)
+                Spacer(minLength: 0)
                 if !isExpanded {
-                    Spacer(minLength: 0)
                     WorkRowDiffStat(additions: stats.additions, deletions: stats.deletions)
                 }
+                TimelineDisclosureChevron(isExpanded: isExpanded)
             }
-            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
-            isExpanded ? "Show fewer \(noun)" : "Show \(hiddenCount) previous \(noun)"
+            isExpanded ? "Show fewer \(noun)" : "Show \(hiddenCount) more \(noun)"
         )
     }
 
@@ -1118,7 +1229,9 @@ struct ThreadWorkLog: View {
     }
 
     private func toggleRow(_ id: String) {
-        history.rowExpansion.toggle(id, expandedByDefault: alwaysExpandActivity)
+        withAnimation(.snappy) {
+            history.rowExpansion.toggle(id, expandedByDefault: alwaysExpandActivity)
+        }
     }
 
     private func copy(_ row: ThreadWorkLogRow) {
@@ -1129,23 +1242,15 @@ struct ThreadWorkLog: View {
             currentWireThreadID: currentWireThreadID
         )
         UIPasteboard.general.string = row.copyText(structuredDetails: model.structuredDetails)
-        copiedRowID = row.id
-        // The confirmation is a flash, not a state: leaving it up would make
-        // the row read as permanently marked.
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.6))
-            if copiedRowID == row.id { copiedRowID = nil }
-        }
+        T3HUD.show("Copied", systemImage: "doc.on.doc")
     }
 }
 
-private struct WorkLogRowButton: View {
+/// What a work row says: the file for an edit, the command for a command, the
+/// summary and its detail otherwise, and what it is waiting for while it waits.
+private struct WorkLogRowText: View {
     let row: ThreadWorkLogRow
     let workspaceRoot: String?
-    let isExpanded: Bool
-    let isCopied: Bool
-    let onToggle: () -> Void
-    let onCopy: () -> Void
 
     private var detail: String? { ThreadWorkLogPresentation.compactDetail(row.detail) }
 
@@ -1172,58 +1277,14 @@ private struct WorkLogRowButton: View {
     }
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: 6) {
-                ThreadToolActivityIcon(icon: row.activityIcon, fallback: row.icon.symbolName)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(isDestructive ? T3Colors.danger : T3Colors.textTertiary)
-                    .frame(width: 20, height: 20)
-
-                rowText
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .shimmering(row.shimmers)
-
-                HStack(spacing: 1) {
-                    if let stat = row.diffStat {
-                        WorkRowDiffStat(additions: stat.additions, deletions: stat.deletions)
-                    }
-                    if isCopied {
-                        Text(verbatim: "Copied")
-                            .font(ChatTimelineStyle.microStrong)
-                            .foregroundStyle(T3Colors.success)
-                            .padding(.trailing, 4)
-                    }
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .frame(width: 16, height: 16)
-                    WorkRowStatusGlyph(
-                        status: row.trailingStatus,
-                        failureTint: isDestructive ? T3Colors.danger : T3Colors.textTertiary
-                    )
-                }
-            }
-            .frame(minHeight: 36)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button {
-                onCopy()
-            } label: {
-                Label("Copy details", systemImage: "doc.on.doc")
-            }
-        }
-        .accessibilityLabel(detail.map { "\(row.summary) \($0)" } ?? row.summary)
-        .accessibilityHint("Double tap to show full details.")
-        .accessibilityAction(named: "Copy details", onCopy)
-    }
-
-    @ViewBuilder
-    private var rowText: some View {
-        if let filePath {
+        if let waiting = row.waiting {
+            (Text(verbatim: waiting == .approval ? "Waiting for approval" : "Waiting for your answer")
+                .font(ChatTimelineStyle.bodyStrong)
+                .foregroundStyle(T3Colors.textPrimary)
+                + Text(verbatim: detail.map { " \($0)" } ?? "")
+                .font(ChatTimelineStyle.body)
+                .foregroundStyle(T3Colors.textTertiary))
+        } else if let filePath {
             (Text(verbatim: filePath.prefix).foregroundStyle(T3Colors.textTertiary)
                 + Text(verbatim: filePath.name).foregroundStyle(T3Colors.textPrimary))
                 .font(ChatTimelineStyle.bodyMono)
@@ -1242,10 +1303,131 @@ private struct WorkLogRowButton: View {
     }
 }
 
-/// Checkpoint rows render as a "changed files" summary card: a header with the
-/// file count, total diffstat, and an Open diff shortcut into the review
-/// screen. Collapsed, it previews the touched scopes and a few file chips;
-/// expanded, one row per file.
+private struct WorkLogRowButton: View {
+    let row: ThreadWorkLogRow
+    let workspaceRoot: String?
+    let isExpanded: Bool
+    let onToggle: () -> Void
+    let onCopy: () -> Void
+
+    private var isDestructive: Bool { row.icon == .alert || row.icon == .warning }
+
+    private var symbolName: String {
+        switch row.waiting {
+        case .approval: "hand.raised"
+        case .input: "questionmark.bubble"
+        case nil: row.icon.symbolName
+        }
+    }
+
+    private var iconTint: Color {
+        if isDestructive { return T3Colors.danger }
+        switch row.waiting {
+        case .approval: return T3Colors.warning
+        case .input: return T3Colors.statusInput
+        case nil: return row.isRunning && !row.isLiveBackgroundCommand ? T3Colors.statusRunning : T3Colors.textTertiary
+        }
+    }
+
+    private var accessibilityText: String {
+        let detail = ThreadWorkLogPresentation.compactDetail(row.detail)
+        let summary = switch row.waiting {
+        case .approval: "Waiting for approval"
+        case .input: "Waiting for your answer"
+        case nil: row.summary
+        }
+        return detail.map { "\(summary) \($0)" } ?? summary
+    }
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 8) {
+                ThreadToolActivityIcon(icon: row.waiting == nil ? row.activityIcon : nil, fallback: symbolName)
+                    .font(ChatTimelineStyle.bodyStrong)
+                    .foregroundStyle(iconTint)
+                    .frame(width: 20)
+
+                WorkLogRowText(row: row, workspaceRoot: workspaceRoot)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 6) {
+                    if let stat = row.diffStat {
+                        WorkRowDiffStat(additions: stat.additions, deletions: stat.deletions)
+                    }
+                    WorkRowStatusGlyph(
+                        status: row.trailingStatus,
+                        failureTint: isDestructive ? T3Colors.danger : T3Colors.textTertiary
+                    )
+                    TimelineDisclosureChevron(isExpanded: isExpanded)
+                }
+            }
+            .frame(minHeight: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                onCopy()
+            } label: {
+                Label("Copy Details", systemImage: "doc.on.doc")
+            }
+        }
+        .accessibilityLabel(accessibilityText)
+        .accessibilityValue([row.trailingStatus?.accessibilityLabel, isExpanded ? "Expanded" : "Collapsed"].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint("Double tap to show full details.")
+        .accessibilityAction(named: "Copy details", onCopy)
+    }
+}
+
+/// A turn's failure, said in full. `ProviderErrorPresentation` works to turn
+/// adapter noise into the next step; a one-line row truncated exactly that.
+private struct ProviderErrorCallout: View {
+    let row: ThreadWorkLogRow
+    let onRetry: (() -> Void)?
+
+    private var message: String {
+        row.detail?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? row.summary
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(T3Colors.danger)
+                    .accessibilityHidden(true)
+                Text(verbatim: message)
+                    .font(.footnote)
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let onRetry {
+                Button("Try Again", systemImage: "arrow.clockwise", action: onRetry)
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+                    .tint(T3Colors.textPrimary)
+                    .padding(.leading, 24)
+            }
+        }
+        .padding(14)
+        .background(T3Colors.danger.opacity(0.10), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Error: \(message)")
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+/// Checkpoint rows render as a "changed files" summary: the file count and
+/// total diffstat with an Open Diff shortcut into the review, then one row per
+/// file that opens the diff at that file.
 private struct ChangedFilesSummaryCard: View {
     let checkpointID: String
     let files: [OrchestrationV2CheckpointFileSummary]
@@ -1253,6 +1435,9 @@ private struct ChangedFilesSummaryCard: View {
     let isExpanded: Bool
     let onToggle: () -> Void
     let onOpenDiff: (String?) -> Void
+
+    /// Enough to see the shape of a change without scrolling past it.
+    private static let collapsedLimit = 5
 
     private var totals: ThreadWorkLogDiffStat {
         ThreadWorkLogDiffStat(
@@ -1265,159 +1450,94 @@ private struct ChangedFilesSummaryCard: View {
         "\(files.count) changed \(files.count == 1 ? "file" : "files")"
     }
 
+    private var shownFiles: [OrchestrationV2CheckpointFileSummary] {
+        isExpanded ? files : ChangedFilesPreview.preview(files, limit: Self.collapsedLimit)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if isExpanded {
-                Divider().overlay(ChatTimelineStyle.hairline)
-                expandedFileList
-            } else {
-                Divider().overlay(ChatTimelineStyle.hairline)
-                collapsedPreview
+            Divider().overlay(ChatTimelineStyle.hairline)
+            ForEach(shownFiles, id: \.path) { file in fileRow(file) }
+            if files.count > Self.collapsedLimit {
+                Button(action: onToggle) {
+                    HStack(spacing: 8) {
+                        Text(verbatim: isExpanded ? "Show Fewer Files" : "Show All \(files.count) Files")
+                            .font(ChatTimelineStyle.bodyStrong)
+                            .foregroundStyle(T3Colors.textSecondary)
+                        Spacer(minLength: 0)
+                        TimelineDisclosureChevron(isExpanded: isExpanded)
+                    }
+                    .frame(minHeight: T3Metrics.minimumTapTarget)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(T3Colors.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(T3Colors.border, lineWidth: 1)
-                )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .padding(.bottom, 8)
     }
 
     private var header: some View {
-        HStack(spacing: 0) {
-            Button(action: onToggle) {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .frame(width: 16, height: 16)
-                    Text(verbatim: fileCountLabel)
-                        .font(ChatTimelineStyle.bodyStrong)
-                        .foregroundStyle(T3Colors.textPrimary)
-                    WorkRowDiffStat(additions: totals.additions, deletions: totals.deletions)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .frame(minHeight: 36)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(fileCountLabel)
-            .accessibilityHint(isExpanded ? "Double tap to hide files." : "Double tap to show files.")
-
-            Button { onOpenDiff(nil) } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(T3Colors.textTertiary)
-                    Text(verbatim: "Open diff")
-                        .font(ChatTimelineStyle.smallStrong)
-                        .foregroundStyle(T3Colors.textPrimary)
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(T3Colors.border, lineWidth: 1)
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .accessibilityLabel("Open diff")
+        HStack(spacing: 8) {
+            Text(verbatim: fileCountLabel)
+                .font(ChatTimelineStyle.bodyStrong)
+                .foregroundStyle(T3Colors.textPrimary)
+            WorkRowDiffStat(additions: totals.additions, deletions: totals.deletions)
+            Spacer(minLength: 8)
+            Button("Open Diff") { onOpenDiff(nil) }
+                .font(ChatTimelineStyle.bodyStrong)
+                .t3SecondaryButtonStyle()
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
         }
+        .padding(.horizontal, 12)
+        .frame(minHeight: T3Metrics.minimumTapTarget + 4)
+        .accessibilityElement(children: .contain)
     }
 
-    private var collapsedPreview: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ChatFlowLayout(horizontalSpacing: 6, verticalSpacing: 2) {
-                ForEach(ChangedFilesPreview.summarizeScopes(files), id: \.label) { scope in
-                    HStack(spacing: 4) {
-                        Text(verbatim: scope.label)
-                            .font(ChatTimelineStyle.smallMono)
-                            .foregroundStyle(T3Colors.textSecondary)
-                        Text(verbatim: "\(scope.fileCount) file\(scope.fileCount == 1 ? "" : "s")")
-                            .font(ChatTimelineStyle.small)
-                            .foregroundStyle(T3Colors.textTertiary)
-                    }
-                }
-            }
-
-            ChatFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-                ForEach(ChangedFilesPreview.preview(files), id: \.path) { file in
-                    Button { onOpenDiff(file.path) } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "doc")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(T3Colors.textTertiary)
-                            Text(verbatim: ChangedFilesPreview.fileName(file.path))
-                                .font(ChatTimelineStyle.smallMono)
-                                .foregroundStyle(T3Colors.textSecondary)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(T3Colors.border, lineWidth: 1)
-                        )
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Open diff for \(ChangedFilesPreview.fileName(file.path))")
-                }
-
-                Button(action: onToggle) {
-                    Text(verbatim: "Show all \(files.count) files")
-                        .font(ChatTimelineStyle.smallStrong)
+    private func fileRow(_ file: OrchestrationV2CheckpointFileSummary) -> some View {
+        let display = ThreadWorkspaceFilePath.displayComponents(file.path, workspaceRoot: workspaceRoot)
+        return Button { onOpenDiff(file.path) } label: {
+            HStack(spacing: 8) {
+                (Text(verbatim: display.prefix).foregroundStyle(T3Colors.textTertiary)
+                    + Text(verbatim: display.name).foregroundStyle(T3Colors.textPrimary))
+                    .font(ChatTimelineStyle.bodyMono)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let kind = Self.kindLabel(file.kind) {
+                    Text(verbatim: kind)
+                        .font(ChatTimelineStyle.small.weight(.medium))
                         .foregroundStyle(T3Colors.textSecondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(T3Colors.subtle, in: Capsule())
                 }
-                .buttonStyle(.plain)
+                WorkRowDiffStat(additions: file.additions, deletions: file.deletions)
             }
+            .padding(.horizontal, 12)
+            .frame(minHeight: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 8)
-        .padding(.top, 6)
-        .padding(.bottom, 8)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open diff for \(ChangedFilesPreview.fileName(file.path))")
     }
 
-    private var expandedFileList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(files, id: \.path) { file in
-                let display = ThreadWorkspaceFilePath.displayComponents(
-                    file.path, workspaceRoot: workspaceRoot
-                )
-                HStack(spacing: 6) {
-                    (Text(verbatim: display.prefix).foregroundStyle(T3Colors.textTertiary)
-                        + Text(verbatim: display.name).foregroundStyle(T3Colors.textPrimary))
-                        .font(ChatTimelineStyle.bodyMono)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if file.kind != "modified" {
-                        Text(verbatim: file.kind.uppercased())
-                            .font(ChatTimelineStyle.micro)
-                            .foregroundStyle(T3Colors.textTertiary)
-                    }
-                    WorkRowDiffStat(additions: file.additions, deletions: file.deletions)
-                }
-                .frame(minHeight: 32)
-            }
+    /// Sentence case, and nothing for an ordinary modification.
+    static func kindLabel(_ kind: String) -> String? {
+        switch kind.lowercased() {
+        case "modified", "": nil
+        case "added", "created": "New"
+        case "deleted", "removed": "Deleted"
+        case "renamed": "Renamed"
+        default: kind.prefix(1).uppercased() + kind.dropFirst()
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
     }
 }
 
+/// Opens the thread a fork or thread-creation row points at.
 private struct ThreadActivityThreadLink: View {
     let row: ThreadWorkLogRow
     let onOpenThread: (String) -> Void
@@ -1441,284 +1561,23 @@ private struct ThreadActivityThreadLink: View {
     var body: some View {
         if let target {
             Button { onOpenThread(target.threadID) } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Text(verbatim: target.label)
-                        .font(ChatTimelineStyle.smallStrong)
-                        .foregroundStyle(T3Colors.textPrimary)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(ChatTimelineStyle.bodyStrong)
+                        .foregroundStyle(T3Colors.accent)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(ChatTimelineStyle.small.weight(.semibold))
                         .foregroundStyle(T3Colors.textTertiary)
                 }
-                .frame(maxWidth: .infinity, minHeight: 36)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(T3Colors.border, lineWidth: 1)
-                )
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
         }
     }
 }
-
-/// The feed-level toggle for a work group whose rows were folded away, so a
-/// settled turn shows one line instead of its whole tool history.
-struct ThreadWorkGroupToggle: View {
-    let hiddenCount: Int
-    let onlyToolActivities: Bool
-    var hiddenAdditions: Int = 0
-    var hiddenDeletions: Int = 0
-    @Binding var isExpanded: Bool
-
-    private var noun: String {
-        ThreadWorkLogRow.overflowNoun(onlyToolRows: onlyToolActivities, count: hiddenCount)
-    }
-
-    var body: some View {
-        Button { isExpanded.toggle() } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .frame(width: 20)
-                Text(verbatim: isExpanded
-                    ? "Show fewer \(noun)"
-                    : "+\(hiddenCount) previous \(noun)")
-                    .font(ChatTimelineStyle.bodyStrong)
-                    .foregroundStyle(T3Colors.textSecondary)
-                if !isExpanded {
-                    Spacer(minLength: 0)
-                    WorkRowDiffStat(additions: hiddenAdditions, deletions: hiddenDeletions)
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.bottom, 4)
-        .accessibilityLabel(
-            isExpanded ? "Show fewer \(noun)" : "Show \(hiddenCount) previous \(noun)"
-        )
-    }
-}
-
-/// A wrapping row of chips. `Layout` rather than a fixed grid: the chips are
-/// file names of wildly different widths, and a grid would leave ragged gaps.
-struct ChatFlowLayout: Layout {
-    var horizontalSpacing: CGFloat = 6
-    var verticalSpacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalHeight: CGFloat = 0
-        var widestRow: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if rowWidth > 0, rowWidth + horizontalSpacing + size.width > maxWidth {
-                totalHeight += rowHeight + verticalSpacing
-                widestRow = max(widestRow, rowWidth)
-                rowWidth = 0
-                rowHeight = 0
-            }
-            rowWidth += (rowWidth > 0 ? horizontalSpacing : 0) + size.width
-            rowHeight = max(rowHeight, size.height)
-        }
-        widestRow = max(widestRow, rowWidth)
-        totalHeight += rowHeight
-        return CGSize(
-            width: proposal.width ?? widestRow,
-            height: totalHeight
-        )
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + verticalSpacing
-                rowHeight = 0
-            }
-            subview.place(
-                at: CGPoint(x: x, y: y),
-                proposal: ProposedViewSize(size)
-            )
-            x += size.width + horizontalSpacing
-            rowHeight = max(rowHeight, size.height)
-        }
-    }
-}
-
-private struct ThreadWorkLogFramesKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
-    }
-}
-
-/// Measurements are transient, so scroll events do not invalidate the whole
-/// transcript. Only the bounded coordinator cache owns durable reader choices.
-@MainActor private final class ThreadWorkLogViewportMeasurements {
-    var frames: [String: CGRect] = [:]
-    weak var scrollView: UIScrollView?
-    var pending: ThreadWorkLogViewportAnchor?
-
-    init(history: ThreadWorkLogHistory) {
-        pending = history.anchorID.map { .init(id: $0, offset: history.offsetWithinAnchor) }
-    }
-}
-
-private struct ThreadWorkLogExpandedHistory<Content: View>: View {
-    let rows: [ThreadWorkLogRow]
-    let history: ThreadWorkLogHistory
-    let rowContent: (ThreadWorkLogRow) -> Content
-    @State private var viewport: ThreadWorkLogViewportMeasurements
-
-    init(rows: [ThreadWorkLogRow], history: ThreadWorkLogHistory, @ViewBuilder rowContent: @escaping (ThreadWorkLogRow) -> Content) {
-        self.rows = rows
-        self.history = history
-        self.rowContent = rowContent
-        _viewport = State(initialValue: ThreadWorkLogViewportMeasurements(history: history))
-    }
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(rows) { row in
-                        rowContent(row).id(row.id)
-                            .background {
-                                GeometryReader { geometry in
-                                    Color.clear.preference(key: ThreadWorkLogFramesKey.self, value: [row.id: geometry.frame(in: .named("work-log-content"))])
-                                }
-                            }
-                    }
-                }
-                .coordinateSpace(name: "work-log-content")
-                .background(ThreadWorkLogScrollObserver(onResolve: { scrollView in
-                    viewport.scrollView = scrollView
-                    restoreViewport()
-                }, onScroll: { scrollView in
-                    guard scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating else { return }
-                    viewport.pending = nil
-                    history.rememberViewport(rows: frames, contentOffset: scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
-                }))
-            }
-            .frame(maxHeight: 320)
-            .onPreferenceChange(ThreadWorkLogFramesKey.self) { frames in
-                viewport.frames = frames
-                restoreViewport()
-                if let scrollView = viewport.scrollView,
-                   scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
-                    history.rememberViewport(rows: self.frames, contentOffset: scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
-                }
-            }
-            .onAppear {
-                if let anchor = viewport.pending, rows.contains(where: { $0.id == anchor.id }) {
-                    // Bring the lazy target into the measured set first; its
-                    // actual frame then supplies the precise intra-row offset.
-                    proxy.scrollTo(anchor.id, anchor: .top)
-                    restoreViewport()
-                }
-            }
-            .onChange(of: rows.map(\.id)) { _, ids in
-                if let anchor = history.anchorID, !ids.contains(anchor) {
-                    history.clearViewport()
-                    viewport.pending = nil
-                    if let first = ids.first { proxy.scrollTo(first, anchor: .top) }
-                }
-            }
-        }
-    }
-
-    private var frames: [ThreadWorkLogRowFrame] {
-        viewport.frames.map { id, frame in .init(id: id, minY: frame.minY, height: frame.height) }
-    }
-
-    private func restoreViewport() {
-        guard let pending = viewport.pending, let scrollView = viewport.scrollView,
-              !scrollView.isTracking, !scrollView.isDragging, !scrollView.isDecelerating,
-              let frame = frames.first(where: { $0.id == pending.id }),
-              let offset = pending.restoredOffset(in: frame) else { return }
-        viewport.pending = nil
-        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: offset - scrollView.adjustedContentInset.top), animated: false)
-    }
-}
-
-/// iOS 17-compatible observation of the owned inner scroll view. KVO leaves
-/// SwiftUI's delegate intact; no display link, polling or transcript relayout.
-private struct ThreadWorkLogScrollObserver: UIViewRepresentable {
-    let onResolve: (UIScrollView) -> Void
-    let onScroll: (UIScrollView) -> Void
-
-    func makeUIView(context: Context) -> ObserverView {
-        let view = ObserverView()
-        view.isUserInteractionEnabled = false
-        view.accessibilityElementsHidden = true
-        return view
-    }
-    func updateUIView(_ view: ObserverView, context: Context) {
-        view.onResolve = onResolve
-        view.onScroll = onScroll
-        view.resolveSoon()
-    }
-    static func dismantleUIView(_ view: ObserverView, coordinator: ()) { view.detach() }
-
-    final class ObserverView: UIView {
-        var onResolve: ((UIScrollView) -> Void)?
-        var onScroll: ((UIScrollView) -> Void)?
-        private weak var observedScrollView: UIScrollView?
-        private var observation: NSKeyValueObservation?
-        private var resolutionTask: Task<Void, Never>?
-
-        override func didMoveToSuperview() { super.didMoveToSuperview(); resolveSoon() }
-        override func didMoveToWindow() { super.didMoveToWindow(); resolveSoon() }
-
-        func resolveSoon() {
-            resolutionTask?.cancel()
-            resolutionTask = Task { @MainActor [weak self] in
-                guard !Task.isCancelled, let self else { return }
-                var ancestor = superview
-                while let view = ancestor {
-                    if let scrollView = view as? UIScrollView {
-                        guard observedScrollView !== scrollView else { return }
-                        observation = nil
-                        observedScrollView = scrollView
-                        observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] scrollView, _ in
-                            MainActor.assumeIsolated { self?.onScroll?(scrollView) }
-                        }
-                        onResolve?(scrollView)
-                        return
-                    }
-                    ancestor = view.superview
-                }
-            }
-        }
-        func detach() {
-            resolutionTask?.cancel()
-            resolutionTask = nil
-            observation = nil
-            observedScrollView = nil
-            onResolve = nil
-            onScroll = nil
-        }
-    }
-}
-
 
 private struct ThreadToolActivityIcon: View {
     let icon: ToolActivityIcon?

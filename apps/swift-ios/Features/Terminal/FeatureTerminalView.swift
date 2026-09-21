@@ -53,8 +53,20 @@ enum TerminalSessionList {
         }
         return "Terminal \(number) · \(shell)"
     }
+
+    /// The navigation title: plain "Terminal" while there is only one session,
+    /// the session's number once there are several to tell apart.
+    static func navigationTitle(terminalID: String, sessionCount: Int) -> String {
+        guard sessionCount > 1 else { return "Terminal" }
+        if terminalID == "default" { return "Terminal 1" }
+        return TerminalCloseConfirm.label(terminalID: terminalID)
+    }
 }
 
+/// The thread's terminal. Pushed inside Thread Details and also presented as a
+/// sheet root, so it carries no close button of its own: the session is the
+/// title (its menu switches sessions), actions live in ⋯, and what happened to
+/// the shell shows in a bar along the bottom.
 public struct FeatureTerminalView: View {
     let client: any FeatureClient
     let threadID: String
@@ -68,7 +80,6 @@ public struct FeatureTerminalView: View {
     let initialCommand: String?
     let initialTerminalID: String?
 
-    @SwiftUI.Environment(\.dismiss) private var dismiss
     @AppStorage("terminalFontSize") private var storedFontSize = TerminalFontSize.defaultValue
     @State private var terminal: FeatureTerminalSnapshot?
     @State private var sessions = [FeatureTerminalSnapshot]()
@@ -78,12 +89,22 @@ public struct FeatureTerminalView: View {
     @State private var rows = 24
     @State private var focusRequest = 0
     @State private var surfaceGeneration = 0
+    /// Bumped by Retry to open and attach again from scratch.
+    @State private var attachGeneration = 0
     @State private var isLoading = true
     @State private var isOpening = false
     @State private var errorMessage: String?
+    /// The environment has no terminals at all, so retrying cannot help.
+    @State private var isUnsupported = false
+    /// The attach stream ended and the view is attaching again.
+    @State private var isReconnecting = false
+    @State private var isTerminalFocused = false
     /// Stopping kills the process and drops the scrollback, and the menu offers
     /// it as one tap with no undo — same confirmation the web clients show.
     @State private var isConfirmingStop = false
+    /// Set when the reader closed the session, so the bottom bar says so
+    /// rather than reporting an exit.
+    @State private var didCloseTerminal = false
     /// `initialCommand` is run once per presentation. Switching terminals
     /// re-runs `loadAndOpen`, and re-sending the command there would replay it
     /// into a terminal the reader deliberately switched to.
@@ -98,7 +119,7 @@ public struct FeatureTerminalView: View {
 
     public var body: some View {
         ZStack {
-            T3Colors.background
+            T3Colors.background.ignoresSafeArea()
 
             GhosttyTerminalSurface(
                 terminalKey: "\(threadID):\(activeTerminalID)",
@@ -118,51 +139,55 @@ public struct FeatureTerminalView: View {
                 },
                 onFontSizeStep: { direction in
                     stepFontSize(direction)
-                }
+                },
+                onFocusChange: { isTerminalFocused = $0 }
             )
             .id("\(terminalTaskID):\(fontSize):\(surfaceGeneration)")
-            .padding(.top, 48)
+            .opacity(isReconnecting ? 0.55 : 1)
 
             if isLoading, terminal == nil {
                 ProgressView("Opening terminal…")
-                    .tint(T3Colors.textPrimary)
-                    .foregroundStyle(T3Colors.textPrimary)
             } else if let errorMessage, terminal == nil {
-                ContentUnavailableView(
-                    "Terminal unavailable",
-                    systemImage: "terminal",
-                    description: Text(errorMessage)
-                )
-                .foregroundStyle(T3Colors.textPrimary)
+                unavailable(errorMessage)
             }
-
-            if let errorMessage, terminal != nil {
-                VStack {
-                    Spacer()
-                    Text(errorMessage)
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(Color.white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color.red.opacity(0.88))
-                        .accessibilityLabel("Terminal error: \(errorMessage)")
-                }
-            }
-
-            terminalHeader
         }
-        .background(T3Colors.background.ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomBar
+        }
+        .navigationTitle(
+            TerminalSessionList.navigationTitle(
+                terminalID: activeTerminalID,
+                sessionCount: menuSessions.count
+            )
+        )
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarTitleMenu { sessionMenu }
+        .modifier(TerminalStatusSubtitle(text: statusLine, isWarning: isReconnecting || errorMessage != nil))
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { actionsMenu }
+        }
+        .t3NavigationChrome()
+        // A history scroll is a vertical pan, which would otherwise drag the
+        // sheet away while someone is working in the shell.
+        .interactiveDismissDisabled(isTerminalFocused)
         .task {
-            for await updates in client.terminalSessions(threadID: threadID) {
-                sessions = updates
-                if !sessionsResolved {
-                    activeTerminalID = initialTerminalID ?? TerminalSessionList.initialID(in: updates)
-                    sessionsResolved = true
+            var attempt = 0
+            while !Task.isCancelled {
+                let attachedAt = ContinuousClock.now
+                for await updates in client.terminalSessions(threadID: threadID) {
+                    sessions = updates
+                    if !sessionsResolved {
+                        activeTerminalID = initialTerminalID ?? TerminalSessionList.initialID(in: updates)
+                        sessionsResolved = true
+                    }
                 }
+                sessionsResolved = true
+                guard !Task.isCancelled else { return }
+                // The session list ends the same way the attach does when the
+                // environment reconnects; follow it onto the new connection.
+                attempt = TerminalReattach.nextAttempt(after: attempt, attachedFor: attachedAt.duration(to: .now))
+                try? await Task.sleep(for: TerminalReattach.delay(attempt: attempt))
             }
-            sessionsResolved = true
         }
         .task(id: terminalTaskID) {
             guard sessionsResolved else { return }
@@ -171,33 +196,7 @@ public struct FeatureTerminalView: View {
         }
         .task(id: terminalTaskID) {
             guard sessionsResolved else { return }
-            let terminalID = activeTerminalID
-            for await update in client.terminalEvents(
-                threadID: threadID,
-                terminalID: terminalID
-            ) {
-                guard terminalID == activeTerminalID else { break }
-                let shouldSyncGrid = !isRunning
-                    && (update.state == .running || update.state == .starting)
-                if let currentBuffer = terminal?.buffer,
-                   !update.buffer.hasPrefix(currentBuffer) {
-                    surfaceGeneration += 1
-                }
-                terminal = update
-                if shouldSyncGrid {
-                    try? await client.resizeTerminal(
-                        threadID: threadID,
-                        terminalID: terminalID,
-                        columns: columns,
-                        rows: rows
-                    )
-                }
-                if update.state == .running {
-                    errorMessage = nil
-                } else if update.state == .failed, let error = update.error {
-                    errorMessage = error
-                }
-            }
+            await followOutput(terminalID: activeTerminalID)
         }
         .confirmationDialog(
             TerminalCloseConfirm.title(label: activeTerminalLabel),
@@ -213,6 +212,58 @@ public struct FeatureTerminalView: View {
         }
     }
 
+    /// Streams the active terminal's output, attaching again whenever the
+    /// stream ends while the terminal is still on screen.
+    private func followOutput(terminalID: String) async {
+        var attempt = 0
+        while !Task.isCancelled {
+            let attachedAt = ContinuousClock.now
+            for await update in client.terminalEvents(threadID: threadID, terminalID: terminalID) {
+                guard terminalID == activeTerminalID else { return }
+                apply(update, terminalID: terminalID)
+            }
+            guard !Task.isCancelled, terminalID == activeTerminalID else { return }
+            attempt = TerminalReattach.nextAttempt(after: attempt, attachedFor: attachedAt.duration(to: .now))
+            switch TerminalReattach.decision(state: terminal?.state, attempt: attempt) {
+            case .stay:
+                isReconnecting = false
+                return
+            case let .reattach(delay):
+                isReconnecting = true
+                try? await Task.sleep(for: delay)
+            }
+        }
+    }
+
+    private func apply(_ update: FeatureTerminalSnapshot, terminalID: String) {
+        isReconnecting = false
+        let shouldSyncGrid = !isRunning
+            && (update.state == .running || update.state == .starting)
+        if let currentBuffer = terminal?.buffer,
+           !update.buffer.hasPrefix(currentBuffer) {
+            surfaceGeneration += 1
+        }
+        terminal = update
+        if shouldSyncGrid {
+            didCloseTerminal = false
+            Task {
+                try? await client.resizeTerminal(
+                    threadID: threadID,
+                    terminalID: terminalID,
+                    columns: columns,
+                    rows: rows
+                )
+            }
+        }
+        if update.state == .running {
+            errorMessage = nil
+        } else if update.state == .failed, let error = update.error {
+            errorMessage = error
+        }
+    }
+
+    // MARK: - Chrome
+
     /// The label the confirmation names, resolved the way the tab strip does:
     /// the session's own title when the server gave it one, else the id.
     private var activeTerminalLabel: String {
@@ -223,119 +274,184 @@ public struct FeatureTerminalView: View {
         )
     }
 
-    private var terminalHeader: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Text("Terminal")
-                    .font(T3Typography.navigationTitle)
-                    .foregroundStyle(T3Colors.textPrimary)
-
-                HStack {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .frame(width: 44, height: 44)
-                    }
-                    .foregroundStyle(T3Colors.textPrimary)
-                    .accessibilityLabel("Close terminal")
-
-                    Spacer()
-
-                    terminalMenu
-                        .frame(width: 44, height: 44)
-                }
+    @ViewBuilder
+    private var sessionMenu: some View {
+        Picker(
+            "Terminal",
+            selection: Binding(get: { activeTerminalID }, set: { selectTerminal($0) })
+        ) {
+            ForEach(menuSessions, id: \.terminalID) { session in
+                Text(TerminalSessionList.displayTitle(for: session))
+                    .tag(session.terminalID)
             }
-            .frame(height: 48)
-            .background(T3Colors.background)
-
-            Spacer(minLength: 0)
         }
+        .pickerStyle(.inline)
+
+        Button {
+            openNewTerminal()
+        } label: {
+            Label("New Terminal", systemImage: "plus")
+        }
+        .keyboardShortcut("t", modifiers: .command)
     }
 
-    private var terminalMenu: some View {
+    private var actionsMenu: some View {
         Menu {
-            Section {
-                Label(statusLabel, systemImage: statusSymbol)
-                if let workingDirectory = terminal?.workingDirectory {
-                    Text(workingDirectory)
+            // iOS 26 shows the status as the title's subtitle.
+            if #available(iOS 26, *) {} else {
+                Section {
+                    Label(statusLabel, systemImage: statusSymbol)
+                    if let workingDirectory = terminal?.workingDirectory {
+                        Text(workingDirectory)
+                    }
                 }
             }
 
-            Section("Sessions") {
-                ForEach(menuSessions, id: \.terminalID) { session in
-                    Button {
-                        selectTerminal(session.terminalID)
-                    } label: {
-                        Label(
-                            TerminalSessionList.displayTitle(for: session),
-                            systemImage: session.terminalID == activeTerminalID
-                                ? "checkmark"
-                                : "terminal"
-                        )
-                    }
+            ControlGroup {
+                Button {
+                    stepFontSize(-1)
+                } label: {
+                    Label("Smaller", systemImage: "textformat.size.smaller")
                 }
+                .disabled(fontSize <= TerminalFontSize.minimum)
+                .keyboardShortcut("-", modifiers: .command)
 
                 Button {
-                    openNewTerminal()
+                    stepFontSize(1)
                 } label: {
-                    Label("Open new terminal", systemImage: "plus")
+                    Label("Larger", systemImage: "textformat.size.larger")
                 }
+                .disabled(fontSize >= TerminalFontSize.maximum)
+                .keyboardShortcut("+", modifiers: .command)
+            } label: {
+                Label("Text Size · \(formattedFontSize(fontSize)) pt", systemImage: "textformat.size")
             }
 
-            Section {
-                Menu {
-                    Button {
-                        stepFontSize(-1)
-                    } label: {
-                        Label(
-                            "Smaller · \(formattedFontSize(fontSize - TerminalFontSize.step)) pt",
-                            systemImage: "textformat.size.smaller"
-                        )
-                    }
-                    .disabled(fontSize <= TerminalFontSize.minimum)
-
-                    Button {
-                        stepFontSize(1)
-                    } label: {
-                        Label(
-                            "Larger · \(formattedFontSize(fontSize + TerminalFontSize.step)) pt",
-                            systemImage: "textformat.size.larger"
-                        )
-                    }
-                    .disabled(fontSize >= TerminalFontSize.maximum)
-                } label: {
-                    Label("Text size · \(formattedFontSize(fontSize)) pt", systemImage: "textformat.size")
-                }
-
-                Button {
-                    Task { await clear() }
-                } label: {
-                    Label("Clear", systemImage: "eraser")
-                }
-                .disabled(terminal == nil)
+            Button {
+                Task { await clear() }
+            } label: {
+                Label("Clear", systemImage: "eraser")
             }
+            .disabled(terminal == nil)
+            .keyboardShortcut("k", modifiers: .command)
 
             Section {
                 if isRunning {
                     Button(role: .destructive) {
                         isConfirmingStop = true
                     } label: {
-                        Label("Stop terminal", systemImage: "stop.fill")
+                        Label("Close Terminal…", systemImage: "xmark.circle")
                     }
                 } else {
                     Button {
                         Task { await open() }
                     } label: {
-                        Label("Start terminal", systemImage: "play.fill")
+                        Label(terminal?.state == .exited ? "Restart Terminal" : "Start Terminal", systemImage: "play")
                     }
                     .disabled(isLoading || isOpening)
                 }
             }
         } label: {
-            Image(systemName: "terminal")
+            Label("Terminal Options", systemImage: "ellipsis")
         }
-        .accessibilityLabel("Terminal options")
+    }
+
+    private func unavailable(_ message: String) -> some View {
+        ContentUnavailableView {
+            Label("Terminal Unavailable", systemImage: "terminal")
+        } description: {
+            Text(message)
+        } actions: {
+            if !isUnsupported {
+                Button("Try Again", action: retry)
+                    .t3SecondaryButtonStyle()
+            }
+        }
+    }
+
+    /// What happened to the shell, and the next step: an error or a lost
+    /// connection with Retry, or an exit with Restart.
+    @ViewBuilder
+    private var bottomBar: some View {
+        if let errorMessage, terminal != nil {
+            TerminalStatusBar(
+                systemImage: "exclamationmark.triangle.fill",
+                tint: T3Colors.danger,
+                title: "Terminal error",
+                message: errorMessage
+            ) {
+                Button("Retry", action: retry)
+                    .t3SecondaryButtonStyle()
+            }
+        } else if isReconnecting {
+            TerminalStatusBar(
+                systemImage: "wifi.exclamationmark",
+                tint: T3Colors.warning,
+                title: "Connection lost",
+                message: "Output resumes when it reconnects."
+            ) {
+                Button("Retry", action: retry)
+                    .t3SecondaryButtonStyle()
+            }
+        } else if let terminal, !isRunning, !isLoading {
+            TerminalStatusBar(
+                systemImage: "xmark.circle",
+                tint: T3Colors.textSecondary,
+                title: stoppedTitle(terminal),
+                message: nil
+            ) {
+                Button {
+                    Task { await open() }
+                } label: {
+                    Label(terminal.state == .stopped && !didCloseTerminal ? "Start" : "Restart", systemImage: "arrow.clockwise")
+                }
+                .t3ProminentButtonStyle()
+                .disabled(isOpening)
+            }
+        }
+    }
+
+    private func stoppedTitle(_ terminal: FeatureTerminalSnapshot) -> String {
+        if didCloseTerminal { return "Terminal closed" }
+        switch terminal.state {
+        case .exited: return "Process exited"
+        case .failed: return "Terminal stopped"
+        default: return "Not started"
+        }
+    }
+
+    /// The subtitle under the session name on iOS 26.
+    private var statusLine: String {
+        if isReconnecting { return "Reconnecting…" }
+        if errorMessage != nil, terminal != nil { return "Error" }
+        guard let terminal else { return isLoading ? "Starting…" : "" }
+        switch terminal.state {
+        case .starting:
+            return "Starting…"
+        case .running:
+            let place = terminal.workingDirectory.map(Self.abbreviatedPath)
+            if terminal.hasRunningSubprocess {
+                return ["Running", place].compactMap { $0 }.joined(separator: " · ")
+            }
+            let shell = terminal.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = shell.isEmpty || shell.caseInsensitiveCompare("Terminal") == .orderedSame ? nil : shell
+            return [name, place].compactMap { $0 }.joined(separator: " · ")
+        case .exited:
+            return terminal.exitCode.map { "Exited · code \($0)" } ?? "Exited"
+        case .failed:
+            return "Error"
+        case .stopped:
+            return didCloseTerminal ? "Closed" : "Not started"
+        }
+    }
+
+    /// `/Users/me/code/t3` → `~/code/t3`; the full path stays in the menu.
+    private static func abbreviatedPath(_ path: String) -> String {
+        let components = path.split(separator: "/", omittingEmptySubsequences: true)
+        if components.count >= 2, components[0] == "Users" || components[0] == "home" {
+            return (["~"] + components.dropFirst(2).map(String.init)).joined(separator: "/")
+        }
+        return path
     }
 
     private var fontSize: Double {
@@ -343,7 +459,7 @@ public struct FeatureTerminalView: View {
     }
 
     private var terminalTaskID: String {
-        "\(sessionsResolved):\(activeTerminalID)"
+        "\(sessionsResolved):\(activeTerminalID):\(attachGeneration)"
     }
 
     private var menuSessions: [FeatureTerminalSnapshot] {
@@ -387,6 +503,8 @@ public struct FeatureTerminalView: View {
         String(format: "%.1f", TerminalFontSize.normalized(value))
     }
 
+    // MARK: - Actions
+
     private func stepFontSize(_ direction: Int) {
         storedFontSize = TerminalFontSize.normalized(
             fontSize + Double(direction) * TerminalFontSize.step
@@ -395,8 +513,11 @@ public struct FeatureTerminalView: View {
 
     private func selectTerminal(_ terminalID: String) {
         guard terminalID != activeTerminalID else { return }
+        PlatformHapticEngine.shared.playSelection()
         terminal = nil
         errorMessage = nil
+        isReconnecting = false
+        didCloseTerminal = false
         activeTerminalID = terminalID
     }
 
@@ -406,25 +527,33 @@ public struct FeatureTerminalView: View {
         )
         terminal = nil
         errorMessage = nil
+        isReconnecting = false
+        didCloseTerminal = false
         activeTerminalID = nextID
     }
 
+    /// Opens and attaches again from scratch.
+    private func retry() {
+        errorMessage = nil
+        isUnsupported = false
+        isReconnecting = false
+        attachGeneration += 1
+    }
+
+    /// A failed resize is retried by the next layout pass, so it is not worth
+    /// interrupting anyone over.
     private func updateGrid(columns nextColumns: Int, rows nextRows: Int) {
         guard nextColumns != columns || nextRows != rows else { return }
         columns = nextColumns
         rows = nextRows
         guard isRunning else { return }
         Task {
-            do {
-                try await client.resizeTerminal(
-                    threadID: threadID,
-                    terminalID: activeTerminalID,
-                    columns: nextColumns,
-                    rows: nextRows
-                )
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+            try? await client.resizeTerminal(
+                threadID: threadID,
+                terminalID: activeTerminalID,
+                columns: nextColumns,
+                rows: nextRows
+            )
         }
     }
 
@@ -444,6 +573,7 @@ public struct FeatureTerminalView: View {
             }
             errorMessage = nil
         } catch {
+            isUnsupported = error is FeatureCapabilityUnavailable
             errorMessage = error.localizedDescription
         }
     }
@@ -468,10 +598,12 @@ public struct FeatureTerminalView: View {
         defer { isOpening = false }
         do {
             try await openTerminal(terminalID: activeTerminalID)
+            didCloseTerminal = false
             focusRequest += 1
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            PlatformHapticEngine.shared.play(.error)
+            errorMessage = "The terminal couldn't start. \(error.localizedDescription)"
         }
     }
 
@@ -497,9 +629,11 @@ public struct FeatureTerminalView: View {
         )
         do {
             try await client.closeTerminal(threadID: threadID, terminalID: terminalID)
+            PlatformHapticEngine.shared.play(.success)
             if let fallbackID {
                 selectTerminal(fallbackID)
             } else {
+                didCloseTerminal = true
                 terminal = try? await client.terminalSnapshot(
                     threadID: threadID,
                     terminalID: terminalID
@@ -507,7 +641,8 @@ public struct FeatureTerminalView: View {
             }
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            PlatformHapticEngine.shared.play(.error)
+            errorMessage = "The terminal couldn't be closed. \(error.localizedDescription)"
         }
     }
 
@@ -528,7 +663,8 @@ public struct FeatureTerminalView: View {
             }
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            PlatformHapticEngine.shared.play(.error)
+            errorMessage = "The terminal couldn't be cleared. \(error.localizedDescription)"
         }
     }
 
@@ -540,7 +676,65 @@ public struct FeatureTerminalView: View {
                 data: data
             )
         } catch {
-            errorMessage = error.localizedDescription
+            PlatformHapticEngine.shared.play(.error)
+            errorMessage = "Input didn't reach the terminal. \(error.localizedDescription)"
         }
+    }
+}
+
+/// The session's status as the navigation subtitle, on systems that have one.
+/// Earlier systems keep the title menu instead and list the status in ⋯.
+private struct TerminalStatusSubtitle: ViewModifier {
+    let text: String
+    let isWarning: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !text.isEmpty {
+            content.navigationSubtitle(
+                Text(text).foregroundStyle(isWarning ? T3Colors.warning : T3Colors.textSecondary)
+            )
+        } else {
+            content
+        }
+    }
+}
+
+/// A glass bar along the bottom of the terminal: what happened, and one action.
+private struct TerminalStatusBar<Action: View>: View {
+    let systemImage: String
+    let tint: Color
+    let title: String
+    let message: String?
+    @ViewBuilder let action: Action
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(T3Colors.textPrimary)
+                if let message {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .lineLimit(3)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            action
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 10)
+        .padding(.vertical, 10)
+        .frame(minHeight: 56)
+        .t3GlassEffect(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .t3GlassRim(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .accessibilityElement(children: .contain)
     }
 }

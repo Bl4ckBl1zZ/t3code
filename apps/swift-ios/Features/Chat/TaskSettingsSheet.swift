@@ -1,5 +1,16 @@
 import SwiftUI
 
+/// The screen the task-settings sheet opens on. The composer's model chip
+/// opens the sheet straight onto the model list ("All Models…") or agent setup
+/// ("Set Up Agents…") as well as onto the settings list itself.
+enum TaskSettingsEntry: Hashable, Identifiable {
+    case settings
+    case models
+    case setup
+
+    var id: Self { self }
+}
+
 /// The composer's task settings, nested in a bottom sheet.
 ///
 /// Swift counterpart of upstream's `ThreadSettingsSheet` restructure: the model
@@ -7,12 +18,15 @@ import SwiftUI
 /// competing for room in the composer footer, where a long model name used to
 /// squeeze the chips out of the row.
 ///
-/// Options push inside the sheet's own navigation stack rather than opening a
-/// second sheet on top of the first. Stacked detent sheets fight each other for
-/// the drag gesture on iOS, and a push keeps the back-swipe the user already
-/// expects from every other list here.
+/// The model list and long option lists push inside the sheet's own
+/// navigation stack rather than opening a second sheet on top of the first.
+/// Stacked detent sheets fight each other for the drag gesture on iOS, and a
+/// push keeps the back-swipe the user already expects from every other list.
 struct TaskSettingsSheet: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
+    private enum Route: Hashable {
+        case models
+        case setup
+    }
 
     @Binding var selection: FeatureSelection?
     let providers: [FeatureProvider]
@@ -20,64 +34,117 @@ struct TaskSettingsSheet: View {
     let materializesDefaultSelection: Bool
     var setupContext: ProviderSetupContext? = nil
 
+    @State private var path: [Route]
+
+    init(
+        selection: Binding<FeatureSelection?>,
+        providers: [FeatureProvider],
+        threadSelection: FeatureSelection?,
+        materializesDefaultSelection: Bool,
+        setupContext: ProviderSetupContext? = nil,
+        entry: TaskSettingsEntry = .settings
+    ) {
+        _selection = selection
+        self.providers = providers
+        self.threadSelection = threadSelection
+        self.materializesDefaultSelection = materializesDefaultSelection
+        self.setupContext = setupContext
+        let initialPath: [Route] = switch entry {
+        case .settings: []
+        case .models: [.models]
+        case .setup: setupContext == nil ? [.models] : [.setup]
+        }
+        _path = State(initialValue: initialPath)
+    }
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 Section {
-                    ProviderModelPicker(
-                        providers: providers,
-                        selection: $selection,
-                        style: .row,
-                        threadSelection: threadSelection,
-                        materializesDefaultSelection: materializesDefaultSelection,
-                        setupContext: setupContext
-                    )
-                    .listRowBackground(T3Colors.surface)
+                    NavigationLink(value: Route.models) {
+                        ProviderModelPickerRowLabel(
+                            providers: providers,
+                            selection: selection,
+                            threadSelection: threadSelection,
+                            materializesDefaultSelection: materializesDefaultSelection
+                        )
+                    }
+                    .accessibilityLabel("Model")
+                    .t3SheetRow()
                 }
 
                 if !rows.isEmpty {
-                    Section("Model options") {
+                    Section {
                         ForEach(rows) { row in
                             optionRow(row)
-                                .listRowBackground(T3Colors.surface)
+                                .t3SheetRow()
                         }
                     }
                 }
             }
             .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(T3Colors.background)
-            .navigationTitle("Task settings")
+            .t3SheetListBackground()
+            .navigationTitle("Task Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .models:
+                    ModelPickerList(
+                        providers: ProviderModelCatalogNormalizer.normalized(providers),
+                        selection: $selection,
+                        isLoading: false,
+                        threadSelection: threadSelection,
+                        materializesDefaultSelection: materializesDefaultSelection,
+                        setupContext: setupContext,
+                        onPicked: popModelPicker
+                    )
+                case .setup:
+                    if let setupContext {
+                        ProviderSetupView(context: setupContext, instanceID: nil)
+                    }
                 }
             }
+            .t3SheetToolbar(.close)
             .t3NavigationChrome()
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
 
+    /// Picking a model pops back to the settings list, unless the sheet was
+    /// opened straight onto the model list; then there is nothing to pop to.
+    private func popModelPicker() {
+        if path.count > 1 || path.first != .models {
+            path.removeLast()
+        } else {
+            path = []
+        }
+    }
+
     @ViewBuilder
     private func optionRow(_ row: TaskSettingsRow) -> some View {
         switch row.descriptor.kind {
         case .select:
-            NavigationLink {
-                TaskSettingsChoiceList(
-                    descriptor: row.descriptor,
-                    selectedChoiceID: row.selectedChoiceID,
-                    onSelect: { choiceID in
-                        setOption(id: row.descriptor.id, value: .string(choiceID))
-                    }
+            let picker = Picker(
+                selection: Binding(
+                    get: { row.selectedChoiceID ?? "" },
+                    set: { setOption(id: row.descriptor.id, value: .string($0)) }
                 )
-            } label: {
-                LabeledContent(row.descriptor.label) {
-                    Text(row.valueLabel)
-                        .foregroundStyle(T3Colors.textSecondary)
+            ) {
+                ForEach(row.descriptor.choices) { choice in
+                    choiceLabel(choice)
+                        .tag(choice.id)
                 }
-                .font(T3Typography.control)
+            } label: {
+                Text(row.descriptor.label)
+                    .font(T3Typography.control)
+            }
+            // A handful of bare choices reads best as an inline menu; longer
+            // lists, or choices that carry an explanation, get their own page.
+            if TaskSettingsOptions.prefersInlinePicker(row.descriptor) {
+                picker.pickerStyle(.menu)
+            } else {
+                picker.pickerStyle(.navigationLink)
             }
         case .boolean:
             Toggle(
@@ -99,6 +166,17 @@ struct TaskSettingsSheet: View {
         }
     }
 
+    private func choiceLabel(_ choice: FeatureModelOptionChoice) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(choice.label)
+            if let detail = choice.detail {
+                Text(detail)
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+            }
+        }
+    }
+
     private var activeSelection: FeatureSelection? { selection ?? threadSelection }
 
     private var activeModel: FeatureModel? {
@@ -116,58 +194,10 @@ struct TaskSettingsSheet: View {
         )
     }
 
-    /// Writes onto the active selection, materializing the inherited one first:
-    /// changing an option on a thread whose model was never overridden must not
-    /// silently drop the model it inherited.
     private func setOption(id: String, value: FeatureModelOptionValue) {
-        guard var next = activeSelection else { return }
-        next.options = DailyUXModelOptions.updating(next.options, id: id, value: value)
-        selection = next
-    }
-}
-
-private struct TaskSettingsChoiceList: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
-
-    let descriptor: FeatureModelOptionDescriptor
-    let selectedChoiceID: String?
-    let onSelect: (String) -> Void
-
-    var body: some View {
-        List {
-            ForEach(descriptor.choices) { choice in
-                Button {
-                    onSelect(choice.id)
-                    dismiss()
-                } label: {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(choice.label)
-                                .font(T3Typography.control)
-                                .foregroundStyle(T3Colors.textPrimary)
-                            if let detail = choice.detail {
-                                Text(detail)
-                                    .font(T3Typography.supporting)
-                                    .foregroundStyle(T3Colors.textSecondary)
-                            }
-                        }
-                        Spacer(minLength: 6)
-                        if choice.id == selectedChoiceID {
-                            Image(systemName: "checkmark")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(T3Colors.textPrimary)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .listRowBackground(T3Colors.surface)
-            }
+        guard let next = TaskSettingsOptions.selection(activeSelection, setting: id, to: value) else {
+            return
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(T3Colors.background)
-        .navigationTitle(descriptor.label)
-        .navigationBarTitleDisplayMode(.inline)
+        selection = next
     }
 }

@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Adds a project to an environment, either from a folder already on that
+/// machine or by cloning a repository into a new one. Presented as a sheet
+/// from Home; the commit lives in the toolbar.
 public struct AddProjectView: View {
     private struct PendingCloneRegistration: Equatable {
         let environmentID: String
@@ -14,7 +17,6 @@ public struct AddProjectView: View {
 
         var id: String { rawValue }
         var label: String { self == .folder ? "Folder" : "Clone" }
-        var icon: String { self == .folder ? "folder" : "arrow.down.circle" }
     }
 
     private enum Field: Hashable {
@@ -22,6 +24,9 @@ public struct AddProjectView: View {
         case repository
         case destination
     }
+
+    private static let clonedButNotAddedMessage =
+        "Repository cloned. Try again to finish adding the project."
 
     @SwiftUI.Environment(\.dismiss) private var dismiss
     @Bindable var model: FeatureRootModel
@@ -47,7 +52,11 @@ public struct AddProjectView: View {
     @State private var discoveryError: String?
     @State private var discoveryRequestID: UUID?
 
+    @State private var isLookingUp = false
+    @State private var lookupRequestID: UUID?
+
     @State private var isSubmitting = false
+    @State private var isReconnecting = false
     @State private var errorMessage: String?
     @State private var cloneRequestID: UUID?
     @FocusState private var focusedField: Field?
@@ -60,66 +69,40 @@ public struct AddProjectView: View {
         NavigationStack {
             Group {
                 if let environment = selectedEnvironment {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 22) {
-                            if environments.count > 1 {
-                                environmentPicker(environment)
-                            }
-                            modePicker
-                            if let errorMessage {
-                                errorBanner(errorMessage)
-                            }
-                            switch mode {
-                            case .folder:
-                                localProjectForm(environment)
-                            case .repository:
-                                repositoryProjectForm(environment)
-                            }
-                            if showsFolderBrowser {
-                                folderBrowser(environment)
-                            }
-                        }
-                        .padding(.horizontal, 18)
-                        .padding(.top, 14)
-                        .padding(.bottom, 32)
-                        .disabled(isSubmitting)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
+                    form(environment)
                 } else {
-                    ContentUnavailableView(
-                        "Environment unavailable",
-                        systemImage: "server.rack",
-                        description: Text("Reconnect a T3 environment before adding a project.")
-                    )
+                    unavailableView
                 }
             }
             .background(T3Colors.background)
-            .navigationTitle("Add project")
+            .navigationTitle("Add Project")
             .navigationBarTitleDisplayMode(.inline)
             .t3NavigationChrome()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
+            .t3SheetToolbar(
+                .cancel,
+                confirm: selectedEnvironment.map(confirmation),
+                hasChanges: isSubmitting
+            )
         }
         .onAppear(perform: selectEnvironmentIfNeeded)
         .onChange(of: model.snapshot.environments) {
             selectEnvironmentIfNeeded()
         }
-        .onChange(of: source) {
-            resolvedRepository = nil
-            pendingCloneRegistration = nil
-            cloneRequestID = nil
-            updateSuggestedDestination()
+        .onChange(of: model.snapshot.connection.state) {
+            selectEnvironmentIfNeeded()
+        }
+        .onChange(of: mode) {
+            focusedField = nil
             errorMessage = nil
         }
-        .onChange(of: repositoryInput) {
-            resolvedRepository = nil
-            pendingCloneRegistration = nil
-            cloneRequestID = nil
-            updateSuggestedDestination()
+        .onChange(of: localPath) {
             errorMessage = nil
+        }
+        .onChange(of: source) {
+            clearRepositoryResolution()
+        }
+        .onChange(of: repositoryInput) {
+            clearRepositoryResolution()
         }
         .task(id: selectedEnvironmentID) {
             guard selectedEnvironmentID != nil else { return }
@@ -148,16 +131,18 @@ public struct AddProjectView: View {
         ProjectRemoteSourceOptions.options(discovery: discovery)
     }
 
-    private var selectedSourceOption: ProjectRemoteSourceOption? {
-        sourceOptions.first { $0.source == source }
-    }
-
     private var needsRepositoryLookup: Bool {
         source.provider != nil && resolvedRepository == nil
     }
 
+    /// Folder browsing needs the project-creation client; without it the
+    /// path can still be typed.
+    private var canBrowse: Bool {
+        projectClient != nil
+    }
+
     private var showsFolderBrowser: Bool {
-        mode == .folder || !needsRepositoryLookup
+        canBrowse && (mode == .folder || !needsRepositoryLookup)
     }
 
     private var repositoryName: String {
@@ -166,397 +151,338 @@ public struct AddProjectView: View {
         )
     }
 
-    private var modePicker: some View {
-        HStack(spacing: 24) {
-            ForEach(ProjectMode.allCases) { candidate in
-                Button {
-                    focusedField = nil
-                    errorMessage = nil
-                    mode = candidate
-                } label: {
-                    VStack(spacing: 9) {
-                        Label(candidate.label, systemImage: candidate.icon)
-                            .font(T3Typography.control)
-                            .foregroundStyle(
-                                mode == candidate ? T3Colors.textPrimary : T3Colors.textTertiary
-                            )
-                        Rectangle()
-                            .fill(mode == candidate ? T3Colors.textPrimary : Color.clear)
-                            .frame(height: 2)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .accessibilityElement(children: .contain)
+    private var remoteURL: String {
+        resolvedRepository?.sshUrl
+            ?? repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func environmentPicker(_ environment: FeatureEnvironment) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionTitle("Environment")
-            Menu {
-                ForEach(environments) { option in
-                    Button {
-                        selectedEnvironmentID = option.id
-                    } label: {
-                        if option.id == environment.id {
-                            Label(option.name, systemImage: "checkmark")
-                        } else {
-                            Text(option.name)
-                        }
+    // MARK: - Form
+
+    private func form(_ environment: FeatureEnvironment) -> some View {
+        Form {
+            if environments.count > 1 {
+                Section {
+                    environmentPicker
+                }
+                .t3GroupedRow()
+            }
+            Section {
+                Picker("Add from", selection: $mode) {
+                    ForEach(ProjectMode.allCases) { candidate in
+                        Text(candidate.label).tag(candidate)
                     }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+            }
+            switch mode {
+            case .folder:
+                locationSection(environment)
+            case .repository:
+                repositorySection(environment)
+                if !needsRepositoryLookup {
+                    destinationSection(environment)
+                }
+            }
+            if showsFolderBrowser {
+                folderBrowser
+            }
+        }
+        .t3GroupedListBackground()
+        .scrollDismissesKeyboard(.interactively)
+        // Edits would orphan the request in flight; its result is only
+        // applied while the inputs still match.
+        .disabled(isSubmitting)
+        .refreshable {
+            await loadDirectory(browsePath, updateSelection: false)
+            if mode == .repository {
+                await loadDiscovery()
+            }
+        }
+    }
+
+    private var environmentPicker: some View {
+        Picker("Environment", selection: $selectedEnvironmentID) {
+            ForEach(environments) { option in
+                environmentOption(option)
+                    .tag(Optional(option.id))
                     .disabled(!canCreateProject(in: option))
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: environment.machineSymbol)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(environment.name)
-                            .font(T3Typography.control)
-                            .foregroundStyle(T3Colors.textPrimary)
-                        Text(environment.endpoint)
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textTertiary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 12)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(T3Colors.textTertiary)
-                }
-                .padding(.horizontal, 13)
-                .frame(minHeight: 52)
-                .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 12))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12).stroke(T3Colors.border, lineWidth: 1)
-                }
             }
-            .buttonStyle(.plain)
         }
+        .pickerStyle(.menu)
     }
 
-    private func localProjectForm(_ environment: FeatureEnvironment) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                sectionTitle("Workspace path")
-                Spacer()
-                Text("on \(environment.name)")
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textTertiary)
-            }
-            pathField(
-                placeholder: "~/projects/my-app",
-                text: $localPath,
-                field: .localPath,
-                browseAction: {
-                    Task {
-                        await loadDirectory(
-                            ProjectCreationPath.directoryBrowsePath(localPath),
-                            updateSelection: false
-                        )
-                    }
-                }
-            )
-            primaryAction(label: "Add project", icon: "plus") {
-                await addLocalProject(environment)
+    /// Menu items read a second text as the item's subtitle.
+    @ViewBuilder
+    private func environmentOption(_ option: FeatureEnvironment) -> some View {
+        if canCreateProject(in: option) {
+            Text(option.name)
+        } else {
+            VStack(alignment: .leading) {
+                Text(option.name)
+                Text("Unreachable")
             }
         }
     }
 
-    private func repositoryProjectForm(_ environment: FeatureEnvironment) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    sectionTitle("Repository source")
-                    if isDiscovering {
-                        ProgressView().controlSize(.small)
+    private func locationSection(_ environment: FeatureEnvironment) -> some View {
+        Section {
+            HStack(spacing: 8) {
+                pathField("Path", prompt: "~/projects/my-app", text: $localPath, field: .localPath)
+                    .onSubmit(browseEnteredPath)
+                if canBrowse {
+                    Button(action: browseEnteredPath) {
+                        Image(systemName: "folder")
                     }
-                }
-                sourcePicker
-                if let discoveryError {
-                    Label(discoveryError, systemImage: "info.circle")
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textTertiary)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(T3Colors.accent)
+                    .accessibilityLabel("Browse entered path")
                 }
             }
+        } header: {
+            Text("Location")
+        } footer: {
+            if let problem = errorMessage
+                ?? message(for: pathIssue(localPath, in: environment), in: environment, target: "folder") {
+                errorFooter(problem)
+            } else if canBrowse {
+                Text("A folder on \(environment.name). Type a path or pick one below.")
+            } else {
+                Text("Folder browsing is unavailable. You can still enter a path directly.")
+            }
+        }
+        .t3GroupedRow()
+    }
 
-            VStack(alignment: .leading, spacing: 8) {
-                sectionTitle(source == .url ? "Remote URL" : "Repository")
-                TextField(source.prompt, text: $repositoryInput)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(source == .url ? .URL : .default)
-                    .submitLabel(needsRepositoryLookup ? .next : .done)
-                    .focused($focusedField, equals: .repository)
-                    .onSubmit {
-                        Task {
-                            if needsRepositoryLookup {
-                                await resolveRepository(environment)
-                            } else {
-                                focusedField = .destination
-                            }
-                        }
+    private func repositorySection(_ environment: FeatureEnvironment) -> some View {
+        Section {
+            Picker("Source", selection: $source) {
+                ForEach(sourceOptions) { option in
+                    sourceOption(option)
+                        .tag(option.source)
+                        .disabled(!option.isReady)
+                }
+            }
+            .pickerStyle(.menu)
+
+            HStack(spacing: 8) {
+                TextField(
+                    source == .url ? "Remote URL" : "Repository",
+                    text: $repositoryInput,
+                    prompt: Text(source.prompt)
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(source == .url ? .URL : .default)
+                .submitLabel(needsRepositoryLookup ? .search : .next)
+                .focused($focusedField, equals: .repository)
+                .onSubmit {
+                    if needsRepositoryLookup {
+                        Task { await resolveRepository(environment) }
+                    } else {
+                        focusedField = .destination
                     }
-                    .t3ProjectInput()
+                }
+                if isLookingUp {
+                    ProgressView()
+                        .accessibilityLabel("Looking up repository")
+                }
             }
 
             if let resolvedRepository {
-                repositorySummary(resolvedRepository)
+                resolvedRepositoryRow(resolvedRepository)
             }
+        } header: {
+            HStack(spacing: 6) {
+                Text("Repository")
+                if isDiscovering {
+                    ProgressView().controlSize(.small)
+                }
+            }
+        } footer: {
+            if needsRepositoryLookup, let errorMessage {
+                errorFooter(errorMessage)
+            } else if let discoveryError {
+                Text(discoveryError)
+            } else if needsRepositoryLookup {
+                Text("Tap Search to look up the repository on \(source.label).")
+            }
+        }
+        .t3GroupedRow()
+    }
 
-            if needsRepositoryLookup {
-                primaryAction(label: "Find repository", icon: "magnifyingglass") {
-                    await resolveRepository(environment)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline) {
-                        sectionTitle("Clone destination")
-                        Spacer()
-                        Text("on \(environment.name)")
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textTertiary)
-                    }
-                    pathField(
-                        placeholder: "~/projects/\(repositoryName)",
-                        text: destinationBinding,
-                        field: .destination,
-                        browseAction: nil
-                    )
-                }
-                primaryAction(label: "Clone and add", icon: "arrow.down.circle") {
-                    await cloneProject(environment)
-                }
+    @ViewBuilder
+    private func sourceOption(_ option: ProjectRemoteSourceOption) -> some View {
+        if let detail = option.detail {
+            VStack(alignment: .leading) {
+                Text(option.source.label)
+                Text(detail)
             }
+        } else {
+            Text(option.source.label)
         }
     }
 
-    private var sourcePicker: some View {
-        Menu {
-            ForEach(sourceOptions) { option in
-                Button {
-                    source = option.source
-                } label: {
-                    if option.source == source {
-                        Label(option.source.label, systemImage: "checkmark")
-                    } else if let detail = option.detail {
-                        Text("\(option.source.label) · \(detail)")
-                    } else {
-                        Text(option.source.label)
-                    }
-                }
-                .disabled(!option.isReady)
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: sourceIcon(source))
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(source.label)
-                        .font(T3Typography.control)
-                        .foregroundStyle(T3Colors.textPrimary)
-                    if let detail = selectedSourceOption?.detail {
-                        Text(detail)
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textTertiary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 12)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(T3Colors.textTertiary)
-            }
-            .padding(.horizontal, 13)
-            .frame(minHeight: 52)
-            .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 12))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12).stroke(T3Colors.border, lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func repositorySummary(_ repository: SourceControlRepositoryInfo) -> some View {
-        HStack(alignment: .top, spacing: 11) {
-            Image(systemName: sourceIcon(source))
-                .font(.body.weight(.semibold))
-                .foregroundStyle(T3Colors.textSecondary)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 3) {
+    private func resolvedRepositoryRow(_ repository: SourceControlRepositoryInfo) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title3)
+                .foregroundStyle(T3Colors.success)
+                .accessibilityLabel("Found")
+            VStack(alignment: .leading, spacing: 2) {
                 Text(repository.nameWithOwner)
-                    .font(T3Typography.control)
                     .foregroundStyle(T3Colors.textPrimary)
                 Text(repository.sshUrl)
                     .font(T3Typography.supporting.monospaced())
                     .foregroundStyle(T3Colors.textTertiary)
-                    .lineLimit(2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            Spacer(minLength: 0)
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(T3Colors.success)
         }
-        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
-    private func folderBrowser(_ environment: FeatureEnvironment) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                sectionTitle("Folders on \(environment.name)")
-                Spacer()
-                if isBrowsing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button {
-                        Task { await loadDirectory(browsePath, updateSelection: false) }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .accessibilityLabel("Refresh folders")
-                }
+    private func destinationSection(_ environment: FeatureEnvironment) -> some View {
+        Section {
+            pathField(
+                "Destination",
+                prompt: "~/projects/\(repositoryName)",
+                text: destinationBinding,
+                field: .destination
+            )
+        } header: {
+            Text("Destination")
+        } footer: {
+            if let problem = errorMessage
+                ?? message(for: pathIssue(destinationPath, in: environment), in: environment, target: "destination") {
+                errorFooter(problem)
+            } else if pendingCloneRegistration != nil {
+                Text(Self.clonedButNotAddedMessage)
+            } else {
+                Text("Cloned on \(environment.name).")
             }
+        }
+        .t3GroupedRow()
+    }
 
-            Text(browsePath)
-                .font(T3Typography.supporting.monospaced())
-                .foregroundStyle(T3Colors.textTertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Divider().overlay(T3Colors.separator)
-            if let browseError {
-                Text(browseError)
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.warning)
-                    .padding(.vertical, 8)
-            }
+    private var folderBrowser: some View {
+        Section {
             if let parentPath = ProjectCreationPath.parentBrowsePath(of: browsePath) {
-                folderRow(name: "..", icon: "arrow.turn.left.up") {
-                    await loadDirectory(parentPath, updateSelection: true)
+                Button {
+                    openFolder(parentPath)
+                } label: {
+                    Label("Parent Folder", systemImage: "arrow.up")
                 }
+                .disabled(isBrowsing)
             }
             if let entries = browseResult?.entries, !entries.isEmpty {
                 ForEach(entries, id: \.fullPath) { entry in
-                    Divider().overlay(T3Colors.separator)
-                    folderRow(name: entry.name, icon: "folder") {
-                        await loadDirectory(
-                            ProjectCreationPath.directoryBrowsePath(entry.fullPath),
-                            updateSelection: true
-                        )
+                    Button {
+                        openFolder(ProjectCreationPath.directoryBrowsePath(entry.fullPath))
+                    } label: {
+                        HStack(spacing: 12) {
+                            Label {
+                                Text(entry.name)
+                                    .foregroundStyle(T3Colors.textPrimary)
+                                    .lineLimit(1)
+                            } icon: {
+                                Image(systemName: "folder.fill")
+                                    .foregroundStyle(T3Colors.accent)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(T3Colors.textTertiary)
+                                .accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .disabled(isBrowsing)
                 }
-            } else if !isBrowsing, browseError == nil {
-                Text("No folders here")
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .frame(maxWidth: .infinity, minHeight: 54, alignment: .center)
-            }
-        }
-    }
-
-    private func folderRow(
-        name: String,
-        icon: String,
-        action: @escaping @MainActor () async -> Void
-    ) -> some View {
-        Button {
-            focusedField = nil
-            Task { await action() }
-        } label: {
-            HStack(spacing: 11) {
-                Image(systemName: icon)
-                    .font(.body.weight(.medium))
+            } else if browseResult != nil, !isBrowsing, browseError == nil {
+                Text("No Folders")
                     .foregroundStyle(T3Colors.textSecondary)
-                    .frame(width: 24)
-                Text(name)
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(T3Colors.textPrimary)
-                    .lineLimit(1)
-                Spacer(minLength: 12)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(T3Colors.textTertiary)
             }
-            .frame(minHeight: T3Metrics.minimumTapTarget)
-            .contentShape(Rectangle())
+        } header: {
+            HStack(spacing: 6) {
+                Text(ProjectCreationPath.abbreviatingHome(browsePath))
+                    .font(T3Typography.supporting.monospaced())
+                    .textCase(nil)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityLabel("Folders in \(ProjectCreationPath.abbreviatingHome(browsePath))")
+                if isBrowsing {
+                    ProgressView().controlSize(.small)
+                }
+            }
+        } footer: {
+            if let browseError {
+                Text(browseError)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(isBrowsing)
+        .t3GroupedRow()
     }
 
-    private func sectionTitle(_ title: String) -> some View {
-        Text(title)
-            .font(T3Typography.supportingStrong)
-            .foregroundStyle(T3Colors.textSecondary)
+    private var unavailableView: some View {
+        ContentUnavailableView {
+            Label("Environment Unavailable", systemImage: "server.rack")
+        } description: {
+            Text("Reconnect a T3 environment before adding a project.")
+        } actions: {
+            Button(isReconnecting ? "Reconnecting…" : "Reconnect") {
+                Task { await reconnect() }
+            }
+            .t3SecondaryButtonStyle()
+            .disabled(isReconnecting)
+        }
     }
 
     private func pathField(
-        placeholder: String,
+        _ title: String,
+        prompt: String,
         text: Binding<String>,
-        field: Field,
-        browseAction: (() -> Void)?
+        field: Field
     ) -> some View {
-        HStack(spacing: 4) {
-            TextField(placeholder, text: text)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.done)
-                .focused($focusedField, equals: field)
-            if let browseAction {
-                Button(action: browseAction) {
-                    Image(systemName: "folder")
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(T3Colors.textSecondary)
-                .accessibilityLabel("Browse entered path")
-            }
-        }
-        .t3ProjectInput()
+        TextField(title, text: text, prompt: Text(prompt))
+            .font(.body.monospaced())
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.done)
+            .focused($focusedField, equals: field)
     }
 
-    private func primaryAction(
-        label: String,
-        icon: String,
-        action: @escaping @MainActor () async -> Void
-    ) -> some View {
-        Button {
+    private func errorFooter(_ message: String) -> some View {
+        Text(message)
+            .foregroundStyle(T3Colors.danger)
+    }
+
+    private func confirmation(_ environment: FeatureEnvironment) -> T3SheetConfirmation {
+        let commit = switch mode {
+        case .folder:
+            AddProjectCommit.folder(pathIssue: pathIssue(localPath, in: environment))
+        case .repository:
+            AddProjectCommit.clone(
+                remoteURL: remoteURL,
+                needsLookup: needsRepositoryLookup,
+                destinationIssue: pathIssue(destinationPath, in: environment),
+                hasClonedCopy: pendingCloneRegistration != nil
+            )
+        }
+        return T3SheetConfirmation(
+            title: commit.title,
+            isEnabled: commit.isEnabled,
+            isBusy: isSubmitting
+        ) {
             focusedField = nil
-            Task { await action() }
-        } label: {
-            HStack(spacing: 8) {
-                if isSubmitting {
-                    ProgressView()
-                        .tint(T3Colors.primaryActionForeground)
-                } else {
-                    Image(systemName: icon)
+            Task {
+                switch mode {
+                case .folder: await addLocalProject(environment)
+                case .repository: await cloneProject(environment)
                 }
-                Text(isSubmitting ? "Working…" : label)
             }
-            .font(.body.weight(.semibold))
-            .foregroundStyle(T3Colors.primaryActionForeground)
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .background(T3Colors.primaryAction, in: RoundedRectangle(cornerRadius: 12))
         }
-        .buttonStyle(.plain)
-        .disabled(isSubmitting)
-        .opacity(isSubmitting ? 0.66 : 1)
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 9) {
-            Image(systemName: "exclamationmark.triangle.fill")
-            Text(message)
-                .font(T3Typography.supporting)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .foregroundStyle(T3Colors.danger)
-        .padding(12)
-        .background(T3Colors.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var destinationBinding: Binding<String> {
@@ -567,8 +493,38 @@ public struct AddProjectView: View {
                 destinationPath = value
                 pendingCloneRegistration = nil
                 cloneRequestID = nil
+                errorMessage = nil
             }
         )
+    }
+
+    // MARK: - Validation
+
+    private func pathIssue(_ path: String, in environment: FeatureEnvironment) -> ProjectPathIssue? {
+        ProjectCreationPath.issue(
+            for: path,
+            serverPath: browseResult?.parentPath,
+            environmentID: environment.id,
+            projects: model.snapshot.projects
+        )
+    }
+
+    /// Footer copy for a path issue. `target` names what the path is for.
+    private func message(
+        for issue: ProjectPathIssue?,
+        in environment: FeatureEnvironment,
+        target: String
+    ) -> String? {
+        switch issue {
+        case nil, .empty:
+            nil
+        case let .malformed(message):
+            message
+        case .foreignFilesystem:
+            "Use a path that matches \(environment.name)’s filesystem."
+        case let .alreadyUsed(projectName):
+            "\(projectName) already uses this \(target)."
+        }
     }
 
     private func canCreateProject(in environment: FeatureEnvironment) -> Bool {
@@ -578,6 +534,8 @@ public struct AddProjectView: View {
         return state != .disconnected
     }
 
+    // MARK: - Actions
+
     private func selectEnvironmentIfNeeded() {
         if let selectedEnvironmentID,
            environments.contains(where: {
@@ -586,6 +544,23 @@ public struct AddProjectView: View {
             return
         }
         selectedEnvironmentID = environments.first(where: canCreateProject)?.id
+    }
+
+    private func reconnect() async {
+        isReconnecting = true
+        defer { isReconnecting = false }
+        await model.reload(reason: "add-project-reconnect")
+        selectEnvironmentIfNeeded()
+    }
+
+    private func clearRepositoryResolution() {
+        resolvedRepository = nil
+        lookupRequestID = nil
+        isLookingUp = false
+        pendingCloneRegistration = nil
+        cloneRequestID = nil
+        updateSuggestedDestination()
+        errorMessage = nil
     }
 
     private func resetEnvironmentState() {
@@ -598,6 +573,8 @@ public struct AddProjectView: View {
         discoveryRequestID = nil
         source = .url
         resolvedRepository = nil
+        lookupRequestID = nil
+        isLookingUp = false
         pendingCloneRegistration = nil
         cloneRequestID = nil
         didEditDestination = false
@@ -606,6 +583,21 @@ public struct AddProjectView: View {
             ? "~/"
             : ProjectCreationPath.appending(repositoryName, to: "~/")
         errorMessage = nil
+    }
+
+    private func browseEnteredPath() {
+        focusedField = nil
+        Task {
+            await loadDirectory(
+                ProjectCreationPath.directoryBrowsePath(localPath),
+                updateSelection: false
+            )
+        }
+    }
+
+    private func openFolder(_ path: String) {
+        focusedField = nil
+        Task { await loadDirectory(path, updateSelection: true) }
     }
 
     private func loadDiscovery() async {
@@ -645,9 +637,10 @@ public struct AddProjectView: View {
     }
 
     private func loadDirectory(_ path: String, updateSelection: Bool) async {
+        // Without a project client the browser is hidden and the Location
+        // footer says so.
         guard let environmentID = selectedEnvironmentID,
               let projectClient else {
-            browseError = "Folder browsing is unavailable. You can still enter a path directly."
             return
         }
         let requestedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -699,45 +692,31 @@ public struct AddProjectView: View {
     }
 
     private func addLocalProject(_ environment: FeatureEnvironment) async {
-        errorMessage = nil
-        let validated: String
-        switch ProjectCreationPath.validated(localPath) {
-        case let .success(path): validated = path
-        case let .failure(error):
-            errorMessage = error.localizedDescription
-            return
-        }
-        if let serverPath = browseResult?.parentPath,
-           !ProjectCreationPath.isCompatibleWithServerPath(
-               validated,
-               serverPath: serverPath
-           ) {
-            errorMessage = "Use a path that matches \(environment.name)’s filesystem."
-            return
-        }
-        if let existing = existingProject(environmentID: environment.id, path: validated) {
-            errorMessage = "\(existing.name) already uses this folder."
-            return
-        }
+        guard pathIssue(localPath, in: environment) == nil else { return }
+        let path = localPath.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        errorMessage = nil
         isSubmitting = true
         defer { isSubmitting = false }
         do {
             if let projectClient {
                 try await projectClient.addProject(
                     environmentID: environment.id,
-                    path: validated
+                    path: path
                 )
-                dismiss()
-            } else if environment.isActive, await model.addProject(path: validated) {
-                dismiss()
+                finish()
+            } else if environment.isActive, await model.addProject(path: path) {
+                finish()
             } else {
-                errorMessage = model.errorMessage ?? "The project could not be added."
+                // Shown in the sheet, so the root alert stays quiet.
+                let message = model.errorMessage ?? "The project could not be added."
+                model.errorMessage = nil
+                fail(message)
             }
         } catch is CancellationError {
             return
         } catch {
-            errorMessage = projectErrorMessage(error)
+            fail(projectErrorMessage(error))
         }
     }
 
@@ -754,18 +733,26 @@ public struct AddProjectView: View {
         }
 
         errorMessage = nil
-        isSubmitting = true
-        defer { isSubmitting = false }
+        let requestID = UUID()
+        lookupRequestID = requestID
+        isLookingUp = true
+        defer {
+            if lookupRequestID == requestID {
+                isLookingUp = false
+            }
+        }
         do {
             let result = try await projectClient.lookupProjectRepository(
                 environmentID: environment.id,
                 provider: provider,
                 repository: repository
             )
-            guard selectedEnvironmentID == environment.id,
-                  source.provider == provider,
-                  repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                    == repository else {
+            guard lookupRequestIsCurrent(
+                requestID,
+                environmentID: environment.id,
+                provider: provider,
+                repository: repository
+            ) else {
                 return
             }
             resolvedRepository = result
@@ -774,47 +761,39 @@ public struct AddProjectView: View {
         } catch is CancellationError {
             return
         } catch {
-            guard selectedEnvironmentID == environment.id,
-                  source.provider == provider,
-                  repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                    == repository else {
+            guard lookupRequestIsCurrent(
+                requestID,
+                environmentID: environment.id,
+                provider: provider,
+                repository: repository
+            ) else {
                 return
             }
-            errorMessage = projectErrorMessage(error)
+            fail(projectErrorMessage(error))
         }
     }
 
+    private func lookupRequestIsCurrent(
+        _ requestID: UUID,
+        environmentID: String,
+        provider: SourceControlProviderKind,
+        repository: String
+    ) -> Bool {
+        lookupRequestID == requestID
+            && selectedEnvironmentID == environmentID
+            && source.provider == provider
+            && repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines) == repository
+    }
+
     private func cloneProject(_ environment: FeatureEnvironment) async {
-        let remoteURL = resolvedRepository?.sshUrl
-            ?? repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !remoteURL.isEmpty else {
-            errorMessage = "Enter a Git remote URL."
+        let remoteURL = self.remoteURL
+        guard !remoteURL.isEmpty,
+              pathIssue(destinationPath, in: environment) == nil else {
             return
         }
-        let validatedDestination: String
-        switch ProjectCreationPath.validated(destinationPath) {
-        case let .success(path): validatedDestination = path
-        case let .failure(error):
-            errorMessage = error.localizedDescription
-            return
-        }
-        if let serverPath = browseResult?.parentPath,
-           !ProjectCreationPath.isCompatibleWithServerPath(
-               validatedDestination,
-               serverPath: serverPath
-           ) {
-            errorMessage = "Use a path that matches \(environment.name)’s filesystem."
-            return
-        }
-        if let existing = existingProject(
-            environmentID: environment.id,
-            path: validatedDestination
-        ) {
-            errorMessage = "\(existing.name) already uses this destination."
-            return
-        }
+        let validatedDestination = destinationPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let projectClient else {
-            errorMessage = "Repository cloning is unavailable on this connection."
+            fail("Repository cloning is unavailable on this connection.")
             return
         }
 
@@ -878,7 +857,7 @@ public struct AddProjectView: View {
                 return
             }
             pendingCloneRegistration = nil
-            dismiss()
+            finish()
         } catch is CancellationError {
             return
         } catch {
@@ -890,11 +869,11 @@ public struct AddProjectView: View {
             ) else {
                 return
             }
-            if pendingCloneRegistration != nil {
-                errorMessage = "Repository cloned. Try again to finish adding the project."
-            } else {
-                errorMessage = projectErrorMessage(error)
-            }
+            fail(
+                pendingCloneRegistration != nil
+                    ? Self.clonedButNotAddedMessage
+                    : projectErrorMessage(error)
+            )
         }
     }
 
@@ -904,11 +883,9 @@ public struct AddProjectView: View {
         remoteURL: String,
         destinationPath: String
     ) -> Bool {
-        let currentRemoteURL = resolvedRepository?.sshUrl
-            ?? repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        return cloneRequestID == requestID
+        cloneRequestID == requestID
             && selectedEnvironmentID == environmentID
-            && currentRemoteURL == remoteURL
+            && self.remoteURL == remoteURL
             && self.destinationPath.trimmingCharacters(in: .whitespacesAndNewlines)
                 == destinationPath
     }
@@ -918,39 +895,18 @@ public struct AddProjectView: View {
         destinationPath = ProjectCreationPath.appending(repositoryName, to: browsePath)
     }
 
-    private func existingProject(environmentID: String, path: String) -> FeatureProject? {
-        let normalized = ProjectCreationPath.normalizedForComparison(path)
-        return model.snapshot.projects.first {
-            $0.environmentID == environmentID
-                && ProjectCreationPath.normalizedForComparison($0.path) == normalized
-        }
+    private func finish() {
+        PlatformHapticEngine.shared.play(.success)
+        dismiss()
     }
 
-    private func sourceIcon(_ source: ProjectRemoteSource) -> String {
-        switch source {
-        case .url: "link"
-        case .github: "chevron.left.forwardslash.chevron.right"
-        case .gitlab: "shippingbox"
-        case .bitbucket: "shippingbox.fill"
-        case .azureDevOps: "point.3.connected.trianglepath.dotted"
-        }
+    private func fail(_ message: String) {
+        errorMessage = message
+        PlatformHapticEngine.shared.play(.error)
     }
 
     private func projectErrorMessage(_ error: Error) -> String {
         let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         return message.isEmpty ? "The server could not complete that request." : message
-    }
-}
-
-private extension View {
-    func t3ProjectInput() -> some View {
-        font(.body)
-            .foregroundStyle(T3Colors.textPrimary)
-            .padding(.horizontal, 13)
-            .frame(minHeight: 48)
-            .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 12))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12).stroke(T3Colors.border, lineWidth: 1)
-            }
     }
 }

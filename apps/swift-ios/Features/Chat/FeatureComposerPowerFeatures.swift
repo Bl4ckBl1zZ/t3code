@@ -17,6 +17,9 @@ struct FeatureComposerPowerFeatures {
     /// the composer resolves `FeatureVoiceCapability.current` — and set in tests
     /// and previews that need a stub transcriber.
     var voice: (any FeatureVoiceTranscribing)?
+    /// Which compose surface this composer is. Compose sheets set it; a thread
+    /// composer can leave it nil because its path scope is already the thread.
+    var voiceScope: FeatureComposerVoiceScope?
 
     init(
         slashCommands: [FeatureProviderSlashCommand] = [],
@@ -24,7 +27,8 @@ struct FeatureComposerPowerFeatures {
         showSkillsInSlashMenu: Bool = true,
         pathSearchScopeID: String = "",
         searchPaths: PathSearch? = nil,
-        voice: (any FeatureVoiceTranscribing)? = nil
+        voice: (any FeatureVoiceTranscribing)? = nil,
+        voiceScope: FeatureComposerVoiceScope? = nil
     ) {
         self.slashCommands = slashCommands
         self.skills = skills
@@ -32,16 +36,53 @@ struct FeatureComposerPowerFeatures {
         self.pathSearchScopeID = pathSearchScopeID
         self.searchPaths = searchPaths
         self.voice = voice
+        self.voiceScope = voiceScope
     }
 
     static let disabled = FeatureComposerPowerFeatures()
 
     /// Which composer a voice recording belongs to. A transcript that lands
     /// after the composer has moved on is stashed under this key and inserted
-    /// when the same conversation is active again, so the scope id doubles as
-    /// the composer's identity.
+    /// when the same composer is active again, so no two surfaces may share it.
     var voiceComposerIdentity: String {
-        pathSearchScopeID.isEmpty ? "composer" : pathSearchScopeID
+        resolvedVoiceScope?.identity ?? "composer"
+    }
+
+    /// The explicit scope, or the thread named by the path scope.
+    var resolvedVoiceScope: FeatureComposerVoiceScope? {
+        if let voiceScope { return voiceScope }
+        return pathSearchScopeID.isEmpty ? nil : .thread(id: pathSearchScopeID)
+    }
+}
+
+/// The compose surface a dictation was recorded in.
+///
+/// Each surface gets its own stash key: a New Chat transcript that lands after
+/// its sheet closed must only ever come back to New Chat on that computer, never
+/// to the next New Work or New Task composer that happens to open.
+enum FeatureComposerVoiceScope: Equatable, Sendable {
+    case thread(id: String)
+    case newChat(environmentID: String)
+    case newWork(environmentID: String)
+    case newTask(draftKey: String)
+
+    var identity: String {
+        switch self {
+        case let .thread(id): id
+        case let .newChat(environmentID): "new-chat:\(environmentID)"
+        case let .newWork(environmentID): "new-work:\(environmentID)"
+        case let .newTask(draftKey): "new-task:\(draftKey)"
+        }
+    }
+
+    /// Where a stashed transcript will reappear, for the confirmation HUD.
+    var destinationName: String {
+        switch self {
+        case .thread: "its conversation"
+        case .newChat: "the New Chat draft"
+        case .newWork: "the New Work draft"
+        case .newTask: "the New Task draft"
+        }
     }
 }
 

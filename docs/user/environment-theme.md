@@ -97,5 +97,5 @@ themes are unaffected.
 Each server detects its machine type when it starts. Its icon appears beside environment
 names in thread lists, new-thread controls, and pull-request controls. In Settings → Connections,
 choose a different icon or select Automatic to restore detection. On iOS, open Settings →
-Environment icons and choose the server first. The choice is saved on that server and follows
+Environment Icon and tap the title to choose the server first. The choice is saved on that server and follows
 it across connected clients. Changing it requires permission to change the server's settings.

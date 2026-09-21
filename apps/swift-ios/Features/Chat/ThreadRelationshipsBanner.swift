@@ -37,10 +37,10 @@ struct ThreadRelationshipsBanner: View {
     /// `isArchived` tells the caller to route to the archive rather than the
     /// thread stack, which cannot show an archived thread.
     let onOpenThread: (_ threadID: String, _ isArchived: Bool) -> Void
-    /// Returns whether the merge committed, which decides whether the sheet
-    /// navigates to the target thread.
-    let onMerge: () async -> Bool
-    let onDetach: () async -> Void
+    /// Throws when the server refuses; the sheet says so and stays put.
+    /// Returning means the merge committed, so the sheet moves to the target.
+    let onMerge: () async throws -> Void
+    let onDetach: () async throws -> Void
 
     @State private var isSheetPresented = false
     @State private var decay = ThreadRelationshipDecay()
@@ -48,6 +48,13 @@ struct ThreadRelationshipsBanner: View {
     @State private var archivedRows: [ThreadRelationshipRow] = []
     @State private var showsArchived = false
     @State private var busyAction: BusyAction?
+    @State private var isConfirmingDetach = false
+    @State private var failure: ActionFailure?
+
+    private struct ActionFailure: Equatable {
+        let title: String
+        let message: String
+    }
 
     private enum BusyAction: Equatable {
         case merge
@@ -94,10 +101,10 @@ struct ThreadRelationshipsBanner: View {
         .frame(minHeight: 48)
         // `.regular`, matching the composer pill: the banner reads as the same
         // family of surface, solid enough that the transcript scrolling under
-        // it never competes with the orbs. `t3GlassEffect` draws no rim, so
-        // the stroke is what keeps the edge legible.
-        .t3GlassEffect(.regular, in: collapsedShape)
-        .overlay { collapsedShape.stroke(T3Colors.border, lineWidth: 1) }
+        // it never competes with the orbs. Interactive, because the capsule is
+        // the button; the rim only draws where glass has no edge of its own.
+        .t3GlassEffect(.regular, interactive: true, in: collapsedShape)
+        .t3GlassRim(in: collapsedShape)
         .contentShape(collapsedShape)
     }
 
@@ -131,7 +138,6 @@ struct ThreadRelationshipsBanner: View {
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.8)
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             chevronSpacer
         }
@@ -139,8 +145,9 @@ struct ThreadRelationshipsBanner: View {
 
     private var disclosureChevron: some View {
         Image(systemName: "chevron.right")
-            .font(.system(size: 10, weight: .semibold))
+            .font(.caption2.weight(.semibold))
             .foregroundStyle(T3Colors.textTertiary)
+            .accessibilityHidden(true)
     }
 
     /// Reserves the chevron's width inside each row so the overlay never sits
@@ -159,7 +166,7 @@ struct ThreadRelationshipsBanner: View {
                 )
             } else {
                 Image(systemName: model.primaryRow.map(collapsedSymbol) ?? "link")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.footnote.weight(.medium))
                     .foregroundStyle(T3Colors.textTertiary)
             }
 
@@ -168,7 +175,6 @@ struct ThreadRelationshipsBanner: View {
                 .foregroundStyle(T3Colors.textPrimary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
 
             if model.rows.count > 1 {
                 Text("+\(model.rows.count - 1)")
@@ -202,49 +208,103 @@ struct ThreadRelationshipsBanner: View {
 
     private var lineageSheet: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(visibleRows) { row in
-                        relationshipRow(row)
+            List {
+                let lineageRows = visibleRows.filter { !isSubagentChild($0) }
+                let agentRows = visibleRows.filter(isSubagentChild)
+                if !lineageRows.isEmpty {
+                    Section("Source") {
+                        ForEach(lineageRows) { relationshipRow($0) }
                     }
-
-                    if !archivedRows.isEmpty {
-                        doneGroupToggle
+                }
+                if !agentRows.isEmpty {
+                    Section("Agents") {
+                        ForEach(agentRows) { relationshipRow($0) }
+                    }
+                }
+                if !archivedRows.isEmpty {
+                    Section {
                         if showsArchived {
-                            ForEach(archivedRows) { row in
-                                relationshipRow(row)
+                            ForEach(archivedRows) { relationshipRow($0) }
+                        }
+                    } header: {
+                        doneGroupHeader
+                    }
+                }
+                if model.canMerge {
+                    Section {
+                        Button {
+                            Task { await merge() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if busyAction == .merge {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "arrow.triangle.merge")
+                                }
+                                Text("Merge Back to Source")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .t3ProminentButtonStyle()
+                        .controlSize(.large)
+                        .disabled(busyAction != nil)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                        .accessibilityIdentifier("thread-merge-back")
+                    } footer: {
+                        Text("Brings this fork's latest work into the thread it came from.")
+                    }
+                }
+                if model.canDetach {
+                    Section {
+                        Button(role: .destructive) {
+                            isConfirmingDetach = true
+                        } label: {
+                            HStack {
+                                Text("Disconnect Agent Session")
+                                if busyAction == .detach {
+                                    Spacer()
+                                    ProgressView()
+                                }
                             }
                         }
+                        .disabled(busyAction != nil)
+                        .t3GroupedRow()
+                        .accessibilityIdentifier("thread-detach-session")
+                    } footer: {
+                        Text("Stops the agent processes behind this thread. Its history stays.")
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
             }
-            .background(T3Colors.background)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                sheetActions
-            }
-            .navigationTitle("Thread lineage")
+            .listStyle(.insetGrouped)
+            .t3GroupedListBackground()
+            .navigationTitle("Thread Lineage")
             .navigationBarTitleDisplayMode(.inline)
+            .modifier(LineageSubtitle(subtitle: relatedCountLabel))
             .t3NavigationChrome()
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text("Thread lineage")
-                            .font(T3Typography.navigationTitle)
-                            .foregroundStyle(T3Colors.textPrimary)
-                        Text(relatedCountLabel)
-                            .font(T3Typography.navigationMetadata)
-                            .foregroundStyle(T3Colors.textTertiary)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { isSheetPresented = false }
-                        .accessibilityLabel("Close thread lineage")
-                }
+            .t3SheetToolbar(.close)
+            .confirmationDialog(
+                "Disconnect the agent session?",
+                isPresented: $isConfirmingDetach,
+                titleVisibility: .visible
+            ) {
+                Button("Disconnect", role: .destructive) { Task { await detach() } }
+            } message: {
+                Text("The agent stops. The thread and its history stay.")
+            }
+            .alert(
+                failure?.title ?? "",
+                isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })
+            ) {
+                Button("OK") { failure = nil }
+            } message: {
+                Text(failure?.message ?? "")
             }
         }
+    }
+
+    private func isSubagentChild(_ row: ThreadRelationshipRow) -> Bool {
+        row.edge.kind == .subagent && row.edge.sourceThreadID == model.currentThreadID
     }
 
     private var relatedCountLabel: String {
@@ -256,6 +316,7 @@ struct ThreadRelationshipsBanner: View {
         let isArchivedThread = availability == "Archived"
         let disabled = availability == "Unavailable" || availability == "Deleted"
         let subagent = model.subagent(for: row.threadID)
+        let status = row.edge.kind == .subagent ? WorkRowStatus(agentStatus: row.edge.status) : nil
 
         return Button {
             isSheetPresented = false
@@ -270,30 +331,21 @@ struct ThreadRelationshipsBanner: View {
                     )
                 } else {
                     Image(systemName: ThreadRelationships.symbol(row.edge))
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.body)
                         .foregroundStyle(T3Colors.textTertiary)
                         .frame(width: 32, height: 32)
-                        .background(T3Colors.subtle, in: Circle())
+                        .accessibilityHidden(true)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    // The thread's name leads, and how it relates to this one
-                    // follows as muted meta, the way a work row names a tool
-                    // and then its target.
-                    (Text(verbatim: model.title(for: row.threadID))
+                    Text(verbatim: model.title(for: row.threadID))
                         .font(T3Typography.control)
                         .foregroundStyle(T3Colors.textPrimary)
-                        + Text(
-                            verbatim: " "
-                                + ThreadRelationships.label(
-                                    row.edge, currentThreadID: model.currentThreadID
-                                )
-                        )
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textTertiary))
                         .lineLimit(1)
-                        .truncationMode(.tail)
-
+                    Text(verbatim: ThreadRelationships.label(row.edge, currentThreadID: model.currentThreadID))
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textTertiary)
+                        .lineLimit(1)
                     if row.edge.kind == .subagent {
                         AgentWorkflowProgressView(
                             workflow: subagent?.workflow,
@@ -303,58 +355,41 @@ struct ThreadRelationshipsBanner: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                if row.edge.kind == .subagent {
-                    WorkRowStatusGlyph(status: WorkRowStatus(agentStatus: row.edge.status))
-                }
-
                 if let availability {
                     Text(availability)
                         .font(T3Typography.supporting)
                         .foregroundStyle(T3Colors.textTertiary)
                 } else {
+                    if let status {
+                        Text(status.accessibilityLabel)
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(status == .failed ? T3Colors.danger : T3Colors.textTertiary)
+                    }
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(T3Colors.textTertiary)
+                        .accessibilityHidden(true)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(minHeight: 56)
-            .background(T3Colors.surface, in: rowShape)
-            .overlay { rowShape.stroke(T3Colors.border, lineWidth: 1) }
-            .contentShape(rowShape)
+            .frame(minHeight: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(disabled)
-        .opacity(disabled ? 0.55 : 1)
-        .accessibilityValue(
-            row.edge.kind == .subagent
-                ? WorkRowStatus(agentStatus: row.edge.status)?.accessibilityLabel ?? ""
-                : ""
-        )
+        .t3GroupedRow()
+        .accessibilityValue(status?.accessibilityLabel ?? availability ?? "")
     }
 
-    private var rowShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-    }
-
-    private var doneGroupToggle: some View {
+    private var doneGroupHeader: some View {
         Button {
-            showsArchived.toggle()
+            withAnimation(.snappy) { showsArchived.toggle() }
         } label: {
             HStack(spacing: 8) {
-                Text("Done · \(archivedRows.count)")
-                    .font(T3Typography.supportingStrong)
-                    .foregroundStyle(T3Colors.textTertiary)
+                Text("Done (\(archivedRows.count))")
                 Spacer(minLength: 0)
-                Image(systemName: showsArchived ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(T3Colors.textTertiary)
+                TimelineDisclosureChevron(isExpanded: showsArchived)
             }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 44)
-            .overlay { rowShape.stroke(T3Colors.border, lineWidth: 1) }
-            .contentShape(rowShape)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
@@ -363,79 +398,21 @@ struct ThreadRelationshipsBanner: View {
         .accessibilityValue(showsArchived ? "Expanded" : "Collapsed")
     }
 
-    @ViewBuilder
-    private var sheetActions: some View {
-        if model.canMerge || model.canDetach {
-            VStack(spacing: 8) {
-                if model.canMerge {
-                    Button {
-                        Task { await merge() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if busyAction == .merge {
-                                ProgressView().controlSize(.small).tint(
-                                    T3Colors.primaryActionForeground)
-                            } else {
-                                Image(systemName: "arrow.triangle.merge")
-                                    .font(.system(size: 13, weight: .semibold))
-                            }
-                            Text("Merge back to source")
-                                .font(T3Typography.control)
-                        }
-                        .foregroundStyle(T3Colors.primaryActionForeground)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: T3Metrics.minimumTapTarget)
-                        .background(
-                            T3Colors.primaryAction,
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(busyAction != nil)
-                    .opacity(busyAction != nil ? 0.6 : 1)
-                    .accessibilityIdentifier("thread-merge-back")
-                }
-
-                if model.canDetach {
-                    Button {
-                        Task { await detach() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if busyAction == .detach {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text("Disconnect agent session")
-                                .font(T3Typography.control)
-                        }
-                        .foregroundStyle(T3Colors.textPrimary)
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: T3Metrics.minimumTapTarget)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(T3Colors.inputBorder, lineWidth: 1)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(busyAction != nil)
-                    .opacity(busyAction != nil ? 0.6 : 1)
-                    .accessibilityIdentifier("thread-detach-session")
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-            .background(.bar)
-        }
-    }
-
     // MARK: Actions
 
     private func merge() async {
         guard model.canMerge, busyAction == nil else { return }
         busyAction = .merge
-        let merged = await onMerge()
-        busyAction = nil
-        guard merged, let targetThreadID = model.mergeTargetThreadID else { return }
+        defer { busyAction = nil }
+        do {
+            try await onMerge()
+        } catch {
+            PlatformHapticEngine.shared.play(.error)
+            failure = ActionFailure(title: "Couldn't Merge Back", message: error.localizedDescription)
+            return
+        }
+        guard let targetThreadID = model.mergeTargetThreadID else { return }
+        PlatformHapticEngine.shared.play(.success)
         isSheetPresented = false
         onOpenThread(targetThreadID, false)
     }
@@ -443,8 +420,13 @@ struct ThreadRelationshipsBanner: View {
     private func detach() async {
         guard model.canDetach, busyAction == nil else { return }
         busyAction = .detach
-        await onDetach()
-        busyAction = nil
+        defer { busyAction = nil }
+        do {
+            try await onDetach()
+        } catch {
+            PlatformHapticEngine.shared.play(.error)
+            failure = ActionFailure(title: "Couldn't Detach", message: error.localizedDescription)
+        }
     }
 
     private func orbSeed(for row: ThreadRelationshipRow) -> String {
@@ -470,6 +452,20 @@ struct ThreadRelationshipsBanner: View {
             } catch {
                 return
             }
+        }
+    }
+}
+
+/// The related-thread count under the lineage title, where iOS 26 has a
+/// subtitle to put it in.
+private struct LineageSubtitle: ViewModifier {
+    let subtitle: String
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.navigationSubtitle(subtitle)
+        } else {
+            content
         }
     }
 }

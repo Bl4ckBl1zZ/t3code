@@ -271,8 +271,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// excluded from both workspaces: they are steps inside their parent, not
     /// work of their own.
     public var relationshipToParent: String?
-    /// A title regeneration is in flight, so the row shimmers its title instead
-    /// of showing a stale one that is about to be replaced.
+    /// A title regeneration is in flight. The row menu shows "Regenerating…"
+    /// and does not offer a second regeneration until the new title lands.
     public var isRegeneratingTitle: Bool
     /// Whether the environment can regenerate a title at all. `nil` means an
     /// older cached descriptor that never reported the capability.
@@ -307,6 +307,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var backgroundWorkCount: Int?
     public var runtimeMode: FeatureRuntimeMode
     public var interactionMode: FeatureInteractionMode
+    /// A provider is executing a turn on this thread right now, so archiving
+    /// would detach it (``ThreadArchive/canArchive(_:)``). Resolved at map time
+    /// from the shell's run status; nil on rows that never reported one.
+    public var archiveBlockedByLiveRun: Bool?
 
     public init(
         id: String,
@@ -359,7 +363,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         latestTurnCompletedAt: Date? = nil,
         backgroundWorkCount: Int? = nil,
         runtimeMode: FeatureRuntimeMode = .fullAccess,
-        interactionMode: FeatureInteractionMode = .standard
+        interactionMode: FeatureInteractionMode = .standard,
+        archiveBlockedByLiveRun: Bool? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -412,6 +417,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.backgroundWorkCount = backgroundWorkCount
         self.runtimeMode = runtimeMode
         self.interactionMode = interactionMode
+        self.archiveBlockedByLiveRun = archiveBlockedByLiveRun
     }
 
     /// Older cached environment descriptors may omit the optional capability even
@@ -1411,6 +1417,6 @@ public enum EnvironmentMachineKind: String, CaseIterable, Sendable {
         switch self { case .server: "Server"; case .cloud: "Cloud VM"; case .linux: "Linux/WSL"; case .desktop: "Desktop"; case .laptop: "Laptop"; case .macMini: "Mini PC"; case .macStudio: "Workstation" }
     }
     public var symbol: String {
-        switch self { case .server, .linux: "server.rack"; case .cloud: "cloud"; case .desktop: "desktopcomputer"; case .laptop: "laptopcomputer"; case .macMini: "macmini"; case .macStudio: "macstudio" }
+        switch self { case .server: "server.rack"; case .linux: "terminal"; case .cloud: "cloud"; case .desktop: "desktopcomputer"; case .laptop: "laptopcomputer"; case .macMini: "macmini"; case .macStudio: "macstudio" }
     }
 }

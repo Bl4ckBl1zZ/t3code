@@ -1,14 +1,11 @@
 import SwiftUI
 
+/// A model row that presents the full model list as a sheet. Settings screens
+/// use it; the composer's task settings push the same list inside their own
+/// navigation stack instead.
 public struct ProviderModelPicker: View {
-    public enum Style {
-        case row
-        case compact
-    }
-
     let providers: [FeatureProvider]
     @Binding var selection: FeatureSelection?
-    let style: Style
     let isLoading: Bool
     let threadSelection: FeatureSelection?
     let materializesDefaultSelection: Bool
@@ -19,7 +16,6 @@ public struct ProviderModelPicker: View {
     public init(
         providers: [FeatureProvider],
         selection: Binding<FeatureSelection?>,
-        style: Style = .row,
         isLoading: Bool = false,
         threadSelection: FeatureSelection? = nil,
         materializesDefaultSelection: Bool = true,
@@ -27,7 +23,6 @@ public struct ProviderModelPicker: View {
     ) {
         self.providers = providers
         _selection = selection
-        self.style = style
         self.isLoading = isLoading
         self.threadSelection = threadSelection
         self.materializesDefaultSelection = materializesDefaultSelection
@@ -38,79 +33,42 @@ public struct ProviderModelPicker: View {
         Button {
             isPresented = true
         } label: {
-            switch style {
-            case .row:
-                HStack(spacing: 12) {
-                    selectionMark(size: 22)
-                        .frame(width: 24)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Model")
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textSecondary)
-                        Text(selectionLabel)
-                            .font(T3Typography.control)
-                            .foregroundStyle(T3Colors.textPrimary)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(T3Typography.supportingStrong)
-                        .foregroundStyle(T3Colors.textTertiary)
-                }
-                .contentShape(Rectangle())
-            case .compact:
-                HStack(spacing: 5) {
-                    selectionMark(size: 14)
-                    Text(compactModelName)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                        .fixedSize()
-                }
-                .font(T3Typography.supportingStrong)
-                .foregroundStyle(T3Colors.textSecondary)
-                .contentShape(Rectangle())
+            HStack(spacing: 12) {
+                ProviderModelPickerRowLabel(
+                    providers: providers,
+                    selection: selection,
+                    threadSelection: threadSelection,
+                    materializesDefaultSelection: materializesDefaultSelection,
+                    isLoading: isLoading
+                )
+                Image(systemName: "chevron.right")
+                    .font(T3Typography.supportingStrong)
+                    .foregroundStyle(T3Colors.textTertiary)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Choose model")
-        .accessibilityValue(selectionLabel)
         .sheet(isPresented: $isPresented) {
-            ModelPickerSheet(
-                providers: normalizedProviders,
-                selection: $selection,
-                isLoading: isLoading,
-                threadSelection: threadSelection,
-                materializesDefaultSelection: materializesDefaultSelection,
-                setupContext: setupContext
-            )
+            NavigationStack {
+                ModelPickerList(
+                    providers: ProviderModelCatalogNormalizer.normalized(providers),
+                    selection: $selection,
+                    isLoading: isLoading,
+                    threadSelection: threadSelection,
+                    materializesDefaultSelection: materializesDefaultSelection,
+                    setupContext: setupContext,
+                    onPicked: { isPresented = false }
+                )
+                .t3SheetToolbar(.close)
+                .t3NavigationChrome()
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .onAppear(perform: materializeSelection)
         .onChange(of: providers) { materializeSelection() }
         .onChange(of: selection) { materializeSelection() }
-    }
-
-    private var selectedOption: DailyUXModelOption? {
-        guard let resolvedSelection,
-              let provider = normalizedProviders.first(where: {
-                  $0.id == resolvedSelection.providerID
-              }),
-              let model = provider.models.first(where: { $0.id == resolvedSelection.modelID }) else {
-            return nil
-        }
-        return DailyUXModelOption(provider: provider, model: model)
-    }
-
-    private var resolvedSelection: FeatureSelection? {
-        if materializesDefaultSelection {
-            return ProviderModelSelectionResolver.materialized(selection, in: normalizedProviders)
-        }
-        return ThreadComposerModelSelectionPolicy.resolvedSelection(
-            explicit: selection,
-            inherited: threadSelection,
-            providers: normalizedProviders
-        )
     }
 
     private func materializeSelection() {
@@ -125,9 +83,59 @@ public struct ProviderModelPicker: View {
         guard selection != resolved.value else { return }
         selection = resolved.value
     }
+}
+
+/// The model row's content: provider mark, "Model", and the selection with its
+/// option summary. Shared by the settings row and the task-settings push.
+struct ProviderModelPickerRowLabel: View {
+    let providers: [FeatureProvider]
+    let selection: FeatureSelection?
+    let threadSelection: FeatureSelection?
+    let materializesDefaultSelection: Bool
+    var isLoading = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            selectionMark
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Model")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+                Text(selectionLabel)
+                    .font(T3Typography.control)
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Model")
+        .accessibilityValue(selectionLabel)
+    }
 
     private var normalizedProviders: [FeatureProvider] {
         ProviderModelCatalogNormalizer.normalized(providers)
+    }
+
+    private var resolvedSelection: FeatureSelection? {
+        if materializesDefaultSelection {
+            return ProviderModelSelectionResolver.materialized(selection, in: normalizedProviders)
+        }
+        return ThreadComposerModelSelectionPolicy.resolvedSelection(
+            explicit: selection,
+            inherited: threadSelection,
+            providers: normalizedProviders
+        )
+    }
+
+    private var selectedOption: DailyUXModelOption? {
+        guard let resolvedSelection,
+              let provider = normalizedProviders.first(where: { $0.id == resolvedSelection.providerID }),
+              let model = provider.models.first(where: { $0.id == resolvedSelection.modelID }) else {
+            return nil
+        }
+        return DailyUXModelOption(provider: provider, model: model)
     }
 
     private var selectionLabel: String {
@@ -147,104 +155,165 @@ public struct ProviderModelPicker: View {
         return "\(base) · \(summary)"
     }
 
-    private var compactModelName: String {
-        guard let selectedOption else {
-            return (selection ?? threadSelection)?.modelID ?? "Choose model"
-        }
-        return selectedOption.model.name
-    }
-
     @ViewBuilder
-    private func selectionMark(size: CGFloat) -> some View {
+    private var selectionMark: some View {
         if let provider = selectedOption?.provider {
             ProviderIcon(
                 driver: provider.driver,
                 providerID: provider.id,
                 fallbackName: provider.name,
-                size: size
+                size: 22
             )
         } else {
             Image(systemName: "cpu")
-                .font(.system(size: size * 0.72, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(T3Colors.textSecondary)
-                .frame(width: size, height: size)
         }
     }
 }
 
-private struct ModelPickerSheet: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
+/// Favorites and recents shared by the full model list and the composer's
+/// model chip, which both read and write the same two lists.
+enum ModelPickerMemory {
+    static let favoritesKey = "swift-ios.model-picker.favorites"
+    static let recentsKey = "swift-ios.model-picker.recents"
+
+    static func ids(in storage: String) -> [String] {
+        storage.split(separator: "\n").map(String.init)
+    }
+
+    /// Moves `id` to the front of the recents, keeping eight.
+    static func recording(_ id: String, in storage: String) -> String {
+        ([id] + ids(in: storage).filter { $0 != id })
+            .prefix(8)
+            .joined(separator: "\n")
+    }
+
+    static func toggling(_ id: String, in storage: String) -> String {
+        var next = Set(ids(in: storage))
+        if next.contains(id) {
+            next.remove(id)
+        } else {
+            next.insert(id)
+        }
+        return next.sorted().joined(separator: "\n")
+    }
+
+    /// The selection a pick commits. Re-picking the model already selected
+    /// keeps its options; any other model starts from the catalog defaults.
+    static func selection(
+        for option: DailyUXModelOption,
+        current: FeatureSelection?
+    ) -> FeatureSelection {
+        let options: [FeatureModelOptionSelection]
+        if option.model.options.isEmpty {
+            options = []
+        } else if current?.providerID == option.provider.id, current?.modelID == option.model.id {
+            options = ProviderModelConfiguration.materializedOptions(
+                for: option.model,
+                preserving: current?.options ?? []
+            )
+        } else {
+            options = DailyUXModelOptions.defaults(for: option.model)
+        }
+        return FeatureSelection(
+            providerID: option.provider.id,
+            modelID: option.model.id,
+            options: options
+        )
+    }
+}
+
+/// The full model list: favorites, recents, one section per provider, legacy
+/// models, and agent setup last. Pushed inside task settings, or wrapped in a
+/// sheet by `ProviderModelPicker`.
+struct ModelPickerList: View {
     let providers: [FeatureProvider]
     @Binding var selection: FeatureSelection?
     let isLoading: Bool
     let threadSelection: FeatureSelection?
     let materializesDefaultSelection: Bool
     let setupContext: ProviderSetupContext?
+    /// Called after a pick is committed, to pop or dismiss.
+    let onPicked: () -> Void
 
-    @AppStorage("swift-ios.model-picker.favorites") private var favoriteStorage = ""
-    @AppStorage("swift-ios.model-picker.recents") private var recentStorage = ""
+    @AppStorage(ModelPickerMemory.favoritesKey) private var favoriteStorage = ""
+    @AppStorage(ModelPickerMemory.recentsKey) private var recentStorage = ""
     @State private var query = ""
     @State private var legacyModelsExpanded = false
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if isLoading, availableModelCount == 0 {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("Loading models")
-                            .font(T3Typography.control)
-                            .foregroundStyle(T3Colors.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if availableModelCount == 0 {
-                    VStack {
-                        ContentUnavailableView("No models available", systemImage: "cpu", description: Text("Check the providers enabled on this environment."))
-                        if let setupContext {
-                            NavigationLink("Set up this account") {
-                                ProviderSetupView(context: setupContext, instanceID: (selection ?? threadSelection)?.providerID)
-                            }.padding(.bottom, 24)
+        Group {
+            if isLoading, availableModelCount == 0 {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Loading models")
+                        .font(T3Typography.control)
+                        .foregroundStyle(T3Colors.textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if availableModelCount == 0 {
+                ContentUnavailableView {
+                    Label("No Models Available", systemImage: "cpu")
+                } description: {
+                    Text("Check the providers enabled on this environment.")
+                } actions: {
+                    if let setupContext {
+                        NavigationLink {
+                            ProviderSetupView(
+                                context: setupContext,
+                                instanceID: (selection ?? threadSelection)?.providerID
+                            )
+                        } label: {
+                            Text("Set Up Agents")
                         }
+                        .t3ProminentButtonStyle()
                     }
-                } else {
-                    modelList
                 }
+            } else {
+                modelList
             }
-            .background(T3Colors.background)
-            .navigationTitle("Choose model")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search models")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-            .t3NavigationChrome()
         }
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
+        .navigationTitle("Model")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, prompt: "Search models")
         .onAppear(perform: revealSelectedLegacyModel)
         .onChange(of: selection) { revealSelectedLegacyModel() }
         .onChange(of: providers) { revealSelectedLegacyModel() }
     }
 
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var modelList: some View {
         List {
-            if let setupContext {
+            if let unavailable = unavailableCurrentModel, !isSearching {
                 Section {
-                    NavigationLink { ProviderSetupView(context: setupContext, instanceID: nil) } label: {
-                        Label("Set up agents", systemImage: "person.crop.circle.badge.plus")
-                    }
+                    ModelOptionLabel(
+                        providerName: unavailable.providerName,
+                        driver: unavailable.driver,
+                        providerID: unavailable.providerID,
+                        modelName: unavailable.modelName,
+                        detail: unavailable.providerName,
+                        badge: nil,
+                        supportsImages: false,
+                        isSelected: false,
+                        isUnavailable: true
+                    )
+                    .t3SheetRow()
+                } header: {
+                    Text("Current Model")
+                } footer: {
+                    Text("\(unavailable.providerName) isn’t available right now. Pick another model to keep working.")
                 }
             }
+
             if modelChangesAreLocked {
                 Section {
-                    Label(
-                        "This provider fixes the model when a task starts.",
-                        systemImage: "lock"
-                    )
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
+                    EmptyView()
+                } footer: {
+                    Label("This provider fixes the model when a task starts.", systemImage: "lock")
                 }
             }
 
@@ -273,20 +342,27 @@ private struct ModelPickerSheet: View {
             }
 
             if !displaySections.legacy.isEmpty {
-                Section {
-                    DisclosureGroup(isExpanded: $legacyModelsExpanded) {
+                if isSearching {
+                    // Searching is looking for something specific: legacy
+                    // matches read as a plain section, not a folded group.
+                    Section("Legacy") {
                         ForEach(displaySections.legacy) { option in
                             modelRow(option)
                         }
-                    } label: {
-                        HStack {
-                            Text("Legacy models")
-                                .font(T3Typography.control.weight(.semibold))
-                            Spacer()
-                            Text("\(displaySections.legacy.count)")
-                                .font(T3Typography.supporting.monospacedDigit())
-                                .foregroundStyle(T3Colors.textTertiary)
+                    }
+                } else {
+                    Section {
+                        DisclosureGroup(isExpanded: $legacyModelsExpanded) {
+                            ForEach(displaySections.legacy) { option in
+                                modelRow(option)
+                            }
+                        } label: {
+                            LabeledContent("Legacy Models") {
+                                Text("\(displaySections.legacy.count)")
+                                    .monospacedDigit()
+                            }
                         }
+                        .t3SheetRow()
                     }
                 }
             }
@@ -295,15 +371,20 @@ private struct ModelPickerSheet: View {
                 ContentUnavailableView.search(text: query)
                     .listRowBackground(Color.clear)
             }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(T3Colors.background)
-        .onChange(of: query) { _, value in
-            if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                legacyModelsExpanded = true
+
+            if let setupContext, !isSearching {
+                Section {
+                    NavigationLink {
+                        ProviderSetupView(context: setupContext, instanceID: nil)
+                    } label: {
+                        Label("Set Up Agents…", systemImage: "person.crop.circle.badge.plus")
+                    }
+                    .t3SheetRow()
+                }
             }
         }
+        .listStyle(.insetGrouped)
+        .t3SheetListBackground()
     }
 
     private var availableModelCount: Int {
@@ -315,47 +396,68 @@ private struct ModelPickerSheet: View {
     }
 
     private func modelRow(_ option: DailyUXModelOption) -> some View {
-        HStack(spacing: 10) {
-            Button {
-                select(option)
-            } label: {
-                ModelOptionLabel(
-                    option: option,
-                    isSelected: resolvedSelection?.providerID == option.provider.id
-                        && resolvedSelection?.modelID == option.model.id
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
+        let isFavorite = favoriteIDs.contains(option.id)
+        return Button {
+            select(option)
+        } label: {
+            ModelOptionLabel(
+                option: option,
+                isSelected: resolvedSelection?.providerID == option.provider.id
+                    && resolvedSelection?.modelID == option.model.id
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isLocked(option))
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button {
                 toggleFavorite(option.id)
             } label: {
-                Image(systemName: favoriteIDs.contains(option.id) ? "star.fill" : "star")
-                    .font(.system(size: 15))
-                    .foregroundStyle(
-                        favoriteIDs.contains(option.id)
-                            ? T3Colors.warning
-                            : T3Colors.textTertiary
-                    )
-                    .frame(width: 34, height: 34)
+                Label(isFavorite ? "Unfavorite" : "Favorite", systemImage: isFavorite ? "star.slash" : "star")
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(
-                favoriteIDs.contains(option.id) ? "Remove favorite" : "Add favorite"
-            )
+            .tint(T3Colors.warning)
         }
-        .disabled(isLocked(option))
-        .opacity(isLocked(option) ? 0.36 : 1)
-        .listRowBackground(T3Colors.background)
+        .contextMenu {
+            Button {
+                toggleFavorite(option.id)
+            } label: {
+                Label(
+                    isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                    systemImage: isFavorite ? "star.slash" : "star"
+                )
+            }
+        }
+        .t3SheetRow()
+    }
+
+    /// The model this composer is on when its provider has dropped out of the
+    /// catalog (offline, signed out). Shown disabled at the top so the list
+    /// still says what is selected instead of silently checking nothing.
+    private var unavailableCurrentModel: (
+        providerID: String,
+        providerName: String,
+        driver: String,
+        modelName: String
+    )? {
+        guard let current = selection ?? threadSelection else { return nil }
+        let provider = providers.first { $0.id == current.providerID }
+        let isOffered = provider?.isAvailable == true
+            && provider?.models.contains(where: { $0.id == current.modelID }) == true
+        guard !isOffered else { return nil }
+        return (
+            current.providerID,
+            provider?.name ?? current.providerID,
+            provider?.driver ?? "",
+            provider?.models.first { $0.id == current.modelID }?.name ?? current.modelID
+        )
     }
 
     private var favoriteIDs: Set<String> {
-        Set(favoriteStorage.split(separator: "\n").map(String.init))
+        Set(ModelPickerMemory.ids(in: favoriteStorage))
     }
 
     private var recentIDs: [String] {
-        recentStorage.split(separator: "\n").map(String.init)
+        ModelPickerMemory.ids(in: recentStorage)
     }
 
     private var catalog: DailyUXModelCatalog {
@@ -382,38 +484,13 @@ private struct ModelPickerSheet: View {
         )
     }
 
-    /// Tapping a model commits it immediately. Models that expose options keep the
-    /// user's current values when the same model is re-selected, and otherwise take
-    /// the catalog defaults.
+    /// Tapping a model commits it immediately and pops back.
     private func select(_ option: DailyUXModelOption) {
         guard !isLocked(option) else { return }
-        selection = FeatureSelection(
-            providerID: option.provider.id,
-            modelID: option.model.id,
-            options: optionSelections(for: option)
-        )
-        recordRecent(option.id)
-        dismiss()
-    }
-
-    private func optionSelections(
-        for option: DailyUXModelOption
-    ) -> [FeatureModelOptionSelection] {
-        guard !option.model.options.isEmpty else { return [] }
-        guard selection?.providerID == option.provider.id,
-              selection?.modelID == option.model.id else {
-            return DailyUXModelOptions.defaults(for: option.model)
-        }
-        return ProviderModelConfiguration.materializedOptions(
-            for: option.model,
-            preserving: selection?.options ?? []
-        )
-    }
-
-    private func recordRecent(_ id: String) {
-        recentStorage = ([id] + recentIDs.filter { $0 != id })
-            .prefix(8)
-            .joined(separator: "\n")
+        selection = ModelPickerMemory.selection(for: option, current: selection)
+        recentStorage = ModelPickerMemory.recording(option.id, in: recentStorage)
+        PlatformHapticEngine.shared.playSelection()
+        onPicked()
     }
 
     private func revealSelectedLegacyModel() {
@@ -441,13 +518,7 @@ private struct ModelPickerSheet: View {
     }
 
     private func toggleFavorite(_ id: String) {
-        var next = favoriteIDs
-        if next.contains(id) {
-            next.remove(id)
-        } else {
-            next.insert(id)
-        }
-        favoriteStorage = next.sorted().joined(separator: "\n")
+        favoriteStorage = ModelPickerMemory.toggling(id, in: favoriteStorage)
     }
 }
 
@@ -684,33 +755,90 @@ enum ProviderModelConfiguration {
     }
 }
 
+
 private struct ModelOptionLabel: View {
-    let option: DailyUXModelOption
+    let providerName: String
+    let driver: String
+    let providerID: String
+    let modelName: String
+    let detail: String
+    let badge: String?
+    let supportsImages: Bool
     let isSelected: Bool
+    var isUnavailable = false
+
+    init(option: DailyUXModelOption, isSelected: Bool) {
+        self.init(
+            providerName: option.provider.name,
+            driver: option.provider.driver,
+            providerID: option.provider.id,
+            modelName: option.model.name,
+            detail: option.model.detail ?? option.model.id,
+            badge: option.model.badge,
+            supportsImages: option.model.supportsImages,
+            isSelected: isSelected
+        )
+    }
+
+    init(
+        providerName: String,
+        driver: String,
+        providerID: String,
+        modelName: String,
+        detail: String,
+        badge: String?,
+        supportsImages: Bool,
+        isSelected: Bool,
+        isUnavailable: Bool = false
+    ) {
+        self.providerName = providerName
+        self.driver = driver
+        self.providerID = providerID
+        self.modelName = modelName
+        self.detail = detail
+        self.badge = badge
+        self.supportsImages = supportsImages
+        self.isSelected = isSelected
+        self.isUnavailable = isUnavailable
+    }
 
     var body: some View {
         HStack(spacing: 12) {
-            providerMark
+            ProviderIcon(
+                driver: driver,
+                providerID: providerID,
+                fallbackName: providerName,
+                size: 26
+            )
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
-                    Text(option.model.name)
+                    Text(modelName)
                         .font(T3Typography.homeTitle)
-                        .foregroundStyle(T3Colors.textPrimary)
+                        .foregroundStyle(isUnavailable ? T3Colors.textSecondary : T3Colors.textPrimary)
                         .lineLimit(1)
-                    if option.model.badge == "new" {
-                        Text("New")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(T3Colors.warning)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(T3Colors.warning.opacity(0.12), in: Capsule())
+                    if badge == "new" {
+                        Text("NEW")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(T3Colors.accent)
                             .accessibilityLabel("New model")
                     }
-                    if option.model.supportsImages {
-                        capability("Images", icon: "photo")
+                    if isUnavailable {
+                        Text("Unavailable")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(T3Colors.subtleStrong, in: Capsule())
+                    }
+                    if supportsImages {
+                        Label("Images", systemImage: "photo")
+                            .labelStyle(.iconOnly)
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .accessibilityLabel("Accepts images")
                     }
                 }
-                Text(option.model.detail ?? option.model.id)
+                Text(detail)
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textSecondary)
                     .lineLimit(1)
@@ -718,26 +846,13 @@ private struct ModelOptionLabel: View {
             Spacer(minLength: 6)
             if isSelected {
                 Image(systemName: "checkmark")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(T3Colors.textPrimary)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(T3Colors.accent)
+                    .accessibilityLabel("Selected")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
-    }
-
-    private var providerMark: some View {
-        ProviderIcon(
-            driver: option.provider.driver,
-            providerID: option.provider.id,
-            fallbackName: option.provider.name,
-            size: 26
-        )
-    }
-
-    private func capability(_ title: String, icon: String) -> some View {
-        Label(title, systemImage: icon)
-            .font(T3Typography.supporting)
-            .foregroundStyle(T3Colors.textSecondary)
+        .accessibilityElement(children: .combine)
     }
 }

@@ -11,6 +11,7 @@ struct PlatformRootView: View {
     @State private var incomingShareCoordinator = PlatformIncomingShareCoordinator()
     @State private var incomingShareNeedsProject = false
     @State private var importedShareProjectID: String?
+    @State private var pairingLink: PlatformPairingLink?
 
     init(model: FeatureRootModel) {
         self.model = model
@@ -67,6 +68,10 @@ struct PlatformRootView: View {
             synchronizeAgentAwareness()
             synchronizeCloudDelivery()
         }
+        .onChange(of: model.snapshot.settings.hapticsEnabled, initial: true) { _, isEnabled in
+            PlatformHapticEngine.shared.isEnabled = isEnabled
+        }
+        .environment(\.t3HapticsEnabled, model.snapshot.settings.hapticsEnabled)
         .onChange(of: model.snapshot.projects.map(\.id)) { _, _ in
             refreshIncomingShares()
         }
@@ -76,9 +81,21 @@ struct PlatformRootView: View {
                 projects: incomingShareProjects,
                 environments: model.snapshot.environments,
                 isImporting: incomingShareCoordinator.isImporting,
+                importingProjectID: importedShareProjectID,
                 onCancel: incomingShareCoordinator.dismissDestination,
                 onSelect: importIncomingShare(into:)
             )
+        }
+        .sheet(item: $pairingLink) { link in
+            ConnectionOnboardingView(
+                model: model,
+                presentation: .link(link.details),
+                onConnected: {
+                    PlatformHapticEngine.shared.play(.success)
+                },
+                onClose: { pairingLink = nil }
+            )
+            .presentationDetents([.medium, .large])
         }
         .alert("Create a project to continue", isPresented: $incomingShareNeedsProject) {
             Button("Not now", role: .cancel) {}
@@ -129,13 +146,13 @@ struct PlatformRootView: View {
             let route = try PlatformDeepLinkParser.parse(url)
             if case .connection = route,
                letOnboardingConfirmConnection,
-               !shouldShowWorkspace {
-                // ConnectionOnboardingView owns the confirmation UI for cold pairing links.
+               ConnectionOnboardingLinks.areHandledByOnboarding {
+                // A visible onboarding page confirms opened pairing links itself.
                 return
             }
             handle(route)
         } catch {
-            model.errorMessage = error.localizedDescription
+            model.reportFailure(error.localizedDescription, title: "Couldn't Open Link")
         }
     }
 
@@ -210,7 +227,7 @@ struct PlatformRootView: View {
                 try await incomingShareCoordinator.importPending(into: project)
             } catch {
                 importedShareProjectID = nil
-                model.errorMessage = error.localizedDescription
+                model.reportFailure(error.localizedDescription, title: "Couldn't Import Share")
             }
         }
     }
@@ -231,12 +248,11 @@ struct PlatformRootView: View {
     private func consume(_ route: PlatformRoute) async {
         switch route {
         case let .connection(endpoint, token):
-            if await model.pair(endpoint: endpoint, token: token) {
-                PlatformHapticEngine.shared.emit(
-                    .success,
-                    enabled: model.snapshot.settings.hapticsEnabled
-                )
-            }
+            // Never pair silently from a link: Confirm Connection shows the
+            // server and code first, the same page onboarding uses.
+            pairingLink = PlatformPairingLink(
+                details: ConnectionDetails(endpoint: endpoint, pairingCode: token)
+            )
         case let .environment(id):
             guard await activateEnvironmentIfNeeded(id) else { return }
             PlatformHapticEngine.shared.selection(
@@ -250,7 +266,9 @@ struct PlatformRootView: View {
                       id: threadID
                   )
             else {
-                if model.errorMessage == nil { model.errorMessage = "That thread is not available on this device." }
+                if model.errorMessage == nil {
+                    model.reportFailure("That thread is not available on this device.", title: "Couldn't Open Thread")
+                }
                 return
             }
             navigationRequest = FeatureWorkspaceNavigationRequest(
@@ -267,7 +285,9 @@ struct PlatformRootView: View {
                       id: projectID
                   )
             else {
-                if model.errorMessage == nil { model.errorMessage = "That project is not available on this device." }
+                if model.errorMessage == nil {
+                    model.reportFailure("That project is not available on this device.", title: "Couldn't Open Project")
+                }
                 return
             }
             navigationRequest = FeatureWorkspaceNavigationRequest(
@@ -286,7 +306,7 @@ struct PlatformRootView: View {
                 )
             }
             if projectID != nil, resolvedProject == nil {
-                model.errorMessage = "That project is not available on this device."
+                model.reportFailure("That project is not available on this device.", title: "Couldn't Start Task")
                 return
             }
             navigationRequest = FeatureWorkspaceNavigationRequest(
@@ -302,7 +322,7 @@ struct PlatformRootView: View {
     private func activateEnvironmentIfNeeded(_ id: String?) async -> Bool {
         guard let id else { return true }
         guard let environment = model.snapshot.environments.first(where: { $0.id == id }) else {
-            model.errorMessage = "That environment is not saved on this device."
+            model.reportFailure("That environment is not saved on this device.", title: "Couldn't Open Link")
             return false
         }
         guard !environment.isActive else { return true }
@@ -342,4 +362,10 @@ struct PlatformRootView: View {
             liveActivitiesEnabled: model.snapshot.settings.liveActivitiesEnabled
         )
     }
+}
+
+/// A pairing link waiting for the user to confirm it.
+private struct PlatformPairingLink: Identifiable {
+    let id = UUID()
+    let details: ConnectionDetails
 }

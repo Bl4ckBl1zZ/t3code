@@ -571,10 +571,12 @@ public struct ThreadRelationshipsModel: Equatable, Sendable {
     /// Nothing to say and nothing to disconnect — the banner hides entirely.
     public var isEmpty: Bool { rows.isEmpty && !canDetach }
 
-    /// The banner earns its place only while agents are in flight, or while
-    /// there is a session to disconnect. Lineage alone does not: it never
-    /// changes while the thread is open, so it belongs in the sheet.
-    public var showsCollapsedBanner: Bool { !subagentSummary.isEmpty || canDetach }
+    /// The banner earns its place only while agents are in flight. Lineage
+    /// alone does not: it never changes while the thread is open, so it belongs
+    /// in Details. Neither does a live session: almost every recently used
+    /// thread has one, and a permanent capsule saying so is noise. Merge back
+    /// and disconnect live in Details, as they do on desktop.
+    public var showsCollapsedBanner: Bool { !subagentSummary.isEmpty }
 
     public func title(for threadID: String) -> String {
         graph.node(threadID)?.thread?.title ?? threadID

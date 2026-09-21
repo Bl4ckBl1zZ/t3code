@@ -15,7 +15,7 @@ enum T3AgentActivityPhase: String, Codable, Hashable, Sendable {
         case .starting:
             "circle.dotted"
         case .running:
-            "arrow.trianglehead.2.clockwise.rotate.90"
+            Self.runningSymbol
         case .waitingForApproval:
             "exclamationmark.circle.fill"
         case .waitingForInput:
@@ -27,6 +27,16 @@ enum T3AgentActivityPhase: String, Codable, Hashable, Sendable {
         case .stale:
             "clock.arrow.circlepath"
         }
+    }
+
+    /// The `arrow.trianglehead` family is SF Symbols 6 (iOS 18); iOS 17 draws
+    /// nothing for it, which left every running row and the minimal Dynamic
+    /// Island without a glyph.
+    private static var runningSymbol: String {
+        if #available(iOS 18, *) {
+            return "arrow.trianglehead.2.clockwise.rotate.90"
+        }
+        return "arrow.triangle.2.circlepath"
     }
 }
 
@@ -57,6 +67,32 @@ struct T3RelayAgentActivityAggregateRow: Codable, Hashable, Identifiable, Sendab
         T3AgentActivityTimestamp.parse(updatedAt)
     }
 
+    /// A working row the host has not refreshed within the Live Activity's
+    /// stale window. The app writes rows only while it runs, so a row left
+    /// "Working" when it was killed would otherwise look live forever. Blocked
+    /// and finished rows are not stale: nothing changes them but the user.
+    func isStale(at date: Date) -> Bool {
+        guard let deadline = staleDeadline else { return false }
+        return date >= deadline
+    }
+
+    /// When a working row stops being trusted, or `nil` for rows that never go stale.
+    var staleDeadline: Date? {
+        guard phase == .starting || phase == .running, let since = phaseSince else { return nil }
+        return since.addingTimeInterval(T3AgentActivityPresentation.staleInterval)
+    }
+
+    /// Waiting first, then failed, running, and finished; newest first within a phase.
+    static func attentionFirst(_ rows: [Self]) -> [Self] {
+        rows.sorted { left, right in
+            let leftPriority = left.phase.presentationPriority
+            let rightPriority = right.phase.presentationPriority
+            return leftPriority == rightPriority
+                ? left.updatedAt > right.updatedAt
+                : leftPriority < rightPriority
+        }
+    }
+
     /// Generate the native query route rather than trusting a web-shaped path.
     var nativeDeepLinkURL: URL? {
         var components = URLComponents()
@@ -79,13 +115,7 @@ struct T3RelayAgentActivityAggregateState: Codable, Hashable, Sendable {
     var activities: [T3RelayAgentActivityAggregateRow]
 
     var attentionFirstActivities: [T3RelayAgentActivityAggregateRow] {
-        activities.sorted { left, right in
-            let leftPriority = left.phase.presentationPriority
-            let rightPriority = right.phase.presentationPriority
-            return leftPriority == rightPriority
-                ? left.updatedAt > right.updatedAt
-                : leftPriority < rightPriority
-        }
+        T3RelayAgentActivityAggregateRow.attentionFirst(activities)
     }
 }
 
@@ -269,20 +299,34 @@ struct T3AgentActivityPresentation: Hashable, Sendable {
     var heroTint: T3AgentActivityTint
     var backgroundTint: T3AgentActivityBackgroundTint?
     var deepLinkURL: URL?
+    /// The system marked the activity stale: the app set a `staleDate` and no
+    /// update arrived before it. The card stops claiming anything is live.
+    var isStale: Bool
+    /// When the aggregate was last written, for "No update since 14:02".
+    var lastUpdate: Date?
 
     var isEscalated: Bool { escalatedRow != nil }
 
+    /// Matches the `staleDate` the app sets on every update
+    /// (`PlatformAgentAwareness`), and the widget's cut-off for a working row
+    /// that stopped reporting.
+    static let staleInterval: TimeInterval = 10 * 60
+
     init(
         state: LiveActivityAttributes.ContentState,
-        isLuminanceReduced: Bool = false
+        isLuminanceReduced: Bool = false,
+        isStale: Bool = false
     ) {
-        self.init(aggregate: state.aggregate, isLuminanceReduced: isLuminanceReduced)
+        self.init(aggregate: state.aggregate, isLuminanceReduced: isLuminanceReduced, isStale: isStale)
     }
 
     init(
         aggregate: T3RelayAgentActivityAggregateState?,
-        isLuminanceReduced: Bool = false
+        isLuminanceReduced: Bool = false,
+        isStale: Bool = false
     ) {
+        self.isStale = isStale
+        lastUpdate = aggregate.flatMap { T3AgentActivityTimestamp.parse($0.updatedAt) }
         let activities = aggregate?.activities ?? []
         rows = aggregate?.attentionFirstActivities ?? []
         activeCount = aggregate?.activeCount ?? 0
@@ -336,12 +380,18 @@ struct T3AgentActivityPresentation: Hashable, Sendable {
         }
         subtitle = aggregate?.subtitle ?? "Waiting for the latest task status."
 
-        heroTint = .forPhase(heroRow?.phase, isLuminanceReduced: isLuminanceReduced)
+        // Stale content goes neutral: a colored wash or tint would keep
+        // asserting a state nobody has confirmed for ten minutes.
+        let isNeutral = isLuminanceReduced || isStale
+        heroTint = .forPhase(heroRow?.phase, isLuminanceReduced: isNeutral)
         headerTint = .forPhase(
             escalated?.phase ?? failed?.phase ?? heroRow?.phase,
-            isLuminanceReduced: isLuminanceReduced
+            isLuminanceReduced: isNeutral
         )
-        backgroundTint = .forPhase(heroRow?.phase, isLuminanceReduced: isLuminanceReduced)
+        backgroundTint = .forPhase(heroRow?.phase, isLuminanceReduced: isNeutral)
+        if isStale {
+            shortStatus = "No update"
+        }
 
         // Any registered scheme variant routes back to this app; taps are
         // delivered to the widget's containing app.

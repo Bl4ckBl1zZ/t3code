@@ -34,7 +34,9 @@ public struct NewWorkConversationView: View {
     @AppStorage(NewWorkConversationView.environmentStorageKey) private var selectedEnvironmentID: String?
     @State private var isSubmitting = false
     @State private var submissionFailed = false
+    @State private var showsWorkSetup = false
     @FocusState private var promptFocused: Bool
+    private let voice = VoiceComposerCoordinator.shared
 
     public init(
         model: FeatureRootModel,
@@ -49,45 +51,58 @@ public struct NewWorkConversationView: View {
     }
 
     public var body: some View {
-        // The composer is plain bottom content, not a `safeAreaInset`: inside
-        // a sheet the inset's keyboard math can land short and sink the model
-        // row under the keyboard, while ordinary layout avoidance never does.
-        VStack(spacing: 0) {
-            topBar
-
-            ScrollView {
-                VStack(spacing: 0) {
-                    hero
-                        .padding(.top, 64)
-                    starters
-                        .padding(.top, 64)
+        NavigationStack {
+            // The composer is plain bottom content, not a `safeAreaInset`:
+            // inside a sheet the inset's keyboard math can land short and sink
+            // the model row under the keyboard, while ordinary layout
+            // avoidance never does.
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        hero
+                            .padding(.top, 40)
+                        starters
+                            .padding(.top, 40)
+                    }
                 }
-            }
-            .scrollIndicators(.hidden)
-            .scrollDismissesKeyboard(.interactively)
+                .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
 
-            FeatureComposerView(
-                text: $prompt,
-                selection: $selection,
-                attachments: $attachments,
-                interactionMode: $interactionMode,
-                providers: targetProviders,
-                providerSetup: ProviderSetupContext(client: model.client, environmentID: activeTarget?.environmentID),
-                threadSelection: defaultSelection,
-                materializesDefaultSelection: false,
-                isSending: isSubmitting,
-                isWorking: false,
-                focused: $promptFocused,
-                onSend: startConversation,
-                onStop: {},
-                forceExpanded: true
-            )
+                FeatureComposerView(
+                    text: $prompt,
+                    selection: $selection,
+                    attachments: $attachments,
+                    interactionMode: $interactionMode,
+                    providers: targetProviders,
+                    providerSetup: ProviderSetupContext(client: model.client, environmentID: activeTarget?.environmentID),
+                    threadSelection: defaultSelection,
+                    materializesDefaultSelection: false,
+                    isSending: isSubmitting,
+                    isWorking: false,
+                    focused: $promptFocused,
+                    onSend: startConversation,
+                    onStop: {},
+                    forceExpanded: true,
+                    powerFeatures: composerPowerFeatures,
+                    sendBlocker: sendBlocker
+                )
+            }
+            .background(T3Colors.background.ignoresSafeArea())
+            .navigationTitle(flavor == .chat ? "New Chat" : "New Conversation")
+            .navigationBarTitleDisplayMode(.inline)
+            // A typed message has no draft to fall back on, and a dictation
+            // still transcribing has nowhere to land once the sheet is gone,
+            // so either one makes leaving a question rather than a swipe.
+            .t3SheetToolbar(.cancel, hasChanges: hasUnsentWork, onDismiss: discardAndClose)
+            .t3NavigationChrome()
         }
-        .background(T3Colors.background.ignoresSafeArea())
-        .alert("Conversation not started", isPresented: $submissionFailed) {
+        .alert("Conversation Not Started", isPresented: $submissionFailed) {
             Button("OK") {}
         } message: {
             Text("Your message is still here. Check your connection and try again.")
+        }
+        .sheet(isPresented: $showsWorkSetup) {
+            WorkSetupSheet(model: model)
         }
         .task {
             // Focus after the sheet's presentation has settled: grabbing it
@@ -99,75 +114,75 @@ public struct NewWorkConversationView: View {
 
     // MARK: - Chrome
 
-    private var topBar: some View {
-        HStack {
-            Button("Cancel") { dismiss() }
-                .font(.body)
-                .foregroundStyle(T3Colors.textSecondary)
-                .disabled(isSubmitting)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 48)
+    private var hasUnsentWork: Bool {
+        isSubmitting
+            || !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !attachments.isEmpty
+            || voice.state.isBusy
+    }
+
+    /// Leaving discards the message; a recording in flight is cancelled with
+    /// it, so nothing is stashed for a conversation that will never exist.
+    private func discardAndClose() {
+        if voice.state.isBusy { voice.cancelRecording() }
+        dismiss()
     }
 
     private var hero: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 14) {
             Text(flavor == .chat ? "What's on your mind?" : "What can I help with?")
+                .font(T3Typography.threadHeading1.weight(.regular))
+                .tracking(-0.35)
+                .foregroundStyle(T3Colors.textPrimary)
+                .multilineTextAlignment(.center)
+            if !availableTargets.isEmpty {
+                environmentMenu
+            }
         }
-        .font(T3Typography.threadHeading1.weight(.regular))
-        .tracking(-0.35)
-        .foregroundStyle(T3Colors.textPrimary)
-        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
-        .overlay(alignment: .bottom) {
-            environmentLine
-                .offset(y: 31)
-        }
+        .padding(.horizontal, 20)
         .accessibilityElement(children: .contain)
     }
 
-    /// Which machine hosts the conversation. A menu only when more than one
-    /// environment can actually run Hermes.
-    private var environmentLine: some View {
-        Menu {
-            ForEach(availableTargets, id: \.environmentID) { candidate in
-                Button {
-                    selectedEnvironmentID = candidate.environmentID
-                    selection = nil
-                } label: {
-                    if candidate.environmentID == activeTarget?.environmentID {
-                        Label(environmentName(candidate.environmentID), systemImage: "checkmark")
-                    } else {
-                        Text(environmentName(candidate.environmentID))
+    /// Which machine hosts the conversation: a picker in a glass capsule when
+    /// more than one environment can run Hermes, a plain label otherwise.
+    @ViewBuilder
+    private var environmentMenu: some View {
+        let name = activeTarget.map { environmentName($0.environmentID) } ?? "No computer"
+        let symbol = model.snapshot.environments.first { $0.id == activeTarget?.environmentID }?.machineSymbol ?? "server.rack"
+        if availableTargets.count > 1 {
+            Menu {
+                Picker("Computer", selection: Binding(
+                    get: { activeTarget?.environmentID ?? "" },
+                    set: { id in
+                        selectedEnvironmentID = id
+                        selection = nil
+                    }
+                )) {
+                    ForEach(availableTargets, id: \.environmentID) { candidate in
+                        Text(environmentName(candidate.environmentID)).tag(candidate.environmentID)
                     }
                 }
+                .pickerStyle(.inline)
+            } label: {
+                ComposeCapsuleLabel(title: name, systemImage: symbol)
             }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: model.snapshot.environments.first { $0.id == activeTarget?.environmentID }?.machineSymbol ?? "server.rack")
-                    .font(.system(size: 11, weight: .medium))
-                Text("on \(activeTarget.map { environmentName($0.environmentID) } ?? "…")")
-                if availableTargets.count > 1 {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                }
-            }
-            .font(T3Typography.supporting)
-            .foregroundStyle(T3Colors.textTertiary)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(isSubmitting)
+            .accessibilityLabel("Computer")
+            .accessibilityValue(name)
+        } else {
+            ComposeCapsuleLabel(title: name, systemImage: symbol, showsChevron: false)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Computer, \(name)")
         }
-        .buttonStyle(.plain)
-        .disabled(isSubmitting || availableTargets.count < 2)
-        .accessibilityLabel("Computer")
-        .accessibilityValue(activeTarget.map { environmentName($0.environmentID) } ?? "None")
     }
 
     /// Assistant starters: tap to seed the draft. Deliberately a seed, not a
     /// send — the point is a running start, not a canned conversation.
     @ViewBuilder
     private var starters: some View {
-        VStack(spacing: 8) {
+        ComposeFlowLayout(spacing: 8) {
             if flavor == .chat {
                 starterChip("Talk through an idea", systemImage: "bubble.left.and.bubble.right")
                 starterChip("Research something for me", systemImage: "magnifyingglass")
@@ -178,7 +193,7 @@ public struct NewWorkConversationView: View {
                 starterChip("Draft a message or document", systemImage: "square.and.pencil")
             }
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 20)
     }
 
     private func starterChip(_ text: String, systemImage: String) -> some View {
@@ -188,27 +203,43 @@ public struct NewWorkConversationView: View {
             }
             promptFocused = true
         } label: {
-            HStack(spacing: 9) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(T3Colors.textTertiary)
-                Text(text)
-                    .font(T3Typography.control)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 44)
-            .background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(T3Colors.border, lineWidth: 1)
-            }
-            .contentShape(Rectangle())
+            Label(text, systemImage: systemImage)
+                .font(T3Typography.control)
+                .foregroundStyle(T3Colors.textPrimary)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .t3GlassEffect(.regular, interactive: true, in: Capsule())
+                .t3GlassRim(in: Capsule())
+                .frame(minHeight: T3Metrics.minimumTapTarget)
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(isSubmitting)
+    }
+
+    // MARK: - Composer
+
+    private var composerPowerFeatures: FeatureComposerPowerFeatures {
+        let environmentID = activeTarget?.environmentID ?? "none"
+        return FeatureComposerPowerFeatures(
+            showSkillsInSlashMenu: model.snapshot.settings.showSkillsInSlashMenu,
+            voiceScope: flavor == .chat
+                ? .newChat(environmentID: environmentID)
+                : .newWork(environmentID: environmentID)
+        )
+    }
+
+    /// With no machine able to run Hermes there is nothing to send to, so the
+    /// send stays off and the reason sits in the pill with the way forward.
+    private var sendBlocker: FeatureComposerSendBlocker? {
+        guard activeTarget == nil else { return nil }
+        return FeatureComposerSendBlocker(
+            "No computer can run T3 \(flavor == .chat ? "Chat" : "Work") right now.",
+            systemImage: "exclamationmark.triangle",
+            actionTitle: "Set Up",
+            action: { showsWorkSetup = true }
+        )
     }
 
     // MARK: - Targets

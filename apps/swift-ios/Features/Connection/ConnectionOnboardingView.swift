@@ -1,586 +1,508 @@
 import SwiftUI
 import UIKit
 
+/// Pairing a computer: Welcome on first launch, "Add Server" from Settings and
+/// Setup, and Confirm Connection for a pairing link opened in the app.
+///
+/// Typed details, pasted and scanned links, and opened links all land on one
+/// details page, which swaps to the network checklist while connecting and to
+/// the success beat once connected.
 public struct ConnectionOnboardingView: View {
+    /// Where the flow is shown, which decides who owns the navigation stack.
+    enum Presentation {
+        /// First launch at the app root, in its own stack. `holdsScreen` stays
+        /// true while a page past Welcome is open: pairing installs the first
+        /// server, which would otherwise swap the root to Home before the
+        /// success beat plays.
+        case root(holdsScreen: Binding<Bool>)
+        /// "Add Server", pushed onto the caller's navigation stack. It pops
+        /// itself once connected.
+        case pushed
+        /// A sheet with its own stack and a close button.
+        case sheet
+        /// A pairing link opened while Home is showing: Confirm Connection is
+        /// the sheet's first page.
+        case link(ConnectionDetails)
+    }
+
     @SwiftUI.Environment(\.scenePhase) private var scenePhase
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+    @SwiftUI.Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Bindable private var model: FeatureRootModel
 
+    private let presentation: Presentation
     private let readinessChecker: any ConnectionReadinessChecking
     private let onConnected: @MainActor () -> Void
-    private let onCancel: (@MainActor () -> Void)?
+    private let onClose: (@MainActor () -> Void)?
 
-    @State private var stage = ConnectionStage.welcome
-    @State private var endpoint = ""
-    @State private var pairingCode = ""
-    @State private var errorMessage: String?
-    @State private var showsPermissionAction = false
+    @State private var stage = ConnectionStage.form
+    @State private var endpoint: String
+    @State private var pairingCode: String
+    @State private var problem: ConnectionProblem?
+    @State private var source: ConnectionSource
+    @State private var focusRequest = ConnectionFocusRequest(field: .endpoint)
+    @State private var showingDetails = false
+    @State private var showingT3Connect = false
     @State private var showingScanner = false
-    @State private var entryHeading = "Connect manually"
+    @State private var handedOffToRoot = false
     @State private var connectionTask: Task<Void, Never>?
     @State private var connectionAttemptID: UUID?
-    @FocusState private var focusedField: ConnectionField?
 
+    /// "Add Server" pushed onto the caller's navigation stack. With `onClose`
+    /// it is instead a sheet with its own stack whose close button calls it.
+    /// Either way the flow dismisses itself once connected, then calls
+    /// `onConnected`.
     public init(
         model: FeatureRootModel,
         onConnected: @escaping @MainActor () -> Void = {},
-        onCancel: (@MainActor () -> Void)? = nil
+        onCancel onClose: (@MainActor () -> Void)? = nil
     ) {
-        self.model = model
-        readinessChecker = LocalNetworkAccessChecker()
-        self.onConnected = onConnected
-        self.onCancel = onCancel
+        self.init(
+            model: model,
+            presentation: onClose == nil ? .pushed : .sheet,
+            onConnected: onConnected,
+            onClose: onClose
+        )
     }
 
     init(
         model: FeatureRootModel,
-        readinessChecker: any ConnectionReadinessChecking,
+        presentation: Presentation,
+        readinessChecker: any ConnectionReadinessChecking = LocalNetworkAccessChecker(),
         onConnected: @escaping @MainActor () -> Void = {},
-        onCancel: (@MainActor () -> Void)? = nil
+        onClose: (@MainActor () -> Void)? = nil
     ) {
         self.model = model
+        self.presentation = presentation
         self.readinessChecker = readinessChecker
         self.onConnected = onConnected
-        self.onCancel = onCancel
+        self.onClose = onClose
+
+        if case let .link(details) = presentation {
+            _endpoint = State(initialValue: details.endpoint)
+            _pairingCode = State(initialValue: details.pairingCode ?? "")
+            _source = State(initialValue: .openedLink)
+            _problem = State(initialValue: details.pairingCode == nil ? .missingCode : nil)
+            _focusRequest = State(initialValue: ConnectionFocusRequest(
+                field: details.pairingCode == nil ? .pairingCode : nil
+            ))
+        } else {
+            _endpoint = State(initialValue: "")
+            _pairingCode = State(initialValue: "")
+            _source = State(initialValue: .manual)
+        }
     }
 
     public var body: some View {
-        NavigationStack {
-            Group {
-                switch stage {
-                case .welcome:
-                    welcomeView
-                case .details:
-                    detailsView
-                case .checking, .connecting:
-                    progressView
-                case .success:
-                    successView
+        Group {
+            switch presentation {
+            case .root:
+                NavigationStack { flow }
+            case .pushed:
+                flow
+            case .sheet:
+                NavigationStack {
+                    flow.t3SheetToolbar(.close, onDismiss: onClose)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(T3Colors.background)
-            .animation(.snappy(duration: 0.24), value: stage)
-        }
-        .toolbar {
-            if stage == .welcome, let onCancel {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close", action: onCancel)
-                }
-            } else if stage == .checking {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        cancelConnectionAttempt()
-                        model.errorMessage = nil
-                        stage = .details
-                    }
-                }
+            case .link:
+                NavigationStack { detailsPage }
             }
         }
         .fullScreenCover(isPresented: $showingScanner) {
             QRCodeScannerView(
-                onScan: { value in
+                onScan: { details in
                     showingScanner = false
-                    applyConnectionString(
-                        value,
-                        heading: "Confirm connection",
-                        connectAutomatically: true
-                    )
+                    apply(details, source: .scan, connectAutomatically: true)
                 },
-                onCancel: {
+                onPaste: { value in
                     showingScanner = false
-                },
-                onPaste: {
-                    showingScanner = false
-                    pasteConnectionLink()
+                    applyConnectionString(value, source: .pastedLink)
                 }
             )
         }
-        .onOpenURL { url in
-            applyConnectionString(url.absoluteString, heading: "Confirm connection")
+        .onOpenURL(perform: handleOpenedURL)
+        .onChange(of: scenePhase) { _, phase in
+            // Returning from Settings after allowing Local Network access
+            // retries on its own, so the user never taps Connect twice.
+            guard phase == .active, problem == .localNetworkDenied, stage == .form,
+                  isShowingDetails else { return }
+            submitDetails()
         }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active, showsPermissionAction {
-                showsPermissionAction = false
-                errorMessage = nil
-            }
-        }
-        .interactiveDismissDisabled(stage == .connecting)
-        .onDisappear {
-            cancelConnectionAttempt()
+        .onChange(of: holdsRoot, initial: true) { _, holds in
+            guard case let .root(holdsScreen) = presentation else { return }
+            holdsScreen.wrappedValue = holds
         }
     }
 
-    private var welcomeView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Spacer(minLength: 48)
+    // MARK: - Welcome and Add Server
 
-                Text("T3")
-                    .font(.system(size: 34, weight: .black, design: .rounded))
-                    .foregroundStyle(Color(red: 0.02, green: 0.74, blue: 0.5))
-                    .accessibilityLabel("T3 Code")
-
-                Text("Your agents,\nwherever you are.")
-                    .font(.system(size: 38, weight: .bold, design: .default))
-                    .tracking(-1.1)
-                    .padding(.top, 24)
-
-                Text("Connect securely to T3 Code running on your computer.")
-                    .font(.body)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .padding(.top, 12)
-
-                if let capability = model.client as? any T3ConnectCapable,
-                   capability.t3ConnectController.unavailableReason == nil {
-                    NavigationLink {
-                        T3ConnectView(capability: capability) {
-                            await model.reloadAfterConnection()
-                            onConnected()
-                        }
-                    } label: {
-                        Label("Continue with T3 Connect", systemImage: "cloud")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(ConnectionPrimaryButtonStyle())
-                    .padding(.top, 36)
-                    .accessibilityHint("Sign in to connect an environment linked to your T3 account")
-                }
-
-                VStack(spacing: 0) {
-                    connectionAction(
-                        title: "Scan QR code",
-                        subtitle: "Pair directly with a computer nearby",
-                        systemImage: "qrcode.viewfinder"
-                    ) {
-                        showingScanner = true
-                    }
-
-                    Divider().overlay(T3Colors.border)
-
-                    connectionAction(
-                        title: "Paste connection link",
-                        subtitle: "Copy it from T3 Code on your computer",
-                        systemImage: "doc.on.clipboard"
-                    ) {
-                        pasteConnectionLink()
-                    }
-
-                    Divider().overlay(T3Colors.border)
-
-                    connectionAction(
-                        title: "Enter details manually",
-                        subtitle: "Use the server address and pairing code",
-                        systemImage: "keyboard"
-                    ) {
-                        entryHeading = "Connect manually"
-                        errorMessage = nil
-                        stage = .details
-                    }
-                }
-                .padding(.top, 12)
-
-                knownEnvironments
-            }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 40)
-            .frame(maxWidth: 520)
-            .frame(maxWidth: .infinity)
-        }
-        .scrollDismissesKeyboard(.interactively)
+    private var flow: some View {
+        welcomePage
+            .navigationDestination(isPresented: $showingDetails) { detailsPage }
+            .navigationDestination(isPresented: $showingT3Connect) { t3ConnectPage }
     }
 
     @ViewBuilder
-    private var knownEnvironments: some View {
-        if !model.snapshot.environments.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("KNOWN SERVERS")
-                    .font(T3Typography.eyebrow)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .padding(.top, 34)
-                    .padding(.bottom, 8)
-
-                ForEach(model.snapshot.environments) { environment in
-                    Button {
-                        connect(
-                            .activate(
-                                id: environment.id,
-                                endpoint: environment.endpoint
-                            )
-                        )
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "desktopcomputer")
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 24)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(environment.name)
-                                    .font(T3Typography.threadBody)
-                                    .foregroundStyle(.primary)
-                                Text(environment.endpoint)
-                                    .font(T3Typography.supporting)
-                                    .foregroundStyle(T3Colors.textSecondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                        .padding(.vertical, 12)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Reconnects to this server")
-
-                    if environment.id != model.snapshot.environments.last?.id {
-                        Divider().overlay(T3Colors.border)
-                    }
-                }
-            }
+    private var welcomePage: some View {
+        if isRoot {
+            optionsList
+                .t3BottomBar { welcomeActions }
+        } else {
+            optionsList
+                .navigationTitle("Add Server")
+                .navigationBarTitleDisplayMode(.large)
+                .t3NavigationChrome()
         }
     }
 
-    private var detailsView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(entryHeading)
-                        .font(.largeTitle.bold())
-                        .tracking(-0.6)
-                    Text("Both values are shown in T3 Code when you create a mobile connection.")
-                        .font(T3Typography.threadBody)
-                        .foregroundStyle(T3Colors.textSecondary)
+    private var optionsList: some View {
+        List {
+            if isRoot {
+                Section {
+                    hero
                 }
+                .listRowBackground(Color.clear)
+            }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("SERVER ADDRESS")
-                        .font(T3Typography.eyebrow)
-                        .foregroundStyle(T3Colors.textSecondary)
-
-                    TextField("http://192.168.1.5:3773", text: $endpoint)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        .autocorrectionDisabled()
-                        .focused($focusedField, equals: .endpoint)
-                        .connectionInput()
-                        .accessibilityLabel("Server address")
-                        .onChange(of: endpoint) { _, value in
-                            autofillIfPairingLink(value)
-                        }
+            Section {
+                if showsScanRow {
+                    Button {
+                        showingScanner = true
+                    } label: {
+                        ConnectionOptionRow(title: "Scan QR Code", systemImage: "qrcode.viewfinder", tint: .blue)
+                    }
                 }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("PAIRING CODE")
-                        .font(T3Typography.eyebrow)
-                        .foregroundStyle(T3Colors.textSecondary)
-
-                    TextField("12-character code", text: $pairingCode)
-                        .textInputAutocapitalization(.never)
-                        .textContentType(.oneTimeCode)
-                        .autocorrectionDisabled()
-                        .focused($focusedField, equals: .pairingCode)
-                        .connectionInput()
-                        .accessibilityLabel("Pairing code")
+                HStack(spacing: 12) {
+                    ConnectionOptionRow(
+                        title: "Pairing Link",
+                        subtitle: "Copied from T3 Code",
+                        systemImage: "link",
+                        tint: .gray,
+                        showsChevron: false
+                    )
+                    ConnectionPasteButton { value in
+                        applyConnectionString(value, source: .pastedLink)
+                    }
                 }
-
                 Button {
-                    pasteConnectionLink()
+                    openManualEntry()
                 } label: {
-                    Label("Paste a connection link instead", systemImage: "doc.on.clipboard")
-                        .font(T3Typography.control.weight(.semibold))
+                    ConnectionOptionRow(title: "Enter Manually", systemImage: "keyboard", tint: .gray)
                 }
-                .buttonStyle(.plain)
+            } footer: {
+                Text("T3 Code on your computer shows a link and a QR code when you create a mobile connection.")
+            }
+            .t3GroupedRow()
 
-                if let errorMessage {
-                    connectionError(message: errorMessage)
+            if !isRoot, t3ConnectCapability != nil {
+                Section {
+                    Button {
+                        showingT3Connect = true
+                    } label: {
+                        ConnectionOptionRow(
+                            title: "T3 Connect",
+                            subtitle: "Environments linked to your account",
+                            systemImage: "cloud",
+                            tint: .ink
+                        )
+                    }
                 }
+                .t3GroupedRow()
+            }
+        }
+        .listStyle(.insetGrouped)
+        .t3GroupedListBackground()
+        // On iPad the first-launch column sits in the middle of the screen
+        // rather than under the top edge.
+        .contentMargins(.top, isRoot && horizontalSizeClass == .regular ? 120 : 0, for: .scrollContent)
+        .frame(maxWidth: isRoot ? 560 : .infinity)
+        .frame(maxWidth: .infinity)
+        .claimsPairingLinks()
+    }
 
+    private var hero: some View {
+        VStack(spacing: 16) {
+            T3BrandMark()
+            Text("Your agents, wherever you are.")
+                .font(.largeTitle.bold())
+                .foregroundStyle(T3Colors.textPrimary)
+            Text("Connect securely to T3 Code running on your computer.")
+                .font(.body)
+                .foregroundStyle(T3Colors.textSecondary)
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 32)
+        .padding(.bottom, 8)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The one primary action at the bottom of Welcome: T3 Connect when this
+    /// build has it, otherwise scanning.
+    private var welcomeActions: some View {
+        VStack(spacing: 12) {
+            if t3ConnectCapability != nil {
                 Button {
-                    submitDetails()
+                    showingT3Connect = true
                 } label: {
-                    Text("Connect")
+                    Label("Continue with T3 Connect", systemImage: "cloud")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(ConnectionPrimaryButtonStyle())
-                .disabled(!canSubmit)
-                .opacity(canSubmit ? 1 : 0.45)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 24)
-            .padding(.bottom, 40)
-            .frame(maxWidth: 520)
-            .frame(maxWidth: .infinity)
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .navigationTitle("Connect")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
+                .t3ProminentButtonStyle()
+                .controlSize(.large)
+                .accessibilityHint("Sign in to connect an environment linked to your T3 account")
+            } else if QRCodeScannerView.isCameraAvailable {
                 Button {
-                    errorMessage = nil
-                    showsPermissionAction = false
-                    focusedField = nil
-                    stage = .welcome
+                    showingScanner = true
                 } label: {
-                    Label("Back", systemImage: "chevron.left")
+                    Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+                        .frame(maxWidth: .infinity)
                 }
-            }
-        }
-    }
-
-    private var progressView: some View {
-        VStack(alignment: .leading, spacing: 34) {
-            Spacer()
-
-            Text(stage == .checking ? "Finding your T3" : "Connecting securely")
-                .font(.largeTitle.bold())
-                .tracking(-0.7)
-
-            VStack(alignment: .leading, spacing: 20) {
-                progressRow(
-                    title: "Server details",
-                    state: .complete
-                )
-                progressRow(
-                    title: EndpointNetworkScope.isLocal(endpoint)
-                        ? "Local network access"
-                        : "Network access",
-                    state: stage == .checking ? .active : .complete
-                )
-                progressRow(
-                    title: "Secure pairing",
-                    state: stage == .connecting ? .active : .waiting
-                )
+                .t3ProminentButtonStyle()
+                .controlSize(.large)
             }
 
-            Spacer()
-
-            Text("Keep T3 Code open on your computer.")
+            Link("Get T3 Code for your computer", destination: Self.downloadURL)
                 .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textSecondary)
+                .tint(T3Colors.accent)
         }
-        .padding(.horizontal, 32)
-        .padding(.vertical, 28)
         .frame(maxWidth: 520)
-        .accessibilityElement(children: .contain)
     }
 
-    private var successView: some View {
-        VStack(spacing: 18) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 54))
-                .foregroundStyle(.green)
-            Text("You're connected")
-                .font(.title.bold())
-            Text("Loading your projects and threads.")
-                .font(T3Typography.threadBody)
-                .foregroundStyle(T3Colors.textSecondary)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func connectionAction(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 18, weight: .medium))
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.body.weight(.semibold))
-                    Text(subtitle)
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textSecondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .foregroundStyle(.primary)
-            .contentShape(Rectangle())
-            .padding(.vertical, 14)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func connectionError(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(message, systemImage: showsPermissionAction ? "network.slash" : "exclamationmark.circle")
-                .font(T3Typography.control)
-                .foregroundStyle(Color(red: 1, green: 0.58, blue: 0.2))
-
-            if showsPermissionAction {
-                Button("Open Settings") {
-                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-                    UIApplication.shared.open(url)
-                }
-                .font(T3Typography.control.weight(.semibold))
+    @ViewBuilder
+    private var t3ConnectPage: some View {
+        if let capability = t3ConnectCapability {
+            T3ConnectView(
+                capability: capability,
+                activeEnvironmentID: model.snapshot.environments.first(where: \.isActive)?.id
+            ) {
+                await model.reloadAfterConnection()
+                // T3ConnectView plays the success haptic and marks the row in use.
+                await finishConnection()
             }
         }
-        .accessibilityElement(children: .combine)
     }
 
-    private func progressRow(title: String, state: ProgressRowState) -> some View {
-        HStack(spacing: 14) {
-            Group {
-                switch state {
-                case .complete:
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                case .active:
-                    ProgressView()
-                        .controlSize(.small)
-                case .waiting:
-                    Image(systemName: "circle")
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .frame(width: 22)
+    // MARK: - Details
 
-            Text(title)
-                .font(.body.weight(state == .active ? .semibold : .regular))
-                .foregroundStyle(state == .waiting ? .secondary : .primary)
-        }
+    private var detailsPage: some View {
+        ConnectionDetailsPage(
+            endpoint: $endpoint,
+            pairingCode: $pairingCode,
+            stage: stage,
+            problem: problem,
+            source: source,
+            focusRequest: focusRequest,
+            connectedName: model.snapshot.environments.first(where: \.isActive)?.name,
+            isSheetRoot: isLinkPresentation,
+            onSubmit: submitDetails,
+            onCancelAttempt: cancelToForm,
+            onPaste: { applyConnectionString($0, source: .pastedLink) },
+            onEndpointEdited: autofillIfPairingLink
+        )
+        .claimsPairingLinks()
+        .onDisappear(perform: cancelConnectionAttempt)
     }
 
-    private var canSubmit: Bool {
-        !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    // MARK: - State
+
+    private var isRoot: Bool {
+        if case .root = presentation { return true }
+        return false
+    }
+
+    private var isLinkPresentation: Bool {
+        if case .link = presentation { return true }
+        return false
+    }
+
+    private var isShowingDetails: Bool {
+        showingDetails || isLinkPresentation
+    }
+
+    /// Keeps the root on this flow from the first page past Welcome until the
+    /// success beat hands off to Home.
+    private var holdsRoot: Bool {
+        (showingDetails || showingT3Connect) && !handedOffToRoot
+    }
+
+    /// At the root, scanning is the primary action when T3 Connect is absent,
+    /// so its row would repeat the button below it.
+    private var showsScanRow: Bool {
+        QRCodeScannerView.isCameraAvailable && (!isRoot || t3ConnectCapability != nil)
+    }
+
+    private var t3ConnectCapability: (any T3ConnectCapable)? {
+        guard let capability = model.client as? any T3ConnectCapable,
+              capability.t3ConnectController.unavailableReason == nil
+        else { return nil }
+        return capability
+    }
+
+    private static let downloadURL = URL(string: "https://t3.codes/download")!
+
+    // MARK: - Actions
+
+    @MainActor
+    private func openManualEntry() {
+        cancelConnectionAttempt()
+        source = .manual
+        problem = nil
+        stage = .form
+        focusRequest = ConnectionFocusRequest(field: .endpoint)
+        showingDetails = true
     }
 
     @MainActor
-    private func submitDetails() {
+    private func handleOpenedURL(_ url: URL) {
+        // Only pairing links belong here; thread and project links are the
+        // root's to route.
+        guard let route = try? PlatformDeepLinkParser.parse(url),
+              case let .connection(endpoint, token) = route
+        else { return }
+        apply(ConnectionDetails(endpoint: endpoint, pairingCode: token), source: .openedLink)
+    }
+
+    @MainActor
+    private func applyConnectionString(_ value: String, source: ConnectionSource) {
         do {
-            let normalized = try ConnectionDetailsParser.normalizedEndpoint(endpoint)
-            endpoint = normalized
-            errorMessage = nil
-            showsPermissionAction = false
-            focusedField = nil
-            connect(
-                .pair(
-                    endpoint: normalized,
-                    code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
-                )
-            )
+            apply(try ConnectionDetailsParser.parse(value), source: source)
         } catch {
-            errorMessage = error.localizedDescription
+            cancelConnectionAttempt()
+            self.source = .manual
+            stage = .form
+            problem = .message(error.localizedDescription)
+            focusRequest = ConnectionFocusRequest(field: .endpoint)
+            showDetailsPage()
         }
     }
 
     @MainActor
-    private func pasteConnectionLink() {
-        guard let value = UIPasteboard.general.string, !value.isEmpty else {
-            entryHeading = "Connect manually"
-            stage = .details
-            errorMessage = "Copy a T3 pairing link first, or enter the details below."
-            focusedField = .endpoint
-            return
-        }
-        applyConnectionString(value, heading: "Confirm connection")
-    }
-
-    @MainActor
-    private func applyConnectionString(
-        _ value: String,
-        heading: String,
+    private func apply(
+        _ details: ConnectionDetails,
+        source: ConnectionSource,
         connectAutomatically: Bool = false
     ) {
         cancelConnectionAttempt()
-        do {
-            let details = try ConnectionDetailsParser.parse(value)
-            endpoint = details.endpoint
-            pairingCode = details.pairingCode ?? ""
-            entryHeading = heading
-            errorMessage = details.pairingCode == nil
-                ? "The link did not include a pairing code. Enter it below."
-                : nil
-            showsPermissionAction = false
-            if connectAutomatically, let code = details.pairingCode {
-                focusedField = nil
-                connect(.pair(endpoint: details.endpoint, code: code))
-            } else {
-                stage = .details
-                focusedField = details.pairingCode == nil ? .pairingCode : nil
-            }
-        } catch {
-            entryHeading = "Connect manually"
-            errorMessage = error.localizedDescription
-            stage = .details
-            focusedField = .endpoint
+        endpoint = details.endpoint
+        pairingCode = details.pairingCode ?? ""
+        self.source = source
+        stage = .form
+        showDetailsPage()
+        guard let code = details.pairingCode else {
+            problem = .missingCode
+            focusRequest = ConnectionFocusRequest(field: .pairingCode)
+            return
+        }
+        problem = nil
+        focusRequest = ConnectionFocusRequest(field: nil)
+        if connectAutomatically {
+            connect(endpoint: details.endpoint, code: code)
         }
     }
 
+    @MainActor
+    private func showDetailsPage() {
+        guard !isLinkPresentation else { return }
+        // A link opened while T3 Connect is showing replaces it.
+        showingT3Connect = false
+        showingDetails = true
+    }
+
+    /// A complete pairing link typed or pasted into the Server field fills in
+    /// both fields.
     @MainActor
     private func autofillIfPairingLink(_ value: String) {
         guard let details = try? ConnectionDetailsParser.parse(value),
               let code = details.pairingCode
-        else {
-            return
-        }
+        else { return }
         endpoint = details.endpoint
         pairingCode = code
-        errorMessage = nil
-        focusedField = nil
+        problem = nil
+        focusRequest = ConnectionFocusRequest(field: nil)
     }
 
     @MainActor
-    private func connect(_ action: ConnectionAction) {
+    private func submitDetails() {
+        let code = pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, stage == .form else { return }
+        do {
+            connect(endpoint: try ConnectionDetailsParser.normalizedEndpoint(endpoint), code: code)
+        } catch {
+            problem = .message(error.localizedDescription)
+            focusRequest = ConnectionFocusRequest(field: .endpoint)
+        }
+    }
+
+    @MainActor
+    private func connect(endpoint: String, code: String) {
         cancelConnectionAttempt()
         let attemptID = UUID()
         connectionAttemptID = attemptID
-        endpoint = action.endpoint
-        errorMessage = nil
-        showsPermissionAction = false
+        self.endpoint = endpoint
+        problem = nil
         stage = .checking
 
         connectionTask = Task {
-            let readiness = await readinessChecker.check(endpoint: action.endpoint)
+            let readiness = await readinessChecker.check(endpoint: endpoint)
             guard !Task.isCancelled, connectionAttemptID == attemptID else { return }
             switch readiness {
             case .ready:
                 stage = .connecting
             case .localNetworkDenied:
-                errorMessage = "Allow Local Network access so this iPhone can find T3 Code on your computer."
-                showsPermissionAction = true
-                stage = .details
+                fail(.localNetworkDenied)
                 return
             case .unreachable:
-                errorMessage = "This iPhone cannot reach that server. Confirm the address and that both devices are on the same network."
-                stage = .details
+                fail(.unreachable)
                 return
             }
 
             model.errorMessage = nil
-            let didConnect: Bool
-            switch action {
-            case let .pair(endpoint, code):
-                didConnect = await model.pair(endpoint: endpoint, token: code)
-            case let .activate(id, _):
-                didConnect = await model.activateEnvironment(id)
-            }
+            let didConnect = await model.pair(endpoint: endpoint, token: code)
             guard !Task.isCancelled, connectionAttemptID == attemptID else { return }
+            connectionAttemptID = nil
+            connectionTask = nil
 
             if didConnect {
-                connectionAttemptID = nil
-                connectionTask = nil
-                stage = .success
-                onConnected()
+                PlatformHapticEngine.shared.play(.success)
+                await finishConnection()
             } else {
                 let rawError = model.errorMessage
                 model.errorMessage = nil
-                errorMessage = ConnectionErrorCopy.message(for: rawError)
-                connectionAttemptID = nil
-                connectionTask = nil
-                stage = .details
+                fail(.message(ConnectionErrorCopy.message(for: rawError)))
             }
         }
+    }
+
+    /// The success beat. At the root it holds for a moment so the checkmark
+    /// is seen, then hands off to Home; elsewhere the flow closes itself.
+    @MainActor
+    private func finishConnection() async {
+        switch presentation {
+        case .root:
+            stage = .success
+            try? await Task.sleep(for: .milliseconds(800))
+            handedOffToRoot = true
+        case .pushed, .sheet, .link:
+            dismiss()
+        }
+        onConnected()
+    }
+
+    @MainActor
+    private func fail(_ problem: ConnectionProblem) {
+        connectionAttemptID = nil
+        connectionTask = nil
+        self.problem = problem
+        stage = .form
+    }
+
+    /// Cancel while checking or pairing: back to the filled-in form.
+    @MainActor
+    private func cancelToForm() {
+        cancelConnectionAttempt()
+        model.errorMessage = nil
+        stage = .form
     }
 
     @MainActor
@@ -591,64 +513,483 @@ public struct ConnectionOnboardingView: View {
     }
 }
 
-private enum ConnectionStage: Equatable {
-    case welcome
-    case details
-    case checking
-    case connecting
-    case success
+// MARK: - Details page
+
+/// The Server and Code form, replaced by the network checklist while
+/// connecting and by the success beat once connected.
+private struct ConnectionDetailsPage: View {
+    @Binding var endpoint: String
+    @Binding var pairingCode: String
+    let stage: ConnectionStage
+    let problem: ConnectionProblem?
+    let source: ConnectionSource
+    let focusRequest: ConnectionFocusRequest
+    let connectedName: String?
+    /// Confirm Connection for an opened link is its sheet's first page, so it
+    /// carries the sheet's cancel and confirm buttons.
+    let isSheetRoot: Bool
+    let onSubmit: () -> Void
+    let onCancelAttempt: () -> Void
+    let onPaste: (String) -> Void
+    let onEndpointEdited: (String) -> Void
+
+    @FocusState private var focusedField: ConnectionField?
+    @ScaledMetric(relativeTo: .body) private var labelWidth: CGFloat = 64
+
+    var body: some View {
+        Group {
+            switch stage {
+            case .form:
+                form
+            case .checking, .connecting:
+                progress
+            case .success:
+                ConnectionSuccessView(serverName: connectedName)
+            }
+        }
+        .navigationTitle(stage == .form ? source.heading : "")
+        .navigationBarTitleDisplayMode(stage == .form && !isSheetRoot ? .large : .inline)
+        .navigationBarBackButtonHidden(stage != .form)
+        .t3NavigationChrome()
+        .modifier(ConnectionDetailsToolbar(
+            stage: stage,
+            canSubmit: canSubmit,
+            isSheetRoot: isSheetRoot,
+            onSubmit: onSubmit,
+            onCancelAttempt: onCancelAttempt
+        ))
+        .task(id: focusRequest) {
+            focusedField = focusRequest.field
+        }
+    }
+
+    private var form: some View {
+        Form {
+            if let problem, let notice = problem.notice {
+                Section {
+                    ConnectionProblemRow(
+                        title: notice.title,
+                        message: notice.message,
+                        systemImage: notice.systemImage
+                    )
+                    if problem == .localNetworkDenied {
+                        Button("Open Settings") {
+                            guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                            UIApplication.shared.open(url)
+                        }
+                        .tint(T3Colors.accent)
+                    }
+                }
+                .t3GroupedRow()
+            }
+
+            Section {
+                LabeledContent {
+                    TextField("192.168.1.5:3773", text: $endpoint)
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.next)
+                        .focused($focusedField, equals: .endpoint)
+                        .onSubmit { focusedField = .pairingCode }
+                        .onChange(of: endpoint) { _, value in onEndpointEdited(value) }
+                        .accessibilityLabel("Server address")
+                } label: {
+                    Text("Server").frame(width: labelWidth, alignment: .leading)
+                }
+                LabeledContent {
+                    TextField("12-character code", text: $pairingCode)
+                        .font(.body.monospaced())
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.go)
+                        .focused($focusedField, equals: .pairingCode)
+                        .onSubmit(onSubmit)
+                        .accessibilityLabel("Pairing code")
+                } label: {
+                    Text("Code").frame(width: labelWidth, alignment: .leading)
+                }
+            } footer: {
+                if let message = problem?.footerMessage {
+                    Text(message).foregroundStyle(T3Colors.danger)
+                } else {
+                    Text(source.footer)
+                }
+            }
+            .t3GroupedRow()
+
+            Section {
+                HStack(spacing: 12) {
+                    Text(source == .manual ? "Have a pairing link?" : "Have a different link?")
+                        .foregroundStyle(T3Colors.textPrimary)
+                    Spacer(minLength: 8)
+                    ConnectionPasteButton(onPaste: onPaste)
+                }
+            }
+            .t3GroupedRow()
+        }
+        .t3GroupedListBackground()
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private var progress: some View {
+        List {
+            Section {
+                VStack(spacing: 8) {
+                    Image(systemName: "laptopcomputer")
+                        .font(.largeTitle)
+                        .imageScale(.large)
+                        .foregroundStyle(T3Colors.textTertiary)
+                        .padding(.bottom, 6)
+                    Text(stage == .checking ? "Checking Network Access" : "Connecting Securely")
+                        .font(.title2.bold())
+                        .foregroundStyle(T3Colors.textPrimary)
+                    Text(displayEndpoint)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(T3Colors.textTertiary)
+                        .lineLimit(2)
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+                .listRowBackground(Color.clear)
+                .accessibilityElement(children: .combine)
+            }
+
+            Section {
+                ConnectionProgressRow(title: "Server details", state: .complete)
+                ConnectionProgressRow(
+                    title: EndpointNetworkScope.isLocal(endpoint) ? "Local network access" : "Network access",
+                    state: stage == .checking ? .active : .complete
+                )
+                ConnectionProgressRow(
+                    title: "Secure pairing",
+                    state: stage == .connecting ? .active : .waiting
+                )
+            } footer: {
+                Text("Keep T3 Code open on your computer.")
+            }
+            .t3GroupedRow()
+        }
+        .listStyle(.insetGrouped)
+        .t3GroupedListBackground()
+    }
+
+    private var canSubmit: Bool {
+        !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var displayEndpoint: String {
+        for scheme in ["https://", "http://"] where endpoint.lowercased().hasPrefix(scheme) {
+            return String(endpoint.dropFirst(scheme.count))
+        }
+        return endpoint
+    }
 }
 
-private enum ConnectionField: Hashable {
-    case endpoint
-    case pairingCode
-}
+/// Connect in the form's toolbar, and Cancel in place of the back button while
+/// checking or pairing. An opened link's sheet uses the sheet toolbar instead,
+/// whose cancel returns to the form mid-attempt and closes the sheet otherwise.
+private struct ConnectionDetailsToolbar: ViewModifier {
+    let stage: ConnectionStage
+    let canSubmit: Bool
+    let isSheetRoot: Bool
+    let onSubmit: () -> Void
+    let onCancelAttempt: () -> Void
 
-private enum ProgressRowState {
-    case complete
-    case active
-    case waiting
-}
-
-private enum ConnectionAction {
-    case pair(endpoint: String, code: String)
-    case activate(id: String, endpoint: String)
-
-    var endpoint: String {
-        switch self {
-        case let .pair(endpoint, _), let .activate(_, endpoint):
-            endpoint
+    func body(content: Content) -> some View {
+        if isSheetRoot {
+            content.t3SheetToolbar(
+                .cancel,
+                confirm: T3SheetConfirmation(
+                    title: "Connect",
+                    isEnabled: canSubmit,
+                    isBusy: stage.isInProgress || stage == .success,
+                    action: onSubmit
+                ),
+                onDismiss: stage.isInProgress ? onCancelAttempt : nil
+            )
+        } else {
+            content.toolbar {
+                if stage == .form {
+                    ToolbarItem(placement: .confirmationAction) {
+                        ConnectionConnectButton(isEnabled: canSubmit, action: onSubmit)
+                    }
+                } else if stage.isInProgress {
+                    ToolbarItem(placement: .cancellationAction) {
+                        if #available(iOS 26, *) {
+                            Button(role: .cancel, action: onCancelAttempt)
+                        } else {
+                            Button("Cancel", role: .cancel, action: onCancelAttempt)
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-private extension View {
-    func connectionInput() -> some View {
-        self
-            .font(.body.monospaced())
-            .padding(.horizontal, 14)
-            .frame(minHeight: 50)
-            .background(T3Colors.input)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(T3Colors.inputBorder)
-                    .frame(height: 1)
+/// The form's commit button: ink glass on iOS 26, bold text before.
+private struct ConnectionConnectButton: View {
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        if #available(iOS 26, *) {
+            Button("Connect", action: action)
+                .buttonStyle(.glassProminent)
+                .tint(T3Colors.primaryAction)
+                .foregroundStyle(T3Colors.primaryActionForeground)
+                .disabled(!isEnabled)
+        } else {
+            Button(action: action) {
+                Text("Connect").fontWeight(.semibold)
             }
+            .disabled(!isEnabled)
+        }
     }
 }
 
-private struct ConnectionPrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.body.weight(.semibold))
-            .foregroundStyle(T3Colors.primaryActionForeground)
-            .padding(.horizontal, 16)
-            .frame(minHeight: 52)
-            .background(
-                configuration.isPressed
-                    ? T3Colors.primaryAction.opacity(0.76)
-                    : T3Colors.primaryAction
+private struct ConnectionSuccessView: View {
+    let serverName: String?
+    @State private var celebrates = false
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.largeTitle)
+                .imageScale(.large)
+                .foregroundStyle(T3Colors.success)
+                .symbolEffect(.bounce, value: celebrates)
+            Text(serverName.map { "Connected to \($0)" } ?? "You’re Connected")
+                .font(.title.bold())
+                .foregroundStyle(T3Colors.textPrimary)
+            Text("Loading your projects and threads.")
+                .font(T3Typography.threadBody)
+                .foregroundStyle(T3Colors.textSecondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(T3Colors.background)
+        .accessibilityElement(children: .combine)
+        .onAppear { celebrates = true }
+    }
+}
+
+private struct ConnectionOptionRow: View {
+    let title: String
+    var subtitle: String?
+    let systemImage: String
+    let tint: T3SettingsTile.Tint
+    var showsChevron = true
+
+    var body: some View {
+        HStack(spacing: 12) {
+            T3SettingsTile(systemImage, tint: tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .foregroundStyle(T3Colors.textPrimary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textTertiary)
+                }
+            }
+            Spacer(minLength: 8)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+private struct ConnectionProgressRow: View {
+    let title: String
+    let state: ConnectionProgressState
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Group {
+                switch state {
+                case .complete:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(T3Colors.success)
+                case .active:
+                    ProgressView()
+                        .controlSize(.small)
+                case .waiting:
+                    Image(systemName: "circle")
+                        .foregroundStyle(T3Colors.textTertiary)
+                }
+            }
+            .font(.title3)
+            .frame(width: 24)
+
+            Text(title)
+                .font(.body.weight(state == .active ? .semibold : .regular))
+                .foregroundStyle(state == .waiting ? T3Colors.textTertiary : T3Colors.textPrimary)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(state.accessibilityValue)
+    }
+}
+
+// MARK: - Model
+
+enum ConnectionStage: Equatable {
+    case form
+    case checking
+    case connecting
+    case success
+
+    var isInProgress: Bool {
+        self == .checking || self == .connecting
+    }
+}
+
+/// How the details got onto the page, which sets its title and footer.
+enum ConnectionSource: Equatable {
+    case manual
+    case pastedLink
+    case openedLink
+    case scan
+
+    var heading: String {
+        self == .manual ? "Connect Manually" : "Confirm Connection"
+    }
+
+    var footer: String {
+        switch self {
+        case .manual:
+            "Both values are shown in T3 Code when you create a mobile connection."
+        case .pastedLink:
+            "From the pairing link you pasted. Check the address before connecting."
+        case .openedLink:
+            "From a link you opened. Only connect to computers you trust."
+        case .scan:
+            "From the QR code you scanned. Check the address before connecting."
+        }
+    }
+}
+
+/// Why the last attempt stopped, and where the details page shows it.
+enum ConnectionProblem: Equatable {
+    /// Local Network access is off for this app.
+    case localNetworkDenied
+    /// The address did not answer.
+    case unreachable
+    /// The link carried an address but no pairing code.
+    case missingCode
+    /// A parse or pairing failure, already in user-facing words.
+    case message(String)
+
+    struct Notice: Equatable {
+        let title: String
+        let message: String
+        let systemImage: String
+    }
+
+    /// Network problems get their own section above the fields.
+    var notice: Notice? {
+        switch self {
+        case .localNetworkDenied:
+            Notice(
+                title: "Local Network Access Is Off",
+                message: "Allow it so this device can find T3 Code on your computer. T3 Code tries again when you come back.",
+                systemImage: "wifi.slash"
             )
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+        case .unreachable:
+            Notice(
+                title: "Can’t Reach the Server",
+                message: "This device cannot reach that server. Confirm the address and that both devices are on the same network.",
+                systemImage: "wifi.exclamationmark"
+            )
+        case .missingCode, .message:
+            nil
+        }
+    }
+
+    /// Everything else sits in the footer under the fields.
+    var footerMessage: String? {
+        switch self {
+        case .localNetworkDenied, .unreachable:
+            nil
+        case .missingCode:
+            "The link did not include a pairing code. Enter it above."
+        case let .message(message):
+            message
+        }
+    }
+}
+
+enum ConnectionField: Hashable {
+    case endpoint
+    case pairingCode
+}
+
+/// A request to move focus. A fresh ID re-runs the request even when the field
+/// is the same one as last time.
+struct ConnectionFocusRequest: Equatable {
+    let id = UUID()
+    let field: ConnectionField?
+}
+
+private enum ConnectionProgressState {
+    case complete
+    case active
+    case waiting
+
+    var accessibilityValue: String {
+        switch self {
+        case .complete: "Done"
+        case .active: "In progress"
+        case .waiting: "Waiting"
+        }
+    }
+}
+
+// MARK: - Pairing links
+
+/// Tracks whether an onboarding page is on screen. Those pages confirm
+/// pairing links themselves, so the app root should leave such links alone
+/// rather than pair them a second time.
+@MainActor
+enum ConnectionOnboardingLinks {
+    private static var visiblePages = Set<UUID>()
+
+    static var areHandledByOnboarding: Bool {
+        !visiblePages.isEmpty
+    }
+
+    fileprivate static func pageAppeared(_ id: UUID) {
+        visiblePages.insert(id)
+    }
+
+    fileprivate static func pageDisappeared(_ id: UUID) {
+        visiblePages.remove(id)
+    }
+}
+
+private struct ClaimsPairingLinks: ViewModifier {
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { ConnectionOnboardingLinks.pageAppeared(id) }
+            .onDisappear { ConnectionOnboardingLinks.pageDisappeared(id) }
+    }
+}
+
+private extension View {
+    func claimsPairingLinks() -> some View {
+        modifier(ClaimsPairingLinks())
     }
 }

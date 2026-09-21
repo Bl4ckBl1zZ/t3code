@@ -45,3 +45,11 @@ public enum ThreadArchive {
         canArchive(Runtime(shell: shell))
     }
 }
+
+extension FeatureThread {
+    /// The Home menu's archive gate. A row that never reported its run status
+    /// archives, matching ``ThreadArchive/canArchive(_:)`` for an absent runtime.
+    var canArchive: Bool {
+        archiveBlockedByLiveRun != true
+    }
+}

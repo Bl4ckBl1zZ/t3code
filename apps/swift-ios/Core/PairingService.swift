@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 public struct TokenExchangeResult: Decodable, Sendable {
     public let accessToken: String
@@ -13,6 +14,45 @@ public struct TokenExchangeResult: Decodable, Sendable {
         case tokenType = "token_type"
         case expiresIn = "expires_in"
         case scope
+    }
+}
+
+/// How this install introduces itself when it trades a pairing code for a
+/// session. The host shows the label and device type in Settings → Connections,
+/// and every client shows them in its Devices list.
+public struct PairingClientIdentity: Equatable, Sendable {
+    /// The subset of the server's `AuthClientMetadataDeviceType` an iOS
+    /// install can be.
+    public enum DeviceType: String, Sendable {
+        case mobile
+        case tablet
+    }
+
+    public var label: String?
+    public var deviceType: DeviceType
+
+    public init(label: String?, deviceType: DeviceType = .mobile) {
+        self.label = label
+        self.deviceType = deviceType
+    }
+
+    /// This device: its name ("iPhone" unless the user-assigned name is
+    /// available to the app) and, on iPad, the tablet type so hosts draw an iPad.
+    @MainActor
+    public static var current: PairingClientIdentity {
+        let device = UIDevice.current
+        let name = device.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return PairingClientIdentity(
+            label: name.isEmpty ? device.model : name,
+            deviceType: DeviceType(idiom: device.userInterfaceIdiom)
+        )
+    }
+}
+
+extension PairingClientIdentity.DeviceType {
+    /// iPads, including iPad apps running on a Mac, pair as tablets.
+    init(idiom: UIUserInterfaceIdiom) {
+        self = idiom == .pad ? .tablet : .mobile
     }
 }
 
@@ -34,30 +74,35 @@ public actor PairingService {
     @discardableResult
     public func pair(
         url pairingURL: String,
-        label clientLabel: String? = nil
+        label clientLabel: String? = nil,
+        deviceType: PairingClientIdentity.DeviceType = .mobile
     ) async throws -> Environment {
-        try await pair(target: PairingURL.resolve(pairingURL), clientLabel: clientLabel)
+        try await pair(
+            target: PairingURL.resolve(pairingURL),
+            client: PairingClientIdentity(label: clientLabel, deviceType: deviceType)
+        )
     }
 
     @discardableResult
     public func pair(
         host: String,
         code: String,
-        label clientLabel: String? = nil
+        label clientLabel: String? = nil,
+        deviceType: PairingClientIdentity.DeviceType = .mobile
     ) async throws -> Environment {
         try await pair(
             target: PairingURL.resolve(host: host, pairingCode: code),
-            clientLabel: clientLabel
+            client: PairingClientIdentity(label: clientLabel, deviceType: deviceType)
         )
     }
 
     private func pair(
         target: PairingTarget,
-        clientLabel: String?
+        client: PairingClientIdentity
     ) async throws -> Environment {
         let api = EnvironmentAPI(transport: transport, credentials: credentialStore)
         let descriptor = try await api.descriptor(at: target.httpBaseURL)
-        let access = try await exchange(target: target, clientLabel: clientLabel)
+        let access = try await exchange(target: target, client: client)
         guard access.tokenType == "Bearer" else {
             throw HTTPError.status(
                 400,
@@ -94,7 +139,7 @@ public actor PairingService {
 
     private func exchange(
         target: PairingTarget,
-        clientLabel: String?
+        client: PairingClientIdentity
     ) async throws -> TokenExchangeResult {
         var fields = [
             URLQueryItem(
@@ -110,11 +155,11 @@ public actor PairingService {
                 name: "requested_token_type",
                 value: "urn:ietf:params:oauth:token-type:access_token"
             ),
-            URLQueryItem(name: "client_device_type", value: "mobile"),
+            URLQueryItem(name: "client_device_type", value: client.deviceType.rawValue),
             URLQueryItem(name: "client_os", value: "iOS"),
         ]
-        if let clientLabel, !clientLabel.isEmpty {
-            fields.append(URLQueryItem(name: "client_label", value: clientLabel))
+        if let label = client.label, !label.isEmpty {
+            fields.append(URLQueryItem(name: "client_label", value: label))
         }
         var form = URLComponents()
         form.queryItems = fields

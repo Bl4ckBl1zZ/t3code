@@ -21,14 +21,11 @@ struct ThreadWorkingStatus: Equatable, Sendable {
 
     /// Below this a timer is noise: a turn that answers in six seconds should
     /// not flash a stopwatch on its way past.
-    private static let minimumTimedDuration: TimeInterval = 10
+    static let minimumTimedDuration: TimeInterval = 10
 
-    /// The same compact form Home rows use, so a thread reads the same in the
-    /// list and in its own transcript.
-    func durationLabel(at now: Date) -> String? {
-        guard let startedAt,
-              now.timeIntervalSince(startedAt) >= Self.minimumTimedDuration else { return nil }
-        return HomeWorkingDuration.compact(since: startedAt, now: now)
+    /// When the timer first appears, or nil when there is nothing to time.
+    var timerAppearsAt: Date? {
+        startedAt?.addingTimeInterval(Self.minimumTimedDuration)
     }
 
     /// Nil for every state that is not a turn in flight.
@@ -53,17 +50,17 @@ struct ThreadWorkingStatus: Equatable, Sendable {
             // old indicator lie.
             return ThreadWorkingStatus(
                 headline: isPreparingWorkspace ? "Preparing workspace" : "Starting agent",
-                symbolName: "circle.dotted",
+                symbolName: isPreparingWorkspace ? "folder" : "hourglass",
                 startedAt: isPreparingWorkspace ? nil : workingStartedAt
             )
         case .working:
             if let activity = activityText?.trimmingCharacters(in: .whitespacesAndNewlines), !activity.isEmpty {
-                return ThreadWorkingStatus(headline: activity, symbolName: "circle.dotted", startedAt: workingStartedAt)
+                return ThreadWorkingStatus(headline: activity, symbolName: "sparkles", startedAt: workingStartedAt)
             }
             guard let live = liveItem(in: timelineItems, activeRunID: activeRunID) else {
                 return ThreadWorkingStatus(
                     headline: "Thinking",
-                    symbolName: "circle.dotted",
+                    symbolName: "sparkles",
                     startedAt: workingStartedAt
                 )
             }
@@ -115,41 +112,41 @@ struct ThreadWorkingStatusBar: View {
     @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        // The only thing on this line that is a function of time is the timer,
-        // so a status with no start to count from renders once and stays put.
-        if status.startedAt == nil {
-            row(at: .now)
-        } else {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                row(at: context.date)
-            }
-        }
-    }
-
-    private func row(at now: Date) -> some View {
         // At accessibility sizes the headline needs the whole width; the timer
-        // is the first thing to go, and the thread header still carries state.
-        let duration = dynamicTypeSize.isAccessibilitySize ? nil : status.durationLabel(at: now)
+        // is the first thing to go, and the subtitle still carries state.
+        let showsTimer = !dynamicTypeSize.isAccessibilitySize
         return HStack(spacing: 8) {
             Image(systemName: status.symbolName)
                 .font(T3Typography.supporting.weight(.semibold))
                 .foregroundStyle(T3Colors.statusRunning)
-                .frame(width: 16)
+                .frame(width: 18)
+                // Discrete, never a loop: the symbol swaps and bounces once
+                // when the step changes, so a long step still looks alive
+                // without repainting while it runs.
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, value: status.headline)
 
             Text(status.headline)
                 .font(T3Typography.supporting)
                 .foregroundStyle(T3Colors.textSecondary)
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 // A path loses its meaning from the front, never from the back.
                 .truncationMode(.middle)
 
             Spacer(minLength: 8)
 
-            if let duration {
-                Text(duration)
-                    .font(T3Typography.supporting)
-                    .monospacedDigit()
-                    .foregroundStyle(T3Colors.textTertiary)
+            if showsTimer, let startedAt = status.startedAt, let appearsAt = status.timerAppearsAt {
+                // The system drives the clock. The only wake-up this view
+                // schedules is the one that reveals it ten seconds in.
+                TimelineView(.explicit([appearsAt])) { context in
+                    if context.date >= appearsAt {
+                        Text(timerInterval: startedAt...Date.distantFuture, countsDown: false)
+                            .font(T3Typography.supporting)
+                            .monospacedDigit()
+                            .foregroundStyle(T3Colors.textTertiary)
+                            .fixedSize()
+                    }
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -159,11 +156,7 @@ struct ThreadWorkingStatusBar: View {
         // shape, which is what fuses the band to the top of the pill.
         .background(T3Colors.statusRunning.opacity(0.08))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            duration == nil
-                ? "Agent is working. \(status.headline)."
-                : "Agent is working. \(status.headline). \(duration ?? "")."
-        )
+        .accessibilityLabel("Agent is working. \(status.headline).")
         .accessibilityIdentifier("thread-working-status")
     }
 }
