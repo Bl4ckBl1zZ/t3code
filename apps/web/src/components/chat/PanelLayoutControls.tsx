@@ -1,9 +1,9 @@
 import {
-  ListFilterIcon,
   Maximize2Icon,
   Minimize2Icon,
   PanelBottomIcon,
   PanelRightIcon,
+  SquareMenuIcon,
 } from "lucide-react";
 import { memo, type ReactElement, type ReactNode, type RefObject } from "react";
 
@@ -66,7 +66,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       variant="ghost"
       size="sm"
     >
-      <ListFilterIcon className="size-3.5" />
+      <SquareMenuIcon className="size-4" />
       {threadPanelHasAttention ? (
         <span
           className="absolute right-1 top-1 size-1.5 rounded-full bg-warning ring-2 ring-background"
