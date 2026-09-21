@@ -6,8 +6,9 @@ import UIKit
 // The in-chat media window: instead of full-screen system pickers, the
 // composer pill morphs into a tall card that hosts either a live camera or the
 // system photo picker, inline. Taking a photo freezes it in the window and
-// collapses the card into the attachment thumbnail; the picker confirms with
-// its "Add Photos" button. Files keep the native document picker.
+// collapses the card into the attachment thumbnail; picked photos are added
+// with the window's own "Add Photos" button. Files keep the native document
+// picker.
 
 /// What the composer pill is currently morphed into.
 enum ComposerMediaSurface: Equatable {
@@ -291,6 +292,10 @@ struct ComposerCameraWindow: View {
 /// the whole library — albums, search and all — while the app only ever sees
 /// the photos that were picked. Selection is ordered and capped by the picker
 /// itself; the ink button confirms.
+///
+/// The picker's own Add and Cancel are hidden, so selection has to be
+/// continuous: a non-continuous picker only reports its selection when its
+/// own Add is tapped, which would leave the ink button disabled forever.
 struct ComposerPhotoLibraryWindow: View {
     /// How many more images the draft can take.
     let maximumSelectable: Int
@@ -304,7 +309,7 @@ struct ComposerPhotoLibraryWindow: View {
         PhotosPicker(
             selection: $selection,
             maxSelectionCount: max(1, maximumSelectable),
-            selectionBehavior: .ordered,
+            selectionBehavior: .continuousAndOrdered,
             matching: .images,
             // The composer re-encodes every upload to JPEG anyway, so asking
             // Photos for a compatible representation avoids shipping a
@@ -344,6 +349,7 @@ struct ComposerPhotoLibraryWindow: View {
                 }
                 .t3ProminentButtonStyle()
                 .disabled(selection.isEmpty)
+                .accessibilityHint(limitHint)
                 .accessibilityIdentifier("composer-photo-done")
             }
         }
@@ -353,10 +359,15 @@ struct ComposerPhotoLibraryWindow: View {
 
     private var confirmTitle: String {
         switch selection.count {
-        case 0: "\(max(1, maximumSelectable)) max"
+        case 0: "Add Photos"
         case 1: "Add 1 Photo"
         default: "Add \(selection.count) Photos"
         }
+    }
+
+    private var limitHint: String {
+        let limit = max(1, maximumSelectable)
+        return limit == 1 ? "Up to 1 photo" : "Up to \(limit) photos"
     }
 }
 
