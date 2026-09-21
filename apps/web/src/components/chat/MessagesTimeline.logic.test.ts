@@ -1,4 +1,14 @@
-import { RunId } from "@t3tools/contracts";
+import {
+  MessageId,
+  NodeId,
+  RunAttemptId,
+  RunId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import type { WorkLogEntry, TimelineEntry } from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -2223,4 +2233,112 @@ describe("plainThoughtPreviewText", () => {
       "snake_case_name is 2 * 3 * 4",
     );
   });
+});
+
+describe("failed turn transcript", () => {
+  it.each(["provider_error", "usage_limit"] as const)(
+    "keeps historical %s failures and preceding work visible without folds",
+    (failureClass) => {
+      const runId = RunId.make("failed-run");
+      const threadId = ThreadId.make("failed-thread");
+      const at = DateTime.makeUnsafe("2026-09-20T12:00:00Z");
+      const base = {
+        threadId,
+        runId,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        title: null,
+        startedAt: at,
+        completedAt: at,
+        updatedAt: at,
+      };
+      const items: OrchestrationV2ProjectedTurnItem[] = [
+        {
+          position: 0,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: TurnItemId.make("user"),
+          item: {
+            ...base,
+            id: TurnItemId.make("user"),
+            type: "user_message",
+            status: "completed",
+            messageId: MessageId.make("user"),
+            createdBy: "user",
+            creationSource: "web",
+            inputIntent: "turn_start",
+            text: "Build it",
+            attachments: [],
+          },
+        },
+        {
+          position: 1,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: TurnItemId.make("command"),
+          item: {
+            ...base,
+            id: TurnItemId.make("command"),
+            type: "command_execution",
+            status: "completed",
+            input: "pwd",
+            output: "",
+            exitCode: 0,
+          },
+        },
+        {
+          position: 2,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: TurnItemId.make("failure"),
+          item: {
+            ...base,
+            id: TurnItemId.make("failure"),
+            type: "error",
+            status: "failed",
+            failure: {
+              class: failureClass,
+              message: "The provider stopped this turn.\nRetry later.",
+              code: null,
+              retryable: true,
+            },
+          },
+        },
+      ];
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+          visibleTurnItems: items,
+          optimisticMessages: [],
+        }).map((entry) => ({
+          ...entry,
+          attempt: {
+            id: RunAttemptId.make("superseded-attempt"),
+            runId,
+            attemptOrdinal: 1,
+            rootNodeId: NodeId.make("superseded-root"),
+            status: "superseded" as const,
+          },
+        })),
+        latestRun: {
+          runId: RunId.make("newer-run"),
+          status: "completed",
+          startedAt: DateTime.formatIso(at),
+          completedAt: DateTime.formatIso(at),
+        },
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+      expect(rows.some((row) => row.kind === "turn-fold" || row.kind === "attempt-fold")).toBe(
+        false,
+      );
+      const work = rows.flatMap((row) => (row.kind === "work" ? row.groupedEntries : []));
+      expect(work.map((entry) => entry.id)).toEqual(["command", "failure"]);
+    },
+  );
 });

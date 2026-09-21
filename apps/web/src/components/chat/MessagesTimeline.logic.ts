@@ -567,11 +567,13 @@ interface SupersededAttemptFold {
  */
 function deriveSupersededAttemptFolds(
   timelineEntries: ReadonlyArray<TimelineEntry>,
+  unfoldedRunIds: ReadonlySet<RunId>,
 ): ReadonlyMap<string, SupersededAttemptFold> {
   const entriesByAttemptId = new Map<RunAttemptId, TimelineEntry[]>();
   for (const entry of timelineEntries) {
     if (
       entry.attempt?.status !== "superseded" ||
+      unfoldedRunIds.has(entry.attempt.runId) ||
       (entry.kind === "message" && entry.message.role === "user") ||
       timelineEntryIsPersistentResourceCard(entry)
     ) {
@@ -617,6 +619,31 @@ function deriveUnsettledRunId(latestRun: TimelineLatestRun | null): RunId | null
   return isSettled ? null : latestRun.runId;
 }
 
+/** Runs that ended in a root failure stay unfolded so the failure reads in context. */
+function failedTimelineRunIds(
+  entries: ReadonlyArray<TimelineEntry>,
+  latestRun: TimelineLatestRun | null,
+): ReadonlySet<RunId> {
+  const failed = new Set<RunId>();
+  if (latestRun?.status === "failed") failed.add(latestRun.runId);
+  for (const entry of entries) {
+    const item =
+      entry.kind === "event"
+        ? entry.projectedItem.item
+        : entry.kind === "work"
+          ? entry.entry.projectedItem?.item
+          : null;
+    if (
+      item?.type === "error" &&
+      item.status === "failed" &&
+      item.parentItemId === null &&
+      item.runId !== null
+    )
+      failed.add(item.runId);
+  }
+  return failed;
+}
+
 function timelineEntryFoldRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "message" && entry.message.role === "assistant") {
     return entry.message.runId ?? null;
@@ -640,6 +667,7 @@ function deriveTurnFolds(input: {
   terminalAssistantMessageIds: ReadonlySet<string>;
   latestRun: TimelineLatestRun | null;
   unsettledRunId: RunId | null;
+  failedRunIds: ReadonlySet<RunId>;
 }): ReadonlyMap<string, TurnFold> {
   const interruptedRunIds = new Set<RunId>();
   for (const entry of input.timelineEntries) {
@@ -704,7 +732,11 @@ function deriveTurnFolds(input: {
 
   const foldsByAnchorEntryId = new Map<string, TurnFold>();
   for (const [runId, group] of groupsByRunId) {
-    if (runId === input.unsettledRunId || interruptedRunIds.has(runId)) {
+    if (
+      runId === input.unsettledRunId ||
+      interruptedRunIds.has(runId) ||
+      input.failedRunIds.has(runId)
+    ) {
       continue;
     }
     if (group.hasStreamingMessage) {
@@ -801,7 +833,11 @@ export function deriveMessagesTimelineRows(input: {
   );
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null);
-  const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(timelineEntries);
+  const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
+  const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(
+    timelineEntries,
+    failedRunIds,
+  );
   const foldsByAnchorEntryId = input.alwaysExpandActivity
     ? new Map<string, TurnFold>()
     : deriveTurnFolds({
@@ -809,6 +845,7 @@ export function deriveMessagesTimelineRows(input: {
         terminalAssistantMessageIds,
         latestRun: input.latestRun ?? null,
         unsettledRunId,
+        failedRunIds,
       });
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {

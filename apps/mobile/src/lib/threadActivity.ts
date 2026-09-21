@@ -553,7 +553,7 @@ function toFeedActivity(row: OrchestrationV2ProjectedTurnItem): ThreadFeedActivi
     runId: item.runId,
     summary,
     detail,
-    canExpand: true,
+    canExpand: !(item.type === "error" && item.status === "failed"),
     getFullDetail,
     getCopyText,
     icon: itemIcon(item),
@@ -747,6 +747,28 @@ interface ThreadFeedRunFold {
   readonly label: string;
 }
 
+export function failedFeedRunIds(
+  feed: ReadonlyArray<ThreadFeedEntry>,
+  latestRun: ThreadFeedLatestRun | null,
+) {
+  const failed = new Set<RunId>();
+  if (latestRun?.status === "failed") failed.add(latestRun.runId);
+  for (const entry of feed) {
+    if (entry.type !== "activity-group") continue;
+    for (const activity of entry.activities) {
+      const item = activity.projectedItem.item;
+      if (
+        item.type === "error" &&
+        item.status === "failed" &&
+        item.parentItemId === null &&
+        item.runId !== null
+      )
+        failed.add(item.runId);
+    }
+  }
+  return failed;
+}
+
 function deriveThreadFeedRunFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestRun: ThreadFeedLatestRun | null,
@@ -785,10 +807,12 @@ function deriveThreadFeedRunFolds(
   }
 
   const activeRunId = unsettledRunId(latestRun);
+  const failedRunIds = failedFeedRunIds(feed, latestRun);
   const foldsByAnchorId = new Map<string, ThreadFeedRunFold>();
   for (const [runId, group] of groupsByRunId) {
     if (
       runId === activeRunId ||
+      failedRunIds.has(runId) ||
       group.entries.some((entry) => entry.type === "message" && entry.message.streaming)
     ) {
       continue;
@@ -848,11 +872,13 @@ function deriveThreadFeedRunFolds(
  */
 function deriveThreadFeedAttemptFolds(
   entries: ReadonlyArray<ThreadFeedEntry>,
+  unfoldedRunIds: ReadonlySet<RunId>,
 ): ReadonlyMap<string, SupersededAttemptFold> {
   const entriesByAttemptId = new Map<RunAttemptId, ThreadFeedEntry[]>();
   for (const entry of entries) {
     if (
       entry.attempt?.status !== "superseded" ||
+      unfoldedRunIds.has(entry.attempt.runId) ||
       (entry.type === "message" && entry.message.role === "user")
     ) {
       continue;
@@ -950,7 +976,9 @@ export function deriveThreadFeedPresentation(
   const foldsByAnchorId = alwaysExpandActivity
     ? new Map<string, ThreadFeedRunFold>()
     : deriveThreadFeedRunFolds(sourceFeed, latestRun);
-  const attemptFoldsByAnchorId = deriveThreadFeedAttemptFolds(sourceFeed);
+  // A failed run stays readable in place: no run, attempt, or work-group folds.
+  const failedRunIds = failedFeedRunIds(sourceFeed, latestRun);
+  const attemptFoldsByAnchorId = deriveThreadFeedAttemptFolds(sourceFeed, failedRunIds);
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
     if (!expandedRunIds.has(fold.runId)) {
@@ -996,9 +1024,13 @@ export function deriveThreadFeedPresentation(
         expanded: expandedAttemptIds.has(attemptFold.attemptId),
       });
     }
-    if (!collapsedAttemptEntryIds.has(entry.id)) {
-      appendPresentedFeedEntry(result, entry, expandedWorkGroupIds, alwaysExpandActivity);
+    if (collapsedAttemptEntryIds.has(entry.id)) continue;
+    if (entry.type === "activity-group" && entry.runId !== null && failedRunIds.has(entry.runId)) {
+      const activities = entry.activities.filter(threadFeedActivityHasRow);
+      if (activities.length > 0) result.push({ ...entry, activities });
+      continue;
     }
+    appendPresentedFeedEntry(result, entry, expandedWorkGroupIds, alwaysExpandActivity);
   }
   if (activeWorkStartedAt !== null) {
     result.push({

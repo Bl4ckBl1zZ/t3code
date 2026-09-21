@@ -165,7 +165,11 @@ import { extractLeadingMessageReply } from "~/lib/messageReply";
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
-import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
+import {
+  formatChatTimestampTooltip,
+  formatDayAwareTimestamp,
+  formatUpcomingTimestamp,
+} from "../../timestampFormat";
 import {
   isBackgroundProcessItem,
   resolveBackgroundProcessView,
@@ -1593,10 +1597,12 @@ function TimelineRowTimestamp({
   createdAt,
   timestampFormat,
   className,
+  alwaysVisible = false,
 }: {
   createdAt: string;
   timestampFormat: TimestampFormat;
   className?: string;
+  alwaysVisible?: boolean;
 }) {
   return (
     <Tooltip>
@@ -1605,6 +1611,7 @@ function TimelineRowTimestamp({
           <span
             className={cn(
               "pointer-events-none absolute me-1 shrink-0 whitespace-nowrap rounded-md text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:pointer-events-auto group-hover/timeline-row:static group-hover/timeline-row:opacity-100 group-focus-within/timeline-row:pointer-events-auto group-focus-within/timeline-row:static group-focus-within/timeline-row:opacity-100",
+              alwaysVisible && "pointer-events-auto static opacity-100",
               className,
             )}
           />
@@ -3450,15 +3457,24 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const showWarningIndicator =
     item?.type === "error" && item.failure.class === "usage_limit" && item.status !== "completed";
   const entryIconName = showWarningIndicator ? "circle-alert" : workEntryIconName(workEntry);
+  // A failed turn's error stays readable in the transcript: wrap it, keep its
+  // time visible, and tell the user when a usage limit resets.
+  const failedError = item?.type === "error" && item.status === "failed" ? item : null;
+  const usageLimitResetTime =
+    failedError?.failure.class === "usage_limit" && failedError.failure.resetAt
+      ? formatUpcomingTimestamp(failedError.failure.resetAt, ctx.timestampFormat)
+      : null;
   const toolPresentation = resolveTimelineToolPresentation(
     item?.type === "dynamic_tool" ? item.toolName : (workEntry.toolTitle ?? workEntry.label),
     workEntry.toolLifecycleStatus,
     item?.type === "dynamic_tool" ? item.input : undefined,
   );
   const heading =
-    backgroundView !== null
-      ? backgroundProcessHeading(backgroundView)
-      : (toolPresentation?.displayName ?? toolWorkEntryHeading(workEntry));
+    failedError?.failure.class === "usage_limit"
+      ? `Usage limit reached.${usageLimitResetTime ? ` Retry after ${usageLimitResetTime}.` : ""}`
+      : backgroundView !== null
+        ? backgroundProcessHeading(backgroundView)
+        : (toolPresentation?.displayName ?? toolWorkEntryHeading(workEntry));
   const rawPreview =
     backgroundView !== null ? backgroundView.command : workEntryPreview(workEntry, workspaceRoot);
   const preview =
@@ -3564,7 +3580,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <p className="flex min-w-0 w-full items-baseline gap-1.5 text-[12px] leading-5">
               <span
                 className={cn(
-                  "min-w-0 shrink truncate",
+                  "min-w-0 shrink",
+                  failedError ? "whitespace-normal break-words" : "truncate",
                   headingClass,
                   shimmerText && "live-tool-shine",
                 )}
@@ -3608,6 +3625,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <TimelineRowTimestamp
               createdAt={workEntry.createdAt}
               timestampFormat={ctx.timestampFormat}
+              alwaysVisible={failedError !== null}
             />
             <span
               className="flex size-4 shrink-0 items-center justify-center"
