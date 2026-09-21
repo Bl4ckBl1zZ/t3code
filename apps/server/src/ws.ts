@@ -2505,7 +2505,7 @@ const makeWsRpcLayer = (
                 return yield* issueAssetUrl({ resource: input.resource });
               }
               const thread = yield* threadManagement
-                .getThreadProjection(input.resource.threadId)
+                .getThreadRecords(input.resource.threadId, [])
                 .pipe(
                   Effect.mapError(
                     (cause) =>

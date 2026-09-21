@@ -65,6 +65,9 @@ import {
   threadShellFromProjection,
   isTurnItemAtOrBeforeRun,
   ProjectionStoreV2,
+  type ProjectionRecordField,
+  type ProjectionRecordFilter,
+  type ProjectionRecords,
 } from "./ProjectionStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
@@ -199,6 +202,13 @@ export interface OrchestratorV2Shape {
   readonly dispatch: (
     command: OrchestrationV2Command,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
+  readonly getMessageCount: (threadId: ThreadId) => Effect.Effect<number, OrchestratorV2Error>;
+  /** Selected canonical records; prefer this over a full projection on control paths. */
+  readonly getThreadRecords: <K extends ProjectionRecordField>(
+    threadId: ThreadId,
+    fields: ReadonlyArray<K>,
+    filter?: ProjectionRecordFilter,
+  ) => Effect.Effect<ProjectionRecords<K>, OrchestratorV2Error>;
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
@@ -726,7 +736,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
   const completionDeliveryRun = (
-    projection: OrchestrationV2ThreadProjection,
+    projection: Pick<OrchestrationV2ThreadProjection, "runs">,
     delivery: OrchestrationV2DelegatedCompletionDelivery | null | undefined,
   ) =>
     delivery === null || delivery === undefined
@@ -734,7 +744,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       : projection.runs.find((candidate) => candidate.userMessageId === delivery.messageId);
 
   const completionDeliveryMessage = (
-    projection: OrchestrationV2ThreadProjection,
+    projection: Pick<OrchestrationV2ThreadProjection, "messages">,
     delivery: OrchestrationV2DelegatedCompletionDelivery | null | undefined,
   ) =>
     delivery === null || delivery === undefined
@@ -751,7 +761,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
    */
   const offerDelegatedCompletionDelivery = (threadId: ThreadId, parentRunId: RunId) =>
     Effect.gen(function* () {
-      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const projection = yield* projectionStore.getThreadRecords(
+        threadId,
+        ["runs", "messages", "providerThreads"],
+        { messageRoles: ["user"] },
+      );
       const parentRun = projection.runs.find((candidate) => candidate.id === parentRunId);
       const cohort = parentRun?.delegatedCompletion;
       const delivery = cohort?.delivery;
@@ -792,7 +806,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   const offerDelegatedCompletionDeliveries = (threadId: ThreadId) =>
     Effect.gen(function* () {
-      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const projection = yield* projectionStore.getThreadRecords(threadId, ["runs"]);
       for (const run of projection.runs) {
         if (
           run.delegatedCompletion?.delivery !== undefined &&
@@ -8001,6 +8015,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     resumeQueuedRuns,
     hydrateProviderThreadSnapshot,
     dispatch: dispatchWithReceipt,
+    getMessageCount: (threadId) =>
+      projectionStore
+        .getMessageCount(threadId)
+        .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
+    getThreadRecords: (threadId, fields, filter) =>
+      projectionStore
+        .getThreadRecords(threadId, fields, filter)
+        .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
     getThreadProjection: (threadId) =>
       projectionStore
         .getThreadProjection(threadId)
@@ -8103,6 +8125,20 @@ export const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
         new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
+          cause: "Orchestration V2 live runtime is not configured.",
+        }),
+      ),
+    getMessageCount: (threadId) =>
+      Effect.fail(
+        new OrchestratorProjectionError({
+          threadId,
+          cause: "Orchestration V2 live runtime is not configured.",
+        }),
+      ),
+    getThreadRecords: (threadId) =>
+      Effect.fail(
+        new OrchestratorProjectionError({
+          threadId,
           cause: "Orchestration V2 live runtime is not configured.",
         }),
       ),

@@ -88,7 +88,9 @@ export const workerLive = Layer.effectDiscard(
       threadId: ThreadId,
       requestId: CommandId,
     ) {
-      const projection = yield* threads.getThreadProjection(threadId);
+      const projection = yield* threads.getThreadRecords(threadId, ["messages"], {
+        messageRoles: ["user", "assistant"],
+      });
       if (projection.thread.titleRegeneration?.requestId !== requestId) {
         return;
       }

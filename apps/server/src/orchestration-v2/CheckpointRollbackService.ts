@@ -89,7 +89,16 @@ export const layer: Layer.Layer<
       readonly checkpointId: CheckpointId;
       readonly scopeId: CheckpointScopeId;
     }) {
-      const projection = yield* projections.getThreadProjection(input.threadId);
+      const projection = yield* projections.getThreadRecords(input.threadId, [
+        "providerThreads",
+        "providerSessions",
+        "checkpoints",
+        "checkpointScopes",
+        "runs",
+        "attempts",
+        "nodes",
+        "providerTurns",
+      ]);
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === input.providerThreadId,
       );

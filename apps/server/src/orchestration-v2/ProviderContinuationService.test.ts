@@ -70,7 +70,7 @@ const makeGuard = Effect.fnUntraced(function* (completed?: Deferred.Deferred<voi
 
 function testLayer(input: {
   readonly dispatched: Queue.Queue<unknown>;
-  readonly getThreadProjection: () => Effect.Effect<OrchestrationV2ThreadProjection>;
+  readonly getThreadRecords: () => Effect.Effect<OrchestrationV2ThreadProjection>;
 }) {
   return testLayerWithDispatch({
     ...input,
@@ -80,11 +80,11 @@ function testLayer(input: {
 
 function testLayerWithDispatch(input: {
   readonly dispatched: Queue.Queue<unknown>;
-  readonly getThreadProjection: () => Effect.Effect<OrchestrationV2ThreadProjection>;
+  readonly getThreadRecords: () => Effect.Effect<OrchestrationV2ThreadProjection>;
   readonly dispatch: ThreadManagementService["Service"]["dispatch"];
 }) {
   const threads = Layer.mock(ThreadManagementService)({
-    getThreadProjection: input.getThreadProjection,
+    getThreadRecords: input.getThreadRecords,
     dispatch: input.dispatch,
   });
   const worker = workerLive.pipe(
@@ -105,7 +105,7 @@ describe("ProviderContinuationService", () => {
         assert.equal(command.creationSource, "provider");
       }).pipe(
         Effect.provide(
-          testLayer({ dispatched, getThreadProjection: () => Effect.succeed(projection) }),
+          testLayer({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
         ),
         Effect.scoped,
       );
@@ -136,7 +136,7 @@ describe("ProviderContinuationService", () => {
         assert.equal(command.text, "Delegated task completed.");
       }).pipe(
         Effect.provide(
-          testLayer({ dispatched, getThreadProjection: () => Effect.succeed(projection) }),
+          testLayer({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
         ),
         Effect.scoped,
       );
@@ -163,7 +163,7 @@ describe("ProviderContinuationService", () => {
         Effect.provide(
           testLayer({
             dispatched,
-            getThreadProjection: () =>
+            getThreadRecords: () =>
               Effect.succeed({
                 ...projection,
                 runs: [{ id: "run-live", status: "running" }],
@@ -195,7 +195,7 @@ describe("ProviderContinuationService", () => {
         Effect.provide(
           testLayerWithDispatch({
             dispatched,
-            getThreadProjection: () =>
+            getThreadRecords: () =>
               Effect.succeed({
                 ...projection,
                 runs: [{ id: "run-live", status: "running" }],
@@ -230,7 +230,7 @@ describe("ProviderContinuationService", () => {
         Effect.provide(
           testLayer({
             dispatched,
-            getThreadProjection: () =>
+            getThreadRecords: () =>
               Effect.succeed({
                 ...projection,
                 runs: [{ id: "run-live", status: "running" }],
@@ -253,7 +253,7 @@ describe("ProviderContinuationService", () => {
         assert.isTrue(Option.isNone(yield* Queue.poll(dispatched)));
       }).pipe(
         Effect.provide(
-          testLayer({ dispatched, getThreadProjection: () => Effect.succeed(projection) }),
+          testLayer({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
         ),
         Effect.scoped,
       );
@@ -274,7 +274,7 @@ describe("ProviderContinuationService", () => {
         assert.isTrue(Option.isNone(yield* Queue.poll(dispatched)));
       }).pipe(
         Effect.provide(
-          testLayer({ dispatched, getThreadProjection: () => Effect.succeed(projection) }),
+          testLayer({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
         ),
         Effect.scoped,
       );
@@ -301,7 +301,7 @@ describe("ProviderContinuationService", () => {
         Effect.provide(
           testLayer({
             dispatched,
-            getThreadProjection: () =>
+            getThreadRecords: () =>
               Deferred.succeed(projectionEntered, undefined).pipe(
                 Effect.andThen(Deferred.await(releaseProjection)),
                 Effect.as(projection),
@@ -336,7 +336,7 @@ describe("ProviderContinuationService", () => {
         Effect.provide(
           testLayer({
             dispatched,
-            getThreadProjection: () => {
+            getThreadRecords: () => {
               projectionCalls += 1;
               return projectionCalls === 1
                 ? Deferred.succeed(firstProjectionEntered, undefined).pipe(
@@ -371,7 +371,7 @@ describe("ProviderContinuationService", () => {
         Effect.provide(
           testLayer({
             dispatched,
-            getThreadProjection: () =>
+            getThreadRecords: () =>
               Effect.succeed({
                 ...projection,
                 thread: {
