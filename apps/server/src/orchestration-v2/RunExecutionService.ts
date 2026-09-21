@@ -504,6 +504,10 @@ export const layer: Layer.Layer<
       readonly openRunOwnedSubagents?: OpenRunOwnedSubagentProjection;
       readonly terminal: ProviderTerminalEvent;
       readonly failureItemPersisted: boolean;
+      readonly writeIfRunCurrent?: {
+        readonly activeAttemptId: RunAttemptId;
+        readonly expectedStatus: OrchestrationV2Run["status"];
+      };
     }) =>
       Effect.gen(function* () {
         const completedAt = yield* DateTime.now;
@@ -595,7 +599,7 @@ export const layer: Layer.Layer<
         const checkpointCaptureCommandId = CommandId.make(
           `command:effect:checkpoint.capture:${input.run.id}`,
         );
-        yield* eventSink.writeWithEffects({
+        const finalization = {
           effects:
             input.terminal.status === "completed"
               ? [
@@ -703,47 +707,23 @@ export const layer: Layer.Layer<
               payload: finalizedProviderThread,
             },
           ],
-        });
+        } satisfies Parameters<typeof eventSink.writeWithEffects>[0];
+        if (input.writeIfRunCurrent !== undefined) {
+          yield* eventSink.writeIfRunCurrent({
+            threadId: input.run.threadId,
+            runId: input.run.id,
+            activeAttemptId: input.writeIfRunCurrent.activeAttemptId,
+            expectedStatus: input.writeIfRunCurrent.expectedStatus,
+            events: finalization.events,
+          });
+        } else {
+          yield* eventSink.writeWithEffects(finalization);
+        }
       });
 
     return RunExecutionServiceV2.of({
       startRootRun: (input) =>
         Effect.gen(function* () {
-          const assistantStreamingEnabled = yield* serverSettings.getSettings.pipe(
-            Effect.map((settings) => settings.enableLegacyTokenStreaming),
-            Effect.mapError(
-              (cause) =>
-                new RunExecutionStartError({
-                  commandId: input.commandId,
-                  runId: input.run.id,
-                  cause,
-                }),
-            ),
-          );
-          if (input.captureFilesystemCheckpoint !== false) {
-            yield* checkpointService
-              .captureBaseline({
-                scope: input.checkpointScope,
-                ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new RunExecutionStartError({
-                      commandId: input.commandId,
-                      runId: input.run.id,
-                      cause,
-                    }),
-                ),
-              );
-          }
-          if (
-            input.shouldStartProviderTurn !== undefined &&
-            !(yield* input.shouldStartProviderTurn())
-          ) {
-            return;
-          }
-          const terminalEvent = yield* Ref.make<ProviderTerminalEvent | null>(null);
           const makeFailedTerminalEvent = (
             failure: OrchestrationV2ProviderFailure,
             failureItemOrdinal: number,
@@ -763,6 +743,73 @@ export const layer: Layer.Layer<
             failure,
             threadDisposition: "reusable",
           });
+          const assistantStreamingEnabled = yield* Effect.gen(function* () {
+            const assistantStreamingEnabled = yield* serverSettings.getSettings.pipe(
+              Effect.map((settings) => settings.enableLegacyTokenStreaming),
+            );
+            if (input.captureFilesystemCheckpoint !== false) {
+              yield* checkpointService.captureBaseline({
+                scope: input.checkpointScope,
+                ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
+              });
+            }
+            if (
+              input.shouldStartProviderTurn !== undefined &&
+              !(yield* input.shouldStartProviderTurn())
+            ) {
+              return null;
+            }
+            return assistantStreamingEnabled;
+          }).pipe(
+            // The run is already running here, so a retried start would see it
+            // advanced and return; settle it now rather than leave it running.
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                if (Cause.hasInterruptsOnly(cause)) {
+                  return yield* Effect.failCause(cause);
+                }
+                yield* Effect.logError("orchestration V2 run preparation failed", {
+                  runId: input.run.id,
+                  cause,
+                });
+                yield* writeFinalRunEvents({
+                  run: input.run,
+                  rootNode: input.rootNode,
+                  checkpointScope: input.checkpointScope,
+                  providerThread: input.providerThread,
+                  attempt: input.attempt,
+                  terminal: makeFailedTerminalEvent(
+                    makeProviderFailure({
+                      cause: Cause.squash(cause),
+                      // Keep exact underlying text in the logged cause only;
+                      // the persisted turn item gets a bounded curated message.
+                      message: "Run preparation failed.",
+                      class: "unknown",
+                    }),
+                    input.providerTurnOrdinal * 100 + 1,
+                  ),
+                  failureItemPersisted: false,
+                  writeIfRunCurrent: {
+                    activeAttemptId: input.attemptId,
+                    expectedStatus: "running",
+                  },
+                });
+                return null;
+              }),
+            ),
+            Effect.mapError(
+              (cause) =>
+                new RunExecutionStartError({
+                  commandId: input.commandId,
+                  runId: input.run.id,
+                  cause,
+                }),
+            ),
+          );
+          if (assistantStreamingEnabled === null) {
+            return;
+          }
+          const terminalEvent = yield* Ref.make<ProviderTerminalEvent | null>(null);
           const latestTurnItemOrdinal = yield* Ref.make(input.providerTurnOrdinal * 100);
           const latestProviderThread = yield* Ref.make(input.providerThread);
           const routeIdentity: ProviderEventRouteIdentity = {
