@@ -1986,7 +1986,7 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
         tone:
           item.status === "completed"
             ? "success"
-            : item.status === "running"
+            : item.status === "running" || item.failure.class === "usage_limit"
               ? "warning"
               : "danger",
         icon: CircleAlertIcon,
@@ -3445,9 +3445,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const backgroundView =
     backgroundItem === null ? null : resolveBackgroundProcessView(backgroundItem, Date.now());
   const iconConfig = workToneIcon(workEntry.tone);
-  const showWarningIndicator = false;
-  const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
   const item = workEntry.projectedItem?.item;
+  // A provider stopping on a usage limit is a warning to wait or switch, not a failed call.
+  const showWarningIndicator =
+    item?.type === "error" && item.failure.class === "usage_limit" && item.status !== "completed";
+  const entryIconName = showWarningIndicator ? "circle-alert" : workEntryIconName(workEntry);
   const toolPresentation = resolveTimelineToolPresentation(
     item?.type === "dynamic_tool" ? item.toolName : (workEntry.toolTitle ?? workEntry.label),
     workEntry.toolLifecycleStatus,
@@ -3469,14 +3471,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
   const canExpand = expandedBody !== null || workEntry.projectedItem !== undefined;
   const showFailedIndicator =
-    backgroundView !== null
+    !showWarningIndicator &&
+    (backgroundView !== null
       ? backgroundView.outcome?.tone === "danger"
-      : workEntryIndicatesToolFailure(workEntry);
+      : workEntryIndicatesToolFailure(workEntry));
   const showDestructiveRowStyle = showFailedIndicator && !workLogEntryIsToolLike(workEntry);
   const iconWrapperClass = cn(
     "flex size-5 shrink-0 items-center justify-center",
     showWarningIndicator
-      ? "text-destructive"
+      ? "text-warning"
       : showDestructiveRowStyle
         ? "text-destructive"
         : workEntry.tone === "tool" || showFailedIndicator

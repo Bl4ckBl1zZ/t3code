@@ -42,6 +42,9 @@ changed agents -- which ones it ran on before. The elapsed time beside a working
 the moment that turn started, including while it waits for your approval, and disappears once the
 thread stops working.
 
+**Limited** means the provider stopped on a usage or rate limit. The conversation keeps the
+provider's explanation. Retry after the limit resets, or switch to another provider instance.
+
 ## Delete threads on web and desktop
 
 Choose **Delete** from a thread's menu, or select several threads and choose **Delete (N)**. With

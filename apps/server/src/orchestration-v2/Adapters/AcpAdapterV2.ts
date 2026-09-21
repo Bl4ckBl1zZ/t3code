@@ -219,6 +219,8 @@ export interface AcpAdapterV2Flavor {
     request: EffectAcpSchema.RequestPermissionRequest,
     decision: ProviderApprovalDecision,
   ) => string | undefined;
+  /** Interprets provider-specific prompt errors before they cross into orchestration. */
+  readonly promptFailure?: (cause: unknown) => OrchestrationV2ProviderFailure;
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
   readonly makeRuntime: (
@@ -4951,10 +4953,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     yield* finalizeTurn(
                       context,
                       context.interrupted ? "interrupted" : "failed",
-                      makeProviderFailure({
-                        cause: Cause.squash(cause),
-                        class: "provider_error",
-                      }),
+                      flavor.promptFailure?.(Cause.squash(cause)) ??
+                        makeProviderFailure({
+                          cause: Cause.squash(cause),
+                          class: "provider_error",
+                        }),
                     ).pipe(
                       Effect.andThen(
                         Effect.logWarning("orchestration-v2.acp-prompt-failed", {

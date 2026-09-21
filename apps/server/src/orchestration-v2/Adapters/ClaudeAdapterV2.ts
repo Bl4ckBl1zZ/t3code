@@ -2072,7 +2072,8 @@ function terminalStatusFromResult(
   if (message.subtype === "success") {
     // The SDK reports API-level failures (401 auth, 529 overloaded, …) as
     // subtype "success" with is_error set; the turn produced no real work.
-    return message.is_error ? "failed" : "completed";
+    // A 429 is reported the same way and never carries completed work either.
+    return message.is_error || message.api_error_status === 429 ? "failed" : "completed";
   }
   const errorText = message.errors.join("\n").toLowerCase();
   // An abort is always client-initiated ("Error: Request was aborted."), so it
@@ -2112,22 +2113,32 @@ function isClaudeTaskNotificationOriginResult(message: SDKMessage): message is S
 
 function providerFailureFromResult(
   message: SDKResultMessage,
+  usageLimited = false,
 ): OrchestrationV2ProviderFailure | null {
+  const failureClass =
+    message.terminal_reason === "blocking_limit" ||
+    (message.subtype === "success" && message.api_error_status === 429) ||
+    usageLimited
+      ? "usage_limit"
+      : "provider_error";
   if (message.subtype !== "success") {
     return makeProviderFailure({
       message: message.errors.join("\n"),
       code: message.subtype,
-      class: "provider_error",
+      class: failureClass,
     });
   }
-  if (!message.is_error) {
+  if (!message.is_error && message.api_error_status !== 429) {
     return null;
   }
   const apiErrorStatus = message.api_error_status ?? null;
   return makeProviderFailure({
-    message: message.result,
+    message:
+      message.result.trim().length === 0 && apiErrorStatus === 429
+        ? "Claude API rate limit reached. Try again later."
+        : message.result,
     code: apiErrorStatus === null ? "sdk_result_error" : `api_error_${apiErrorStatus}`,
-    class: "provider_error",
+    class: failureClass,
     retryable: apiErrorStatus === 429 || apiErrorStatus === 529 ? true : null,
   });
 }
@@ -2140,7 +2151,12 @@ function providerFailureFromApiRetry(message: SDKAPIRetryMessage): Orchestration
       message.error_status === null
         ? message.error
         : `api_error_${Math.trunc(message.error_status)}`,
-    class: message.error_status === null ? "transport_error" : "provider_error",
+    class:
+      message.error_status === 429
+        ? "usage_limit"
+        : message.error_status === null
+          ? "transport_error"
+          : "provider_error",
     retryable: true,
   });
 }
@@ -2249,6 +2265,10 @@ interface ActiveClaudeTurnContext {
   };
   readonly toolCalls: Map<string, ActiveClaudeToolCall>;
   readonly ignoredTaskIds: Set<string>;
+  /** Rate-limit windows the SDK rejected during this turn, with their reset times. */
+  readonly rejectedRateLimitTypes: Set<string>;
+  readonly rateLimitResetTimes: Map<string, string | null>;
+  latestAssistantRateLimited: boolean;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
@@ -4211,6 +4231,35 @@ export function makeClaudeAdapterV2(
             yield* (
               adapterOptions.usageLimitListener?.publish(message.rate_limit_info) ?? Effect.void
             );
+            // Rejected windows pause the SDK without ending its turn. Remember them
+            // so the turn's terminal result can report the limit and its reset.
+            const rateLimitInfo = message.rate_limit_info;
+            const limitContext = yield* Ref.get(activeTurn);
+            if (rateLimitInfo && limitContext !== null) {
+              const overageAllowed =
+                rateLimitInfo.overageStatus === "allowed" ||
+                rateLimitInfo.overageStatus === "allowed_warning" ||
+                rateLimitInfo.isUsingOverage === true ||
+                rateLimitInfo.overageInUse === true;
+              const limitType = rateLimitInfo.rateLimitType ?? "unknown";
+              if (rateLimitInfo.status === "rejected" && !overageAllowed) {
+                limitContext.rejectedRateLimitTypes.add(limitType);
+                const resetMs = (rateLimitInfo.resetsAt ?? NaN) * 1000;
+                limitContext.rateLimitResetTimes.set(
+                  limitType,
+                  Number.isFinite(resetMs) && resetMs > 0 && resetMs < 8.64e15
+                    ? DateTime.formatIso(DateTime.makeUnsafe(resetMs))
+                    : null,
+                );
+              } else if (
+                rateLimitInfo.status === "allowed" ||
+                rateLimitInfo.status === "allowed_warning" ||
+                overageAllowed
+              ) {
+                limitContext.rejectedRateLimitTypes.delete(limitType);
+                limitContext.rateLimitResetTimes.delete(limitType);
+              }
+            }
           }
           // Background lifecycle first, and deliberately ahead of the wake
           // buffer. A background command settles precisely when no turn is
@@ -4229,6 +4278,9 @@ export function makeClaudeAdapterV2(
 
           if (message.type === "assistant") {
             context.nativeMessageCursor = message.uuid;
+            if (message.parent_tool_use_id === null) {
+              context.latestAssistantRateLimited = message.error === "rate_limit";
+            }
             const now = yield* DateTime.now;
             yield* completeProviderRetry(context, now);
             // Only the main agent's requests fill the thread's context window;
@@ -4628,12 +4680,31 @@ export function makeClaudeAdapterV2(
                 session_id: message.session_id,
               });
             }
-            const resultFailure = interrupted ? null : providerFailureFromResult(message);
+            const usageLimited =
+              (context.rejectedRateLimitTypes.size > 0 || context.latestAssistantRateLimited) &&
+              (message.subtype !== "success" ||
+                message.api_error_status == null ||
+                message.api_error_status === 429) &&
+              (message.terminal_reason == null ||
+                message.terminal_reason === "api_error" ||
+                message.terminal_reason === "blocking_limit");
+            const resetTimes = Array.from(context.rateLimitResetTimes.values());
+            const resetAt =
+              resetTimes.length > 0 && resetTimes.every((time) => time !== null)
+                ? resetTimes.reduce((latest, time) => (time! > latest ? time! : latest), "")
+                : null;
+            const resultFailure = interrupted
+              ? null
+              : providerFailureFromResult(message, usageLimited);
+            const terminalFailure =
+              resultFailure?.class === "usage_limit"
+                ? { ...resultFailure, resetAt }
+                : resultFailure;
             yield* finalizeActiveTurn({
               context,
               status: interrupted ? "interrupted" : terminalStatusFromResult(message),
               completedAt,
-              ...(resultFailure === null ? {} : { failure: resultFailure }),
+              ...(terminalFailure === null ? {} : { failure: terminalFailure }),
             });
           }
         });
@@ -4930,6 +5001,9 @@ export function makeClaudeAdapterV2(
               },
               toolCalls: new Map(),
               ignoredTaskIds: new Set(),
+              rejectedRateLimitTypes: new Set(),
+              rateLimitResetTimes: new Map(),
+              latestAssistantRateLimited: false,
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),

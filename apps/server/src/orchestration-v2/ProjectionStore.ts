@@ -1,3 +1,7 @@
+import {
+  latestRootProviderFailure,
+  threadErrorSummary,
+} from "@t3tools/shared/orchestrationV2ThreadError";
 import type {
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
@@ -535,6 +539,7 @@ type ShellThreadRow = {
   readonly activity_run_started_at: string | null;
   readonly provider_instance_history_json: string | null;
   readonly last_error: string | null;
+  readonly terminal_failure_payload_json: string | null;
   readonly pending_request_payload_json: string | null;
   readonly latest_message_summary_json: string | null;
   readonly latest_user_message_at: string | null;
@@ -1110,7 +1115,10 @@ export function threadShellFromProjection(
       providerThreads: projection.providerThreads,
     }),
     status: latestRun?.status ?? "idle",
-    lastError: providerSession?.lastError ?? null,
+    ...threadErrorSummary(
+      latestRootProviderFailure(latestRun, projection.turnItems),
+      providerSession?.lastError ?? null,
+    ),
     pendingRuntimeRequest:
       pendingRuntimeRequest === null
         ? null
@@ -1199,6 +1207,8 @@ type ShellThreadState = {
   readonly activityRunStartedAt: DateTime.Utc | null;
   readonly providerInstanceHistory: OrchestrationV2ThreadShell["providerInstanceHistory"];
   readonly lastError: string | null;
+  readonly lastErrorClass: OrchestrationV2ThreadShell["lastErrorClass"];
+  readonly usageLimitResetAt: OrchestrationV2ThreadShell["usageLimitResetAt"];
   readonly pendingRuntimeRequest: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null;
   readonly latestVisibleMessage: OrchestrationV2LatestVisibleMessageSummary | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
@@ -1337,6 +1347,8 @@ function shellFromState(input: {
     providerInstanceHistory: input.state.providerInstanceHistory,
     status: input.state.latestRunStatus,
     lastError: input.state.lastError,
+    lastErrorClass: input.state.lastErrorClass,
+    usageLimitResetAt: input.state.usageLimitResetAt,
     pendingRuntimeRequest:
       input.state.pendingRuntimeRequest === null
         ? null
@@ -2560,7 +2572,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             `.pipe(Effect.flatMap(decodeRows(decodeProviderTurnPayload, threadId)));
             const checkpointScopes = yield* sql<PayloadRow>`
               SELECT payload_json FROM orchestration_v2_projection_checkpoint_scopes
-              WHERE thread_id = ${threadId} AND node_id IN (SELECT json_extract(payload_json, '$.rootNodeId') FROM orchestration_v2_projection_runs WHERE thread_id = ${threadId} AND run_id = ${runId}) ORDER BY ordinal_within_parent ASC, scope_id ASC
+              WHERE thread_id = ${threadId} AND scope_id IN ${sql.in(nodes.flatMap((node) => (node.checkpointScopeId === null ? [] : [node.checkpointScopeId])))} ORDER BY ordinal_within_parent ASC, scope_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeCheckpointScopePayload, threadId)));
             const contextHandoffs = yield* sql<PayloadRow>`
               SELECT payload_json FROM orchestration_v2_projection_context_handoffs
@@ -2772,6 +2784,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 LIMIT 1
               ) AS last_error,
               (
+                SELECT item.payload_json
+                FROM orchestration_v2_projection_turn_items item
+                INNER JOIN orchestration_v2_projection_runs r ON r.run_id = item.run_id
+                WHERE r.run_id = (
+                  SELECT latest.run_id FROM orchestration_v2_projection_runs latest
+                  WHERE latest.thread_id = t.thread_id
+                  ORDER BY latest.ordinal DESC, latest.run_id DESC LIMIT 1
+                )
+                  AND r.status = 'failed'
+                  AND item.type = 'error' AND item.status = 'failed'
+                  AND item.node_id IS json_extract(r.payload_json, '$.rootNodeId')
+                ORDER BY item.updated_at DESC, item.ordinal DESC, item.turn_item_id DESC
+                LIMIT 1
+              ) AS terminal_failure_payload_json,
+              (
                 SELECT request.payload_json
                 FROM orchestration_v2_projection_runtime_requests request
                 WHERE request.thread_id = t.thread_id
@@ -2937,6 +2964,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           row.latest_message_summary_json === null
             ? null
             : yield* decodeLatestVisibleMessageSummary(row.latest_message_summary_json);
+        const terminalFailureItem =
+          row.terminal_failure_payload_json === null
+            ? null
+            : yield* decodeTurnItemPayload(row.terminal_failure_payload_json);
         return {
           thread,
           latestRunId: row.latest_run_id === null ? null : RunId.make(row.latest_run_id),
@@ -2961,7 +2992,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           providerInstanceHistory: providerInstanceHistoryFromRow(
             row.provider_instance_history_json,
           ),
-          lastError: row.last_error,
+          ...threadErrorSummary(
+            terminalFailureItem?.type === "error" ? terminalFailureItem.failure : null,
+            row.last_error,
+          ),
           pendingRuntimeRequest,
           latestVisibleMessage,
           latestUserMessageAt:

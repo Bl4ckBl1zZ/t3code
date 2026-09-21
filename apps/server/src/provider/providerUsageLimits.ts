@@ -240,6 +240,45 @@ export function usageLimitsAfterProbe(
   return probed;
 }
 
+/**
+ * Codex sends `account/rateLimits/updated` as a partial view of the snapshot: a
+ * field the update omits keeps the value observed earlier in the session.
+ * Model-specific snapshots (such as Spark) describe another allowance and never
+ * overwrite the main one.
+ */
+export function mergeCodexRateLimits(
+  previous: CodexRateLimitSnapshot | undefined,
+  update: CodexRateLimitSnapshot,
+): CodexRateLimitSnapshot | undefined {
+  if (update.limitId && update.limitId !== "codex") return previous;
+  if (!previous) return update;
+  return {
+    ...previous,
+    ...(update.limitId !== undefined ? { limitId: update.limitId } : {}),
+    ...(update.planType !== undefined ? { planType: update.planType } : {}),
+    ...(update.primary !== undefined ? { primary: update.primary } : {}),
+    ...(update.secondary !== undefined ? { secondary: update.secondary } : {}),
+  };
+}
+
+/** When a usage-limited Codex turn can run again: every exhausted window must have reset. */
+export function codexUsageLimitResetAt(
+  snapshot: CodexRateLimitSnapshot | undefined,
+): string | null {
+  if (!snapshot) return null;
+  const windows = codexUsageLimits(snapshot, "").windows.filter(
+    (window) => window.usedPercent >= 100,
+  );
+  if (windows.length === 0 || windows.some((window) => !window.resetsAt)) return null;
+  return windows.reduce<string | null>(
+    (latest, window) =>
+      latest === null || Date.parse(window.resetsAt!) > Date.parse(latest)
+        ? window.resetsAt!
+        : latest,
+    null,
+  );
+}
+
 export class CodexUsageLimitListener extends Context.Service<
   CodexUsageLimitListener,
   {

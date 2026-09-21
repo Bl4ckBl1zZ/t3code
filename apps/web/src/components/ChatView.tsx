@@ -8369,6 +8369,11 @@ function ChatViewContent(props: ChatViewProps) {
         <LinkPullRequestDialogHost />
         <ThreadErrorBanner
           error={visibleThreadError}
+          errorClass={
+            localServerError === null && visibleThreadError === serverRuntime?.lastError
+              ? (serverRuntime?.lastErrorClass ?? null)
+              : null
+          }
           onDismiss={() => {
             setThreadError(activeThread.id, null);
             dismissThreadErrorBannerForSession(threadErrorBannerKey);

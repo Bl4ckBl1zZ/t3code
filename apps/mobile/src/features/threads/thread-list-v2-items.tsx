@@ -65,6 +65,8 @@ const STATUS_LABEL_BY_STATUS: Partial<
   // out there.
   background: { label: "Background", className: "text-sky-600/80 dark:text-sky-400/80" },
   failed: { label: "Failed", className: "text-red-700 dark:text-red-300" },
+  // Amber like Approval: the provider stopped on a usage or rate limit, not an error.
+  limited: { label: "Limited", className: "text-amber-700 dark:text-amber-300" },
 };
 
 // The Work lozenge reuses the same hues, as a filled pill rather than a bare
@@ -88,6 +90,11 @@ const WORK_BADGE_STYLE: Record<
     label: "FAILED",
     fillClassName: "bg-red-500/15",
     textClassName: "text-red-700 dark:text-red-300",
+  },
+  limited: {
+    label: "LIMITED",
+    fillClassName: "bg-amber-500/15",
+    textClassName: "text-amber-700 dark:text-amber-300",
   },
   done: {
     label: "DONE",
@@ -930,13 +937,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </View>
       ) : null}
       <View className="mt-1 flex-row items-center gap-2">
-        {status === "failed" && thread.runtime?.lastError ? (
+        {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
           <Text
             className={cn(
               "flex-1 text-xs",
               selected
                 ? "text-user-bubble-foreground-muted"
-                : "text-red-600/80 dark:text-red-400/80",
+                : status === "limited"
+                  ? "text-amber-700/80 dark:text-amber-300/80"
+                  : "text-red-600/80 dark:text-red-400/80",
             )}
             numberOfLines={1}
           >
@@ -1014,7 +1023,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         {/* The trailing badge only carries the number, so it is redundant
             once the line above leads with it — it comes back for a failed
             row, where the error text owns that line instead. */}
-        {pr && status === "failed" && thread.runtime?.lastError ? (
+        {pr && (status === "failed" || status === "limited") && thread.runtime?.lastError ? (
           <Text
             accessibilityLabel={pr.accessibilityLabel}
             className={cn("text-xs", selected ? "text-user-bubble-foreground" : pr.textClassName)}

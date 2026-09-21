@@ -550,9 +550,20 @@ function SidebarThreadTooltip({
             </div>
           ) : null}
           {thread.runtime?.lastError ? (
-            <div className="flex min-w-0 items-center gap-2 text-destructive-foreground">
+            <div
+              className={cn(
+                "flex min-w-0 items-center gap-2",
+                thread.runtime.lastErrorClass === "usage_limit"
+                  ? "text-warning-foreground"
+                  : "text-destructive-foreground",
+              )}
+            >
               <CircleAlertIcon className="size-3 shrink-0 stroke-current" />
-              <div className="min-w-0 truncate">Error occurred</div>
+              <div className="min-w-0 truncate">
+                {thread.runtime.lastErrorClass === "usage_limit"
+                  ? "Usage limit reached"
+                  : "Error occurred"}
+              </div>
             </div>
           ) : null}
         </div>
@@ -655,6 +666,11 @@ const WORK_INBOX_BADGE_STYLE: Record<
   failed: {
     label: "Failed",
     className: "bg-red-500/15 text-red-700 dark:text-red-300",
+    railClassName: null,
+  },
+  limited: {
+    label: "Limited",
+    className: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
     railClassName: null,
   },
   done: {
@@ -1083,35 +1099,41 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               icon: "input" as const,
               className: "text-indigo-600 dark:text-indigo-300",
             }
-          : status === "failed"
+          : status === "limited"
             ? {
-                label: "Failed",
+                label: "Limited",
                 icon: "failed" as const,
-                className: "text-red-700 dark:text-red-300",
+                className: "text-warning-foreground",
               }
-            : isWoke
+            : status === "failed"
               ? {
-                  label: "Woke",
-                  icon: "woke" as const,
-                  className: "text-warning-foreground",
+                  label: "Failed",
+                  icon: "failed" as const,
+                  className: "text-red-700 dark:text-red-300",
                 }
-              : isUnread
+              : isWoke
                 ? {
-                    label: "Done",
-                    icon: "done" as const,
-                    className: "text-emerald-700 dark:text-emerald-300",
+                    label: "Woke",
+                    icon: "woke" as const,
+                    className: "text-warning-foreground",
                   }
-                : // Ranked under Done and Woke, matching sidebar v1: a result the
-                  // reader has not seen yet outranks work that is still going.
-                  // Sky like Working, but unanimated — nothing is generating,
-                  // something is merely still out there.
-                  status === "background"
+                : isUnread
                   ? {
-                      label: "Background",
-                      icon: "working" as const,
-                      className: "text-sky-600/80 dark:text-sky-400/80",
+                      label: "Done",
+                      icon: "done" as const,
+                      className: "text-emerald-700 dark:text-emerald-300",
                     }
-                  : null;
+                  : // Ranked under Done and Woke, matching sidebar v1: a result the
+                    // reader has not seen yet outranks work that is still going.
+                    // Sky like Working, but unanimated — nothing is generating,
+                    // something is merely still out there.
+                    status === "background"
+                    ? {
+                        label: "Background",
+                        icon: "working" as const,
+                        className: "text-sky-600/80 dark:text-sky-400/80",
+                      }
+                    : null;
 
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;

@@ -361,11 +361,21 @@ function ChangedFilesSummaryCard(props: {
   );
 }
 
+/** A provider stopping on a usage limit reads as a warning, not a failure. */
+function isUsageLimitRow(row: ThreadFeedActivity): boolean {
+  const item = row.projectedItem.item;
+  return (
+    item.type === "error" && item.failure.class === "usage_limit" && item.status !== "completed"
+  );
+}
+
 function WorkRowIcon(props: {
   readonly row: ThreadFeedActivity;
   readonly iconSubtleColor: import("react-native").ColorValue;
 }) {
-  const iconIsDestructive = props.row.icon === "alert" || props.row.icon === "warning";
+  const isUsageLimit = isUsageLimitRow(props.row);
+  const iconIsDestructive =
+    !isUsageLimit && (props.row.icon === "alert" || props.row.icon === "warning");
   if (props.row.logo === "t3-code") {
     return (
       <Image
@@ -391,7 +401,7 @@ function WorkRowIcon(props: {
       }
       size={14}
       weight="medium"
-      tintColor={iconIsDestructive ? "#e11d48" : props.iconSubtleColor}
+      tintColor={isUsageLimit ? "#d97706" : iconIsDestructive ? "#e11d48" : props.iconSubtleColor}
       type="monochrome"
     />
   );
@@ -502,7 +512,9 @@ export function ThreadWorkLog(props: {
             backgroundOutcome === null || backgroundOutcome.tone === "success"
               ? rowText
               : `${rowText}, ${backgroundOutcome.label}`;
-          const textIsDestructive = row.icon === "alert" || row.icon === "warning";
+          const textIsUsageLimit = isUsageLimitRow(row);
+          const textIsDestructive =
+            !textIsUsageLimit && (row.icon === "alert" || row.icon === "warning");
           const dynamicToolPath =
             item.type === "dynamic_tool" ? dynamicToolInputPreview(item.input) : null;
           const filePath =
@@ -596,6 +608,7 @@ export function ThreadWorkLog(props: {
                         className={cn(
                           "font-t3-medium text-foreground",
                           textIsDestructive && "text-rose-600 dark:text-rose-400",
+                          textIsUsageLimit && "text-amber-600 dark:text-amber-400",
                         )}
                       >
                         {row.summary}

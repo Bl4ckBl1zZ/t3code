@@ -19,7 +19,7 @@ export type ThreadNotificationThread = Pick<
 >;
 
 export interface ThreadNotificationMemory {
-  /** `<runId>:<status>` while the thread is blocked on the user or failed. */
+  /** `<runId>:<status>` while the thread is blocked on the user, failed, or limited. */
   readonly attention: string | null;
   /** The latest run this thread was seen resting on after completing. */
   readonly completion: RunId | null;
@@ -60,7 +60,7 @@ export function resolveThreadNotificationEvents(
     const status = resolveSidebarThreadStatus(thread);
     const prior = previous.get(key);
     const attention =
-      status === "input" || status === "approval" || status === "failed"
+      status === "input" || status === "approval" || status === "failed" || status === "limited"
         ? `${thread.latestRun?.runId ?? ""}:${status}`
         : null;
     const completion =
@@ -75,13 +75,20 @@ export function resolveThreadNotificationEvents(
         thread,
         kind: "input",
         tone: status === "failed" ? "error" : "warning",
-        icon: status === "approval" || status === "failed" ? status : "input",
+        icon:
+          status === "approval" || status === "failed"
+            ? status
+            : status === "limited"
+              ? "failed"
+              : "input",
         title:
           status === "approval"
             ? "Approval needed"
-            : status === "failed"
-              ? "Thread failed"
-              : "Input needed",
+            : status === "limited"
+              ? "Usage limit reached"
+              : status === "failed"
+                ? "Thread failed"
+                : "Input needed",
       });
     } else if (completion !== null && completion !== prior.completion) {
       events.push({

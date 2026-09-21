@@ -4,6 +4,7 @@ import type {
   OrchestrationProjectShell,
   OrchestrationV2RunStatus,
   OrchestrationV2ShellSnapshot,
+  OrchestrationV2ProviderFailureClass,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   PlanId,
@@ -54,6 +55,8 @@ export interface ThreadRuntimeSummary {
   readonly providerInstanceId: ProviderInstanceId;
   readonly providerName: string | null;
   readonly lastError: string | null;
+  readonly lastErrorClass?: OrchestrationV2ProviderFailureClass | null;
+  readonly usageLimitResetAt?: string | null;
   readonly updatedAt: string;
 }
 
@@ -218,6 +221,8 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
     providerInstanceId: thread.providerInstanceId,
     providerName: null,
     lastError: thread.lastError ?? null,
+    lastErrorClass: thread.lastErrorClass ?? null,
+    usageLimitResetAt: thread.usageLimitResetAt ?? null,
     updatedAt: iso(thread.updatedAt),
   };
 }

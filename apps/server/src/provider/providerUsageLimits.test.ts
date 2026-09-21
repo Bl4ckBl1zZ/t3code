@@ -6,6 +6,8 @@ import {
   claudeUsageLimits,
   applyClaudeRateLimitEvent,
   applyCodexRateLimitEvent,
+  codexUsageLimitResetAt,
+  mergeCodexRateLimits,
   usageLimitsAfterProbe,
 } from "./providerUsageLimits.ts";
 
@@ -254,4 +256,33 @@ it("merges live Codex windows without replacing monthly semantics, reset times o
     ),
   ).toBe(updated);
   expect(decodeLimits(updated)).toEqual(updated);
+});
+
+describe("codexUsageLimitResetAt", () => {
+  it("waits for every exhausted window and never invents an unknown reset", () => {
+    expect(
+      codexUsageLimitResetAt({
+        primary: { usedPercent: 100, resetsAt: 2000000000 },
+        secondary: { usedPercent: 100, resetsAt: 2000100000 },
+      }),
+    ).toBe("2033-05-19T07:20:00.000Z");
+    expect(codexUsageLimitResetAt({ primary: { usedPercent: 100 } })).toBeNull();
+    expect(
+      codexUsageLimitResetAt({ primary: { usedPercent: 50, resetsAt: 2000000000 } }),
+    ).toBeNull();
+  });
+});
+
+describe("mergeCodexRateLimits", () => {
+  it("keeps windows a partial update omits and ignores model-specific snapshots", () => {
+    const main = { limitId: "codex", primary: { usedPercent: 40 } };
+    expect(mergeCodexRateLimits(main, { secondary: { usedPercent: 100 } })).toEqual({
+      limitId: "codex",
+      primary: { usedPercent: 40 },
+      secondary: { usedPercent: 100 },
+    });
+    expect(mergeCodexRateLimits(main, { limitId: "spark", primary: { usedPercent: 100 } })).toBe(
+      main,
+    );
+  });
 });

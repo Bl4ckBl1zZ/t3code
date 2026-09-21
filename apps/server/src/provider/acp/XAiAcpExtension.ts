@@ -803,7 +803,7 @@ export function extractXAiAcpSubagentUpdate(
     suppressNormalTool: true,
   };
 }
-const xAiRateLimitedErrorCode = -32003;
+export const xAiRateLimitedErrorCode = -32003;
 
 const XAiAskUserQuestionOption = Schema.Struct({
   label: Schema.String,
