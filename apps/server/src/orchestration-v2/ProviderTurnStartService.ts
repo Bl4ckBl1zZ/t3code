@@ -375,6 +375,12 @@ export const layer: Layer.Layer<
         }
 
         if (message.restartContinuation === true) return yield* resumed.failure;
+        yield* Effect.logWarning("Provider resume failed; attempting a fresh native session", {
+          driver: session.driver,
+          providerThreadId: providerThread.id,
+          runId,
+          errorTag: resumed.failure._tag,
+        });
         const replacement = yield* session.ensureThread({
           threadId: projection.thread.id,
           modelSelection: run.modelSelection,
