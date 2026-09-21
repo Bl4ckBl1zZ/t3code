@@ -200,6 +200,11 @@ function makeTestLayer(input: {
       getTurnStartContext: () => Effect.succeed({ ...input.projection, hasConversation: true }),
       getTurnStartHistory: () => Effect.succeed(input.projection.turnItems),
       getPlan: () => Effect.die("unused getPlan"),
+      hasUnpairedRunInterruptRequest: (_threadId, requestId, resultId) =>
+        Effect.succeed(
+          input.projection.turnItems.some((item) => item.id === requestId) &&
+            !input.projection.turnItems.some((item) => item.id === resultId),
+        ),
     }),
   );
   const eventSinkLayer = Layer.succeed(
@@ -509,6 +514,7 @@ function makeStartTestLayer(input: {
             getTurnStartContext: () =>
               Effect.succeed({ ...input.projection, hasConversation: true }),
             getTurnStartHistory: () => Effect.succeed(input.projection.turnItems),
+            hasUnpairedRunInterruptRequest: () => Effect.succeed(false),
           }),
         ),
         Layer.succeed(

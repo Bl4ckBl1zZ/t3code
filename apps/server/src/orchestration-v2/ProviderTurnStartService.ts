@@ -610,22 +610,19 @@ export const layer: Layer.Layer<
             Effect.catchCause(() => Effect.succeed(false)),
           ),
         hasUnpairedRunInterruptRequest: () =>
-          projectionStore.getThreadProjection(projection.thread.id).pipe(
-            Effect.map((current) => {
-              const requestId = idAllocator.derive.runSignalTurnItem({
+          projectionStore
+            .hasUnpairedRunInterruptRequest(
+              projection.thread.id,
+              idAllocator.derive.runSignalTurnItem({
                 runId: run.id,
                 signal: "interrupt-request",
-              });
-              const resultId = idAllocator.derive.runSignalTurnItem({
+              }),
+              idAllocator.derive.runSignalTurnItem({
                 runId: run.id,
                 signal: "interrupt-result",
-              });
-              const hasRequest = current.turnItems.some((item) => item.id === requestId);
-              const hasResult = current.turnItems.some((item) => item.id === resultId);
-              return hasRequest && !hasResult;
-            }),
-            Effect.catchCause(() => Effect.succeed(false)),
-          ),
+              }),
+            )
+            .pipe(Effect.catchCause(() => Effect.succeed(false))),
         captureFilesystemCheckpoint:
           session.providerSession.capabilities.checkpointing.appCanCheckpointFilesystem,
         message: {

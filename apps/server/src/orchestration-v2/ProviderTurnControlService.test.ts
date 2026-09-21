@@ -225,6 +225,7 @@ it.effect(
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
           getTurnStartContext: () => Effect.die("unused getTurnStartContext"),
           getTurnStartHistory: () => Effect.die("unused getTurnStartHistory"),
+          hasUnpairedRunInterruptRequest: () => Effect.die("unused interrupt read"),
         }),
       );
       const sessionManagerLayer = Layer.succeed(
