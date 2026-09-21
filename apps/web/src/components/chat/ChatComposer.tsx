@@ -17,6 +17,7 @@ import {
 } from "../composerFooterLayout";
 import { useComposerRestingState, type ComposerReadingTimeline } from "./useComposerRestingState";
 import { useComposerMultilinePrompt } from "./useComposerMultilinePrompt";
+import { useComposerTriggerState } from "./useComposerTriggerState";
 import { ComposerBanner } from "./ComposerBanner";
 import { ComposerSurface } from "./ComposerSurface";
 import type { AssistantCitation } from "@t3tools/contracts";
@@ -1216,9 +1217,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [composerCursor, setComposerCursor] = useState(() =>
     collapseExpandedComposerCursor(prompt, prompt.length),
   );
-  const [composerTrigger, setComposerTrigger] = useState<ComposerTrigger | null>(() =>
-    detectComposerTrigger(prompt, prompt.length),
-  );
+  const {
+    trigger: composerTrigger,
+    setTrigger: setComposerTrigger,
+    resolveTrigger: resolveComposerTrigger,
+    dismissTrigger: dismissComposerTrigger,
+    resetTrigger: resetComposerTrigger,
+  } = useComposerTriggerState(() => detectComposerTrigger(prompt, prompt.length));
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [composerHighlightedSearchKey, setComposerHighlightedSearchKey] = useState<string | null>(
     null,
@@ -1838,7 +1843,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         promptRef.current = prompt;
         const { cursor, trigger } = composerStateAtPromptEnd(prompt);
         setComposerCursor(cursor);
-        setComposerTrigger(trigger);
+        resetComposerTrigger(trigger);
       }
       lastSyncedPendingInputRef.current = null;
       return;
@@ -1863,7 +1868,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     promptRef.current = nextCustomAnswer;
     const { cursor, trigger } = composerStateAtPromptEnd(nextCustomAnswer);
     setComposerCursor(cursor);
-    setComposerTrigger(trigger);
+    resetComposerTrigger(trigger);
     setComposerHighlightedItemId(null);
   }, [
     activePendingProgress?.customAnswer,
@@ -1871,6 +1876,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingUserInput?.requestId,
     prompt,
     promptRef,
+    resetComposerTrigger,
   ]);
 
   // ------------------------------------------------------------------
@@ -1881,9 +1887,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setComposerSubmissionError(null);
     setProviderInputSubmissionError(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
-    setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
+    resetComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
     setIsDragOverComposer(false);
-  }, [draftId, activeThreadId, promptRef]);
+  }, [draftId, activeThreadId, promptRef, resetComposerTrigger]);
 
   // ------------------------------------------------------------------
   // Footer compact layout observation
@@ -2166,9 +2172,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const snapshot = readComposerSnapshot();
     return {
       snapshot,
-      trigger: detectComposerTrigger(snapshot.value, snapshot.expandedCursor),
+      trigger: resolveComposerTrigger(
+        detectComposerTrigger(snapshot.value, snapshot.expandedCursor),
+      ),
     };
-  }, [readComposerSnapshot]);
+  }, [readComposerSnapshot, resolveComposerTrigger]);
 
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
@@ -2488,7 +2496,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
 
   const onComposerCommandKey = (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
+    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Escape",
     event: KeyboardEvent,
   ) => {
     if (key === "Tab" && event.shiftKey) {
@@ -2497,6 +2505,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     const { trigger } = resolveActiveComposerTrigger();
     const menuIsActive = composerMenuOpenRef.current || trigger !== null;
+    if (key === "Escape") {
+      if (!menuIsActive || event.isComposing || event.keyCode === 229) return false;
+      dismissComposerTrigger(trigger);
+      composerMenuOpenRef.current = false;
+      return true;
+    }
     if (menuIsActive) {
       const currentItems = composerMenuItemsRef.current;
       const selectedItem = activeComposerMenuItemRef.current ?? currentItems[0];
@@ -3314,7 +3328,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const cursor = clampCollapsedComposerCursor(promptForState, options?.cursor ?? 0);
         setComposerHighlightedItemId(null);
         setComposerCursor(cursor);
-        setComposerTrigger(
+        resetComposerTrigger(
           options?.detectTrigger
             ? detectComposerTrigger(
                 promptForState,

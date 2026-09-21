@@ -1,5 +1,9 @@
 import * as NetService from "@t3tools/shared/Net";
-import { OtlpHeadersFromString, OtlpProtocol } from "@t3tools/shared/observability";
+import {
+  OtlpHeadersFromString,
+  OtlpProtocol,
+  type SignalExport,
+} from "@t3tools/shared/observability";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
@@ -357,6 +361,14 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
+    // T3 Code's own OTLP variables name no signal, so the one answer they give
+    // is the answer for every signal.
+    const signalExport: SignalExport = {
+      protocol: env.otlpProtocol,
+      headers: env.otlpHeaders,
+      exportIntervalMs: env.otlpExportIntervalMs,
+    };
+
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
       traceMinLevel: env.traceMinLevel,
@@ -372,10 +384,9 @@ export const resolveServerConfig = (
         env.otlpMetricsUrl ??
         bootstrap?.otlpMetricsUrl ??
         persistedObservabilitySettings.otlpMetricsUrl,
-      otlpExportIntervalMs: env.otlpExportIntervalMs,
+      otlpTracesExport: signalExport,
+      otlpMetricsExport: signalExport,
       otlpServiceName: env.otlpServiceName,
-      otlpHeaders: env.otlpHeaders,
-      otlpProtocol: env.otlpProtocol,
       mode,
       port,
       cwd,

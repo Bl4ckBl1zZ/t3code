@@ -20,7 +20,11 @@ import * as BrowserTraceCollector from "../BrowserTraceCollector.ts";
 export const ObservabilityLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    const serializationLayer = otlpSerializationLayer(config.otlpProtocol);
+    const traces = config.otlpTracesExport;
+    const metrics = config.otlpMetricsExport;
+    // The trace serializer stays in the returned context because the browser
+    // trace forwarder exports on the same signal.
+    const serializationLayer = otlpSerializationLayer(traces.protocol);
     const attribution = yield* ResourceAttribution.ResourceAttribution;
 
     const traceReferencesLayer = Layer.mergeAll(
@@ -50,8 +54,8 @@ export const ObservabilityLive = Layer.unwrap(
             ? undefined
             : yield* OtlpTracer.make({
                 url: config.otlpTracesUrl,
-                exportInterval: `${config.otlpExportIntervalMs} millis`,
-                headers: config.otlpHeaders,
+                exportInterval: `${traces.exportIntervalMs} millis`,
+                headers: traces.headers,
                 resource: {
                   serviceName: config.otlpServiceName,
                   attributes: {
@@ -82,8 +86,8 @@ export const ObservabilityLive = Layer.unwrap(
         ? Layer.empty
         : OtlpMetrics.layer({
             url: config.otlpMetricsUrl,
-            exportInterval: `${config.otlpExportIntervalMs} millis`,
-            headers: config.otlpHeaders,
+            exportInterval: `${metrics.exportIntervalMs} millis`,
+            headers: metrics.headers,
             resource: {
               serviceName: config.otlpServiceName,
               attributes: {
@@ -91,7 +95,7 @@ export const ObservabilityLive = Layer.unwrap(
                 "service.mode": config.mode,
               },
             },
-          }).pipe(Layer.provideMerge(serializationLayer));
+          }).pipe(Layer.provide(otlpSerializationLayer(metrics.protocol)));
 
     return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
   }),

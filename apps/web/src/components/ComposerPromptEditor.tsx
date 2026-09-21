@@ -37,6 +37,7 @@ import {
   KEY_ARROW_UP_COMMAND,
   KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
+  KEY_ESCAPE_COMMAND,
   KEY_TAB_COMMAND,
   COMMAND_PRIORITY_HIGH,
   COMMAND_PRIORITY_LOW,
@@ -923,7 +924,7 @@ interface ComposerPromptEditorProps {
     terminalContextIds: string[],
   ) => void;
   onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
+    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Escape",
     event: KeyboardEvent,
   ) => boolean;
   onPaste: React.ClipboardEventHandler<HTMLElement>;
@@ -981,7 +982,7 @@ function caretLineRect(range: Range, edge: "start" | "end"): DOMRect | null {
 
 function ComposerCommandKeyPlugin(props: {
   onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
+    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Escape",
     event: KeyboardEvent,
   ) => boolean;
 }) {
@@ -989,7 +990,7 @@ function ComposerCommandKeyPlugin(props: {
 
   useEffect(() => {
     const handleCommand = (
-      key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
+      key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Escape",
       event: KeyboardEvent | null,
     ): boolean => {
       if (!props.onCommandKeyDown || !event) {
@@ -1029,12 +1030,18 @@ function ComposerCommandKeyPlugin(props: {
       (event) => handleCommand("Tab", event),
       COMMAND_PRIORITY_HIGH,
     );
+    const unregisterEscape = editor.registerCommand(
+      KEY_ESCAPE_COMMAND,
+      (event) => handleCommand("Escape", event),
+      COMMAND_PRIORITY_HIGH,
+    );
 
     return () => {
       unregisterArrowDown();
       unregisterArrowUp();
       unregisterEnter();
       unregisterTab();
+      unregisterEscape();
     };
   }, [editor, props]);
 

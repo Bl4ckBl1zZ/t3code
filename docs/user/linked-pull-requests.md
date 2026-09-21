@@ -62,6 +62,12 @@ Filter by path, choose all commits or a single commit, then tap a file to read i
 Use **Copy path** in the file toolbar. **Load more files** continues large diffs; a notice identifies
 hunks or binary contents withheld by the host. File counts retain the host’s reported values even
 when its patch omits the text. Refresh retries failed reads without changing the local checkout.
+On web and desktop, the **Code** tab toolbar can hide whitespace-only changes. It starts from your
+diff whitespace setting, and line comments still land on the right line.
+
+On GitHub, a row shows **Approved** or **Changes requested** from the latest reviews when GitHub
+itself reports no verdict, such as when the approval came from a review bot. A cancelled check
+counts as failing, the same way GitHub rolls it up.
 
 On iOS, tap a changed line in **Code → All commits** to add a private line comment. Choose
 **Review** to edit or remove pending comments, write a summary, and submit a comment, approval,

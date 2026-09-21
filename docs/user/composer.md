@@ -129,7 +129,8 @@ only the normal message text when you submit the draft.
 ## Commands and skills
 
 Type `/` to open the command menu. Type `$` to find and add a skill. Skill rows show their source,
-such as System, Personal, Project, or App.
+such as System, Personal, Project, or App. On web and desktop, press `Escape` to close a command,
+skill, or mention menu; it stays closed until you move the cursor out of that word.
 
 On mobile, these menus are available on the **New task** screen before you start a thread. They
 use the skills and commands from the selected environment and provider.
