@@ -192,6 +192,7 @@ function makeTestLayer(input: {
     ProjectionStoreV2,
     ProjectionStoreV2.of({
       apply: () => Effect.void,
+      getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
       getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
       getThreadShell: () => Effect.die("unused getThreadShell"),
       getThreadProjection: () => Effect.succeed(input.projection),
@@ -499,6 +500,7 @@ function makeStartTestLayer(input: {
           ProjectionStoreV2,
           ProjectionStoreV2.of({
             apply: () => Effect.void,
+            getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
             getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
             getThreadShell: () => Effect.die("unused getThreadShell"),
             getPlan: () => Effect.die("unused getPlan"),

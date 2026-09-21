@@ -14,6 +14,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
 import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -64,6 +65,7 @@ const makeTestLayer = (input: {
       }),
     ),
     Layer.provide(Layer.mock(ThreadLaunchService)({})),
+    Layer.provide(Scheduler.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "scheduled-task-test-" })),
     Layer.provide(NodeServices.layer),
@@ -85,6 +87,7 @@ const makeDispatchCapturingLayer = (
       }),
     ),
     Layer.provide(Layer.mock(ThreadLaunchService)({})),
+    Layer.provide(Scheduler.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "scheduled-task-run-test-" })),
     Layer.provide(NodeServices.layer),
@@ -174,6 +177,7 @@ it.effect("sweeps automations whose thread was deleted while the server was down
             }),
           ),
           Layer.provide(Layer.mock(ThreadLaunchService)({})),
+          Layer.provide(Scheduler.layer),
           Layer.provide(sharedDatabase),
         );
 

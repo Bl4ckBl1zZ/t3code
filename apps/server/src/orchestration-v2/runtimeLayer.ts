@@ -3,6 +3,7 @@ import { agentBrowserAccessEnabled } from "./AgentBrowserAccessPolicy.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -315,4 +316,4 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
     Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),
   ),
   providerContinuationWorkerProvided,
-);
+).pipe(Layer.provide(Scheduler.layer));

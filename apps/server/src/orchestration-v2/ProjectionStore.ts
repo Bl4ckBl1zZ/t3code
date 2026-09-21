@@ -111,6 +111,23 @@ export const ProjectionStoreV2Error = Schema.Union([
 ]);
 export type ProjectionStoreV2Error = typeof ProjectionStoreV2Error.Type;
 
+/** Persisted state needed for limit recovery, without transcript or fork history. */
+export type ProjectionLimitRecoveryCandidate = Pick<
+  OrchestrationV2ThreadShell,
+  | "id"
+  | "status"
+  | "lastErrorClass"
+  | "latestRunId"
+  | "usageLimitResetAt"
+  | "archivedAt"
+  | "settledOverride"
+  | "pendingRuntimeRequest"
+  | "latestRunCompletedAt"
+  | "updatedAt"
+  | "limitRecovery"
+  | "snoozedUntil"
+>;
+
 export interface ProjectionStoreV2Shape {
   readonly apply: (
     event: OrchestrationV2DomainEvent,
@@ -129,6 +146,11 @@ export interface ProjectionStoreV2Shape {
    * input message, and any `/compact` markers. Not the transcript and not
    * inherited fork history.
    */
+  readonly getLimitRecoveryCandidates: (options: {
+    readonly now: DateTime.Utc;
+    readonly autoResume: boolean;
+    readonly snooze: boolean;
+  }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
   readonly getTurnStartContext: (
     threadId: ThreadId,
     runId: RunId,
@@ -2534,6 +2556,108 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const javascriptTrimWhitespace =
       " \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
 
+    const getLimitRecoveryCandidates = Effect.fn("ProjectionStore.getLimitRecoveryCandidates")(
+      function* (options: Parameters<ProjectionStoreV2Shape["getLimitRecoveryCandidates"]>[0]) {
+        // Indexed latest-run and root-error lookups avoid reading run histories,
+        // counting transcript items, or walking fork ancestors on scheduler ticks.
+        const nowIso = DateTime.formatIso(options.now);
+        const rows = yield* sql<{
+          readonly payload_json: string;
+          readonly run_id: string;
+          readonly completed_at: string | null;
+          readonly failure_payload_json: string;
+          readonly last_error: string | null;
+        }>`
+          SELECT t.payload_json, r.run_id, r.completed_at,
+            item.payload_json AS failure_payload_json,
+            (
+              SELECT json_extract(session.payload_json, '$.lastError')
+              FROM orchestration_v2_projection_provider_session_bindings binding
+              CROSS JOIN orchestration_v2_projection_provider_sessions session
+                ON session.provider_session_id = binding.provider_session_id
+              WHERE binding.thread_id = t.thread_id
+                AND session.provider_instance_id = t.provider_instance_id
+              ORDER BY session.updated_at DESC, session.provider_session_id DESC
+              LIMIT 1
+            ) AS last_error
+          FROM orchestration_v2_projection_threads t
+          INNER JOIN orchestration_v2_projection_runs r ON r.run_id = (
+            SELECT latest.run_id FROM orchestration_v2_projection_runs latest
+            WHERE latest.thread_id = t.thread_id
+            ORDER BY latest.ordinal DESC, latest.run_id DESC LIMIT 1
+          ) AND r.status = 'failed'
+          INNER JOIN orchestration_v2_projection_turn_items item ON item.turn_item_id = (
+            SELECT error.turn_item_id FROM orchestration_v2_projection_turn_items error
+            WHERE error.thread_id = t.thread_id AND error.run_id = r.run_id
+              AND error.type = 'error' AND error.status = 'failed'
+              AND error.node_id IS json_extract(r.payload_json, '$.rootNodeId')
+            ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+            LIMIT 1
+          )
+          WHERE t.deleted_at IS NULL
+            AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+            AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
+            AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
+            AND json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
+            AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
+            AND (
+              (
+                json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
+                AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
+                AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
+                AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${nowIso})
+                AND (
+                  json_extract(t.payload_json, '$.snoozedUntil') IS NULL
+                  OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${nowIso})
+                )
+              )
+              OR (
+                (
+                  json_extract(t.payload_json, '$.limitRecovery.runId') IS NOT r.run_id
+                  OR json_extract(t.payload_json, '$.limitRecovery.resetAt') IS NOT json_extract(item.payload_json, '$.failure.resetAt')
+                )
+                AND (
+                  ${options.autoResume ? 1 : 0} = 1
+                  OR (${options.snooze ? 1 : 0} = 1 AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(${nowIso}))
+                )
+              )
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_runtime_requests request
+              WHERE request.thread_id = t.thread_id AND request.status = 'pending'
+            )
+          ORDER BY t.thread_id
+        `;
+        const candidates: Array<ProjectionLimitRecoveryCandidate> = [];
+        for (const row of rows) {
+          const thread = yield* decodeThreadPayload(row.payload_json);
+          const item = yield* decodeTurnItemPayload(row.failure_payload_json);
+          const summary = threadErrorSummary(
+            item.type === "error" ? item.failure : null,
+            row.last_error,
+          );
+          if (summary.lastErrorClass !== "usage_limit") continue;
+          candidates.push({
+            id: thread.id,
+            status: "failed",
+            lastErrorClass: summary.lastErrorClass,
+            usageLimitResetAt: summary.usageLimitResetAt,
+            latestRunId: RunId.make(row.run_id),
+            latestRunCompletedAt:
+              row.completed_at === null ? null : DateTime.makeUnsafe(row.completed_at),
+            updatedAt: thread.updatedAt,
+            archivedAt: thread.archivedAt,
+            settledOverride: thread.settledOverride,
+            pendingRuntimeRequest: null,
+            limitRecovery: thread.limitRecovery ?? null,
+            snoozedUntil: thread.snoozedUntil ?? null,
+          });
+        }
+        return candidates;
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
+
     // Startup needs execution metadata, not the transcript or inherited fork history.
     const getTurnStartContext: ProjectionStoreV2Shape["getTurnStartContext"] = (threadId, runId) =>
       sql
@@ -3178,6 +3302,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getShellSnapshot,
       getThreadShell,
       getThreadProjection,
+      getLimitRecoveryCandidates,
       getTurnStartContext,
       getTurnStartHistory,
       getThreadSnapshot,
@@ -3280,6 +3405,47 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             return yield* new ProjectionStoreThreadNotFoundError({ threadId });
           }
           return projection;
+        }),
+      getLimitRecoveryCandidates: (options) =>
+        Effect.gen(function* () {
+          const existing = (yield* Ref.get(replayState)).projections;
+          const shells = yield* Effect.forEach(
+            [...existing.keys()].toSorted((left, right) =>
+              String(left).localeCompare(String(right)),
+            ),
+            (threadId) =>
+              service.getThreadProjection(threadId).pipe(Effect.map(threadShellFromProjection)),
+          );
+          const nowMs = DateTime.toEpochMillis(options.now);
+          return shells.filter((thread) => {
+            if (
+              thread.deletedAt !== null ||
+              thread.archivedAt !== null ||
+              thread.settledOverride === "settled" ||
+              thread.status !== "failed" ||
+              thread.lastErrorClass !== "usage_limit" ||
+              !thread.usageLimitResetAt ||
+              thread.pendingRuntimeRequest !== null
+            )
+              return false;
+            const resetMs = Date.parse(thread.usageLimitResetAt);
+            if (
+              !Number.isFinite(resetMs) ||
+              resetMs <= DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt)
+            )
+              return false;
+            if (
+              thread.limitRecovery?.runId !== thread.latestRunId ||
+              thread.limitRecovery.resetAt !== thread.usageLimitResetAt
+            ) {
+              return options.autoResume || (options.snooze && resetMs > nowMs);
+            }
+            return (
+              thread.limitRecovery.autoResume &&
+              resetMs <= nowMs &&
+              (thread.snoozedUntil == null || DateTime.toEpochMillis(thread.snoozedUntil) <= nowMs)
+            );
+          });
         }),
       getTurnStartContext: (threadId, runId) =>
         service.getThreadProjection(threadId).pipe(
