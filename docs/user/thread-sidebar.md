@@ -51,6 +51,12 @@ web and desktop to schedule limit stops by default. The environment must be runn
 arrives; it resumes overdue continuations after a restart. Sending a new message, archiving, or
 settling the thread prevents a pending continuation from starting.
 
+Choose **Snooze until reset** to hide the thread until its allowance returns. Snooze and
+auto-resume are independent: snooze alone wakes the thread without sending a message; enabling
+both wakes and continues it. **Wake now** cancels the snooze. Enable **Snooze limited threads** in
+**Settings → General** on web and desktop to snooze limit stops by default. Providers without a
+reset time offer manual retry and the normal snooze choices.
+
 ## Delete threads on web and desktop
 
 Choose **Delete** from a thread's menu, or select several threads and choose **Delete (N)**. With

@@ -2507,6 +2507,32 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          {...searchableSetting("snooze-limited-threads")}
+          description="Snooze usage-limit stops until the reported reset time. Combine with auto-resume to continue when they wake."
+          resetAction={
+            settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads ? (
+              <SettingResetButton
+                label="snooze limited threads"
+                onClick={() =>
+                  updateSettings({
+                    snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.snoozeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ snoozeLimitedThreads: Boolean(checked) })
+              }
+              aria-label="Snooze limited threads"
+            />
+          }
+        />
+
+        <SettingsRow
           {...searchableSetting("auto-settle-merged-threads")}
           description="Settle a thread when its pull request merges. Closed pull requests still settle automatically."
           resetAction={

@@ -1258,6 +1258,7 @@ export const ServerSettings = Schema.Struct({
   ),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Continue a thread the provider stopped on a usage limit once the limit resets.
+  snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Days a thread stays settled before the server deletes it together with its
   // worktree and local branch. Null (the default) never deletes.
@@ -1589,6 +1590,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   autoDeleteSettledAfterDays: Schema.optionalKey(Schema.NullOr(AutoDeleteSettledAfterDays)),
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),

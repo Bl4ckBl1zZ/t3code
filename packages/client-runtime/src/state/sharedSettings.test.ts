@@ -116,6 +116,7 @@ describe("pickSharedServerSettings", () => {
       "newWorktreesStartFromOrigin",
       "sidebarAutoSettleAfterDays",
       "sidebarAutoSettleOnMerge",
+      "snoozeLimitedThreads",
       "sourceControlWritingStyle",
       "textGenerationModelSelection",
     ]);

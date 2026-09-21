@@ -349,8 +349,25 @@ export const OrchestrationV2LimitRecovery = Schema.Struct({
   runId: RunId,
   resetAt: IsoDateTime,
   autoResume: Schema.Boolean,
+  snooze: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2LimitRecovery = typeof OrchestrationV2LimitRecovery.Type;
+
+/** A choice update preserves omitted options for this same run and reset. */
+export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
+  runId: RunId,
+  resetAt: IsoDateTime,
+  autoResume: Schema.optional(Schema.Boolean),
+  snooze: Schema.optional(Schema.Boolean),
+}).check(
+  Schema.makeFilter(
+    (update) =>
+      update.autoResume !== undefined ||
+      update.snooze !== undefined ||
+      "A recovery update must include autoResume or snooze.",
+  ),
+);
+export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
@@ -2707,7 +2724,7 @@ export const OrchestrationV2Command = Schema.Union([
     branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-    limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
+    limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Absent leaves the link alone; null unlinks. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
     /** Atomic collection edits; older clients keep using the single-link field. */

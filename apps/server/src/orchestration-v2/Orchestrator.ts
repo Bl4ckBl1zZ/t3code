@@ -1667,14 +1667,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const projection = yield* loadProjectionForCommand(command);
       const run = projection.runs.at(-1) ?? null;
       const failure = latestRootProviderFailure(run, projection.turnItems);
+      const resetMs = Date.parse(command.limitRecovery.resetAt);
+      if (command.limitRecovery.snooze === true && resetMs <= DateTime.toEpochMillis(now)) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The reset time has passed. Retry the thread manually.",
+        });
+      }
       if (
+        !Number.isFinite(resetMs) ||
         thread.archivedAt !== null ||
         thread.settledOverride === "settled" ||
         run?.id !== command.limitRecovery.runId ||
         failure?.class !== "usage_limit" ||
         failure.resetAt !== command.limitRecovery.resetAt ||
-        Date.parse(command.limitRecovery.resetAt) <=
-          DateTime.toEpochMillis(run.completedAt ?? run.requestedAt) ||
+        resetMs <= DateTime.toEpochMillis(run.completedAt ?? run.requestedAt) ||
         projection.runtimeRequests.some((request) => request.status === "pending") ||
         projection.runs.some((candidate) => candidate.status === "queued")
       ) {
@@ -1792,6 +1800,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return {
             ...thread,
             snoozedUntil,
+            limitRecovery: thread.limitRecovery ? { ...thread.limitRecovery, snooze: false } : null,
             snoozedAt: existingSnoozedAt ?? now,
             pinnedAt: null,
             updatedAt: existingSnoozedAt === null ? now : thread.updatedAt,
@@ -1819,18 +1828,44 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         case "thread.mark-unread":
           return { ...thread, lastVisitedAt: markUnreadVisitedAt };
-        case "thread.metadata.update":
+        case "thread.metadata.update": {
+          const previousRecovery =
+            thread.limitRecovery?.runId === command.limitRecovery?.runId &&
+            thread.limitRecovery?.resetAt === command.limitRecovery?.resetAt
+              ? thread.limitRecovery
+              : null;
+          const limitRecovery =
+            command.limitRecovery === undefined
+              ? thread.limitRecovery
+              : command.limitRecovery === null
+                ? null
+                : {
+                    ...command.limitRecovery,
+                    autoResume:
+                      command.limitRecovery.autoResume ?? previousRecovery?.autoResume ?? false,
+                    snooze: command.limitRecovery.snooze ?? previousRecovery?.snooze ?? false,
+                    requestId: command.commandId,
+                  };
           return {
             ...thread,
             ...(command.title === undefined ? {} : { title: command.title }),
-            ...(command.limitRecovery === undefined
-              ? {}
-              : {
-                  limitRecovery:
-                    command.limitRecovery === null
-                      ? null
-                      : { ...command.limitRecovery, requestId: command.commandId },
-                }),
+            ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
+            ...(command.limitRecovery !== undefined &&
+            limitRecovery?.snooze === true &&
+            Date.parse(limitRecovery.resetAt) > DateTime.toEpochMillis(now)
+              ? {
+                  snoozedUntil: DateTime.makeUnsafe(limitRecovery.resetAt),
+                  // Recovery changes acknowledge the same stopped run; keep its
+                  // metadata timestamp from appearing as a fresh failure wake.
+                  snoozedAt: now,
+                }
+              : command.limitRecovery !== undefined &&
+                  thread.limitRecovery?.snooze &&
+                  thread.snoozedUntil != null &&
+                  DateTime.toEpochMillis(thread.snoozedUntil) ===
+                    Date.parse(thread.limitRecovery.resetAt)
+                ? { snoozedUntil: null, snoozedAt: null }
+                : {}),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
             // regenerateTitle: true arms the in-flight marker; a landing title
@@ -1917,6 +1952,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 ? thread.updatedAt
                 : now,
           };
+        }
         case "thread.runtime-mode.set":
           return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };
         case "thread.interaction-mode.set":
