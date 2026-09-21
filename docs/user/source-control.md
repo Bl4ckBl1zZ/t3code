@@ -186,4 +186,14 @@ The native iOS review provides these actions too, including the saved auto-merge
 
 Actions are available only when your host supports them and your account has permission.
 
+## Source control on iPhone and iPad
+
+Open a thread's **Details → Source Control** to commit, push, pull and publish. **Commit** asks for a
+message and shows what will be included. While an action runs, its row shows the current step, such
+as a running hook or the push. A failed commit, push or pull stays on screen with the host's reason;
+a rejected push suggests pulling first. Publishing directly to the default branch asks you to
+confirm first. When the branch has conflicts, commit actions hide and
+**Ask Agent to Resolve** hands the conflict to the thread's agent. Tap a changed file to open it in
+**Review**.
+
 Pull-request links can open another repository on a Git host configured in the same environment, even when that repository has no local project. Web and native iOS keep the linked repository selected throughout review, comments, diffs and actions. Your existing checkout is used to contact the host.

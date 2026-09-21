@@ -17,22 +17,35 @@ struct FeatureWorkspaceNavigationRequest: Equatable, Sendable {
     }
 }
 
+/// Home: a tab per workspace (Code, Work, Chat) and a New tab that composes.
+/// Each workspace tab is its own split view, so a thread opens inside the tab
+/// it belongs to and every tab remembers where it was left.
 public struct WorkspaceView: View {
     @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @SwiftUI.Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @Bindable var model: FeatureRootModel
     private let navigationRequest: FeatureWorkspaceNavigationRequest?
     private let onNavigationRequestConsumed: @MainActor (UUID) -> Void
     private let submitNewTask: (NewTaskRequest) async -> FeatureThread?
     private let submitMessage: (FeatureMessageSubmission) async -> Bool
+    /// True while the model is still restoring its cache. The shell is already
+    /// up with placeholder rows; navigation requests and compose wait.
+    private let isAwaitingData: Bool
 
     @AppStorage(WorkspaceSwitcher.storageKey) private var storedWorkspace = MobileWorkspace.code
         .rawValue
 
-    @State private var selectedThreadID: String?
+    /// Each tab keeps its own open thread and column, so switching tabs returns
+    /// to where that tab was left.
+    @State private var selectedThreadIDs: [MobileWorkspace: String] = [:]
+    @State private var compactColumns: [MobileWorkspace: NavigationSplitViewColumn] = [:]
     @State private var selectedProjectID: String?
     @State private var searchText = ""
-    @State private var isSearching = false
+    @State private var isSearchPresented = false
+    /// Which workspace a search looks through. It starts at the tab the search
+    /// was opened from; the scope bar can widen it to another.
+    @State private var searchScope = MobileWorkspace.code
     // Persisted like the web sidebar's shelves: whether a shelf is open is a
     // lasting preference, not per-launch state. Defaults match web (settled
     // open; snoozed and archived out of the way).
@@ -50,17 +63,18 @@ public struct WorkspaceView: View {
     @State private var showingAddProject = false
     @State private var editingProjectIcon: FeatureProject?
     @State private var showingSettings = false
+    /// Connection problems open Settings on Servers rather than its root.
+    @State private var settingsOpensServers = false
     @State private var showingHermesSetup = false
     @State private var showingPullRequests = false
     @State private var showingArrangement = false
     @State private var renamingThread: FeatureThread?
     @State private var renameTitle = ""
     @State private var sidebarBoundaryNow = Date.now
-    @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     @State private var homePresentationCache = HomePresentationCache()
     @State private var threadListActions = ThreadListActions()
-    /// One slot for every "here is what happened" message the sidebar raises —
-    /// a copied handoff script, a refused regeneration, an unconfigured Hermes.
+    /// One slot for every "here is what went wrong" message the list raises —
+    /// a refused regeneration, a failed handoff script, a drop that can't land.
     /// They cannot overlap: each is the direct result of a single tap.
     @State private var noticeAlert: ThreadListActionAlert?
     @State private var draftKeys: Set<String> = []
@@ -74,7 +88,13 @@ public struct WorkspaceView: View {
     @State private var contentSearch: (query: String, matches: [String: FeatureThreadSearchMatch])?
     @State private var draftToDiscard: FeatureThread?
     @State private var pendingUnpinThread: FeatureThread?
-    @FocusState private var isSearchFocused: Bool
+    @State private var pendingDeleteThread: FeatureThread?
+    /// The row whose leading Snooze swipe is asking for a wake time.
+    @State private var snoozeRequestThread: FeatureThread?
+    /// The banner's Reconnect is in flight.
+    @State private var isReconnecting = false
+    /// Handoff scripts being generated, so the menu can say so.
+    @State private var generatingHandoffIDs: Set<String> = []
 
     public init(
         model: FeatureRootModel,
@@ -94,12 +114,14 @@ public struct WorkspaceView: View {
         model: FeatureRootModel,
         navigationRequest: FeatureWorkspaceNavigationRequest?,
         onNavigationRequestConsumed: @escaping @MainActor (UUID) -> Void,
+        isAwaitingData: Bool = false,
         submitNewTask: ((NewTaskRequest) async -> FeatureThread?)? = nil,
         submitMessage: ((FeatureMessageSubmission) async -> Bool)? = nil
     ) {
         self.model = model
         self.navigationRequest = navigationRequest
         self.onNavigationRequestConsumed = onNavigationRequestConsumed
+        self.isAwaitingData = isAwaitingData
         self.submitNewTask = submitNewTask ?? { request in await model.startTask(request) }
         self.submitMessage = submitMessage ?? { submission in
             if submission.attachments.isEmpty {
@@ -125,260 +147,980 @@ public struct WorkspaceView: View {
     }
 
     public var body: some View {
-        NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
-            sidebar
+        lifecycle(dialogs(sheets(homeTabs)))
+    }
+
+    // MARK: - Tabs
+
+    @ViewBuilder
+    private var homeTabs: some View {
+        if #available(iOS 18, *) {
+            TabView(selection: tabSelection) {
+                Tab("Code", systemImage: MobileWorkspace.code.tabSymbol, value: HomeTab.workspace(.code)) {
+                    workspaceTab(.code)
+                }
+                Tab("Work", systemImage: MobileWorkspace.work.tabSymbol, value: HomeTab.workspace(.work)) {
+                    workspaceTab(.work)
+                }
+                .badge(workNeedsYouCount)
+                Tab("Chat", systemImage: MobileWorkspace.chat.tabSymbol, value: HomeTab.workspace(.chat)) {
+                    workspaceTab(.chat)
+                }
+                // Never shown: selecting it composes and the selection snaps
+                // back. iPad keeps compose in the list's toolbar instead.
+                Tab("New", systemImage: "plus", value: HomeTab.new, role: Self.newTabRole) {
+                    Color.clear
+                }
+                .hidden(usesToolbarCompose)
+            }
+            .tabViewStyle(.sidebarAdaptable)
+            .homeTabBarMinimizesOnScroll()
+        } else {
+            TabView(selection: tabSelection) {
+                workspaceTab(.code)
+                    .tabItem { Label("Code", systemImage: MobileWorkspace.code.tabSymbol) }
+                    .tag(HomeTab.workspace(.code))
+                workspaceTab(.work)
+                    .tabItem { Label("Work", systemImage: MobileWorkspace.work.tabSymbol) }
+                    .tag(HomeTab.workspace(.work))
+                    .badge(workNeedsYouCount)
+                workspaceTab(.chat)
+                    .tabItem { Label("Chat", systemImage: MobileWorkspace.chat.tabSymbol) }
+                    .tag(HomeTab.workspace(.chat))
+                if !usesToolbarCompose {
+                    Color.clear
+                        .tabItem { Label("New", systemImage: "plus") }
+                        .tag(HomeTab.new)
+                }
+            }
+        }
+    }
+
+    /// iOS 27 draws a prominent tab as the detached circle beside the bar;
+    /// before that + is an ordinary trailing tab. The role only exists in the
+    /// iOS 27 SDK (Swift 6.4), so builds with an older Xcode take the
+    /// ordinary tab on every system.
+    @available(iOS 18, *)
+    private static var newTabRole: TabRole? {
+        #if compiler(>=6.4)
+        if #available(iOS 27, *) { return .prominent }
+        #endif
+        return nil
+    }
+
+    /// A regular-width window has room for compose in the toolbar, where iPad
+    /// apps keep it; the New tab would read as a sidebar destination there.
+    private var usesToolbarCompose: Bool {
+        horizontalSizeClass == .regular
+    }
+
+    /// Reads the remembered workspace and never reports `.new`: choosing New
+    /// composes for the tab the user came from, and the tab bar snaps back.
+    private var tabSelection: Binding<HomeTab> {
+        Binding(
+            get: { .workspace(workspace) },
+            set: { tab in
+                switch tab {
+                case let .workspace(next):
+                    selectWorkspace(next)
+                case .new:
+                    guard !isAwaitingData else { return }
+                    openNewTaskOrProjectCreation()
+                }
+            }
+        )
+    }
+
+    private func selectWorkspace(_ next: MobileWorkspace) {
+        guard next != workspace else { return }
+        endSearch()
+        exitSelection()
+        storedWorkspace = next.rawValue
+    }
+
+    private func workspaceTab(_ tab: MobileWorkspace) -> some View {
+        NavigationSplitView(preferredCompactColumn: compactColumnBinding(for: tab)) {
+            homeList(tab)
                 .navigationSplitViewColumnWidth(
                     min: T3Metrics.minimumSidebarWidth,
                     ideal: T3Metrics.sidebarWidth,
                     max: T3Metrics.maximumSidebarWidth
                 )
         } detail: {
-            detail
+            detail(tab)
         }
         .navigationSplitViewStyle(.balanced)
-        .task {
-            do {
-                for await keys in try await FeatureComposerDraftStore.shared.draftPresence() {
-                    draftKeys = keys
-                    newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects)
+    }
+
+    private func compactColumnBinding(for tab: MobileWorkspace) -> Binding<NavigationSplitViewColumn> {
+        Binding(
+            get: { compactColumns[tab] ?? .sidebar },
+            set: { compactColumns[tab] = $0 }
+        )
+    }
+
+    // MARK: - List
+
+    private func homeList(_ tab: MobileWorkspace) -> some View {
+        let isCurrent = tab == workspace
+        let isSearchingHere = isCurrent && isSearchActive
+        let listWorkspace = isSearchingHere ? searchScope : tab
+        let query = isSearchingHere ? searchText : ""
+        // A tab that is not showing keeps its last presentation; its list skips
+        // updates until it is selected again.
+        let presentation = isCurrent
+            ? presentation(for: listWorkspace, query: query)
+            : homePresentationCache.latest(for: tab) ?? presentation(for: tab, query: "")
+        let isSelectingHere = isCurrent && isSelecting
+        let showsPlaceholders = !isSearchingHere
+            && HomeLoadingState.showsPlaceholders(isLoading: isAwaitingData, snapshot: model.snapshot)
+        let subtitle = isCurrent ? listSubtitle(tab, presentation: presentation) : nil
+        let emptyState = isCurrent && presentation.isEmpty && !showsPlaceholders
+            ? emptyState(for: tab)
+            : nil
+        let canArrange = tab != .chat && presentation.active.contains { $0.supportsActiveOrder == true }
+
+        return HomeThreadCollectionView(
+            presentation: presentation,
+            changeRequests: model.changeRequestsByThreadID,
+            workspace: listWorkspace,
+            query: query,
+            selectedThreadID: selectedThreadIDs[tab],
+            forceRichRows: dynamicTypeSize.isAccessibilitySize,
+            isSnoozedExpanded: isSnoozedExpanded,
+            isSettledExpanded: isSettledExpanded,
+            isArchiveExpanded: isArchiveExpanded,
+            settledLimit: settledLimit,
+            confirmThreadUnpin: model.snapshot.settings.confirmThreadUnpin,
+            onOpen: { openThread($0, in: tab) },
+            onToggleSnoozed: { isSnoozedExpanded.toggle() },
+            onToggleSettled: { isSettledExpanded.toggle() },
+            onToggleArchive: { isArchiveExpanded.toggle() },
+            onShowMoreSettled: { settledLimit += 25 },
+            onRename: { thread in
+                renameTitle = thread.title
+                renamingThread = thread
+            },
+            onArchive: { thread, archived in
+                Task { await model.setArchived(thread.id, archived: archived) }
+            },
+            onSettle: { thread, settled in
+                Task { await model.setSettled(thread.id, settled: settled) }
+            },
+            onSnooze: { thread, until in
+                Task { await model.setSnoozed(thread.id, until: until) }
+            },
+            onPin: { thread, pinned in
+                if !pinned, model.snapshot.settings.confirmThreadUnpin {
+                    pendingUnpinThread = thread
+                } else {
+                    Task { await model.setPinned(thread.id, pinned: pinned) }
                 }
-            } catch { noticeAlert = ThreadListActionAlert(title: "Drafts unavailable", message: error.localizedDescription) }
-        }
-        .confirmationDialog("Delete \(batchSelection.count) selected threads?", isPresented: $confirmsBatchDelete, titleVisibility: .visible) {
-            Button("Delete threads", role: .destructive) { runBatch { await model.deleteThread($0) } }
-        } message: { Text("Thread history will be deleted. Worktree files stay on the environment. Failed threads remain selected.") }
-        .confirmationDialog("Unpin selected threads?", isPresented: $confirmsBatchUnpin, titleVisibility: .visible) {
-            Button("Unpin") { runBatch { await model.setPinned($0, pinned: false) } }
-        }
-        .confirmationDialog("Discard unsent draft?", isPresented: Binding(get: { draftToDiscard != nil }, set: { if !$0 { draftToDiscard = nil } }), titleVisibility: .visible) {
-            Button("Discard draft", role: .destructive) {
-                guard let thread = draftToDiscard else { return }
-                draftToDiscard = nil
-                Task {
-                    do { try await FeatureComposerDraftStore.shared.discardDraft(for: FeatureComposerDraftStore.threadKey(thread)) }
-                    catch { noticeAlert = ThreadListActionAlert(title: "Draft not discarded", message: error.localizedDescription) }
-                }
+            },
+            onDelete: { pendingDeleteThread = $0 },
+            onCopyHandoffScript: copyHandoffScript,
+            onCopy: copyThreadDetail,
+            onRegenerateTitle: regenerateTitle,
+            draftKeys: draftKeys,
+            isSelecting: isSelectingHere,
+            batchSelection: batchSelection,
+            onToggleSelection: toggleSelection,
+            onBeginSelection: beginSelection,
+            onDiscardDraft: { draftToDiscard = $0 },
+            onDropFiles: { thread, providers in receiveThreadFileDrop(thread, providers: providers, in: tab) },
+            onCustomSnooze: { customSnoozeTargets = CustomSnoozeTargets(threadIDs: [$0.id], isBatch: false) },
+            onSnoozeRequest: { snoozeRequestThread = $0 },
+            contentMatches: isSearchingHere ? currentContentMatches : [:],
+            isSearchingContent: isSearchingHere && isSearchingContent,
+            generatingHandoffIDs: generatingHandoffIDs,
+            isActive: isCurrent,
+            isPlaceholder: showsPlaceholders,
+            subtitle: Self.subtitleIsInNavigationBar ? nil : subtitle,
+            banner: isCurrent ? connectionBanner : nil,
+            onReconnect: reconnect,
+            onOpenConnections: openServerSettings,
+            emptyState: emptyState,
+            onEmptyAction: performEmptyAction,
+            onRefresh: { await model.reload(reason: "pull-to-refresh") },
+            isRegularWidth: horizontalSizeClass == .regular
+        )
+        // Rows run under the glass bars; UIKit insets the content to match.
+        .ignoresSafeArea(.container, edges: .vertical)
+        .background(sidebarIsGlass ? Color.clear : T3Colors.background)
+        .navigationTitle(isSelectingHere ? selectionTitle : WorkspaceSwitcher.shortTitle(tab))
+        .navigationBarTitleDisplayMode(.large)
+        .homeNavigationSubtitle(subtitle ?? "")
+        .toolbar {
+            if isSelectingHere {
+                selectionToolbar(presentation)
+            } else {
+                listToolbar(tab, canArrange: canArrange)
             }
         }
-        .sheet(isPresented: $showingNewTask) {
-            NewThreadView(
-                model: model,
-                submit: submitNewTask,
-                onCreated: { thread in
-                    openThread(thread.id)
-                    showingNewTask = false
-                },
-                onCreateProject: openProjectCreation,
-                initialProjectID: newTaskInitialProjectID,
-                draftID: newTaskDraftID
-            )
+        .toolbar(isSelectingHere ? .hidden : .automatic, for: .tabBar)
+        .searchable(
+            text: $searchText,
+            isPresented: searchPresentedBinding(for: tab),
+            placement: .navigationBarDrawer(displayMode: .automatic),
+            prompt: Text(listWorkspace.searchPrompt)
+        )
+        .searchScopes($searchScope, activation: .onSearchPresentation) {
+            ForEach(MobileWorkspace.allCases, id: \.self) { scope in
+                Text(WorkspaceSwitcher.shortTitle(scope)).tag(scope)
+            }
         }
-        .sheet(isPresented: $showingDrafts, onDismiss: {
-            if openingDraft { openingDraft = false; showingNewTask = true }
-        }) {
-            NavigationStack {
-                List {
-                    if model.outboxCount > 0 {
-                        Section("Outbox") {
-                            Button("Retry queued messages") { model.retryOutbox() }
-                            ForEach(model.outboxSubmissions) { submission in
-                                VStack(alignment: .leading) {
-                                    Text(submission.text).lineLimit(2)
-                                    Text(model.outboxStatus(submission)).font(.caption).foregroundStyle(T3Colors.textSecondary)
-                                }
-                                .swipeActions { Button("Cancel", role: .destructive) { Task { await model.cancelOutbox(submission.id) } } }
-                            }
+        .t3NavigationChrome()
+    }
+
+    /// iPadOS 26 floats the sidebar as a glass pane; painting it would hide
+    /// the glass.
+    private var sidebarIsGlass: Bool {
+        if #available(iOS 26, *) { return horizontalSizeClass == .regular }
+        return false
+    }
+
+    /// Only the showing tab's search can be presented; the others read false.
+    private func searchPresentedBinding(for tab: MobileWorkspace) -> Binding<Bool> {
+        Binding(
+            get: { tab == workspace && isSearchPresented },
+            set: { if tab == workspace { isSearchPresented = $0 } }
+        )
+    }
+
+    /// iOS 26 carries the subtitle in the navigation bar; before that it is the
+    /// list's first row.
+    private static var subtitleIsInNavigationBar: Bool {
+        if #available(iOS 26, *) { return true }
+        return false
+    }
+
+    private func listSubtitle(_ tab: MobileWorkspace, presentation: HomePresentation) -> String? {
+        guard !isSearchActive else { return nil }
+        return HomeListSubtitle.text(
+            workspace: tab,
+            projectName: selectedProject?.name,
+            threads: presentation.pinned + presentation.active,
+            connection: model.snapshot.connection,
+            environmentName: HomeConnectionBanner.environmentName(in: model.snapshot)
+        )
+    }
+
+    @ToolbarContentBuilder
+    private func listToolbar(_ tab: MobileWorkspace, canArrange: Bool) -> some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            HomeAccountButton(status: connectionBanner?.tone) {
+                if connectionBanner == nil { showingSettings = true } else { openServerSettings() }
+            }
+        }
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if usesToolbarCompose {
+                Button {
+                    openNewTaskOrProjectCreation()
+                } label: {
+                    Label(tab.newItemTitle, systemImage: "square.and.pencil")
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(isAwaitingData)
+                .accessibilityHint(
+                    tab == .code && creationProjects.isEmpty
+                        ? "Add a project to start a task"
+                        : "Compose a message and start a thread"
+                )
+                .accessibilityIdentifier("sidebar-new-task-button")
+            }
+            Button {
+                isSearchPresented = true
+            } label: {
+                Label("Search", systemImage: "magnifyingglass")
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .accessibilityIdentifier("sidebar-search-button")
+            moreMenu(tab, canArrange: canArrange)
+        }
+    }
+
+    /// Everything that used to be a row above the list: the project filter,
+    /// and the actions reached for too rarely to deserve permanent space.
+    private func moreMenu(_ tab: MobileWorkspace, canArrange: Bool) -> some View {
+        Menu {
+            if WorkspaceSwitcher.showsProjectFilter(tab), !filterableProjects.isEmpty {
+                Section("Project") {
+                    Picker("Project", selection: $selectedProjectID) {
+                        Text("All Projects").tag(String?.none)
+                        ForEach(filterableProjects) { project in
+                            Text(projectMenuTitle(project)).tag(Optional(project.id))
                         }
                     }
-                    Button("New draft", systemImage: "square.and.pencil") {
-                        newTaskDraftID = UUID().uuidString
-                        newTaskInitialProjectID = activeProjectFilterID
-                        openingDraft = true
-                        showingDrafts = false
+                    .pickerStyle(.inline)
+                    if let project = selectedProject, canChangeIcon(of: project) {
+                        Button("Change Project Icon…", systemImage: "paintpalette") {
+                            editingProjectIcon = project
+                        }
                     }
-                    ForEach(newTaskDrafts) { draft in
+                }
+            }
+            Section {
+                Button("Select Threads", systemImage: "checkmark.circle", action: beginSelection)
+                if canArrange {
+                    Button("Arrange Threads", systemImage: "arrow.up.arrow.down") {
+                        showingArrangement = true
+                    }
+                }
+            }
+            Section {
+                if supportsPullRequests {
+                    Button("Pull Requests", systemImage: "arrow.triangle.pull") {
+                        showingPullRequests = true
+                    }
+                }
+                Button(action: openDrafts) {
+                    Label {
+                        Text("Drafts")
+                        if let draftsSubtitle { Text(draftsSubtitle) }
+                    } icon: {
+                        Image(systemName: "doc.text")
+                    }
+                }
+            }
+            Section {
+                Button("Add Project…", systemImage: "folder.badge.plus") { showingAddProject = true }
+                    .accessibilityIdentifier("sidebar-add-project-button")
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis")
+        }
+        .accessibilityIdentifier("sidebar-more-menu")
+    }
+
+    private var supportsPullRequests: Bool {
+        model.client is any FeatureProjectPullRequestManaging
+            && model.snapshot.environments.contains(where: { $0.supportsPullRequests == true })
+    }
+
+    private func canChangeIcon(of project: FeatureProject) -> Bool {
+        model.snapshot.environments.first(where: { $0.id == project.environmentID })?.supportsProjectIcons == true
+            && model.client is any FeatureProjectIconManaging
+    }
+
+    /// "2 drafts · 1 queued", or nothing when both are empty.
+    private var draftsSubtitle: String? {
+        var parts: [String] = []
+        if !newTaskDrafts.isEmpty {
+            parts.append(newTaskDrafts.count == 1 ? "1 draft" : "\(newTaskDrafts.count) drafts")
+        }
+        if model.outboxCount > 0 {
+            parts.append("\(model.outboxCount) queued")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    // MARK: - Selection
+
+    private var selectionTitle: String {
+        batchSelection.isEmpty ? "Select Threads" : "\(batchSelection.count) Selected"
+    }
+
+    private func beginSelection() {
+        guard !isBatchRunning else { return }
+        endSearch()
+        isSelecting = true
+    }
+
+    private func toggleSelection(_ id: String) {
+        guard !isBatchRunning else { return }
+        isSelecting = true
+        if !batchSelection.insert(id).inserted { batchSelection.remove(id) }
+    }
+
+    private func exitSelection() {
+        guard !isBatchRunning else { return }
+        isSelecting = false
+        batchSelection.removeAll()
+    }
+
+    /// The rows Select All reaches: what the list is showing right now.
+    private func selectableThreadIDs(in presentation: HomePresentation) -> [String] {
+        var threads = presentation.pinned + presentation.active
+        if isSnoozedExpanded { threads += presentation.snoozed }
+        if isSettledExpanded { threads += presentation.settled.prefix(settledLimit) }
+        if isArchiveExpanded { threads += presentation.archived }
+        return threads.map(\.id)
+    }
+
+    private var selectedThreads: [FeatureThread] {
+        model.snapshot.threads.filter { batchSelection.contains($0.id) }
+    }
+
+    @ToolbarContentBuilder
+    private func selectionToolbar(_ presentation: HomePresentation) -> some ToolbarContent {
+        let selectable = selectableThreadIDs(in: presentation)
+        let selectsAll = !selectable.isEmpty && selectable.allSatisfy(batchSelection.contains)
+        ToolbarItem(placement: .topBarLeading) {
+            Button(selectsAll ? "Deselect All" : "Select All") {
+                if selectsAll { batchSelection.removeAll() } else { batchSelection.formUnion(selectable) }
+            }
+            .disabled(isBatchRunning || selectable.isEmpty)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            selectionDoneButton
+        }
+        ToolbarItemGroup(placement: .bottomBar) {
+            batchActions
+        }
+    }
+
+    @ViewBuilder
+    private var selectionDoneButton: some View {
+        if #available(iOS 26, *) {
+            Button(role: .confirm, action: exitSelection)
+                .disabled(isBatchRunning)
+                .accessibilityLabel("Done Selecting")
+        } else {
+            Button(action: exitSelection) {
+                Text("Done").fontWeight(.semibold)
+            }
+            .disabled(isBatchRunning)
+            .accessibilityLabel("Done Selecting")
+        }
+    }
+
+    /// Each action is enabled when it applies to at least one selected thread;
+    /// the rest of the selection is left alone and stays selected.
+    @ViewBuilder
+    private var batchActions: some View {
+        let availability = HomeBatchAvailability.resolve(
+            selectedThreads,
+            workspace: workspace,
+            now: .now,
+            changeRequests: model.changeRequestsByThreadID
+        )
+        if isBatchRunning {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text(batchSelection.count == 1 ? "Updating 1 thread…" : "Updating \(batchSelection.count) threads…")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+            }
+        } else {
+            if workspace != .chat {
+                Menu {
+                    ForEach(SnoozePresets.resolve()) { preset in
                         Button {
-                            newTaskDraftID = draft.draftID
-                            newTaskInitialProjectID = draft.projectID
-                            openingDraft = true
-                        showingDrafts = false
+                            // Recomputed at tap time, like the row menu.
+                            guard let until = SnoozePresets.snoozedUntil(actionID: SnoozePresets.actionID(for: preset)) else { return }
+                            snoozeSelection(until: until)
                         } label: {
-                            VStack(alignment: .leading) {
-                                Text(draft.title).lineLimit(2)
-                                Text(model.snapshot.projects.first(where: { $0.id == draft.projectID })?.name ?? "Project")
-                                    .font(.caption).foregroundStyle(T3Colors.textSecondary)
-                            }
-                        }
-                    }.onDelete { offsets in
-                        let removed = offsets.map { newTaskDrafts[$0] }
-                        Task {
-                            do {
-                                for draft in removed { try await FeatureComposerDraftStore.shared.removeDraft(for: draft.id) }
-                                newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects)
-                            } catch { noticeAlert = ThreadListActionAlert(title: "Could not delete draft", message: error.localizedDescription) }
+                            Text(preset.label)
+                            Text(preset.whenLabel)
                         }
                     }
+                    Divider()
+                    Button("Custom…", systemImage: "calendar") {
+                        customSnoozeTargets = CustomSnoozeTargets(threadIDs: batchSelection.sorted(), isBatch: true)
+                    }
+                } label: {
+                    Label("Snooze", systemImage: "moon.zzz")
                 }
-                .navigationTitle("Drafts")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { newTaskInitialProjectID = nil; showingDrafts = false } } }
-                .t3NavigationChrome()
-            }
-        }
-        .sheet(isPresented: $showingNewWorkConversation) {
-            NewWorkConversationView(
-                model: model,
-                flavor: workspace == .chat ? .chat : .work,
-                submit: submitNewTask,
-                onCreated: { thread in
-                    openThread(thread.id)
-                    showingNewWorkConversation = false
+                .disabled(!availability.canSnooze)
+                .accessibilityIdentifier("workspace-batch-snooze")
+                Spacer()
+                Button {
+                    settleSelection()
+                } label: {
+                    Label("Settle", systemImage: "checkmark")
                 }
-            )
-        }
-        .sheet(item: $editingProjectIcon) { project in
-            if let manager = model.client as? any FeatureProjectIconManaging {
-                ProjectIconPickerView(project: project, manager: manager)
+                .disabled(!availability.canSettle)
+                Spacer()
             }
-        }
-        .sheet(isPresented: $showingAddProject) {
-            AddProjectView(model: model)
-        }
-        .sheet(isPresented: $showingPullRequests) {
-            if let manager = model.client as? any FeatureProjectPullRequestManaging {
-                PullRequestWorkspaceView(model: model, manager: manager)
+            Button {
+                archiveSelection()
+            } label: {
+                Label("Archive", systemImage: "archivebox")
             }
-        }
-        .sheet(isPresented: $showingHermesSetup) { WorkSetupSheet(model: model) }
-        .sheet(item: $customSnoozeTargets) { targets in
-            CustomSnoozeSheet(threadCount: targets.threadIDs.count) { until in
-                if targets.isBatch {
-                    snoozeSelection(until: until)
-                } else if let id = targets.threadIDs.first {
-                    Task { await model.setSnoozed(id, until: until) }
+            .disabled(!availability.canArchive)
+            Spacer()
+            if availability.canPin || !availability.canUnpin {
+                Button {
+                    runBatch { await model.setPinned($0, pinned: true) }
+                } label: {
+                    Label("Pin", systemImage: "pin")
+                }
+                .disabled(!availability.canPin)
+            } else {
+                Button {
+                    if model.snapshot.settings.confirmThreadUnpin { confirmsBatchUnpin = true }
+                    else { runBatch { await model.setPinned($0, pinned: false) } }
+                } label: {
+                    Label("Unpin", systemImage: "pin.slash")
                 }
             }
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(model: model)
-        }
-        .alert(
-            "Rename thread",
-            isPresented: Binding(
-                get: { renamingThread != nil },
-                set: { if !$0 { renamingThread = nil } }
-            )
-        ) {
-            TextField("Thread title", text: $renameTitle)
-            Button("Cancel", role: .cancel) { renamingThread = nil }
-            Button("Save") {
-                guard let thread = renamingThread else { return }
-                let title = renameTitle
-                renamingThread = nil
-                Task { await model.renameThread(thread.id, title: title) }
+            Spacer()
+            Button(role: .destructive) {
+                confirmsBatchDelete = true
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
-            .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(batchSelection.isEmpty)
+            .accessibilityIdentifier("workspace-batch-delete")
         }
-        .alert(
-            noticeAlert?.title ?? "",
-            isPresented: Binding(
-                get: { noticeAlert != nil },
-                set: { if !$0 { noticeAlert = nil } }
-            ),
-            presenting: noticeAlert
-        ) { _ in
-            Button("OK") { noticeAlert = nil }
-        } message: { notice in
-            Text(notice.message)
-        }
-        .sheet(isPresented: $showingArrangement) {
-            ActiveThreadArrangementSheet(model: model, workspace: workspace, projectID: activeProjectFilterID)
-        }
-        .confirmationDialog(
-            pendingUnpinThread.map { "Unpin \($0.title)?" } ?? "Unpin thread?",
-            isPresented: Binding(
-                get: { pendingUnpinThread != nil },
-                set: { if !$0 { pendingUnpinThread = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: pendingUnpinThread
-        ) { thread in
-            Button("Unpin", role: .destructive) {
-                pendingUnpinThread = nil
-                Task { await model.setPinned(thread.id, pinned: false) }
+    }
+
+    /// Applies one action to every selected thread in turn. Threads it
+    /// succeeds on leave the selection, so a retry only touches the rest.
+    private func runBatch(
+        failureMessage: String = "Failed threads remain selected. Check the connection and try again.",
+        _ operation: @escaping (String) async -> Bool
+    ) {
+        guard !isBatchRunning else { return }
+        isBatchRunning = true
+        let ids = batchSelection.sorted()
+        Task {
+            for id in ids {
+                if await operation(id) { batchSelection.remove(id) }
             }
-            Button("Cancel", role: .cancel) { pendingUnpinThread = nil }
-        } message: { _ in
-            Text("This thread will return to its normal place in the list.")
-        }
-        .environment(\.pullRequestHandoff, (model.client is any FeaturePullRequestThreadPreparing) ? PullRequestHandoffHandler { scope, overview, kind, mode, selection in
-            let threadID = try await model.stagePullRequestTask(scope: scope, overview: overview, kind: kind, mode: mode, selection: selection)
-            showingPullRequests = false
-            openThread(threadID)
-        } : nil)
-        .onChange(of: selectedThreadIsAvailable) { _, isAvailable in
-            if !isAvailable { closeSelectedThread() }
-        }
-        .onChange(of: selectedThreadID) { _, newValue in
-            preferredCompactColumn = newValue == nil ? .sidebar : .detail
-        }
-        .onChange(of: selectedProjectIsAvailable) { _, isAvailable in
-            if !isAvailable { selectedProjectID = nil }
-        }
-        .onChange(of: navigationRequest?.id, initial: true) { _, _ in
-            consumeNavigationRequest()
-        }
-        // A request that arrives before its thread or project exists in the
-        // snapshot stays pending; retry it as data lands so cold-start deep
-        // links are not silently stranded.
-        .onChange(of: model.homePresentationRevision) { _, _ in
-            if navigationRequest != nil { consumeNavigationRequest() }
-        }
-        .onAppear {
-            // The favicon store resolves through whichever client this session
-            // runs on; re-pointing on every appearance keeps it current after
-            // a reconnect swaps the client out.
-            ProjectFaviconStore.shared.attach(model.client)
-        }
-        .task(id: nextSidebarBoundary) {
-            guard let boundary = nextSidebarBoundary else { return }
-            do {
-                try await Task.sleep(for: .seconds(max(0, boundary.timeIntervalSinceNow)))
-                sidebarBoundaryNow = max(.now, boundary)
-            } catch {
-                return
+            isBatchRunning = false
+            if batchSelection.isEmpty {
+                isSelecting = false
+                PlatformHapticEngine.shared.play(.success)
+            } else {
+                PlatformHapticEngine.shared.play(.error)
+                // A server refusal already raised the root alert; one alert
+                // at a time.
+                if model.errorMessage == nil {
+                    noticeAlert = ThreadListActionAlert(title: "Some Threads Weren't Updated", message: failureMessage)
+                }
             }
         }
     }
 
-    private var sidebar: some View {
-        ZStack(alignment: .bottomTrailing) {
-            VStack(spacing: 0) {
-                homeBar
-                if isSearching {
-                    searchBar
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                threadList
-            }
+    /// Threads whose server cannot snooze them, or that are queued or Work's
+    /// Main thread, stay selected rather than being sent a command the server
+    /// would refuse.
+    private func snoozeSelection(until: Date) {
+        let snoozable = Set(model.snapshot.threads.filter { HomeBatchAvailability.canSnooze($0, in: workspace) }.map(\.id))
+        runBatch(failureMessage: "Threads that can't be snoozed, or failed to update, remain selected.") { id in
+            guard snoozable.contains(id) else { return false }
+            return await model.setSnoozed(id, until: until)
+        }
+    }
 
-            composeButton
-                .padding(.trailing, 16)
-                .padding(.bottom, 14)
+    private func settleSelection() {
+        let now = Date.now
+        let settleable = Set(model.snapshot.threads.filter {
+            HomeBatchAvailability.canSettle(
+                $0,
+                in: workspace,
+                now: now,
+                changeRequest: model.changeRequestsByThreadID[$0.id]
+            )
+        }.map(\.id))
+        runBatch(failureMessage: "Threads that can't be settled, or failed to update, remain selected.") { id in
+            guard settleable.contains(id) else { return false }
+            return await model.setSettled(id, settled: true)
         }
-        .background(T3Colors.background)
-        .toolbar(.hidden, for: .navigationBar)
-        .onChange(of: selectedProjectID) {
-            settledLimit = 12
+    }
+
+    /// A thread with a live provider run stays selected: archiving it would
+    /// detach the run.
+    private func archiveSelection() {
+        let archivable = Set(model.snapshot.threads.filter { !$0.isArchived && $0.canArchive }.map(\.id))
+        runBatch(failureMessage: "Running threads can't be archived. They remain selected.") { id in
+            guard archivable.contains(id) else { return false }
+            return await model.setArchived(id, archived: true)
         }
-        // A different workspace is a different list, so the settled shelf starts
-        // from its own first page rather than inheriting the other's.
-        // Every workspace lands on its own list. Chat used to auto-open its most
-        // recent conversation here, which read as the tab opening a thread on
-        // its own; picking the thread is the user's call.
-        .onChange(of: storedWorkspace) {
-            settledLimit = 12
+    }
+
+    // MARK: - Detail
+
+    @ViewBuilder
+    private func detail(_ tab: MobileWorkspace) -> some View {
+        if let id = selectedThreadIDs[tab],
+           let thread = model.snapshot.threads.first(where: { $0.id == id }) {
+            ThreadDetailView(
+                model: model,
+                thread: thread,
+                submitMessage: submitMessage,
+                onNavigateBack: { closeSelectedThread(in: tab) },
+                // Subagent cards, fork dividers and lineage rows all point at
+                // another thread; an archived target also needs the shelf open
+                // or it lands on a list that does not contain it.
+                onOpenRelatedThread: { threadID, isArchived in
+                    if isArchived { isArchiveExpanded = true }
+                    openThread(threadID, in: tab)
+                }
+            )
+            .id(id)
+            // The composer owns the bottom of a thread on iPhone.
+            .toolbar(horizontalSizeClass == .compact ? .hidden : .automatic, for: .tabBar)
+        } else {
+            ContentUnavailableView {
+                Label(
+                    tab == .code ? "No Thread Selected" : "No Conversation Selected",
+                    systemImage: tab.tabSymbol
+                )
+            } description: {
+                Text(tab == .code
+                    ? "Choose a thread, or start a new task."
+                    : "Choose a conversation, or start a new one.")
+            } actions: {
+                Button(tab.newItemTitle, action: openNewTaskOrProjectCreation)
+                    .t3ProminentButtonStyle()
+                    .disabled(isAwaitingData)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(T3Colors.background)
         }
-        .task(id: searchText) { await searchThreadContent() }
+    }
+
+    // MARK: - Presentations
+
+    private func sheets(_ content: some View) -> some View {
+        content
+            .sheet(isPresented: $showingNewTask) {
+                NewThreadView(
+                    model: model,
+                    submit: submitNewTask,
+                    onCreated: { thread in
+                        openThread(thread.id, in: .code)
+                        showingNewTask = false
+                    },
+                    onCreateProject: openProjectCreation,
+                    initialProjectID: newTaskInitialProjectID,
+                    draftID: newTaskDraftID
+                )
+            }
+            .sheet(isPresented: $showingDrafts, onDismiss: {
+                if openingDraft { openingDraft = false; showingNewTask = true }
+            }) {
+                draftsSheet
+            }
+            .sheet(isPresented: $showingNewWorkConversation) {
+                NewWorkConversationView(
+                    model: model,
+                    flavor: workspace == .chat ? .chat : .work,
+                    submit: submitNewTask,
+                    onCreated: { thread in
+                        openThread(thread.id, in: workspace)
+                        showingNewWorkConversation = false
+                    }
+                )
+            }
+            .sheet(item: $editingProjectIcon) { project in
+                if let manager = model.client as? any FeatureProjectIconManaging {
+                    ProjectIconPickerView(project: project, manager: manager)
+                }
+            }
+            .sheet(isPresented: $showingAddProject) {
+                AddProjectView(model: model)
+            }
+            .sheet(isPresented: $showingPullRequests) {
+                if let manager = model.client as? any FeatureProjectPullRequestManaging {
+                    PullRequestWorkspaceView(model: model, manager: manager)
+                }
+            }
+            .sheet(isPresented: $showingHermesSetup) { WorkSetupSheet(model: model) }
+            .sheet(item: $customSnoozeTargets) { targets in
+                CustomSnoozeSheet(threadCount: targets.threadIDs.count) { until in
+                    if targets.isBatch {
+                        snoozeSelection(until: until)
+                    } else if let id = targets.threadIDs.first {
+                        Task { await model.setSnoozed(id, until: until) }
+                    }
+                }
+            }
+            .sheet(isPresented: $showingSettings, onDismiss: { settingsOpensServers = false }) {
+                SettingsView(model: model, initialRoute: settingsOpensServers ? .servers : nil)
+            }
+            .sheet(isPresented: $showingArrangement) {
+                ActiveThreadArrangementSheet(model: model, workspace: workspace, projectID: activeProjectFilterID)
+            }
+    }
+
+    private var draftsSheet: some View {
+        NavigationStack {
+            List {
+                if model.outboxCount > 0 {
+                    Section {
+                        ForEach(model.outboxSubmissions) { submission in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(submission.text)
+                                    .lineLimit(2)
+                                    .foregroundStyle(T3Colors.textPrimary)
+                                Text(model.outboxStatus(submission))
+                                    .font(.caption)
+                                    .foregroundStyle(T3Colors.textSecondary)
+                            }
+                            .swipeActions {
+                                Button("Cancel Send", role: .destructive) {
+                                    Task { await model.cancelOutbox(submission.id) }
+                                }
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Outbox")
+                            Spacer()
+                            Button("Retry All") { model.retryOutbox() }
+                                .font(.footnote.weight(.semibold))
+                                .textCase(nil)
+                        }
+                    } footer: {
+                        Text("Queued messages send on their own once their environment is reachable.")
+                    }
+                    .t3GroupedRow()
+                }
+                if !newTaskDrafts.isEmpty {
+                    Section("Drafts") {
+                        ForEach(newTaskDrafts) { draft in
+                            Button {
+                                openDraft(draftID: draft.draftID, projectID: draft.projectID)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(draft.title)
+                                        .lineLimit(2)
+                                        .foregroundStyle(T3Colors.textPrimary)
+                                    Text(model.snapshot.projects.first(where: { $0.id == draft.projectID })?.name ?? "Project")
+                                        .font(.caption)
+                                        .foregroundStyle(T3Colors.textSecondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .onDelete { offsets in
+                            let removed = offsets.map { newTaskDrafts[$0] }
+                            Task {
+                                do {
+                                    for draft in removed { try await FeatureComposerDraftStore.shared.removeDraft(for: draft.id) }
+                                    newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects)
+                                } catch { noticeAlert = ThreadListActionAlert(title: "Couldn't Delete Draft", message: error.localizedDescription) }
+                            }
+                        }
+                    }
+                    .t3GroupedRow()
+                }
+            }
+            .listStyle(.insetGrouped)
+            .t3GroupedListBackground()
+            .overlay {
+                if model.outboxCount == 0, newTaskDrafts.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Drafts", systemImage: "doc.text")
+                    } description: {
+                        Text("New tasks you start and don't send are kept here.")
+                    } actions: {
+                        Button("New Draft", action: startNewDraft)
+                            .t3ProminentButtonStyle()
+                    }
+                }
+            }
+            .navigationTitle("Drafts")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: startNewDraft) {
+                        Label("New Draft", systemImage: "square.and.pencil")
+                    }
+                }
+            }
+            .t3SheetToolbar(.close) {
+                newTaskInitialProjectID = nil
+                showingDrafts = false
+            }
+            .t3NavigationChrome()
+        }
+    }
+
+    private func dialogs(_ content: some View) -> some View {
+        content
+            .confirmationDialog(
+                batchSelection.count == 1 ? "Delete 1 Selected Thread?" : "Delete \(batchSelection.count) Selected Threads?",
+                isPresented: $confirmsBatchDelete,
+                titleVisibility: .visible
+            ) {
+                Button(batchSelection.count == 1 ? "Delete Thread" : "Delete Threads", role: .destructive) {
+                    runBatch { await model.deleteThread($0) }
+                }
+            } message: {
+                Text("Thread history will be deleted. Worktree files stay on the environment. Failed threads remain selected.")
+            }
+            .confirmationDialog("Unpin Selected Threads?", isPresented: $confirmsBatchUnpin, titleVisibility: .visible) {
+                Button("Unpin", role: .destructive) { runBatch { await model.setPinned($0, pinned: false) } }
+            }
+            .confirmationDialog(
+                "Discard Unsent Draft?",
+                isPresented: Binding(get: { draftToDiscard != nil }, set: { if !$0 { draftToDiscard = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Discard Draft", role: .destructive) {
+                    guard let thread = draftToDiscard else { return }
+                    draftToDiscard = nil
+                    Task {
+                        do { try await FeatureComposerDraftStore.shared.discardDraft(for: FeatureComposerDraftStore.threadKey(thread)) }
+                        catch { noticeAlert = ThreadListActionAlert(title: "Couldn't Discard Draft", message: error.localizedDescription) }
+                    }
+                }
+            }
+            .confirmationDialog(
+                pendingDeleteThread.map { "Delete “\($0.title)”?" } ?? "Delete Thread?",
+                isPresented: Binding(
+                    get: { pendingDeleteThread != nil },
+                    set: { if !$0 { pendingDeleteThread = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: pendingDeleteThread
+            ) { thread in
+                Button("Delete Thread", role: .destructive) {
+                    pendingDeleteThread = nil
+                    Task { await model.deleteThread(thread.id) }
+                }
+                Button("Cancel", role: .cancel) { pendingDeleteThread = nil }
+            } message: { _ in
+                Text("Its history will be deleted. Worktree files stay on the environment.")
+            }
+            .confirmationDialog(
+                "Snooze Until",
+                isPresented: Binding(
+                    get: { snoozeRequestThread != nil },
+                    set: { if !$0 { snoozeRequestThread = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: snoozeRequestThread
+            ) { thread in
+                ForEach(SnoozePresets.resolve()) { preset in
+                    Button("\(preset.label) · \(preset.whenLabel)") {
+                        snoozeRequestThread = nil
+                        guard let until = SnoozePresets.snoozedUntil(actionID: SnoozePresets.actionID(for: preset)) else { return }
+                        Task { await model.setSnoozed(thread.id, until: until) }
+                    }
+                }
+                Button("Custom…") {
+                    snoozeRequestThread = nil
+                    customSnoozeTargets = CustomSnoozeTargets(threadIDs: [thread.id], isBatch: false)
+                }
+                Button("Cancel", role: .cancel) { snoozeRequestThread = nil }
+            }
+            .alert(
+                "Rename Thread",
+                isPresented: Binding(
+                    get: { renamingThread != nil },
+                    set: { if !$0 { renamingThread = nil } }
+                )
+            ) {
+                TextField("Thread title", text: $renameTitle)
+                Button("Cancel", role: .cancel) { renamingThread = nil }
+                Button("Save") {
+                    guard let thread = renamingThread else { return }
+                    let title = renameTitle
+                    renamingThread = nil
+                    Task { await model.renameThread(thread.id, title: title) }
+                }
+                .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .alert(
+                noticeAlert?.title ?? "",
+                isPresented: Binding(
+                    get: { noticeAlert != nil },
+                    set: { if !$0 { noticeAlert = nil } }
+                ),
+                presenting: noticeAlert
+            ) { _ in
+                Button("OK") { noticeAlert = nil }
+            } message: { notice in
+                Text(notice.message)
+            }
+            .confirmationDialog(
+                pendingUnpinThread.map { "Unpin “\($0.title)”?" } ?? "Unpin Thread?",
+                isPresented: Binding(
+                    get: { pendingUnpinThread != nil },
+                    set: { if !$0 { pendingUnpinThread = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: pendingUnpinThread
+            ) { thread in
+                Button("Unpin", role: .destructive) {
+                    pendingUnpinThread = nil
+                    Task { await model.setPinned(thread.id, pinned: false) }
+                }
+                Button("Cancel", role: .cancel) { pendingUnpinThread = nil }
+            } message: { _ in
+                Text("This thread will return to its normal place in the list.")
+            }
+    }
+
+    private func lifecycle(_ content: some View) -> some View {
+        content
+            .task {
+                do {
+                    for await keys in try await FeatureComposerDraftStore.shared.draftPresence() {
+                        draftKeys = keys
+                        newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects)
+                    }
+                } catch { noticeAlert = ThreadListActionAlert(title: "Drafts Unavailable", message: error.localizedDescription) }
+            }
+            .environment(\.pullRequestHandoff, (model.client is any FeaturePullRequestThreadPreparing) ? PullRequestHandoffHandler { scope, overview, kind, mode, selection in
+                let threadID = try await model.stagePullRequestTask(scope: scope, overview: overview, kind: kind, mode: mode, selection: selection)
+                showingPullRequests = false
+                openThread(threadID, in: .code)
+            } : nil)
+            .onChange(of: selectedProjectIsAvailable) { _, isAvailable in
+                if !isAvailable { selectedProjectID = nil }
+            }
+            .onChange(of: selectedProjectID) {
+                settledLimit = 12
+            }
+            // A different workspace is a different list, so the settled shelf
+            // starts from its own first page rather than inheriting the other's.
+            .onChange(of: storedWorkspace) {
+                settledLimit = 12
+            }
+            .onChange(of: isSearchPresented) { _, isPresented in
+                if isPresented { searchScope = workspace }
+            }
+            .onChange(of: navigationRequest?.id, initial: true) { _, _ in
+                consumeNavigationRequest()
+            }
+            // A request that arrives before its thread or project exists in the
+            // snapshot stays pending; retry it as data lands so cold-start deep
+            // links are not silently stranded.
+            .onChange(of: model.homePresentationRevision) { _, _ in
+                closeMissingThreads()
+                if navigationRequest != nil { consumeNavigationRequest() }
+            }
+            .onChange(of: isAwaitingData) { _, _ in
+                if navigationRequest != nil { consumeNavigationRequest() }
+            }
+            .onAppear {
+                // The favicon store resolves through whichever client this session
+                // runs on; re-pointing on every appearance keeps it current after
+                // a reconnect swaps the client out.
+                ProjectFaviconStore.shared.attach(model.client)
+            }
+            .task(id: nextSidebarBoundary) {
+                guard let boundary = nextSidebarBoundary else { return }
+                do {
+                    try await Task.sleep(for: .seconds(max(0, boundary.timeIntervalSinceNow)))
+                    sidebarBoundaryNow = max(.now, boundary)
+                } catch {
+                    return
+                }
+            }
+            .task(id: searchText) { await searchThreadContent() }
+            .task(id: currentChangeRequestThreadIDs) {
+                model.observeChangeRequests(threadIDs: currentChangeRequestThreadIDs)
+            }
+    }
+
+    // MARK: - Search
+
+    private var isSearchActive: Bool {
+        isSearchPresented || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func endSearch() {
+        isSearchPresented = false
+        searchText = ""
     }
 
     /// Debounced, and cancelled by the next keystroke through `.task(id:)`.
@@ -407,113 +1149,77 @@ public struct WorkspaceView: View {
         return contentSearch?.query != query
     }
 
-    private var threadList: some View {
-        let presentation = homePresentationCache.presentation(
+    // MARK: - Presentation
+
+    private func presentation(for listWorkspace: MobileWorkspace, query: String) -> HomePresentation {
+        homePresentationCache.presentation(
             snapshot: model.snapshot,
             revision: model.homePresentationRevision,
-            workspace: workspace,
-            query: searchText,
-            projectID: activeProjectFilterID,
+            workspace: listWorkspace,
+            query: query,
+            projectID: WorkspaceSwitcher.projectFilter(listWorkspace, selectedProjectID: selectedProjectID),
             now: sidebarBoundaryNow,
             changeRequests: model.changeRequestsByThreadID,
-            contentMatchIDs: Set(currentContentMatches.keys)
+            contentMatchIDs: query.isEmpty ? [] : Set(currentContentMatches.keys)
         )
+    }
 
-        let changeRequestThreadIDs = changeRequestThreadIDs(in: presentation)
+    /// Blocked-on-you Work, badged on the Work tab so it shows from Code and
+    /// Chat too.
+    private var workNeedsYouCount: Int {
+        let work = presentation(for: .work, query: "")
+        return (work.pinned + work.active)
+            .filter { $0.homeStatus == .approval || $0.homeStatus == .input }
+            .count
+    }
 
-        return VStack(spacing: 0) {
-            if WorkspaceSwitcher.showsProjectFilter(workspace) {
-                projectFilter
-                if model.client is any FeatureProjectPullRequestManaging,
-                   model.snapshot.environments.contains(where: { $0.supportsPullRequests == true }) {
-                    Button { showingPullRequests = true } label: {
-                        HStack {
-                            Label("Pull requests", systemImage: "arrow.triangle.pull")
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
-                        }.font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                            .frame(minHeight: 44).padding(.horizontal, 18).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityIdentifier("sidebar-pull-requests")
-                }
-            }
-            if workspace != .chat && presentation.active.contains(where: { $0.supportsActiveOrder == true }) {
-                Button("Arrange threads", systemImage: "arrow.up.arrow.down") { showingArrangement = true }
-                    .font(T3Typography.homeMetadata)
-                    .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .trailing)
-                    .padding(.horizontal, 18)
-            }
-            HStack {
-                Button("Drafts (\(newTaskDrafts.count))", systemImage: "doc.text") {
-                    Task {
-                        do { newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects); showingDrafts = true }
-                        catch { noticeAlert = ThreadListActionAlert(title: "Could not read drafts", message: error.localizedDescription) }
-                    }
-                }
-                Spacer()
-                if model.outboxCount > 0 { Button("\(model.outboxCount) queued") { showingDrafts = true } }
-            }.font(T3Typography.homeMetadata).padding(.horizontal, 18).frame(minHeight: T3Metrics.minimumTapTarget)
-            if isSelecting { batchBar }
-            HomeThreadCollectionView(
-                presentation: presentation,
-                changeRequests: model.changeRequestsByThreadID,
-                workspace: workspace,
-                query: searchText,
-                selectedThreadID: selectedThreadID,
-                forceRichRows: dynamicTypeSize.isAccessibilitySize,
-                isSnoozedExpanded: isSnoozedExpanded,
-                isSettledExpanded: isSettledExpanded,
-                isArchiveExpanded: isArchiveExpanded,
-                settledLimit: settledLimit,
-                confirmThreadUnpin: model.snapshot.settings.confirmThreadUnpin,
-                onOpen: openThread,
-                onToggleSnoozed: { isSnoozedExpanded.toggle() },
-                onToggleSettled: { isSettledExpanded.toggle() },
-                onToggleArchive: { isArchiveExpanded.toggle() },
-                onShowMoreSettled: { settledLimit += 25 },
-                onRename: { thread in
-                    renameTitle = thread.title
-                    renamingThread = thread
-                },
-                onArchive: { thread, archived in
-                    Task { await model.setArchived(thread.id, archived: archived) }
-                },
-                onSettle: { thread, settled in
-                    Task { await model.setSettled(thread.id, settled: settled) }
-                },
-                onSnooze: { thread, until in
-                    Task { await model.setSnoozed(thread.id, until: until) }
-                },
-                onPin: { thread, pinned in
-                    if !pinned, model.snapshot.settings.confirmThreadUnpin {
-                        pendingUnpinThread = thread
-                    } else {
-                        Task { await model.setPinned(thread.id, pinned: pinned) }
-                    }
-                },
-                onDelete: { thread in
-                    Task { await model.deleteThread(thread.id) }
-                },
-                onCopyHandoffScript: copyHandoffScript,
-                onCopy: copyThreadDetail,
-                onRegenerateTitle: regenerateTitle,
-                draftKeys: draftKeys,
-                isSelecting: isSelecting,
-                batchSelection: batchSelection,
-                onToggleSelection: { id in
-                    guard !isBatchRunning else { return }
-                    isSelecting = true
-                    if !batchSelection.insert(id).inserted { batchSelection.remove(id) }
-                },
-                onDiscardDraft: { draftToDiscard = $0 },
-                onDropFiles: receiveThreadFileDrop,
-                onCustomSnooze: { customSnoozeTargets = CustomSnoozeTargets(threadIDs: [$0.id], isBatch: false) },
-                contentMatches: currentContentMatches,
-                isSearchingContent: isSearchingContent
-            )
+    private var connectionBanner: HomeConnectionBanner? {
+        HomeConnectionBanner.resolve(snapshot: model.snapshot, isReconnecting: isReconnecting)
+    }
+
+    private func openServerSettings() {
+        settingsOpensServers = true
+        showingSettings = true
+    }
+
+    private func reconnect() {
+        guard !isReconnecting else { return }
+        isReconnecting = true
+        Task {
+            await model.reload(reason: "reconnect-button")
+            isReconnecting = false
         }
-        .background(T3Colors.background)
-        .task(id: changeRequestThreadIDs) {
-            model.observeChangeRequests(threadIDs: changeRequestThreadIDs)
+    }
+
+    private func emptyState(for tab: MobileWorkspace) -> HomeEmptyState {
+        let hermesReady: Bool
+        if tab == .code {
+            hermesReady = true
+        } else if case .hermesUnavailable = WorkspaceSwitcher.newTaskIntent(
+            workspace: tab,
+            selectedProjectID: nil,
+            projects: workspaceProjects,
+            serverConfigs: workspaceServerConfigs,
+            requiredEnvironmentID: nil
+        ) {
+            hermesReady = false
+        } else {
+            hermesReady = true
+        }
+        return HomeEmptyState.resolve(
+            workspace: tab,
+            hasCreationProjects: !creationProjects.isEmpty,
+            filteredProjectName: tab == .code ? selectedProject?.name : nil,
+            hermesReady: hermesReady
+        )
+    }
+
+    private func performEmptyAction(_ action: HomeEmptyState.Action) {
+        switch action {
+        case .addProject: showingAddProject = true
+        case .newItem: openNewTaskOrProjectCreation()
+        case .showAllProjects: selectedProjectID = nil
+        case .setUpHermes: showingHermesSetup = true
         }
     }
 
@@ -523,8 +1229,12 @@ public struct WorkspaceView: View {
     /// parked shelves below use the slim row, which shows no branch to replace.
     private static let changeRequestRowLimit = 30
 
-    private func changeRequestThreadIDs(in presentation: HomePresentation) -> [String] {
+    private var currentChangeRequestThreadIDs: [String] {
         guard workspace == .code else { return [] }
+        return changeRequestThreadIDs(in: presentation(for: .code, query: ""))
+    }
+
+    private func changeRequestThreadIDs(in presentation: HomePresentation) -> [String] {
         let live = (presentation.pinned + presentation.active)
             .prefix(Self.changeRequestRowLimit)
             .map(\.id)
@@ -543,407 +1253,6 @@ public struct WorkspaceView: View {
         return (live + settledWithKnownRequest)
             .filter { seen.insert($0).inserted }
             .sorted()
-    }
-
-    @ViewBuilder
-    private var detail: some View {
-        if let id = selectedThreadID,
-           let thread = model.snapshot.threads.first(where: { $0.id == id }) {
-            ThreadDetailView(
-                model: model,
-                thread: thread,
-                submitMessage: submitMessage,
-                onNavigateBack: closeSelectedThread,
-                // Subagent cards, fork dividers and lineage rows all point at
-                // another thread; an archived target also needs the shelf open
-                // or it lands on a list that does not contain it.
-                onOpenRelatedThread: { threadID, isArchived in
-                    if isArchived { isArchiveExpanded = true }
-                    openThread(threadID)
-                }
-            )
-            .id(id)
-        } else {
-            VStack(spacing: 14) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 30, weight: .light))
-                    .foregroundStyle(T3Colors.textTertiary)
-                Text("Start a task")
-                    .font(.title3.weight(.semibold))
-                Text("Choose a thread or compose something new.")
-                    .font(.subheadline)
-                    .foregroundStyle(T3Colors.textSecondary)
-                Button("New task", action: openNewTaskOrProjectCreation)
-                    .buttonStyle(.borderedProminent)
-                    .tint(T3Colors.primaryAction)
-                    .foregroundStyle(T3Colors.primaryActionForeground)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(T3Colors.background)
-        }
-    }
-
-    private var batchBar: some View {
-        HStack {
-            Text("\(batchSelection.count) selected").font(.caption)
-            Spacer()
-            if workspace != .chat {
-                Menu("Snooze") {
-                    ForEach(SnoozePresets.resolve()) { preset in
-                        Button("\(preset.label) (\(preset.whenLabel))") {
-                            // Recomputed at tap time, like the row menu.
-                            guard let until = SnoozePresets.snoozedUntil(actionID: SnoozePresets.actionID(for: preset)) else { return }
-                            snoozeSelection(until: until)
-                        }
-                    }
-                    Divider()
-                    Button("Custom…", systemImage: "calendar") {
-                        customSnoozeTargets = CustomSnoozeTargets(threadIDs: batchSelection.sorted(), isBatch: true)
-                    }
-                }
-                .disabled(batchSelection.isEmpty || isBatchRunning)
-                .accessibilityIdentifier("workspace-batch-snooze")
-            }
-            Button("Unpin") {
-                if model.snapshot.settings.confirmThreadUnpin { confirmsBatchUnpin = true }
-                else { runBatch { await model.setPinned($0, pinned: false) } }
-            }.disabled(batchSelection.isEmpty || isBatchRunning)
-            Button("Delete", role: .destructive) { confirmsBatchDelete = true }
-                .disabled(batchSelection.isEmpty || isBatchRunning)
-            Button("Done") { isSelecting = false; batchSelection.removeAll() }.disabled(isBatchRunning)
-        }
-        .font(.subheadline)
-        .padding(12)
-        .background(T3Colors.background)
-        .accessibilityIdentifier("workspace-batch-actions")
-    }
-
-    /// Applies one action to every selected thread in turn. Threads it
-    /// succeeds on leave the selection, so a retry only touches the rest.
-    private func runBatch(
-        failureMessage: String = "Failed threads remain selected. Check the connection and try again.",
-        _ operation: @escaping (String) async -> Bool
-    ) {
-        guard !isBatchRunning else { return }
-        isBatchRunning = true
-        let ids = batchSelection.sorted()
-        Task {
-            for id in ids {
-                if await operation(id) { batchSelection.remove(id) }
-            }
-            isBatchRunning = false
-            if batchSelection.isEmpty { isSelecting = false }
-            else { noticeAlert = ThreadListActionAlert(title: "Some threads could not be updated", message: failureMessage) }
-        }
-    }
-
-    /// Threads whose server cannot snooze them, or that are queued or Work's
-    /// Main thread, stay selected rather than being sent a command the server
-    /// would refuse.
-    private func snoozeSelection(until: Date) {
-        let snoozable = Set(model.snapshot.threads.filter { $0.canShelveSnoozed && $0.state != .queued }.map(\.id))
-        runBatch(failureMessage: "Threads that cannot be snoozed, or failed to update, remain selected.") { id in
-            guard snoozable.contains(id) else { return false }
-            return await model.setSnoozed(id, until: until)
-        }
-    }
-
-    private var homeBar: some View {
-        HStack(spacing: 2) {
-            Button {
-                isSelecting.toggle()
-                if !isSelecting { batchSelection.removeAll() }
-            } label: { Image(systemName: isSelecting ? "checkmark.circle.fill" : "checkmark.circle").frame(width: 40, height: T3Metrics.minimumTapTarget) }
-                .disabled(isBatchRunning)
-                .accessibilityLabel("Select threads")
-            connectionBrand
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                withAnimation(.easeOut(duration: 0.16)) {
-                    isSearching.toggle()
-                }
-                if isSearching {
-                    Task { @MainActor in
-                        await Task.yield()
-                        isSearchFocused = true
-                    }
-                } else {
-                    searchText = ""
-                    isSearchFocused = false
-                }
-            } label: {
-                Image(systemName: isSearching ? "xmark" : "magnifyingglass")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 40, height: T3Metrics.minimumTapTarget)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(T3Colors.textSecondary)
-            .accessibilityLabel(isSearching ? "Close search" : "Search tasks")
-            .accessibilityIdentifier("sidebar-search-button")
-
-            Button { showingSettings = true } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 40, height: T3Metrics.minimumTapTarget)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(T3Colors.textSecondary)
-            .accessibilityLabel("Settings")
-            .accessibilityIdentifier("sidebar-settings-button")
-        }
-        .padding(.leading, 15)
-        .padding(.trailing, 8)
-        // Sized off the switcher rather than fixed, so the row keeps its margin
-        // above and below the tallest thing in it.
-        .frame(height: Self.workspaceSwitcherHeight + 12)
-        .background(T3Colors.background)
-    }
-
-    @ViewBuilder
-    private var connectionBrand: some View {
-        if !unreachableEnvironments.isEmpty {
-            HStack(spacing: 7) {
-                Image(systemName: "network.slash")
-                    .font(.system(size: 13, weight: .semibold))
-                Text(unreachableBrandLabel)
-                    .lineLimit(2)
-                    .font(.system(size: 13, weight: .semibold))
-                Button("Reconnect") {
-                    Task { await model.reload(reason: "reconnect-button") }
-                }
-                .font(.caption.weight(.bold))
-                .buttonStyle(.plain)
-                .padding(.horizontal, 9)
-                .frame(height: 26)
-                .overlay {
-                    Capsule().stroke(T3Colors.danger.opacity(0.42), lineWidth: 1)
-                }
-            }
-            .foregroundStyle(T3Colors.danger)
-            .accessibilityElement(children: .contain)
-        } else if let reconnecting = reconnectingEnvironments.first {
-            Button { showingSettings = true } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "wifi.exclamationmark")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(reconnecting.name)
-                        .lineLimit(1)
-                    Text("reconnecting")
-                        .fontWeight(.medium)
-                        .opacity(0.76)
-                }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(T3Colors.warning)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(reconnecting.name) reconnecting")
-        } else if model.snapshot.connection.state == .connecting
-            || model.snapshot.connection.state == .reconnecting {
-            Button { showingSettings = true } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "wifi.exclamationmark")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(connectionEnvironmentName)
-                        .lineLimit(1)
-                    Text("reconnecting")
-                        .fontWeight(.medium)
-                        .opacity(0.76)
-                }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(T3Colors.warning)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(connectionEnvironmentName) reconnecting")
-        } else if model.snapshot.connection.state == .disconnected {
-            HStack(spacing: 7) {
-                Image(systemName: "network.slash")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("\(connectionEnvironmentName) unreachable")
-                    .lineLimit(2)
-                    .font(.system(size: 13, weight: .semibold))
-                Button("Reconnect") {
-                    Task { await model.reload(reason: "reconnect-button") }
-                }
-                .font(.caption.weight(.bold))
-                .buttonStyle(.plain)
-                .padding(.horizontal, 9)
-                .frame(height: 26)
-                .overlay {
-                    Capsule().stroke(T3Colors.danger.opacity(0.42), lineWidth: 1)
-                }
-            }
-            .foregroundStyle(T3Colors.danger)
-            .accessibilityElement(children: .contain)
-        } else {
-            workspaceSwitcher
-        }
-    }
-
-    /// Every workspace is always on screen. The switcher is a hosted
-    /// `UISegmentedControl` — the system owns the sliding thumb, its animation
-    /// and its glass treatment, which a hand-rolled matched-geometry copy never
-    /// quite matched — sized up past what `.pickerStyle(.segmented)` allows,
-    /// because switching surfaces is the header's primary action and the
-    /// default segment font reads as a settings row.
-    private var workspaceSwitcher: some View {
-        HStack(spacing: 11) {
-            Text("T3")
-                .font(.system(size: 19, weight: .bold))
-                .foregroundStyle(T3Colors.textPrimary)
-
-            WorkspaceSegmentedControl(
-                titles: MobileWorkspace.allCases.map(WorkspaceSwitcher.shortTitle),
-                selectedIndex: workspaceSelection,
-                font: .systemFont(ofSize: 16, weight: .semibold),
-                height: Self.workspaceSwitcherHeight,
-                segmentPadding: 14
-            )
-        }
-        .frame(minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("sidebar-workspace-switcher")
-    }
-
-    /// Tall enough to clear the 44pt tap target on its own rather than relying
-    /// on the header row's padding to make up the difference.
-    private static let workspaceSwitcherHeight: CGFloat = 44
-
-    private var workspaceSelection: Binding<Int> {
-        Binding(
-            get: { MobileWorkspace.allCases.firstIndex(of: workspace) ?? 0 },
-            set: { index in
-                let candidates = MobileWorkspace.allCases
-                guard candidates.indices.contains(index) else { return }
-                storedWorkspace = candidates[index].rawValue
-            }
-        )
-    }
-
-    private var searchBar: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(T3Colors.textTertiary)
-            TextField("Search tasks, projects and PRs", text: $searchText)
-                .font(.subheadline)
-                .foregroundStyle(T3Colors.textPrimary)
-                .focused($isSearchFocused)
-                .submitLabel(.search)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityIdentifier("sidebar-search-field")
-            if !searchText.isEmpty {
-                Button { searchText = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: T3Metrics.minimumTapTarget)
-        .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(T3Colors.border, lineWidth: 1)
-        }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 4)
-    }
-
-    private var composeButton: some View {
-        Button {
-            isSearchFocused = false
-            openNewTaskOrProjectCreation()
-        } label: {
-            Image(systemName: "square.and.pencil")
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(T3Colors.primaryActionForeground)
-                .frame(width: 52, height: 52)
-                .background(T3Colors.primaryAction, in: Circle())
-                .shadow(color: T3Colors.shadow, radius: 16, y: 8)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("New task")
-        .accessibilityHint(
-            creationProjects.isEmpty
-                ? "Create a project to start a task"
-                : "Compose a message and start a thread"
-        )
-        .accessibilityIdentifier("sidebar-new-task-button")
-    }
-
-    private var projectFilter: some View {
-        HStack(spacing: 0) {
-            Menu {
-                Button {
-                    selectedProjectID = nil
-                } label: {
-                    if selectedProjectID == nil {
-                        Label("All projects", systemImage: "checkmark")
-                    } else {
-                        Text("All projects")
-                    }
-                }
-                if let project = selectedProject,
-                   model.snapshot.environments.first(where: { $0.id == project.environmentID })?.supportsProjectIcons == true,
-                   model.client is any FeatureProjectIconManaging {
-                    Button { editingProjectIcon = project } label: { Label("Change project icon", systemImage: "paintpalette") }
-                    Divider()
-                }
-                ForEach(filterableProjects) { project in
-                    Button {
-                        selectedProjectID = project.id
-                    } label: {
-                        let title = projectMenuTitle(project)
-                        if selectedProjectID == project.id {
-                            Label(title, systemImage: "checkmark")
-                        } else {
-                            Text(title)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 7) {
-                    if let project = selectedProject {
-                        ProjectFaviconBadge(environmentID: project.environmentID, workspaceRoot: project.path,
-                            faviconPath: project.faviconPath, projectIcon: project.projectIcon, projectTitle: project.name) {
-                            Image(systemName: "folder")
-                        }
-                    } else {
-                        Image(systemName: "folder").font(.system(size: 13, weight: .medium))
-                    }
-                    Text(selectedProject?.name ?? "All projects")
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-            }
-            .font(T3Typography.homeMetadata.weight(.semibold))
-                .foregroundStyle(T3Colors.textSecondary)
-            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Project filter")
-            .accessibilityValue(selectedProject?.name ?? "All projects")
-            .accessibilityIdentifier("sidebar-project-filter")
-
-            Button { showingAddProject = true } label: {
-                Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .frame(width: T3Metrics.minimumTapTarget, height: 34)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Add project")
-            .accessibilityIdentifier("sidebar-add-project-button")
-        }
-        .padding(.leading, 10)
-        .padding(.trailing, 2)
-        .accessibilityElement(children: .contain)
     }
 
     private var workspace: MobileWorkspace {
@@ -1018,41 +1327,12 @@ public struct WorkspaceView: View {
         }
     }
 
-    private var connectionEnvironmentName: String {
-        model.snapshot.connection.environmentName
-            ?? model.snapshot.environments.first(where: \.isActive)?.name
-            ?? model.snapshot.environments.first?.name
-            ?? "Server"
-    }
-
-    private var unreachableEnvironments: [FeatureEnvironment] {
-        model.snapshot.environments.filter { $0.connectionState == .disconnected }
-    }
-
-    private var reconnectingEnvironments: [FeatureEnvironment] {
-        model.snapshot.environments.filter {
-            $0.connectionState == .connecting || $0.connectionState == .reconnecting
-        }
-    }
-
-    private var unreachableBrandLabel: String {
-        if unreachableEnvironments.count == 1 {
-            return "\(unreachableEnvironments[0].name) unreachable"
-        }
-        return "\(unreachableEnvironments.count) devices unreachable"
-    }
-
     private var nextSidebarBoundary: Date? {
         DailyUXSidebarRefresh.nextBoundary(
             for: model.snapshot.threads,
             after: sidebarBoundaryNow,
             changeRequests: model.changeRequestsByThreadID
         )
-    }
-
-    private var selectedThreadIsAvailable: Bool {
-        guard let selectedThreadID else { return true }
-        return model.snapshot.threads.contains { $0.id == selectedThreadID }
     }
 
     /// A filter remembered from before the Work checkout became identifiable
@@ -1063,39 +1343,73 @@ public struct WorkspaceView: View {
         return filterableProjects.contains { $0.id == selectedProjectID }
     }
 
-    private func receiveThreadFileDrop(_ thread: FeatureThread, providers: [NSItemProvider]) -> Bool {
+    /// A thread deleted elsewhere closes in whichever tab had it open.
+    private func closeMissingThreads() {
+        let known = Set(model.snapshot.threads.map(\.id))
+        for (tab, id) in selectedThreadIDs where !known.contains(id) {
+            closeSelectedThread(in: tab)
+        }
+    }
+
+    // MARK: - Actions
+
+    private func receiveThreadFileDrop(_ thread: FeatureThread, providers: [NSItemProvider], in tab: MobileWorkspace) -> Bool {
         guard !isSelecting, !thread.isArchived,
             model.snapshot.threads.contains(where: { $0.id == thread.id && !$0.isArchived }) else { return false }
         let supported = providers.filter { ThreadFileDropBatch.supportedType($0) != nil }
         guard !supported.isEmpty else { return false }
         guard model.pendingThreadFileDrops[thread.id] == nil else {
-            noticeAlert = ThreadListActionAlert(title: "Files are being prepared", message: "Finish adding the previous drop before dropping more files on this thread.")
-            openThread(thread.id)
+            noticeAlert = ThreadListActionAlert(title: "Files Are Being Prepared", message: "Finish adding the previous drop before dropping more files on this thread.")
+            openThread(thread.id, in: tab)
             return false
         }
         guard model.pendingThreadFileDrops.count < 8 else {
-            noticeAlert = ThreadListActionAlert(title: "Pending file drops", message: "Open the threads with pending files before adding more.")
+            noticeAlert = ThreadListActionAlert(title: "Too Many Pending Drops", message: "Open the threads with pending files before adding more.")
             return false
         }
         model.pendingThreadFileDrops[thread.id] = ThreadFileDropBatch(draftKey: FeatureComposerDraftStore.threadKey(thread), providers: supported)
-        openThread(thread.id)
+        openThread(thread.id, in: tab)
         return true
     }
 
-    private func openThread(_ id: String) {
-        selectedThreadID = id
-        preferredCompactColumn = .detail
+    private func openThread(_ id: String, in tab: MobileWorkspace) {
+        selectedThreadIDs[tab] = id
+        compactColumns[tab] = .detail
     }
 
-    private func closeSelectedThread() {
-        selectedThreadID = nil
-        preferredCompactColumn = .sidebar
+    private func closeSelectedThread(in tab: MobileWorkspace) {
+        selectedThreadIDs[tab] = nil
+        compactColumns[tab] = .sidebar
     }
 
     @MainActor
     private func openProjectCreation() {
         showingNewTask = false
         showingAddProject = true
+    }
+
+    private func openDrafts() {
+        Task {
+            do {
+                newTaskDrafts = try await FeatureComposerDraftStore.shared.newTaskDrafts(projects: model.snapshot.projects)
+                showingDrafts = true
+            } catch {
+                noticeAlert = ThreadListActionAlert(title: "Couldn't Read Drafts", message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func startNewDraft() {
+        openDraft(draftID: UUID().uuidString, projectID: activeProjectFilterID)
+    }
+
+    /// The composer opens once the drafts sheet is gone, so the two sheets
+    /// never fight over the same presentation.
+    private func openDraft(draftID: String?, projectID: String?) {
+        newTaskDraftID = draftID
+        newTaskInitialProjectID = projectID
+        openingDraft = true
+        showingDrafts = false
     }
 
     private func openNewTaskOrProjectCreation() {
@@ -1135,14 +1449,16 @@ public struct WorkspaceView: View {
     /// The pasteboard write lives here rather than in ``ThreadListActions`` so
     /// the whole path stays testable without UIKit.
     private func copyHandoffScript(for thread: FeatureThread) {
+        generatingHandoffIDs.insert(thread.id)
         Task { @MainActor in
             let outcome = await threadListActions.copyHandoffScript(threadID: thread.id) {
                 try await model.client.generateHandoffScript(threadID: thread.id)
             }
+            generatingHandoffIDs.remove(thread.id)
             switch outcome {
-            case let .handoffScript(script, alert):
+            case let .handoffScript(script, confirmation):
                 UIPasteboard.general.string = script
-                noticeAlert = alert
+                T3HUD.show(confirmation.title, systemImage: "doc.on.doc")
             case let .unsupported(alert), let .failed(alert):
                 noticeAlert = alert
             case .alreadyRunning, .titleRegenerationRequested:
@@ -1160,7 +1476,7 @@ public struct WorkspaceView: View {
         // row changed under an open menu. Silent: there is nothing to report.
         guard let value = ThreadCopy.value(for: target, on: thread) else { return }
         UIPasteboard.general.string = value
-        noticeAlert = ThreadCopy.confirmation(for: target)
+        T3HUD.show(ThreadCopy.confirmation(for: target).title, systemImage: "doc.on.doc")
     }
 
     private func regenerateTitle(for thread: FeatureThread) {
@@ -1183,17 +1499,26 @@ public struct WorkspaceView: View {
     }
 
     private func consumeNavigationRequest() {
-        guard let navigationRequest else { return }
+        guard let navigationRequest, !isAwaitingData else { return }
         switch navigationRequest.destination {
         case let .thread(id):
-            guard model.snapshot.threads.contains(where: { $0.id == id }) else { return }
+            guard let thread = model.snapshot.threads.first(where: { $0.id == id }) else { return }
             dismissTransientPresentations()
-            openThread(id)
+            // The thread opens in the tab that lists it.
+            let tab = WorkspaceSwitcher.workspace(
+                of: thread,
+                providerDrivers: WorkspaceSwitcher.providerDrivers(in: model.snapshot),
+                fallbackEnvironmentID: WorkspaceSwitcher.fallbackEnvironmentID(in: model.snapshot)
+            )
+            showTab(tab)
+            if thread.isArchived { isArchiveExpanded = true }
+            openThread(id, in: tab)
         case let .project(id):
             guard model.snapshot.projects.contains(where: { $0.id == id }) else { return }
             dismissTransientPresentations()
+            showTab(.code)
             selectedProjectID = id
-            closeSelectedThread()
+            closeSelectedThread(in: .code)
         case let .newTask(projectID):
             if let projectID,
                model.snapshot.projects.contains(where: { $0.id == projectID }) {
@@ -1216,6 +1541,15 @@ public struct WorkspaceView: View {
         onNavigationRequestConsumed(navigationRequest.id)
     }
 
+    /// Switches tabs for a deep link, leaving search and selection behind.
+    private func showTab(_ tab: MobileWorkspace) {
+        guard tab != workspace else { return }
+        endSearch()
+        isSelecting = false
+        batchSelection.removeAll()
+        storedWorkspace = tab.rawValue
+    }
+
     private func dismissTransientPresentations() {
         showingNewTask = false
         showingAddProject = false
@@ -1231,6 +1565,31 @@ public struct WorkspaceView: View {
             return project.name
         }
         return "\(project.name) · \(environment.name)"
+    }
+}
+
+private extension View {
+    /// iOS 26 minimizes the tab bar to its current tab while a list scrolls
+    /// down; earlier systems keep the bar.
+    @ViewBuilder
+    func homeTabBarMinimizesOnScroll() -> some View {
+        if #available(iOS 26, *) {
+            tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            self
+        }
+    }
+
+    /// The list's subtitle under the large title, where the system has one
+    /// (iOS 26). Always applied, never conditional on the text, so the list
+    /// underneath keeps its identity when the subtitle comes and goes.
+    @ViewBuilder
+    func homeNavigationSubtitle(_ subtitle: String) -> some View {
+        if #available(iOS 26, *) {
+            navigationSubtitle(subtitle)
+        } else {
+            self
+        }
     }
 }
 
@@ -1253,8 +1612,19 @@ struct HomePresentation {
     let snoozed: [FeatureThread]
     let settled: [FeatureThread]
     let archived: [FeatureThread]
-    let searchResults: [FeatureThread]
+    /// Threads the query matches by title, preview, project or pull request.
+    let searchTitleResults: [FeatureThread]
+    /// Threads only the server's message search found; listed under their own
+    /// heading, after the title matches.
+    let searchMessageResults: [FeatureThread]
     let rowContexts: [String: HomeThreadRowContext]
+
+    var searchResults: [FeatureThread] { searchTitleResults + searchMessageResults }
+
+    /// Nothing on any shelf: the list shows its empty state instead.
+    var isEmpty: Bool {
+        pinned.isEmpty && active.isEmpty && snoozed.isEmpty && settled.isEmpty && archived.isEmpty
+    }
 
     init(
         snapshot: FeatureSnapshot,
@@ -1291,16 +1661,11 @@ struct HomePresentation {
             .filter { thread in
                 guard thread.isArchived, !thread.isSubagentThread else { return false }
                 guard projectID == nil || thread.projectID == projectID else { return false }
-                let isHermes = WorkspaceSwitcher.isWorkThread(
-                    thread,
-                    environmentID: thread.environmentID ?? fallbackEnvironmentID,
-                    providerDrivers: providerDrivers
-                )
-                switch workspace {
-                case .code: return !isHermes
-                case .work: return isHermes && thread.workInboxRole != "chat"
-                case .chat: return isHermes && thread.workInboxRole == "chat"
-                }
+                return WorkspaceSwitcher.workspace(
+                    of: thread,
+                    providerDrivers: providerDrivers,
+                    fallbackEnvironmentID: fallbackEnvironmentID
+                ) == workspace
             }
             .sorted {
                 if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
@@ -1324,18 +1689,21 @@ struct HomePresentation {
         }
         self.archived = archived
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        searchResults = normalizedQuery.isEmpty
-            ? []
-            : DailyUXSidebarIndex.matchingThreads(
-                index.pinned + index.active + index.snoozed + index.settled + archived,
-                snapshot: snapshot,
-                query: normalizedQuery,
-                contentMatchIDs: contentMatchIDs
-            )
+        let matches = DailyUXSidebarIndex.matchingThreadGroups(
+            index.pinned + index.active + index.snoozed + index.settled + archived,
+            snapshot: snapshot,
+            query: normalizedQuery,
+            contentMatchIDs: contentMatchIDs
+        )
+        searchTitleResults = matches.titles
+        searchMessageResults = matches.messages
         rowContexts = HomeThreadRowContext.index(snapshot: snapshot)
     }
 }
 
+/// Home's presentations, a few at a time: each tab, the Work badge and a
+/// search can each want a different one in the same render, and a single slot
+/// would rebuild them in turn on every pass.
 @MainActor
 final class HomePresentationCache {
     private struct Key: Equatable {
@@ -1355,8 +1723,9 @@ final class HomePresentationCache {
         let contentMatchIDs: Set<String>
     }
 
-    private var cachedKey: Key?
-    private var cachedPresentation: HomePresentation?
+    /// Most recent last.
+    private var entries: [(key: Key, presentation: HomePresentation)] = []
+    private static let capacity = 6
 
     func presentation(
         snapshot: FeatureSnapshot,
@@ -1377,8 +1746,10 @@ final class HomePresentationCache {
             changeRequests: changeRequests,
             contentMatchIDs: contentMatchIDs
         )
-        if cachedKey == key, let cachedPresentation {
-            return cachedPresentation
+        if let index = entries.firstIndex(where: { $0.key == key }) {
+            let entry = entries.remove(at: index)
+            entries.append(entry)
+            return entry.presentation
         }
 
         let presentation = HomePresentation(
@@ -1390,38 +1761,46 @@ final class HomePresentationCache {
             changeRequests: changeRequests,
             contentMatchIDs: contentMatchIDs
         )
-        cachedKey = key
-        cachedPresentation = presentation
+        entries.append((key, presentation))
+        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
         return presentation
+    }
+
+    /// The last presentation built for a workspace, for a tab that is not on
+    /// screen and so does not need a fresh one.
+    func latest(for workspace: MobileWorkspace) -> HomePresentation? {
+        entries.last { $0.key.workspace == workspace && $0.key.query.isEmpty }?.presentation
     }
 }
 
+/// A parked shelf's heading: "Snoozed 2", with a disclosure chevron that turns
+/// as the shelf opens. Quiet on purpose; a collapsed shelf is the least
+/// important thing on the screen.
 struct HomeShelfHeader: View {
     let title: String
     let count: Int
     let isExpanded: Bool
-    let accent: Color?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(count > 0 ? "\(title) (\(count))" : title)
-                .lineLimit(1)
-            Rectangle()
-                .fill((accent ?? T3Colors.textTertiary).opacity(accent == nil ? 0.16 : 0.24))
-                .frame(height: 1)
+        HStack(spacing: 6) {
+            Text(title)
+                .foregroundStyle(T3Colors.textSecondary)
+            Text("\(count)")
+                .monospacedDigit()
+                .foregroundStyle(T3Colors.textTertiary)
+            Spacer(minLength: 8)
             // One glyph rotated, never two glyphs swapped: swapping replaces the
-            // view and the arrow changes without travelling, which also drops any
-            // animation the caller wrapped the toggle in.
-            Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .bold))
-                .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            // view and the arrow changes without travelling.
+            Image(systemName: "chevron.right")
+                .imageScale(.small)
+                .foregroundStyle(T3Colors.textTertiary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .animation(.easeInOut(duration: 0.2), value: isExpanded)
         }
-        .font(T3Typography.homeMetadata.weight(.bold))
-        .foregroundStyle(accent ?? T3Colors.textTertiary)
-        .padding(.horizontal, 10)
-        .padding(.top, 4)
-        .frame(minHeight: 40)
+        .font(.subheadline.weight(.semibold))
+        .padding(.horizontal, 18)
+        .padding(.top, 6)
+        .frame(minHeight: T3Metrics.minimumTapTarget)
         .contentShape(Rectangle())
     }
 }
@@ -1447,6 +1826,9 @@ struct HomeThreadRowContext: Equatable {
     var pullRequest: FeaturePullRequest?
     /// Set only on a search result found by message content rather than title.
     var searchExcerpt: HomeThreadSearchExcerpt?
+    /// Marks an archived thread among search results, where nothing else says
+    /// it is archived. Rows on the Archived shelf do not need it.
+    var showsArchivedBadge = false
 
     static let fallback = HomeThreadRowContext(
         projectName: "Project",
@@ -1460,13 +1842,12 @@ struct HomeThreadRowContext: Equatable {
         connectionState: nil
     )
 
-    var providerLooksTerminal: Bool {
-        let normalized = [providerDriver, providerID, providerName]
-            .joined(separator: " ")
-            .lowercased()
-        return normalized.contains("codex")
-            || normalized.contains("cursor")
-            || normalized.contains("open")
+    /// The row's environment is not live, so what it shows is its last known
+    /// state.
+    var isConnectionStale: Bool {
+        connectionState == .connecting
+            || connectionState == .reconnecting
+            || connectionState == .disconnected
     }
 
     static func index(snapshot: FeatureSnapshot) -> [String: HomeThreadRowContext] {
@@ -1531,9 +1912,9 @@ struct FeatureThreadRow: View, Equatable {
         /// Chat rows: a conversation, not a task — title and the last thing
         /// said, no repo badge, no branch, no provenance.
         case conversation
-        /// T3 Work rows: an inbox item, not a checkout — a status lozenge
-        /// where a Code card names its repo, and what the work is doing where
-        /// a Code card names its branch.
+        /// T3 Work rows: an inbox item, not a checkout — a status pill where a
+        /// Code card names its repo, and what the work is doing where a Code
+        /// card names its branch.
         case inbox
     }
 
@@ -1543,6 +1924,8 @@ struct FeatureThreadRow: View, Equatable {
     let style: Style
     let now: Date
     let allowsMultilineTitle: Bool
+    /// An unsent draft sits in this thread's composer.
+    let hasDraft: Bool
 
     init(
         thread: FeatureThread,
@@ -1550,7 +1933,8 @@ struct FeatureThreadRow: View, Equatable {
         isSelected: Bool = false,
         style: Style = .rich,
         now: Date = .now,
-        allowsMultilineTitle: Bool = false
+        allowsMultilineTitle: Bool = false,
+        hasDraft: Bool = false
     ) {
         self.thread = thread
         self.context = context
@@ -1558,14 +1942,15 @@ struct FeatureThreadRow: View, Equatable {
         self.style = style
         self.now = now
         self.allowsMultilineTitle = allowsMultilineTitle
+        self.hasDraft = hasDraft
     }
 
     var body: some View {
         row(at: now)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(thread.title)
-            .accessibilityValue(accessibilityValue(at: now))
-            .accessibilityHint("Opens task")
+            .accessibilityValue(Self.accessibilityValue(thread: thread, context: context, style: style, now: now))
+            .accessibilityHint(Self.accessibilityHint(for: style))
             .accessibilityIdentifier("thread-\(thread.id)")
             .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -1610,68 +1995,11 @@ struct FeatureThreadRow: View, Equatable {
                 .lineLimit(allowsMultilineTitle ? 2 : 1)
                 .padding(.top, 4)
 
-            HStack(spacing: 6) {
-                // A t3-generated branch ("t3code/ffeef775") names nothing the
-                // row does not already say. Once the work has a change request,
-                // that is what this line reports instead.
-                if let pullRequest = context.pullRequest {
-                    let stackSize = FeaturePullRequestLines.stackSize(thread.allLinkedPullRequests)
-                    let draft = pullRequest.state == "open" && pullRequest.isDraft == true
-                    let icon = stackSize != nil ? "square.3.layers.3d" : pullRequest.state == "merged" ? "arrow.triangle.merge" : pullRequest.state == "closed" ? "xmark.circle" : draft ? "pencil.circle" : "arrow.triangle.pull"
-                    let color = draft ? T3Colors.textSecondary : Self.pullRequestColor(pullRequest.state)
-                    Image(systemName: icon)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(color)
-                    Text(stackSize.map { "\($0)" } ?? "#\(pullRequest.number)")
-                        .monospacedDigit()
-                        .foregroundStyle(color)
-                    if stackSize == nil && thread.allLinkedPullRequests.count > 1 {
-                        Text("+\(thread.allLinkedPullRequests.count - 1)")
-                            .foregroundStyle(T3Colors.textSecondary)
-                    }
-                    Text(pullRequest.title)
-                        .lineLimit(1)
-                } else {
-                    // Worktree checkouts get their own glyph (the desktop
-                    // sidebar's worktree indicator): the branch alone doesn't
-                    // say the thread runs on an isolated copy of the repo.
-                    Image(systemName: isWorktreeCheckout
-                        ? "square.on.square"
-                        : "arrow.triangle.branch")
-                        .font(.system(size: 10, weight: .medium))
-                    Text(branchLabel)
-                        .lineLimit(1)
-                }
-                if context.providerLooksTerminal {
-                    Text(">_")
-                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(T3Colors.syntaxProperty)
-                }
-                Spacer(minLength: 8)
-                if let environmentLabel {
-                    HStack(spacing: 4) {
-                        Image(systemName: environmentIcon)
-                            .font(.system(size: 9))
-                        Text(environmentLabel)
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(environmentColor)
-                }
-                if thread.pinnedAt != nil {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(T3Colors.textSecondary)
-                }
-                Text(FeatureAccountLabel.display(context.providerName, fallback: context.providerDriver))
-                    .font(T3Typography.homeMetadata)
-                    .lineLimit(1)
-                    .foregroundStyle(T3Colors.textSecondary)
-                providerIcon(size: 16)
-            }
-            .font(T3Typography.homeMetadata)
-            .foregroundStyle(T3Colors.textTertiary)
-            .frame(minHeight: 20)
-            .padding(.top, 3)
+            metaLine
+                .font(T3Typography.homeMetadata)
+                .foregroundStyle(T3Colors.textTertiary)
+                .frame(minHeight: 20)
+                .padding(.top, 3)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -1683,75 +2011,166 @@ struct FeatureThreadRow: View, Equatable {
         .padding(.horizontal, 8)
     }
 
+    /// Line three of a Code row: draft, change request or branch, environment,
+    /// pin and harness. At accessibility sizes it stacks instead of running
+    /// off the edge.
+    private var metaLine: some View {
+        let layout = allowsMultilineTitle
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+            : AnyLayout(HStackLayout(spacing: 6))
+        return layout {
+            if hasDraft {
+                draftMarker
+            }
+            branchOrChangeRequest
+            if !allowsMultilineTitle {
+                Spacer(minLength: 8)
+            }
+            HStack(spacing: 6) {
+                if let environmentLabel = context.environmentLabel {
+                    environmentStatus(environmentLabel)
+                }
+                if thread.pinnedAt != nil {
+                    Image(systemName: "pin.fill")
+                        .imageScale(.small)
+                        .foregroundStyle(T3Colors.textSecondary)
+                }
+                providerIcon(size: 16)
+            }
+        }
+    }
+
+    private var branchOrChangeRequest: some View {
+        HStack(spacing: 5) {
+            // A t3-generated branch ("t3code/ffeef775") names nothing the row
+            // does not already say. Once the work has a change request, that is
+            // what this line reports instead.
+            if let pullRequest = context.pullRequest {
+                let stackSize = FeaturePullRequestLines.stackSize(thread.allLinkedPullRequests)
+                let draft = pullRequest.state == "open" && pullRequest.isDraft == true
+                let icon = stackSize != nil ? "square.3.layers.3d" : pullRequest.state == "merged" ? "arrow.triangle.merge" : pullRequest.state == "closed" ? "xmark.circle" : draft ? "pencil.circle" : "arrow.triangle.pull"
+                let color = draft ? T3Colors.textSecondary : Self.pullRequestColor(pullRequest.state)
+                Image(systemName: icon)
+                    .imageScale(.small)
+                    .foregroundStyle(color)
+                Text(stackSize.map { "\($0)" } ?? "#\(pullRequest.number)")
+                    .monospacedDigit()
+                    .foregroundStyle(color)
+                if stackSize == nil && thread.allLinkedPullRequests.count > 1 {
+                    Text("+\(thread.allLinkedPullRequests.count - 1)")
+                        .foregroundStyle(T3Colors.textSecondary)
+                }
+                Text(pullRequest.title)
+                    .lineLimit(1)
+            } else {
+                // Worktree checkouts get their own glyph (the desktop sidebar's
+                // worktree indicator): the branch alone doesn't say the thread
+                // runs on an isolated copy of the repo.
+                Image(systemName: isWorktreeCheckout
+                    ? "square.on.square"
+                    : "arrow.triangle.branch")
+                    .imageScale(.small)
+                Text(branchLabel)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    /// The environment a Code row runs on, spelled out when it is not live.
+    private func environmentStatus(_ name: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: environmentIcon)
+                .imageScale(.small)
+            Text(environmentText(name))
+                .lineLimit(1)
+        }
+        .foregroundStyle(environmentColor)
+    }
+
     private func slimRow(at now: Date) -> some View {
         HStack(spacing: 9) {
             ProjectFaviconBadge(
                 environmentID: context.projectEnvironmentID,
                 workspaceRoot: context.projectWorkspaceRoot,
                 faviconPath: context.projectFaviconPath,
-                    projectIcon: context.projectIcon, projectTitle: context.projectName
+                projectIcon: context.projectIcon, projectTitle: context.projectName
             ) {
                 ProjectBadge(name: context.projectName)
             }
             .saturation(0)
             .opacity(0.48)
-            Text(thread.title)
-                .font(T3Typography.homeTitle)
-                .foregroundStyle(T3Colors.textSecondary)
-                .lineLimit(allowsMultilineTitle ? 2 : 1)
+            VStack(alignment: .leading, spacing: 1) {
+                (hasDraft ? draftPrefix : Text(""))
+                    + Text(thread.title)
+                        .foregroundStyle(T3Colors.textSecondary)
+                if context.isConnectionStale, let environmentLabel = context.environmentLabel {
+                    environmentStatus(environmentLabel)
+                        .font(T3Typography.homeMetadata)
+                }
+            }
+            .font(T3Typography.homeTitle)
+            .lineLimit(allowsMultilineTitle ? 2 : 1)
             Spacer(minLength: 8)
             if thread.pinnedAt != nil {
                 Image(systemName: "pin.fill")
-                    .font(.system(size: 9, weight: .semibold))
+                    .imageScale(.small)
+                    .font(T3Typography.homeMetadata)
                     .foregroundStyle(T3Colors.textSecondary)
             }
             providerIcon(size: 15)
-            Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
-                .font(T3Typography.homeMetadata.monospacedDigit())
-                .foregroundStyle(T3Colors.textTertiary)
+            dateColumn(at: now)
         }
         .padding(.horizontal, 10)
         .frame(minHeight: 44)
-        .padding(.horizontal, 8)
         .background(
             isSelected ? T3Colors.subtleStrong : Color.clear,
-            in: RoundedRectangle(cornerRadius: 7)
+            in: RoundedRectangle(cornerRadius: 8)
         )
+        .padding(.horizontal, 8)
     }
 
-    /// The Chat row: title and time on one line, the last thing said underneath.
+    /// The Chat row: title and date on one line, the last thing said underneath.
     ///
     /// There is no meta line above the title, because every row in Chat would
     /// have filled it with the same word. What differs between conversations is
     /// what was last said, which is what every message list leads with.
     private func conversationRow(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if thread.pinnedAt != nil {
+                    Image(systemName: "pin.fill")
+                        .imageScale(.small)
+                        .font(T3Typography.homeMetadata)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .accessibilityHidden(true)
+                }
                 Text(thread.title)
                     .font(T3Typography.homeTitle)
                     .tracking(-0.14)
                     .foregroundStyle(T3Colors.textPrimary)
                     .lineLimit(allowsMultilineTitle ? 2 : 1)
                 Spacer(minLength: 8)
-                if thread.pinnedAt != nil {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(T3Colors.textSecondary)
-                }
-                Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
-                    .font(T3Typography.homeMetadata.monospacedDigit())
-                    .foregroundStyle(T3Colors.textTertiary)
+                dateColumn(at: now)
             }
 
-            if thread.homeStatus == .working {
-                Text("responding…")
+            Group {
+                if thread.homeStatus == .working {
+                    Text("Responding…")
+                        .foregroundStyle(T3Colors.statusRunning)
+                } else if let preview = previewLine {
+                    (hasDraft ? draftPrefix : Text(""))
+                        + preview
+                } else if hasDraft {
+                    draftPrefix
+                }
+            }
+            .font(T3Typography.homeMetadata)
+            .foregroundStyle(T3Colors.textTertiary)
+            .lineLimit(2)
+
+            if context.isConnectionStale, let environmentLabel = context.environmentLabel {
+                environmentStatus(environmentLabel)
                     .font(T3Typography.homeMetadata)
-                    .foregroundStyle(T3Colors.statusRunning)
-            } else if let preview = previewLine {
-                preview
-                    .font(T3Typography.homeMetadata)
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .lineLimit(1)
             }
         }
         .padding(.horizontal, 10)
@@ -1764,8 +2183,8 @@ struct FeatureThreadRow: View, Equatable {
         .padding(.horizontal, 8)
     }
 
-    /// The T3 Work row: a status lozenge where a Code card names its repo, and
-    /// the last thing that happened where a Code card names its branch.
+    /// The T3 Work row: a status pill where a Code card names its repo, and the
+    /// last thing that happened where a Code card names its branch.
     ///
     /// Work threads all sit on one hidden backing checkout, so repo, branch and
     /// harness are identical on every row — three constants where the inbox
@@ -1773,24 +2192,22 @@ struct FeatureThreadRow: View, Equatable {
     private func inboxRow(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                if let badge = thread.workInboxBadge {
-                    WorkInboxLozenge(badge: badge, tint: statusColor)
+                if let pill = workInboxPill {
+                    WorkInboxPill(label: pill, systemImage: statusIcon, tint: statusColor)
                 }
                 if let duration = thread.homeWorkingDuration(at: now) {
                     Text(duration)
-                        .font(.system(.footnote, design: .monospaced, weight: .semibold))
-                        .monospacedDigit()
+                        .font(T3Typography.homeMetadata.weight(.semibold).monospacedDigit())
                         .foregroundStyle(statusColor)
                 }
                 Spacer(minLength: 8)
                 if thread.pinnedAt != nil {
                     Image(systemName: "pin.fill")
-                        .font(.system(size: 9, weight: .semibold))
+                        .imageScale(.small)
+                        .font(T3Typography.homeMetadata)
                         .foregroundStyle(T3Colors.textSecondary)
                 }
-                Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
-                    .font(T3Typography.homeMetadata.monospacedDigit())
-                    .foregroundStyle(T3Colors.textTertiary)
+                dateColumn(at: now)
             }
             .frame(minHeight: 20)
 
@@ -1801,15 +2218,25 @@ struct FeatureThreadRow: View, Equatable {
                 .lineLimit(allowsMultilineTitle ? 2 : 1)
                 .padding(.top, 3)
 
-            if let preview = previewLine {
-                preview
+            Group {
+                if let preview = previewLine {
+                    (hasDraft ? draftPrefix : Text("")) + preview
+                } else if hasDraft {
+                    draftPrefix
+                }
+            }
+            .font(T3Typography.homeMetadata)
+            .foregroundStyle(T3Colors.textTertiary)
+            .lineLimit(1)
+            .padding(.top, 2)
+
+            if context.isConnectionStale, let environmentLabel = context.environmentLabel {
+                environmentStatus(environmentLabel)
                     .font(T3Typography.homeMetadata)
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .lineLimit(1)
                     .padding(.top, 2)
             }
         }
-        .padding(.leading, thread.workInboxBadge?.wantsAttentionRail == true ? 13 : 10)
+        .padding(.leading, 14)
         .padding(.trailing, 10)
         .padding(.vertical, 9)
         .frame(minHeight: 72)
@@ -1817,15 +2244,26 @@ struct FeatureThreadRow: View, Equatable {
             isSelected ? T3Colors.subtleStrong : Color.clear,
             in: RoundedRectangle(cornerRadius: 8)
         )
-        .overlay(alignment: .leading) {
+        // Mail's unread dot, for work that is blocked on the user.
+        .overlay(alignment: .topLeading) {
             if thread.workInboxBadge?.wantsAttentionRail == true {
-                Capsule()
+                Circle()
                     .fill(statusColor)
-                    .frame(width: 3)
-                    .padding(.vertical, 8)
+                    .frame(width: 7, height: 7)
+                    .padding(.leading, 4)
+                    .padding(.top, 16)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.horizontal, 8)
+    }
+
+    /// What a Work pill names: the actual ask (Approval, Input) rather than
+    /// the section it already sits in.
+    private var workInboxPill: String? {
+        guard let badge = thread.workInboxBadge else { return nil }
+        if badge == .needsYou { return thread.homeStatusLabel ?? badge.label }
+        return badge.label
     }
 
     /// The last thing said, prefixed when it was the user who said it. Returns
@@ -1840,32 +2278,91 @@ struct FeatureThreadRow: View, Equatable {
             + Text(preview)
     }
 
+    /// Mail's inline "Draft", leading the line it belongs to.
+    private var draftPrefix: Text {
+        Text("Draft ")
+            .fontWeight(.semibold)
+            .foregroundStyle(T3Colors.accent)
+    }
+
+    private var draftMarker: some View {
+        Text("Draft")
+            .fontWeight(.semibold)
+            .foregroundStyle(T3Colors.accent)
+    }
+
+    /// Status glyph, label and age: "Approval 4m", "Done 12m", "Working 3m".
+    /// A ready row has no label, just its date.
     @ViewBuilder
     private func status(at now: Date) -> some View {
-        let label = thread.homeStatusLabel
-            ?? SidebarRelativeAge.compact(since: thread.updatedAt, now: now)
-        HStack(spacing: 5) {
-            if let icon = statusIcon {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
+        if let label = thread.homeStatusLabel {
+            HStack(spacing: 4) {
+                if let icon = statusIcon {
+                    Image(systemName: icon)
+                        .imageScale(.small)
+                        // One bounce when the status changes; never repeating.
+                        .symbolEffect(.bounce, value: thread.homeStatus)
+                }
+                Text(label)
+                if let duration = thread.homeWorkingDuration(at: now) {
+                    Text(duration)
+                        .monospacedDigit()
+                } else {
+                    Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
+                        .monospacedDigit()
+                        .fontWeight(.regular)
+                        .foregroundStyle(T3Colors.textTertiary)
+                }
             }
-            Text(label)
-            if let duration = thread.homeWorkingDuration(at: now) {
-                Text(duration)
-                    .font(.system(.footnote, design: .monospaced, weight: .semibold))
+            .font(T3Typography.status)
+            .foregroundStyle(statusColor)
+        } else {
+            dateColumn(at: now)
+        }
+    }
+
+    /// The trailing date: when a snoozed thread wakes, "Archived" on an
+    /// archived search result, otherwise how long ago it moved.
+    @ViewBuilder
+    private func dateColumn(at now: Date) -> some View {
+        HStack(spacing: 4) {
+            if context.showsArchivedBadge {
+                Text("Archived")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(T3Colors.subtleStrong, in: Capsule())
+            }
+            if let wake = snoozeWake(at: now) {
+                Image(systemName: "moon.zzz")
+                    .imageScale(.small)
+                Text(HomeRowDate.wake(wake, now: now))
+                    .monospacedDigit()
+            } else {
+                Text(style == .conversation
+                    ? HomeRowDate.conversation(thread.updatedAt, now: now)
+                    : SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
                     .monospacedDigit()
             }
         }
-        .font(T3Typography.status)
-        .foregroundStyle(statusColor)
+        .font(T3Typography.homeMetadata)
+        .foregroundStyle(T3Colors.textTertiary)
+    }
+
+    private func snoozeWake(at now: Date) -> Date? {
+        guard let snoozedUntil = thread.snoozedUntil, thread.isEffectivelySnoozed(at: now) else { return nil }
+        return snoozedUntil
     }
 
     private var statusIcon: String? {
         switch thread.homeStatus {
         case .working, .background: "circle.dotted"
+        case .approval: "hand.raised.fill"
+        case .input: "questionmark.bubble"
         case .done: "checkmark.circle"
         case .failed: "exclamationmark.circle"
-        case .approval, .input, .ready: nil
+        case .ready: nil
         }
     }
 
@@ -1897,18 +2394,20 @@ struct FeatureThreadRow: View, Equatable {
     private var environmentColor: Color {
         switch context.connectionState {
         case .connecting, .reconnecting:
-            T3Colors.warning.opacity(0.78)
+            T3Colors.warning
         case .disconnected:
-            T3Colors.danger.opacity(0.78)
+            T3Colors.danger
         case .connected, nil:
             T3Colors.textTertiary
         }
     }
 
-    private var isConnectionStale: Bool {
-        context.connectionState == .connecting
-            || context.connectionState == .reconnecting
-            || context.connectionState == .disconnected
+    private func environmentText(_ name: String) -> String {
+        switch context.connectionState {
+        case .connecting, .reconnecting: "\(name) · reconnecting"
+        case .disconnected: "\(name) · last known state"
+        case .connected, nil: name
+        }
     }
 
     private var isWorktreeCheckout: Bool {
@@ -1917,15 +2416,7 @@ struct FeatureThreadRow: View, Equatable {
     }
 
     private var branchLabel: String {
-        if let branch = thread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !branch.isEmpty {
-            return branch
-        }
-        if let worktreePath = thread.worktreePath,
-           !worktreePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: worktreePath).lastPathComponent
-        }
-        return "workspace"
+        HomeBranchLabel.display(branch: thread.branch, worktreePath: thread.worktreePath)
     }
 
     /// Open reads as live and merged as landed, matching how the other clients
@@ -1939,10 +2430,6 @@ struct FeatureThreadRow: View, Equatable {
         }
     }
 
-    private var environmentLabel: String? {
-        context.environmentLabel
-    }
-
     private func providerIcon(size: CGFloat) -> some View {
         ProviderIcon(
             driver: context.providerDriver,
@@ -1952,75 +2439,101 @@ struct FeatureThreadRow: View, Equatable {
         )
     }
 
-    private func accessibilityValue(at now: Date) -> String {
-        // Work and Chat rows say the same thing about project, branch and
-        // harness on every row, so VoiceOver reads what the row actually
-        // carries instead of three constants before the useful part.
+    static func accessibilityHint(for style: Style) -> String {
+        switch style {
+        case .rich, .slim: "Opens task"
+        case .conversation, .inbox: "Opens conversation"
+        }
+    }
+
+    /// What VoiceOver reads after a row's title. Work and Chat rows say the
+    /// same thing about project, branch and harness on every row, so they read
+    /// what the row actually carries instead of three constants before the
+    /// useful part.
+    static func accessibilityValue(
+        thread: FeatureThread,
+        context: HomeThreadRowContext,
+        style: Style,
+        now: Date
+    ) -> String {
+        var values: [String] = []
         switch style {
         case .conversation:
-            var values: [String] = []
             if thread.homeStatus == .working {
                 values.append("Responding")
             }
             if let preview = thread.preview, !preview.isEmpty {
                 values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
             }
-            values.append(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
-            return values.joined(separator: ". ")
         case .inbox:
-            var values = [thread.workInboxBadge?.label ?? "Ready"]
+            values.append(thread.homeStatusLabel ?? "Ready")
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }
             if let preview = thread.preview, !preview.isEmpty {
                 values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
             }
-            if isConnectionStale {
-                values.append("last known state")
-            }
-            return values.joined(separator: ". ")
         case .rich, .slim:
-            var values = [thread.homeStatusLabel ?? "Ready", "Project \(context.projectName)"]
-            values.append("Account \(FeatureAccountLabel.display(context.providerName, fallback: context.providerDriver))")
+            values.append(thread.homeStatusLabel ?? "Ready")
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }
+            values.append("Project \(context.projectName)")
             if let pullRequest = context.pullRequest {
                 values.append(
                     "Pull request #\(pullRequest.number) \(pullRequest.state == "open" && pullRequest.isDraft == true ? "draft" : pullRequest.state). \(pullRequest.title)"
                 )
             } else {
-                values.append(
-                    isWorktreeCheckout
-                        ? "Worktree branch \(branchLabel)" : "Branch \(branchLabel)"
-                )
+                let branch = HomeBranchLabel.display(branch: thread.branch, worktreePath: thread.worktreePath)
+                let isWorktree = thread.worktreePath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                values.append(isWorktree ? "Worktree branch \(branch)" : "Branch \(branch)")
             }
-            if let environmentLabel {
+            if let environmentLabel = context.environmentLabel {
                 values.append("on \(environmentLabel)")
             }
-            if isConnectionStale {
-                values.append("last known state")
-            }
-            return values.joined(separator: ". ")
         }
+        if thread.pinnedAt != nil {
+            values.append("Pinned")
+        }
+        if let snoozedUntil = thread.snoozedUntil, thread.isEffectivelySnoozed(at: now) {
+            values.append("Snoozed until \(HomeRowDate.wake(snoozedUntil, now: now))")
+        } else if thread.homeWorkingDuration(at: now) == nil {
+            values.append(SidebarRelativeAge.accessibility(since: thread.updatedAt, now: now))
+        }
+        if thread.isArchived {
+            values.append("Archived")
+        }
+        if context.isConnectionStale {
+            let name = context.environmentLabel ?? "Environment"
+            values.append(context.connectionState == .disconnected
+                ? "\(name) unreachable, last known state"
+                : "\(name) reconnecting, last known state")
+        }
+        return values.joined(separator: ". ")
     }
-
 }
 
-/// The T3 Work inbox row's status lozenge.
-private struct WorkInboxLozenge: View {
-    let badge: WorkInboxBadge
+/// The T3 Work row's status pill: what the work needs or is doing, in
+/// sentence case at a size that scales.
+private struct WorkInboxPill: View {
+    let label: String
+    let systemImage: String?
     let tint: Color
 
     var body: some View {
-        Text(badge.label.uppercased())
-            .font(.system(size: 10, weight: .bold))
-            .tracking(0.4)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2.5)
-            .background(tint.opacity(0.14), in: Capsule())
-            .accessibilityHidden(true)
+        HStack(spacing: 3) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .imageScale(.small)
+            }
+            Text(label)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(tint)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(tint.opacity(0.14), in: Capsule())
+        .accessibilityHidden(true)
     }
 }
 
@@ -2067,57 +2580,100 @@ private struct ProjectBadge: View {
     }
 }
 
-
+/// Drag-to-reorder for the Active shelf. The order is stored on the server, so
+/// every client sees the same arrangement.
 private struct ActiveThreadArrangementSheet: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
     @Bindable var model: FeatureRootModel
     let workspace: MobileWorkspace
     let projectID: String?
     @State private var rows: [FeatureThread] = []
+    @State private var contexts: [String: HomeThreadRowContext] = [:]
     @State private var saving = false
     @State private var error: String?
 
+    private var presentation: HomePresentation {
+        HomePresentation(
+            snapshot: model.snapshot,
+            workspace: workspace,
+            query: "",
+            projectID: projectID,
+            now: .now,
+            changeRequests: model.changeRequestsByThreadID
+        )
+    }
+
     private var active: [FeatureThread] {
-        HomePresentation(snapshot: model.snapshot, workspace: workspace, query: "", projectID: projectID, now: .now,
-            changeRequests: model.changeRequestsByThreadID).active.filter { $0.supportsActiveOrder == true }
+        presentation.active.filter { $0.supportsActiveOrder == true }
     }
 
     var body: some View {
         NavigationStack {
             List {
-                if let error { SettingsErrorBanner(message: error) }
-                ForEach(rows) { thread in
-                    Text(thread.title)
-                        .accessibilityAction(named: "Move up") { move(thread.id, offset: -1) }
-                        .accessibilityAction(named: "Move down") { move(thread.id, offset: 1) }
-                }.onMove { source, destination in
-                    guard !saving, let index = source.first else { return }
-                    let id = rows[index].id
-                    rows.move(fromOffsets: source, toOffset: destination)
-                    save(movedID: id)
+                if let error {
+                    Section { SettingsErrorBanner(message: error) }
                 }
-                Button("Reset to newest first") {
-                    guard !saving else { return }
-                    saving = true
-                    Task {
-                        for row in rows where row.activeOrderKey != nil {
-                            if !(await model.setActiveOrder(row.id, key: nil)) { error = "Could not reset all threads. Try again."; break }
-                        }
-                        rows = active
-                        saving = false
+                Section {
+                    ForEach(rows) { thread in
+                        ArrangementRow(
+                            thread: thread,
+                            context: contexts[thread.id] ?? .fallback,
+                            showsProject: workspace == .code
+                        )
+                        .accessibilityAction(named: "Move Up") { move(thread.id, offset: -1) }
+                        .accessibilityAction(named: "Move Down") { move(thread.id, offset: 1) }
                     }
+                    .onMove { source, destination in
+                        guard !saving, let index = source.first else { return }
+                        let id = rows[index].id
+                        rows.move(fromOffsets: source, toOffset: destination)
+                        save(movedID: id)
+                    }
+                    .moveDisabled(saving)
+                } footer: {
+                    Text("Drag threads into the order you want to work through them.")
+                }
+                Section {
+                    Button("Reset to Newest First", action: reset)
+                        .disabled(saving || !rows.contains { $0.activeOrderKey != nil })
                 }
             }
             .environment(\.editMode, .constant(.active))
-            .disabled(saving)
-            .navigationTitle("Arrange threads")
+            .t3GroupedListBackground()
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "Nothing to Arrange",
+                        systemImage: "arrow.up.arrow.down",
+                        description: Text("Active threads you can reorder show up here.")
+                    )
+                }
+            }
+            .navigationTitle("Arrange Threads")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(saving) } }
-            .onAppear { rows = active }
-            .onChange(of: active) { _, next in if !saving { rows = next } }
-            .interactiveDismissDisabled(saving)
+            .toolbar {
+                if saving {
+                    ToolbarItem(placement: .status) {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                            Text("Saving…")
+                                .font(.footnote)
+                                .foregroundStyle(T3Colors.textSecondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            .t3SheetToolbar(.close, hasChanges: saving)
+            .onAppear(perform: reload)
+            .onChange(of: active) { _, _ in if !saving { reload() } }
             .t3NavigationChrome()
         }
+    }
+
+    private func reload() {
+        let presentation = presentation
+        rows = presentation.active.filter { $0.supportsActiveOrder == true }
+        contexts = presentation.rowContexts
     }
 
     private func move(_ id: String, offset: Int) {
@@ -2132,10 +2688,72 @@ private struct ActiveThreadArrangementSheet: View {
         error = nil
         Task {
             for (id, key) in writes {
-                if !(await model.setActiveOrder(id, key: key)) { error = "Could not save the complete order. Try again."; break }
+                if !(await model.setActiveOrder(id, key: key)) {
+                    error = "Couldn't save the new order. Try again."
+                    PlatformHapticEngine.shared.play(.error)
+                    break
+                }
             }
             saving = false
-            rows = active
+            reload()
         }
+    }
+
+    private func reset() {
+        guard !saving else { return }
+        saving = true
+        error = nil
+        Task {
+            for row in rows where row.activeOrderKey != nil {
+                if !(await model.setActiveOrder(row.id, key: nil)) {
+                    error = "Couldn't reset every thread. Try again."
+                    PlatformHapticEngine.shared.play(.error)
+                    break
+                }
+            }
+            saving = false
+            reload()
+        }
+    }
+}
+
+/// One thread in the arrangement sheet: enough to tell rows apart while
+/// dragging, without the full Home row.
+private struct ArrangementRow: View {
+    let thread: FeatureThread
+    let context: HomeThreadRowContext
+    let showsProject: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if showsProject {
+                ProjectFaviconBadge(
+                    environmentID: context.projectEnvironmentID,
+                    workspaceRoot: context.projectWorkspaceRoot,
+                    faviconPath: context.projectFaviconPath,
+                    projectIcon: context.projectIcon, projectTitle: context.projectName
+                ) {
+                    ProjectBadge(name: context.projectName)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(thread.title)
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .lineLimit(2)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var detail: String {
+        [showsProject ? context.projectName : nil, thread.homeStatusLabel]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 }

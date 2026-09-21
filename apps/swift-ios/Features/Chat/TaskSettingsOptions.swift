@@ -102,4 +102,24 @@ public enum TaskSettingsOptions {
         }
         return false
     }
+
+    /// Whether a select reads best as an inline menu: a handful of bare
+    /// choices. Longer lists, or choices that carry an explanation, get a
+    /// pushed page where the detail has room.
+    public static func prefersInlinePicker(_ descriptor: FeatureModelOptionDescriptor) -> Bool {
+        descriptor.choices.count <= 5 && descriptor.choices.allSatisfy { $0.detail == nil }
+    }
+
+    /// The active selection with one option changed. Writes onto the inherited
+    /// selection when there is no explicit one: changing an option on a thread
+    /// whose model was never overridden must not drop the model it inherited.
+    public static func selection(
+        _ active: FeatureSelection?,
+        setting id: String,
+        to value: FeatureModelOptionValue
+    ) -> FeatureSelection? {
+        guard var next = active else { return nil }
+        next.options = DailyUXModelOptions.updating(next.options, id: id, value: value)
+        return next
+    }
 }

@@ -4,7 +4,11 @@ public struct FeatureRootView: View {
     @State private var model: FeatureRootModel
     @State private var startedFresh = false
     @State private var showingSetup = false
+    @State private var holdsOnboarding = false
     @AppStorage("t3.native.onboarding.completed") private var setupCompleted = false
+    /// Set once Home has shown real data. A returning user then gets Home's
+    /// shell with placeholder rows at launch instead of the loading screen.
+    @AppStorage("t3.native.workspace.shown") private var hasShownWorkspace = false
     private let navigationRequest: FeatureWorkspaceNavigationRequest?
     private let onNavigationRequestConsumed: @MainActor (UUID) -> Void
 
@@ -26,13 +30,17 @@ public struct FeatureRootView: View {
 
     public var body: some View {
         Group {
-            if model.isLoading {
+            if model.isLoading && !hasShownWorkspace {
                 FeatureLoadingView()
-            } else if shouldShowWorkspace {
+                    .transition(.opacity)
+            } else if showsHome || model.isLoading {
+                // Still loading here means a returning user: Home's shell with
+                // placeholder rows until the first snapshot lands.
                 WorkspaceView(
                     model: model,
                     navigationRequest: navigationRequest,
                     onNavigationRequestConsumed: onNavigationRequestConsumed,
+                    isAwaitingData: model.isLoading,
                     submitNewTask: { request in
                         await model.startTask(request)
                     },
@@ -40,16 +48,20 @@ public struct FeatureRootView: View {
                         await model.sendMessage(submission)
                     }
                 )
+                .transition(.opacity)
             } else {
-                ConnectionOnboardingView(model: model)
+                ConnectionOnboardingView(model: model, presentation: .root(holdsScreen: $holdsOnboarding))
                     .onAppear { if model.snapshot.environments.isEmpty { startedFresh = true } }
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.3), value: model.isLoading)
+        .animation(.easeInOut(duration: 0.3), value: showsHome)
         .preferredColorScheme(preferredColorScheme)
         .tint(T3Colors.accent)
         .background(T3Colors.background.ignoresSafeArea())
         .task { await model.start() }
-        .onChange(of: shouldShowWorkspace) { _, ready in
+        .onChange(of: showsHome) { _, ready in
             if ready && startedFresh && !setupCompleted { showingSetup = true; startedFresh = false }
         }
         .sheet(isPresented: $showingSetup) {
@@ -70,7 +82,7 @@ public struct FeatureRootView: View {
             )
         }
         .alert(
-            "Something went wrong",
+            model.errorTitle ?? "Something Went Wrong",
             isPresented: Binding(
                 get: { model.errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }
@@ -82,6 +94,15 @@ public struct FeatureRootView: View {
                 Text(model.errorMessage ?? "Unknown error")
             }
         )
+        .onChange(of: model.isLoading) { _, isLoading in
+            if !isLoading { hasShownWorkspace = shouldShowWorkspace }
+        }
+    }
+
+    /// Onboarding keeps the screen through its success beat after the first
+    /// pairing installs a server.
+    private var showsHome: Bool {
+        shouldShowWorkspace && !holdsOnboarding
     }
 
     /// Keep the last-known workspace visible through a degraded connection.
@@ -142,14 +163,13 @@ enum FeatureRootPresentation {
     }
 }
 
+/// The app mark over the palette background, so launch → loading → content
+/// reads as one frame. Static apart from the system spinner.
 private struct FeatureLoadingView: View {
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "chevron.left.forwardslash.chevron.right")
-                .font(.system(size: 30, weight: .semibold))
-            ProgressView()
-                .controlSize(.small)
-            Text("Connecting to T3 Code")
+        VStack(spacing: 34) {
+            T3BrandMark(size: 76)
+            ProgressView("Connecting to T3 Code…")
                 .font(T3Typography.supporting)
                 .foregroundStyle(T3Colors.textSecondary)
         }

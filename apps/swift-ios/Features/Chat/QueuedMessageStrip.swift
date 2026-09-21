@@ -60,6 +60,10 @@ public enum QueuedMessagePresentation {
 
 // MARK: - View
 
+/// The queue as one glass card above the composer. Each row is a preview with
+/// an "…" menu (long-press opens the same actions): steer, edit, move and
+/// delete. Glass rather than a 4% wash, because the transcript scrolls under
+/// the card and the two texts would otherwise print over each other.
 struct QueuedMessageStripView: View {
     let queuedRuns: [QueuedThreadRun]
     /// Restart recovery is holding the queue; nothing sends until resumed.
@@ -80,14 +84,19 @@ struct QueuedMessageStripView: View {
 
     @State private var editingRunID: String?
     @State private var editText = ""
+    @FocusState private var editorFocused: Bool
+
+    private let cardShape = RoundedRectangle(cornerRadius: 22, style: .continuous)
 
     var body: some View {
         if !queuedRuns.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(headerText)
                     .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .padding(.horizontal, 4)
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+                    .padding(.bottom, 2)
 
                 if isHeld { heldNotice }
 
@@ -95,7 +104,10 @@ struct QueuedMessageStripView: View {
                     row(queued, at: index)
                 }
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, 6)
+            .t3GlassEffect(.regular, in: cardShape)
+            .t3GlassRim(in: cardShape)
+            .padding(.bottom, 2)
             .animation(.easeInOut(duration: 0.18), value: queuedRuns)
             .accessibilityIdentifier("queued-message-strip")
             .onChange(of: dispatchingRunID) {
@@ -122,154 +134,152 @@ struct QueuedMessageStripView: View {
     private var heldNotice: some View {
         HStack(spacing: 8) {
             Image(systemName: "pause.circle")
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textTertiary)
+                .foregroundStyle(T3Colors.textSecondary)
+                .accessibilityHidden(true)
             Text("Paused when the server restarted. Nothing was lost.")
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textTertiary)
+                .foregroundStyle(T3Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             Button("Resume", action: onResumeQueue)
-                .font(T3Typography.supporting)
-                .buttonStyle(.plain)
-                .foregroundStyle(T3Colors.textPrimary)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .tint(T3Colors.textPrimary)
+                .frame(minHeight: T3Metrics.minimumTapTarget)
                 .accessibilityIdentifier("queued-message-strip-resume")
         }
-        .padding(.horizontal, 4)
+        .font(T3Typography.supporting)
+        .padding(.horizontal, 14)
     }
 
     @ViewBuilder
     private func row(_ queued: QueuedThreadRun, at index: Int) -> some View {
         let isDispatching = dispatchingRunID == queued.run.id
+        let isBusy = busyRunID == queued.run.id
         HStack(spacing: 8) {
-            leadingIndicator(isDispatching: isDispatching)
+            leadingIndicator(isWorking: isDispatching || isBusy, isDispatching: isDispatching)
 
             if editingRunID == queued.run.id {
                 TextField("Queued message", text: $editText, axis: .vertical)
                     .font(T3Typography.supporting)
                     .lineLimit(1...5)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .focused($editorFocused)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .accessibilityLabel("Edit queued message")
 
-                iconButton("checkmark", label: "Save queued message") {
+                Button {
                     saveEdit(queued)
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.footnote.weight(.bold))
                 }
-                iconButton("xmark", label: "Cancel editing") {
-                    cancelEdit()
+                .t3ProminentButtonStyle()
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("Save queued message")
+
+                Button(action: cancelEdit) {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.bold))
                 }
+                .t3SecondaryButtonStyle()
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("Cancel editing")
             } else {
-                Text(QueuedMessagePresentation.preview(queued))
+                Text(isDispatching ? "Sending…" : QueuedMessagePresentation.preview(queued))
                     .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textPrimary.opacity(0.85))
-                    .lineLimit(1)
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .lineLimit(2)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 0) {
-                    if let steerTargetRunID {
-                        iconButton(
-                            "arrow.turn.left.up",
-                            label: "Promote queued message to steer",
-                            disabled: isDispatching || busyRunID != nil
-                        ) {
-                            onPromoteToSteer(queued.run.id, steerTargetRunID)
-                        }
-                    }
-                    moveButton(at: index, direction: .up, isDispatching: isDispatching)
-                    moveButton(at: index, direction: .down, isDispatching: isDispatching)
-                    iconButton(
-                        "pencil",
-                        label: "Edit queued message",
-                        disabled: isDispatching || busyRunID != nil
-                    ) {
-                        beginEdit(queued)
-                    }
-                    iconButton(
-                        "trash",
-                        label: "Delete queued message",
-                        disabled: isDispatching || busyRunID != nil,
-                        danger: true
-                    ) {
-                        onDelete(queued.run.id)
-                    }
+                Menu {
+                    actions(for: queued, at: index, isDispatching: isDispatching)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                        .contentShape(Rectangle())
                 }
+                .disabled(isDispatching || busyRunID != nil)
+                .accessibilityLabel("Queued message actions")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.leading, 14)
+        .padding(.trailing, 4)
         .frame(minHeight: T3Metrics.minimumTapTarget)
-        .background(T3Colors.subtle, in: rowShape)
-        .overlay { rowShape.stroke(T3Colors.border, lineWidth: 1) }
+        .contentShape(Rectangle())
+        .contextMenu {
+            if editingRunID != queued.run.id, !isDispatching, busyRunID == nil {
+                actions(for: queued, at: index, isDispatching: isDispatching)
+            }
+        }
     }
 
-    private var rowShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+    /// The row's actions, shared by the "…" menu and the long-press menu.
+    /// Move items only exist when the provider can reorder at all.
+    @ViewBuilder
+    private func actions(for queued: QueuedThreadRun, at index: Int, isDispatching: Bool) -> some View {
+        if let steerTargetRunID {
+            Button("Steer Current Turn", systemImage: "arrow.turn.left.up") {
+                onPromoteToSteer(queued.run.id, steerTargetRunID)
+            }
+        }
+        Button("Edit", systemImage: "pencil") { beginEdit(queued) }
+        if canReorder {
+            moveButton(at: index, direction: .up)
+            moveButton(at: index, direction: .down)
+        }
+        Section {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                onDelete(queued.run.id)
+            }
+        }
     }
 
     @ViewBuilder
-    private func leadingIndicator(isDispatching: Bool) -> some View {
+    private func leadingIndicator(isWorking: Bool, isDispatching: Bool) -> some View {
         Group {
-            if isDispatching {
+            if isWorking {
                 ProgressView()
                     .controlSize(.small)
-                    .accessibilityLabel("Sending queued message")
+                    .accessibilityLabel(isDispatching ? "Sending queued message" : "Updating queued message")
             } else {
                 Image(systemName: "clock")
-                    .font(.system(size: 11))
+                    .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textTertiary)
+                    .accessibilityHidden(true)
             }
         }
         .frame(width: 20, height: 20)
     }
 
-    private func moveButton(
-        at index: Int,
-        direction: QueueMoveDirection,
-        isDispatching: Bool
-    ) -> some View {
-        let target = ThreadWorkflows.reorderTarget(
+    @ViewBuilder
+    private func moveButton(at index: Int, direction: QueueMoveDirection) -> some View {
+        if let target = ThreadWorkflows.reorderTarget(
             queuedRuns: queuedRuns, index: index, direction: direction
-        )
-        return iconButton(
-            direction == .up ? "chevron.up" : "chevron.down",
-            label: direction == .up ? "Move queued message up" : "Move queued message down",
-            disabled: isDispatching || busyRunID != nil || !canReorder || target == nil
         ) {
-            guard let target else { return }
-            onReorder(target)
+            Button(
+                direction == .up ? "Move Up" : "Move Down",
+                systemImage: direction == .up ? "arrow.up" : "arrow.down"
+            ) {
+                onReorder(target)
+            }
         }
-    }
-
-    private func iconButton(
-        _ symbol: String,
-        label: String,
-        disabled: Bool = false,
-        danger: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(danger ? T3Colors.danger : T3Colors.textTertiary)
-                .frame(width: 30, height: 30)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.3 : 1)
-        .accessibilityLabel(label)
     }
 
     private func beginEdit(_ queued: QueuedThreadRun) {
         editText = queued.text
         editingRunID = queued.run.id
+        editorFocused = true
     }
 
     private func cancelEdit() {
         editingRunID = nil
         editText = ""
+        editorFocused = false
     }
 
     private func saveEdit(_ queued: QueuedThreadRun) {

@@ -16,7 +16,7 @@ usage view, metric and time range are remembered.
 
 ## Subscription limits
 
-Open **Limits** from Usage (or **Settings → Usage limits** on iPhone and iPad) to see Codex and Claude subscription windows,
+Open **Limits** from Usage (or **Settings → Usage → Limits** on iPhone and iPad) to see Codex and Claude subscription windows,
 quota remaining, reset times, and when each report was checked. Choose which environments to
 include, then use **Refresh limits** to request fresh reports.
 
@@ -68,7 +68,7 @@ succeeds but its follow-up report fails, refresh the limits to confirm their cur
 ## Quota hubs
 
 On web and desktop, open **Usage → Limits** and choose **Add hub** under an environment.
-On iPhone or iPad, open **Settings → Usage → Limits → Quota hubs**, select an environment,
+On iPhone or iPad, open **Settings → Usage → Limits → Quota Hubs**, select an environment,
 and add its hub URL and management key. The key stays in that server’s secret store.
 
 Edit a hub to change its address, label, or key. Leaving the key blank while editing on iOS

@@ -44,7 +44,12 @@ public struct NewThreadView: View {
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var immediateDraftSaveTasks: [String: Task<Void, Never>] = [:]
     @State private var submittedSuccessfully = false
+    /// The draft was deleted on the way out, so leaving must not save it again.
+    @State private var discardedDraft = false
+    @State private var confirmsLeaving = false
+    @State private var didFocusPrompt = false
     @FocusState private var promptFocused: Bool
+    private let voice = VoiceComposerCoordinator.shared
 
     public init(
         model: FeatureRootModel,
@@ -68,65 +73,29 @@ public struct NewThreadView: View {
     }
 
     public var body: some View {
-        ZStack {
-            T3Colors.background.ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                topBar
-                if creationProjects.isEmpty {
-                    noProjects
-                        .padding(.top, 82)
-                } else {
-                    hero
-                        .padding(.top, 82)
+        NavigationStack {
+            content
+                .navigationTitle("New Task")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        ComposeCancelButton(action: requestLeave)
+                            .disabled(isSubmitting)
+                    }
                 }
-                Spacer(minLength: 140)
-            }
+                .t3NavigationChrome()
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !creationProjects.isEmpty {
-                VStack(spacing: 0) {
-                    // A T3 Work conversation is directory-based Hermes chat:
-                    // worktrees, branches and origin do not apply, so the row
-                    // that offers them disappears entirely.
-                    if !isWorkConversation {
-                        workspaceControls
-                    }
-
-                    if let balancingMessage {
-                        Text(balancingMessage).font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textSecondary).padding(.horizontal, 18).padding(.vertical, 8)
-                    }
-
-                    FeatureComposerView(
-                        text: $prompt,
-                        selection: selectionBinding,
-                        attachments: $attachments,
-                        interactionMode: $interactionMode,
-                        providers: creationProviders,
-                        providerSetup: ProviderSetupContext(client: model.client, environmentID: executionProject?.environmentID),
-                        threadSelection: nil,
-                        isSending: isSubmitting,
-                        isWorking: false,
-                        focused: $promptFocused,
-                        onSend: startTask,
-                        onStop: {},
-                        forceExpanded: true,
-                        powerFeatures: composerPowerFeatures,
-                        historyDraftKey: currentDraftKey,
-                        historyDraftStore: draftStore,
-                        onWillStash: {
-                            isSwappingDraft = true
-                            let pending = draftSaveTask
-                            pending?.cancel()
-                            await pending?.value
-                            if let key = currentDraftKey { await immediateDraftSaveTasks[key]?.value }
-                        },
-                        onDidStash: { isSwappingDraft = false }
-                    )
-                }
-                .background(T3Colors.background)
-            }
+        // A task draft is kept, so leaving with words in it asks the Mail
+        // question: keep the draft for later, or delete it.
+        .interactiveDismissDisabled(isSubmitting || hasUnsavedWork)
+        .confirmationDialog(
+            voice.state.isBusy ? "Your recording is still being transcribed." : "Keep this task as a draft?",
+            isPresented: $confirmsLeaving,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Draft", role: .destructive, action: deleteDraftAndClose)
+            Button("Save Draft") { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
         }
         .onAppear {
             if projectID.isEmpty {
@@ -166,7 +135,7 @@ public struct NewThreadView: View {
         }
         .task(id: projectID) { await restoreDraftAndLoadBranches() }
         .onDisappear {
-            guard !submittedSuccessfully else { return }
+            guard !submittedSuccessfully, !discardedDraft else { return }
             persistCurrentDraftImmediately()
         }
         .sheet(isPresented: $showingBranchPicker) {
@@ -184,143 +153,354 @@ public struct NewThreadView: View {
                 onRefresh: { Task { await loadBranches(refresh: true) } }
             )
         }
-        .alert("Couldn’t start task", isPresented: $submissionFailed) {
+        .alert("Couldn’t Start Task", isPresented: $submissionFailed) {
             Button("OK") {}
         } message: {
-            Text("Check your connection and try again.")
+            Text("Your task is still here. Check your connection and try again.")
         }
-        .interactiveDismissDisabled(isSubmitting)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
 
-    private var topBar: some View {
-        HStack {
-            Button("Cancel") { dismiss() }
-                .font(.body)
-                .foregroundStyle(T3Colors.textSecondary)
-                .disabled(isSubmitting)
-            Spacer()
+    @ViewBuilder
+    private var content: some View {
+        if creationProjects.isEmpty {
+            noProjects
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(T3Colors.background.ignoresSafeArea())
+        } else {
+            VStack(spacing: 0) {
+                ScrollView {
+                    hero
+                        .padding(.top, 40)
+                        .padding(.bottom, 20)
+                }
+                .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
+
+                FeatureComposerView(
+                    text: $prompt,
+                    selection: selectionBinding,
+                    attachments: $attachments,
+                    interactionMode: $interactionMode,
+                    providers: creationProviders,
+                    providerSetup: ProviderSetupContext(client: model.client, environmentID: executionProject?.environmentID),
+                    threadSelection: nil,
+                    isSending: isSubmitting,
+                    isWorking: false,
+                    focused: $promptFocused,
+                    onSend: startTask,
+                    onStop: {},
+                    forceExpanded: true,
+                    powerFeatures: composerPowerFeatures,
+                    sendBlocker: sendBlocker,
+                    historyDraftKey: currentDraftKey,
+                    historyDraftStore: draftStore,
+                    onWillStash: {
+                        isSwappingDraft = true
+                        let pending = draftSaveTask
+                        pending?.cancel()
+                        await pending?.value
+                        if let key = currentDraftKey { await immediateDraftSaveTasks[key]?.value }
+                    },
+                    onDidStash: { isSwappingDraft = false }
+                )
+            }
+            .background(T3Colors.background.ignoresSafeArea())
         }
-        .padding(.horizontal, 16)
-        .frame(height: 48)
     }
 
+    // MARK: - Leaving
+
+    private var hasUnsavedWork: Bool {
+        !trimmedPrompt.isEmpty || !attachments.isEmpty || voice.state.isBusy
+    }
+
+    private func requestLeave() {
+        if hasUnsavedWork {
+            confirmsLeaving = true
+        } else {
+            dismiss()
+        }
+    }
+
+    /// Deletes the stored draft rather than just closing: the sheet saves its
+    /// draft on the way out, so "Delete" has to stop that save and remove the
+    /// copy already written. A recording in flight is cancelled with it.
+    private func deleteDraftAndClose() {
+        if voice.state.isBusy { voice.cancelRecording() }
+        discardedDraft = true
+        let pendingSave = draftSaveTask
+        draftSaveTask = nil
+        let key = currentDraftKey
+        let immediateSave = key.flatMap { immediateDraftSaveTasks.removeValue(forKey: $0) }
+        let store = draftStore
+        Task { @MainActor in
+            await NewTaskDraftWriteFence.cancelAndWait(pendingSave)
+            await NewTaskDraftWriteFence.wait(immediateSave)
+            if let key { try? await store.removeDraft(for: key) }
+        }
+        dismiss()
+    }
+
+    /// The question, with the project as an accent menu inside it, then the
+    /// computer and workspace as glass capsule menus in layout flow.
     private var hero: some View {
-        VStack(spacing: 10) {
-            Text("What should we build")
-            HStack(spacing: 0) {
-                Text("in")
-                Menu {
-                    ForEach(creationProjects) { project in
-                        Button {
-                            selectProject(project.id)
-                        } label: {
-                            // A menu row reads a second Text as its subtitle and
-                            // a bare Image as its icon, so the path sits small
-                            // under the name instead of wrapping beside it.
-                            let row = projectMenuRow(project)
-                            Text(row.title)
-                            if let detail = row.detail {
-                                Text(detail)
-                            }
-                            if project.id == projectID {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                } label: {
-                    Text(selectedProject?.name ?? "a project")
-                        .foregroundStyle(T3Colors.textPrimary)
-                        .overlay(alignment: .bottom) {
-                            DottedUnderline()
-                                .stroke(
-                                    T3Colors.textPrimary.opacity(0.58),
-                                    style: StrokeStyle(lineWidth: 1, dash: [2, 3])
-                                )
-                                .frame(height: 1)
-                                .offset(y: 3)
-                        }
+        VStack(spacing: 18) {
+            VStack(spacing: 6) {
+                Text("What should we build")
+                HStack(spacing: 5) {
+                    Text("in")
+                    projectMenu
+                    Text("?")
                 }
-                .buttonStyle(.plain)
-                .disabled(isSubmitting)
-                .padding(.leading, 5)
-                Text("?")
+            }
+            .font(T3Typography.threadHeading1.weight(.regular))
+            .tracking(-0.35)
+            .foregroundStyle(T3Colors.textPrimary)
+            .multilineTextAlignment(.center)
+
+            ComposeFlowLayout(spacing: 8) {
+                computerMenu
+                // A T3 Work conversation is directory-based Hermes chat:
+                // worktrees, branches and origin do not apply, so the
+                // capsules that offer them disappear entirely.
+                if !isWorkConversation {
+                    workspaceMenu
+                    branchControl
+                }
             }
         }
-        .font(T3Typography.threadHeading1.weight(.regular))
-        .tracking(-0.35)
-        .foregroundStyle(T3Colors.textPrimary)
-        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
-        .overlay(alignment: .bottom) {
-            Menu {
-                if loadBalancingEnabled {
-                    Button { retryAutomaticRouting() } label: {
-                        Label(automaticRouting ? "Retry automatic selection" : "Auto balance", systemImage: "scalemass")
-                    }.disabled(!attachments.isEmpty)
-                    Divider()
-                }
-                ForEach(creationEnvironments) { environment in
-                    Button {
-                        selectEnvironment(environment.id)
-                    } label: {
-                        if environment.id == executionProject?.environmentID && !automaticRouting {
-                            Label(environment.name, systemImage: "checkmark")
-                        } else {
-                            Text(environment.name)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: automaticRouting ? "scalemass" : model.snapshot.environments.first { $0.id == executionProject?.environmentID }?.machineSymbol ?? "server.rack")
-                        .font(.system(size: 11, weight: .medium))
-                    Text(balancing ? "Checking machines…" : automaticRouting ? "Auto · \(environmentName)" : "on \(environmentName)")
-                    if creationEnvironments.count > 1 {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .bold))
-                    }
-                }
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textTertiary)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isSubmitting || (creationEnvironments.count < 2 && !loadBalancingEnabled))
-            .accessibilityLabel("Computer")
-            .accessibilityValue(environmentName)
-            .offset(y: 31)
-        }
+        .padding(.horizontal, 20)
         .accessibilityElement(children: .contain)
     }
 
+    private var projectMenu: some View {
+        Menu {
+            ForEach(creationProjects) { project in
+                Button {
+                    selectProject(project.id)
+                } label: {
+                    // A menu row reads a second Text as its subtitle and a
+                    // bare Image as its trailing mark, so the path sits small
+                    // under the name instead of wrapping beside it.
+                    let row = projectMenuRow(project)
+                    Text(row.title)
+                    if let detail = row.detail {
+                        Text(detail)
+                    }
+                    if project.id == projectID {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(selectedProject?.name ?? "a project")
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.body.weight(.semibold))
+                    .accessibilityHidden(true)
+            }
+            .foregroundStyle(T3Colors.accent)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSubmitting)
+        .accessibilityLabel("Project")
+        .accessibilityValue(selectedProject?.name ?? "None")
+    }
+
+    @ViewBuilder
+    private var computerMenu: some View {
+        let offline = executionProject != nil && !executionEnvironmentConnected
+        let title = balancing
+            ? "Checking machines…"
+            : automaticRouting ? "Auto · \(environmentName)" : environmentName + (offline ? " Offline" : "")
+        let symbol = offline
+            ? "wifi.slash"
+            : automaticRouting
+                ? "scalemass"
+                : model.snapshot.environments.first { $0.id == executionProject?.environmentID }?.machineSymbol ?? "server.rack"
+        if creationEnvironments.count > 1 || loadBalancingEnabled {
+            Menu {
+                if loadBalancingEnabled {
+                    Button { retryAutomaticRouting() } label: {
+                        Label(automaticRouting ? "Retry Automatic Selection" : "Auto Balance", systemImage: "scalemass")
+                    }
+                    .disabled(!attachments.isEmpty)
+                }
+                Picker("Computer", selection: Binding(
+                    get: { automaticRouting ? "" : executionProject?.environmentID ?? "" },
+                    set: { selectEnvironment($0) }
+                )) {
+                    ForEach(creationEnvironments) { environment in
+                        Text(environment.name).tag(environment.id)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                ComposeCapsuleLabel(
+                    title: title,
+                    systemImage: symbol,
+                    glyphTint: offline ? T3Colors.warning : T3Colors.textSecondary
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubmitting)
+            .accessibilityLabel("Computer")
+            .accessibilityValue(title)
+        } else {
+            ComposeCapsuleLabel(
+                title: title,
+                systemImage: symbol,
+                showsChevron: false,
+                glyphTint: offline ? T3Colors.warning : T3Colors.textSecondary
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Computer, \(title)")
+        }
+    }
+
+    /// Current checkout or a new worktree, and for a worktree whether it
+    /// starts from the latest origin, in one glass capsule menu.
+    private var workspaceMenu: some View {
+        Menu {
+            Picker("Workspace", selection: Binding(
+                get: { workspaceMode },
+                set: { setWorkspaceMode($0) }
+            )) {
+                ForEach(FeatureWorkspaceMode.allCases, id: \.self) { mode in
+                    Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                }
+            }
+            .pickerStyle(.inline)
+            if workspaceMode == .worktree {
+                Toggle("Start from Latest Origin", isOn: Binding(
+                    get: { startFromOrigin },
+                    set: { value in
+                        makeRoutingManual()
+                        workspaceSelectionIsExplicit = true
+                        startFromOrigin = value
+                    }
+                ))
+            }
+        } label: {
+            ComposeCapsuleLabel(
+                title: workspaceMode.title,
+                systemImage: branchLoadFailed ? "exclamationmark.triangle" : workspaceMode.systemImage,
+                glyphTint: branchLoadFailed ? T3Colors.warning : T3Colors.textSecondary
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isSubmitting)
+        .accessibilityLabel("Workspace")
+        .accessibilityValue(workspaceMode.title)
+    }
+
+    /// The branch: a picker for a new worktree's base, a plain label for the
+    /// current checkout's branch.
+    @ViewBuilder
+    private var branchControl: some View {
+        if workspaceMode == .worktree {
+            Button {
+                showingBranchPicker = true
+            } label: {
+                ComposeCapsuleLabel(
+                    title: selectedBranch?.name ?? (branchesLoading ? "Loading Branches" : "Choose Branch"),
+                    systemImage: "arrow.triangle.branch"
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubmitting)
+            .accessibilityLabel("Base branch")
+            .accessibilityValue(selectedBranch?.name ?? "Not selected")
+        } else if let selectedBranch {
+            ComposeCapsuleLabel(
+                title: selectedBranch.name,
+                systemImage: "arrow.triangle.branch",
+                showsChevron: false
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Current branch, \(selectedBranch.name)")
+        }
+    }
+
+    /// Why send is off, when it is. Mirrors `canSubmit` (minus the draft's own
+    /// content, which the composer judges), so a send that would silently do
+    /// nothing is always drawn disabled with its reason beside it. Waits that
+    /// resolve on their own only explain themselves once there is something to
+    /// send, so opening the sheet does not flash a row.
+    private var sendBlocker: FeatureComposerSendBlocker? {
+        guard !isSubmitting else { return nil }
+        let hasContent = !trimmedPrompt.isEmpty || !attachments.isEmpty
+        guard executionProject != nil else {
+            return FeatureComposerSendBlocker("Choose a project to start a task.", systemImage: "folder")
+        }
+        if balancingMessage != nil {
+            return FeatureComposerSendBlocker(
+                "No eligible machine has capacity right now.",
+                systemImage: "scalemass",
+                actionTitle: "Retry Auto",
+                action: retryAutomaticRouting
+            )
+        }
+        if !executionEnvironmentConnected {
+            return FeatureComposerSendBlocker("\(environmentName) is offline.", systemImage: "wifi.slash")
+        }
+        if needsBalancing || balancing {
+            return FeatureComposerSendBlocker("Checking machines…", systemImage: "scalemass")
+        }
+        if restoredDraftProjectID != projectID {
+            return hasContent ? FeatureComposerSendBlocker("Loading draft…", systemImage: "hourglass") : waitingBlocker
+        }
+        if effectiveWorkspaceMode == .worktree, branchLoadFailed, selectedBranch == nil {
+            return FeatureComposerSendBlocker(
+                "Couldn’t load branches.",
+                systemImage: "exclamationmark.triangle",
+                actionTitle: "Retry",
+                action: { Task { await loadBranches(refresh: true) } }
+            )
+        }
+        if branchesLoading {
+            return hasContent ? FeatureComposerSendBlocker("Loading branches…", systemImage: "hourglass") : waitingBlocker
+        }
+        if effectiveWorkspaceMode == .worktree, selectedBranch == nil {
+            return FeatureComposerSendBlocker(
+                "Choose a base branch.",
+                systemImage: "arrow.triangle.branch",
+                actionTitle: "Choose Branch",
+                action: { showingBranchPicker = true }
+            )
+        }
+        if concreteSelection == nil {
+            return FeatureComposerSendBlocker("Choose a model to start.", systemImage: "cpu")
+        }
+        return nil
+    }
+
+    /// A silent blocker for a short wait with nothing typed yet: send stays
+    /// off without a row appearing and vanishing as the sheet opens.
+    private var waitingBlocker: FeatureComposerSendBlocker? {
+        FeatureComposerSendBlocker("")
+    }
+
     private var noProjects: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "folder.badge.plus")
-                .font(.system(size: 28, weight: .regular))
-                .foregroundStyle(T3Colors.textSecondary)
-            Text("Create a project first")
-                .font(T3Typography.threadHeading1.weight(.regular))
-                .foregroundStyle(T3Colors.textPrimary)
-            Text("Tasks need a workspace on one of your connected environments.")
-                .font(T3Typography.threadBody)
-                .foregroundStyle(T3Colors.textSecondary)
-                .multilineTextAlignment(.center)
-            Button("Create project") {
+        ContentUnavailableView {
+            Label("No Projects Yet", systemImage: "folder.badge.plus")
+        } description: {
+            Text("Tasks run in a project folder on one of your computers.")
+        } actions: {
+            Button("Create Project") {
                 dismiss()
                 Task { @MainActor in
                     await Task.yield()
                     onCreateProject()
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(T3Colors.primaryAction)
-            .foregroundStyle(T3Colors.primaryActionForeground)
-            .padding(.top, 6)
+            .t3ProminentButtonStyle()
         }
-        .padding(.horizontal, 28)
-        .frame(maxWidth: .infinity)
     }
 
     private var selectedProject: FeatureProject? {
@@ -427,103 +607,6 @@ public struct NewThreadView: View {
         routing = .init(automatic: true, projectID: project.id)
     }
 
-    private var workspaceControls: some View {
-        HStack(spacing: 14) {
-            Menu {
-                Button {
-                    setWorkspaceMode(.local)
-                } label: {
-                    Label(
-                        FeatureWorkspaceMode.local.title,
-                        systemImage: workspaceMode == .local ? "checkmark" : "folder"
-                    )
-                }
-                Button {
-                    setWorkspaceMode(.worktree)
-                } label: {
-                    Label(
-                        FeatureWorkspaceMode.worktree.title,
-                        systemImage: workspaceMode == .worktree
-                            ? "checkmark"
-                            : "arrow.triangle.branch"
-                    )
-                }
-            } label: {
-                workspaceControlLabel(
-                    workspaceMode.title,
-                    systemImage: workspaceMode.systemImage,
-                    showsChevron: true
-                )
-            }
-            .disabled(isSubmitting)
-
-            if workspaceMode == .worktree {
-                Button {
-                    showingBranchPicker = true
-                } label: {
-                    workspaceControlLabel(
-                        selectedBranch?.name
-                            ?? (branchesLoading ? "Loading branches" : "Choose branch"),
-                        systemImage: "arrow.triangle.branch",
-                        showsChevron: true
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(isSubmitting)
-                .accessibilityLabel("Base branch")
-                .accessibilityValue(selectedBranch?.name ?? "Not selected")
-
-                Button {
-                    makeRoutingManual()
-                    workspaceSelectionIsExplicit = true
-                    startFromOrigin.toggle()
-                } label: {
-                    Label(
-                        "Latest origin",
-                        systemImage: startFromOrigin ? "checkmark.circle.fill" : "circle"
-                    )
-                    .lineLimit(1)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(
-                    startFromOrigin ? T3Colors.textSecondary : T3Colors.textTertiary
-                )
-                .disabled(isSubmitting)
-                .accessibilityValue(startFromOrigin ? "On" : "Off")
-            } else if let selectedBranch {
-                Label(selectedBranch.name, systemImage: "arrow.triangle.branch")
-                    .lineLimit(1)
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .accessibilityLabel("Current branch, \(selectedBranch.name)")
-            }
-
-            Spacer(minLength: 0)
-        }
-        .font(T3Typography.supporting)
-        .padding(.horizontal, 18)
-        .frame(minHeight: 38)
-        .animation(.snappy(duration: 0.18), value: workspaceMode)
-    }
-
-    private func workspaceControlLabel(
-        _ title: String,
-        systemImage: String,
-        showsChevron: Bool
-    ) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
-            Text(title)
-                .lineLimit(1)
-            if showsChevron {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-            }
-        }
-        .foregroundStyle(T3Colors.textSecondary)
-        .contentShape(Rectangle())
-    }
-
     private func projectMenuRow(_ project: FeatureProject) -> (title: String, detail: String?) {
         DailyUXCreationContext.projectMenuRow(for: project, in: creationEnvironments)
     }
@@ -603,11 +686,16 @@ public struct NewThreadView: View {
         let provider = creationProviders.first {
             $0.id == selection?.providerID
         }?.inWorkspace(executionProject?.path)
+        // Keyed to the draft, not the project path scope: a dictation that
+        // lands after the sheet closed waits for this same draft, and never
+        // for New Work, New Chat or another project's task.
+        let voiceScope = FeatureComposerVoiceScope.newTask(draftKey: currentDraftKey ?? draftID ?? "unscoped")
         guard let project = executionProject else {
             return FeatureComposerPowerFeatures(
                 slashCommands: provider?.slashCommands ?? [],
                 skills: provider?.skills ?? [],
-                showSkillsInSlashMenu: model.snapshot.settings.showSkillsInSlashMenu
+                showSkillsInSlashMenu: model.snapshot.settings.showSkillsInSlashMenu,
+                voiceScope: voiceScope
             )
         }
         return FeatureComposerPowerFeatures(
@@ -621,7 +709,8 @@ public struct NewThreadView: View {
                     query: query,
                     limit: 20
                 ).map(Self.composerPathEntry)
-            }
+            },
+            voiceScope: voiceScope
         )
     }
 
@@ -937,6 +1026,12 @@ public struct NewThreadView: View {
         if liveDraft != context.baseline {
             scheduleDraftSave()
         }
+        // Like Mail and Messages, the sheet opens ready to type — once the
+        // draft is in the field, so the caret lands after the restored text.
+        if !didFocusPrompt {
+            didFocusPrompt = true
+            promptFocused = true
+        }
         await loadBranches()
     }
 
@@ -1069,18 +1164,9 @@ struct NewTaskDraftRestoreContext: Equatable {
     }
 }
 
-private struct DottedUnderline: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        return path
-    }
-}
-
+/// The base branch for a new worktree: a floating glass sheet on iOS 26,
+/// searchable, with pull to refresh.
 private struct NewTaskBranchPicker: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
-
     let branches: [FeatureWorkspaceBranch]
     let selection: FeatureWorkspaceBranch?
     let isLoading: Bool
@@ -1097,80 +1183,75 @@ private struct NewTaskBranchPicker: View {
                     ProgressView("Loading branches")
                         .foregroundStyle(T3Colors.textSecondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if filteredBranches.isEmpty {
+                } else if loadFailed, branches.isEmpty {
                     ContentUnavailableView {
-                        Label(
-                            loadFailed ? "Branches unavailable" : "No branches found",
-                            systemImage: loadFailed
-                                ? "exclamationmark.triangle"
-                                : "arrow.triangle.branch"
-                        )
+                        Label("Branches Unavailable", systemImage: "exclamationmark.triangle")
                     } description: {
-                        Text(
-                            loadFailed
-                                ? "Check the connection and try again."
-                                : "Try a different search."
-                        )
+                        Text("Check the connection and try again.")
                     } actions: {
-                        if loadFailed {
-                            Button("Try again", action: onRefresh)
-                        }
+                        Button("Try Again", action: onRefresh)
+                            .buttonStyle(.bordered)
                     }
+                } else if filteredBranches.isEmpty {
+                    ContentUnavailableView.search(text: query)
                 } else {
                     List(filteredBranches) { branch in
-                        Button {
-                            onSelect(branch)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "arrow.triangle.branch")
-                                    .foregroundStyle(T3Colors.textTertiary)
-
-                                Text(branch.name)
-                                    .foregroundStyle(T3Colors.textPrimary)
-                                    .lineLimit(1)
-
-                                Spacer(minLength: 10)
-
-                                if let badge = branch.badge {
-                                    Text(badge)
-                                        .font(T3Typography.supporting)
-                                        .foregroundStyle(T3Colors.textTertiary)
-                                }
-
-                                if branch.id == selection?.id {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(T3Colors.accent)
-                                }
-                            }
-                            .frame(minHeight: 34)
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(T3Colors.background)
+                        row(branch)
                     }
-                    .listStyle(.plain)
+                    .listStyle(.insetGrouped)
+                    .t3SheetListBackground()
                     .refreshable { onRefresh() }
                 }
             }
-            .background(T3Colors.background)
-            .navigationTitle("Base branch")
+            .navigationTitle("Base Branch")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Search branches")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: onRefresh) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(isLoading)
-                    .accessibilityLabel("Refresh branches")
-                }
-            }
+            .t3SheetToolbar(.close)
+            .t3NavigationChrome()
         }
         .presentationDetents([.medium, .large])
-        .presentationBackground(T3Colors.background)
+        .presentationDragIndicator(.visible)
+        .modifier(NewTaskBranchSheetBackground())
+    }
+
+    private func row(_ branch: FeatureWorkspaceBranch) -> some View {
+        Button {
+            PlatformHapticEngine.shared.playSelection()
+            onSelect(branch)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .accessibilityHidden(true)
+
+                Text(branch.name)
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 10)
+
+                if let badge = branch.badge {
+                    Text(badge)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(T3Colors.subtleStrong, in: Capsule())
+                }
+
+                if branch.id == selection?.id {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(T3Colors.accent)
+                        .accessibilityLabel("Selected")
+                }
+            }
+            .frame(minHeight: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .t3SheetRow()
     }
 
     private var filteredBranches: [FeatureWorkspaceBranch] {
@@ -1178,6 +1259,18 @@ private struct NewTaskBranchPicker: View {
         guard !trimmed.isEmpty else { return branches }
         return branches.filter {
             $0.name.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+}
+
+/// iOS 26 floats a medium sheet as glass; a painted background would turn it
+/// back into an opaque slab. Earlier systems keep the palette background.
+private struct NewTaskBranchSheetBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content
+        } else {
+            content.presentationBackground(T3Colors.background)
         }
     }
 }

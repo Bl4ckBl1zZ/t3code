@@ -1,5 +1,7 @@
 import SwiftUI
 
+/// Model IDs an account can run beyond its built-in list. Add from the
+/// toolbar, tap to edit, swipe to remove behind a confirmation.
 struct SettingsCustomModelsView: View {
     let manager: any FeatureServerSettingsManaging
     let environmentID: String
@@ -8,51 +10,122 @@ struct SettingsCustomModelsView: View {
     @State private var entries: [JSONValue] = []
     @State private var builtInModels: [ServerProviderModelSnapshot] = []
     @State private var loading = true
-    @State private var pending = false
-    @State private var errorMessage: String?
-    @State private var editing: NativeCustomModelDefinition?
-    @State private var adding = false
+    @State private var hasLoaded = false
+    @State private var busySlug: String?
+    @State private var loadError: String?
+    @State private var writeError: String?
+    @State private var editor: EditorTarget?
+    @State private var removalTarget: NativeCustomModelDefinition?
+
+    private struct EditorTarget: Identifiable {
+        let definition: NativeCustomModelDefinition?
+        var id: String { definition?.slug ?? "\u{0}new" }
+    }
+
+    private var definitions: [NativeCustomModelDefinition] {
+        NativeCustomModelDefinition.readEntries(entries)
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                if let errorMessage { SettingsErrorBanner(message: errorMessage) }
-                if loading { ProgressView().frame(maxWidth: .infinity) }
-                Text("Use a model ID your provider supports. A display name changes its label in the picker. Custom options replace the provider's defaults for this model.")
-                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                SettingsSection(title: "Custom models") {
-                    ForEach(NativeCustomModelDefinition.readEntries(entries)) { entry in
-                        HStack(spacing: 12) {
-                            Button { editing = entry } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(entry.name).font(T3Typography.supportingStrong).foregroundStyle(T3Colors.textPrimary)
-                                    Text(entry.slug).font(.caption.monospaced()).foregroundStyle(T3Colors.textSecondary)
-                                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            }.buttonStyle(.plain).disabled(!supported)
-                            Button(role: .destructive) { Task { await remove(entry) } } label: {
-                                Image(systemName: "trash").frame(minWidth: T3Metrics.minimumTapTarget, minHeight: T3Metrics.minimumTapTarget)
-                            }.accessibilityLabel("Remove \(entry.name)").disabled(!supported)
-                        }.padding(.leading, SettingsMetrics.rowPadding).frame(minHeight: T3Metrics.minimumTapTarget)
+        content
+            .navigationTitle("Custom Models")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Add Model", systemImage: "plus") { editor = EditorTarget(definition: nil) }
+                        .disabled(!supported || !hasLoaded || busySlug != nil)
+                }
+            }
+            .task(id: environmentID) { await load() }
+            .sheet(item: $editor) { target in
+                NativeCustomModelEditor(
+                    definition: target.definition,
+                    driver: provider.driver,
+                    builtInModels: builtInModels,
+                    existingSlugs: Set(definitions.map(\.slug)).union(builtInModels.map(\.slug))
+                ) { updated in
+                    try await save(updated, replacing: target.definition?.slug)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if hasLoaded, definitions.isEmpty, loadError == nil {
+            ContentUnavailableView {
+                Label("No Custom Models", systemImage: "cpu")
+            } description: {
+                Text(supported
+                    ? "Add a model ID \(provider.displayName ?? "this provider") supports to run it from the model picker."
+                    : "Update this server to edit custom model definitions.")
+            } actions: {
+                if supported {
+                    Button("Add Model") { editor = EditorTarget(definition: nil) }
+                        .t3ProminentButtonStyle()
+                }
+            }
+            .background(T3Colors.background)
+        } else {
+            SettingsForm {
+                if let loadError, !hasLoaded {
+                    SettingsRetrySection(message: loadError) { Task { await load() } }
+                } else if !hasLoaded {
+                    Section { SettingsPlaceholderRows(count: 2) }
+                } else {
+                    Section {
+                        ForEach(definitions) { entry in row(entry) }
+                    } footer: {
+                        SettingsFooter(
+                            text: supported
+                                ? "A display name changes the model's label in the picker. Custom options replace the provider's defaults for that model."
+                                : "Update this server to edit custom model definitions.",
+                            error: writeError
+                        )
                     }
-                    if entries.isEmpty && !loading { Text("No custom models.").font(T3Typography.supporting).padding(SettingsMetrics.rowPadding) }
-                    Button { adding = true } label: { Label("Add custom model", systemImage: "plus").frame(minHeight: T3Metrics.minimumTapTarget) }
-                        .disabled(!supported || loading)
-                }.disabled(pending)
-                if !supported { Text("Update this server to edit custom model definitions.").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary) }
-                if pending { ProgressView("Saving models…") }
-            }.padding(18)
+                }
+            }
+            .refreshable { await load() }
         }
-        .background(T3Colors.background).navigationTitle("Custom models").navigationBarTitleDisplayMode(.inline)
-        .task(id: environmentID) { await load() }
-        .sheet(item: $editing) { entry in
-            NavigationStack { NativeCustomModelEditor(definition: entry, driver: provider.driver, builtInModels: builtInModels) { updated in
-                try await save(updated, replacing: entry.slug)
-            } }
+    }
+
+    private func row(_ entry: NativeCustomModelDefinition) -> some View {
+        Button {
+            editor = EditorTarget(definition: entry)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.name).foregroundStyle(T3Colors.textPrimary)
+                    if entry.name != entry.slug {
+                        Text(entry.slug)
+                            .font(.system(.footnote, design: .monospaced))
+                            .foregroundStyle(T3Colors.textSecondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if busySlug == entry.slug { ProgressView() }
+            }
+            .contentShape(Rectangle())
         }
-        .sheet(isPresented: $adding) {
-            NavigationStack { NativeCustomModelEditor(definition: nil, driver: provider.driver, builtInModels: builtInModels) { updated in
-                try await save(updated, replacing: nil)
-            } }
+        .disabled(!supported || busySlug != nil)
+        .swipeActions(edge: .trailing) {
+            if supported {
+                Button("Remove", systemImage: "trash", role: .destructive) { removalTarget = entry }
+            }
+        }
+        .contextMenu {
+            if supported {
+                Button("Remove Model", systemImage: "trash", role: .destructive) { removalTarget = entry }
+            }
+        }
+        .confirmationDialog(
+            "Remove \(entry.name)?",
+            isPresented: Binding(get: { removalTarget?.slug == entry.slug }, set: { if !$0 { removalTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove Model", role: .destructive) { Task { await remove(entry) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It disappears from model pickers on this server. Threads that used it keep their history.")
         }
     }
 
@@ -61,22 +134,30 @@ struct SettingsCustomModelsView: View {
         defer { loading = false }
         do {
             let config = try await manager.providerModelConfiguration(environmentID: environmentID)
-            guard !Task.isCancelled, let settings = config.settings else { return }
+            guard !Task.isCancelled else { return }
+            guard let settings = config.settings else {
+                loadError = CustomModelEditError.invalidAccount.localizedDescription
+                return
+            }
             entries = NativeCustomModelSettings.entries(settings: settings, instanceID: provider.instanceId, driver: provider.driver)
             builtInModels = (config.providers.first { $0.instanceId == provider.instanceId }?.models ?? []).filter { !$0.isCustom }
-        } catch { if !Task.isCancelled { errorMessage = error.localizedDescription } }
+            loadError = nil
+            hasLoaded = true
+        } catch {
+            if !Task.isCancelled { loadError = error.localizedDescription }
+        }
     }
 
     private func save(_ entry: NativeCustomModelDefinition, replacing slug: String?) async throws {
-        guard supported, !pending else { throw FeatureCapabilityUnavailable("Custom model definitions") }
-        pending = true
-        defer { pending = false }
+        guard supported, busySlug == nil else { throw FeatureCapabilityUnavailable("Custom model definitions") }
+        busySlug = slug ?? entry.slug
+        defer { busySlug = nil }
         let config = try await manager.providerModelConfiguration(environmentID: environmentID)
         guard let settings = config.settings else { throw CustomModelEditError.invalidAccount }
         var next = NativeCustomModelSettings.entries(settings: settings, instanceID: provider.instanceId, driver: provider.driver)
         if let slug {
             guard let index = next.firstIndex(where: { NativeCustomModelDefinition.read($0)?.slug == slug }) else {
-                throw CustomModelEditError.invalidDraft("This custom model was removed. Refresh the account to continue.")
+                throw CustomModelEditError.invalidDraft("This custom model was removed on another device. Close the editor to continue.")
             }
             next[index] = entry.json
         } else {
@@ -88,13 +169,14 @@ struct SettingsCustomModelsView: View {
         try await manager.updateServerSettings(environmentID: environmentID,
             patch: NativeCustomModelSettings.patch(settings: settings, instanceID: provider.instanceId, driver: provider.driver, entries: next))
         entries = next
-        errorMessage = nil
+        writeError = nil
     }
 
     private func remove(_ entry: NativeCustomModelDefinition) async {
-        guard supported, !pending else { return }
-        pending = true
-        defer { pending = false }
+        removalTarget = nil
+        guard supported, busySlug == nil else { return }
+        busySlug = entry.slug
+        defer { busySlug = nil }
         do {
             let config = try await manager.providerModelConfiguration(environmentID: environmentID)
             guard let settings = config.settings else { throw CustomModelEditError.invalidAccount }
@@ -103,70 +185,164 @@ struct SettingsCustomModelsView: View {
             try await manager.updateServerSettings(environmentID: environmentID,
                 patch: NativeCustomModelSettings.patch(settings: settings, instanceID: provider.instanceId, driver: provider.driver, entries: next))
             entries = next
-            errorMessage = nil
-        } catch { errorMessage = error.localizedDescription }
+            writeError = nil
+        } catch {
+            PlatformHapticEngine.shared.play(.error)
+            writeError = "Couldn't remove \(entry.name). \(error.localizedDescription)"
+        }
     }
 }
 
+/// Adds or edits one custom model. An edit sheet: the draft is validated as
+/// it is typed, and confirm stays off until it would save.
 struct NativeCustomModelEditor: View {
     @SwiftUI.Environment(\.dismiss) private var dismiss
     let definition: NativeCustomModelDefinition?
     let driver: String
     let builtInModels: [ServerProviderModelSnapshot]
+    let existingSlugs: Set<String>
     let save: (NativeCustomModelDefinition) async throws -> Void
+    private let initialDraft: NativeCustomModelDraft
     @State private var draft: NativeCustomModelDraft
     @State private var saving = false
     @State private var errorMessage: String?
 
-    init(definition: NativeCustomModelDefinition?, driver: String, builtInModels: [ServerProviderModelSnapshot],
-         save: @escaping (NativeCustomModelDefinition) async throws -> Void) {
+    init(
+        definition: NativeCustomModelDefinition?,
+        driver: String,
+        builtInModels: [ServerProviderModelSnapshot],
+        existingSlugs: Set<String> = [],
+        save: @escaping (NativeCustomModelDefinition) async throws -> Void
+    ) {
         self.definition = definition
         self.driver = driver
         self.builtInModels = builtInModels
+        self.existingSlugs = existingSlugs
         self.save = save
-        _draft = State(initialValue: NativeCustomModelDraft(definition: definition))
+        let draft = NativeCustomModelDraft(definition: definition)
+        initialDraft = draft
+        _draft = State(initialValue: draft)
     }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                if let errorMessage { SettingsErrorBanner(message: errorMessage) }
-                VStack(alignment: .leading, spacing: 10) {
-                    TextField("Model ID", text: $draft.slug).disabled(definition != nil).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("Display name (optional)", text: $draft.name).autocorrectionDisabled()
-                }.textFieldStyle(.roundedBorder)
-                if !builtInModels.isEmpty {
-                    Menu("Copy options from a model") {
-                        ForEach(builtInModels) { model in
-                            Button(model.name) { draft.options = NativeCustomModelDraft.options(from: model.capabilities, driver: driver) }
-                        }
-                    }.frame(minHeight: T3Metrics.minimumTapTarget)
-                }
-                if !NativeCustomModelDraft.presets(driver: driver).isEmpty {
-                    Menu("Add a provider option") {
-                        ForEach(NativeCustomModelDraft.presets(driver: driver)) { preset in
-                            Button(preset.label) { draft.options.append(preset) }
-                                .disabled(draft.options.contains { $0.optionID == preset.optionID })
-                        }
-                    }.frame(minHeight: T3Metrics.minimumTapTarget)
-                }
-                Text("Options shown in the composer").font(T3Typography.supportingStrong)
-                if draft.options.isEmpty { Text("No custom options. The provider's defaults apply.").font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary) }
-                ForEach($draft.options) { $option in
-                    NativeCustomModelOptionEditor(option: $option) { draft.options.removeAll { $0.id == option.id } }
-                }
-                Button { draft.options.append(NativeCustomModelOption()) } label: { Label("Add option", systemImage: "plus").frame(minHeight: T3Metrics.minimumTapTarget) }
-                Text("Use option IDs supported by this provider. Other IDs are saved but may be ignored when the model runs.")
-                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-            }.padding(18).disabled(saving)
+    private var isNew: Bool { definition == nil }
+
+    private var duplicateSlug: Bool {
+        isNew && existingSlugs.contains(draft.slug.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Why the draft cannot be saved yet. An untouched new draft says nothing:
+    /// an empty form is not an error.
+    private var validation: String? {
+        if duplicateSlug { return CustomModelEditError.duplicate.localizedDescription }
+        do {
+            _ = try draft.definition()
+            return nil
+        } catch {
+            return error.localizedDescription
         }
-        .background(T3Colors.background).navigationTitle(definition == nil ? "Add model" : "Edit model").navigationBarTitleDisplayMode(.inline)
-        .interactiveDismissDisabled(saving)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
-            ToolbarItem(placement: .confirmationAction) {
-                Button(saving ? "Saving…" : "Save") { Task { await commit() } }.disabled(saving)
+    }
+
+    private var hasChanges: Bool { draft != initialDraft }
+
+    var body: some View {
+        NavigationStack {
+            SettingsForm {
+                Section {
+                    if isNew {
+                        LabeledContent("Model ID") {
+                            TextField("Required", text: $draft.slug)
+                                .font(.system(.body, design: .monospaced))
+                                .multilineTextAlignment(.trailing)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
+                    } else {
+                        LabeledContent("Model ID") {
+                            Label(draft.slug, systemImage: "lock.fill")
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(T3Colors.textSecondary)
+                        }
+                    }
+                    LabeledContent("Display Name") {
+                        TextField("Optional", text: $draft.name)
+                            .multilineTextAlignment(.trailing)
+                            .autocorrectionDisabled()
+                    }
+                } footer: {
+                    SettingsFooter(
+                        text: "Use a model ID your provider supports.",
+                        error: duplicateSlug ? CustomModelEditError.duplicate.localizedDescription : nil
+                    )
+                }
+
+                ForEach($draft.options) { $option in
+                    NativeCustomModelOptionSection(
+                        index: draft.options.firstIndex { $0.id == option.id } ?? 0,
+                        option: $option
+                    ) {
+                        draft.options.removeAll { $0.id == option.id }
+                    }
+                }
+
+                Section {
+                    addOptionMenu
+                } footer: {
+                    SettingsFooter(
+                        text: draft.options.isEmpty
+                            ? "No custom options. The provider's defaults apply."
+                            : "Use option IDs this provider supports. Others are saved but may be ignored when the model runs.",
+                        error: hasChanges && !duplicateSlug && !draft.slug.isEmpty ? validation : nil
+                    )
+                }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .disabled(saving)
+            .navigationTitle(isNew ? "Add Model" : "Edit Model")
+            .navigationBarTitleDisplayMode(.inline)
+            .t3SheetToolbar(
+                .cancel,
+                confirm: T3SheetConfirmation(
+                    title: isNew ? "Add" : "Save",
+                    isEnabled: hasChanges && validation == nil && !saving,
+                    isBusy: saving,
+                    action: { Task { await commit() } }
+                ),
+                hasChanges: hasChanges || saving
+            )
+            .alert(
+                "Couldn't Save Model",
+                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
+            ) {
+                Button("OK") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    private var addOptionMenu: some View {
+        Menu {
+            Button("Blank Option", systemImage: "plus") { draft.options.append(NativeCustomModelOption()) }
+            let presets = NativeCustomModelDraft.presets(driver: driver)
+            if !presets.isEmpty {
+                Section("Provider Options") {
+                    ForEach(presets) { preset in
+                        Button(preset.label) { draft.options.append(preset) }
+                            .disabled(draft.options.contains { $0.optionID == preset.optionID })
+                    }
+                }
+            }
+            if !builtInModels.isEmpty {
+                Section("Copy All Options From") {
+                    ForEach(builtInModels) { model in
+                        Button(model.name) {
+                            draft.options = NativeCustomModelDraft.options(from: model.capabilities, driver: driver)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label("Add Option", systemImage: "plus")
         }
     }
 
@@ -177,43 +353,85 @@ struct NativeCustomModelEditor: View {
             saving = true
             defer { saving = false }
             try await save(entry)
+            PlatformHapticEngine.shared.play(.success)
             dismiss()
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            PlatformHapticEngine.shared.play(.error)
+            errorMessage = error.localizedDescription
+        }
     }
 }
 
-private struct NativeCustomModelOptionEditor: View {
+/// One composer option of a custom model: its ID, label and kind, then either
+/// the default for a toggle or the choices with a checkmark on the default.
+private struct NativeCustomModelOptionSection: View {
+    let index: Int
     @Binding var option: NativeCustomModelOption
     let remove: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                TextField("Option ID", text: $option.optionID).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button(role: .destructive, action: remove) { Image(systemName: "trash").frame(minWidth: T3Metrics.minimumTapTarget, minHeight: T3Metrics.minimumTapTarget) }
-                    .accessibilityLabel("Remove option")
+        Section {
+            LabeledContent("ID") {
+                TextField("Required", text: $option.optionID)
+                    .font(.system(.body, design: .monospaced))
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
             }
-            TextField("Label", text: $option.label)
-            Picker("Type", selection: $option.kind) { Text("Choices").tag("select"); Text("Toggle").tag("boolean") }.pickerStyle(.segmented)
+            LabeledContent("Label") {
+                TextField("Required", text: $option.label)
+                    .multilineTextAlignment(.trailing)
+            }
+            Picker("Type", selection: $option.kind) {
+                Text("Choices").tag("select")
+                Text("Toggle").tag("boolean")
+            }
+            .pickerStyle(.menu)
             if option.kind == "boolean" {
-                Toggle("Default on", isOn: Binding(get: { option.currentBooleanValue ?? false }, set: { option.currentBooleanValue = $0 }))
+                Toggle("On by Default", isOn: Binding(
+                    get: { option.currentBooleanValue ?? false },
+                    set: { option.currentBooleanValue = $0 }
+                ))
             } else {
                 ForEach($option.choices) { $choice in
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Choice value", text: $choice.value).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        TextField("Choice label", text: $choice.label)
-                        HStack {
-                            Toggle("Default", isOn: Binding(get: { choice.isDefault }, set: { selected in
-                                for index in option.choices.indices { option.choices[index].isDefault = selected && option.choices[index].id == choice.id }
-                            }))
-                            Button(role: .destructive) { option.choices.removeAll { $0.id == choice.id } } label: {
-                                Image(systemName: "minus.circle").frame(minWidth: T3Metrics.minimumTapTarget, minHeight: T3Metrics.minimumTapTarget)
-                            }.accessibilityLabel("Remove choice")
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            TextField("Value", text: $choice.value)
+                                .font(.system(.body, design: .monospaced))
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            TextField("Label (optional)", text: $choice.label)
+                                .font(T3Typography.supporting)
+                                .foregroundStyle(T3Colors.textSecondary)
                         }
-                    }.padding(10).background(T3Colors.surfaceRaised, in: RoundedRectangle(cornerRadius: 10))
+                        Button {
+                            let makeDefault = !choice.isDefault
+                            for position in option.choices.indices {
+                                option.choices[position].isDefault = makeDefault && option.choices[position].id == choice.id
+                            }
+                        } label: {
+                            Image(systemName: choice.isDefault ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundStyle(choice.isDefault ? T3Colors.accent : T3Colors.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(choice.isDefault ? "Default choice" : "Make default")
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            option.choices.removeAll { $0.id == choice.id }
+                        }
+                    }
                 }
-                Button { option.choices.append(NativeCustomModelChoice()) } label: { Label("Add choice", systemImage: "plus").frame(minHeight: T3Metrics.minimumTapTarget) }
+                Button("Add Choice", systemImage: "plus") { option.choices.append(NativeCustomModelChoice()) }
             }
-        }.textFieldStyle(.roundedBorder).padding(14).background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 14))
+            Button("Remove Option", role: .destructive, action: remove)
+        } header: {
+            Text(option.label.isEmpty ? "Option \(index + 1)" : option.label)
+        } footer: {
+            if option.kind != "boolean" {
+                Text("The checked choice is the default. Swipe a choice to delete it.")
+            }
+        }
     }
 }

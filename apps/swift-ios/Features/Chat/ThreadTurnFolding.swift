@@ -52,14 +52,16 @@ enum ThreadTurnFolding {
             let end = run.completedAt ?? group.last?.date
             let label: String
             if let start, let end, end >= start {
-                let seconds = Int(end.timeIntervalSince(start))
-                let duration = seconds >= 3600 ? "\(seconds / 3600)h \((seconds % 3600) / 60)m" :
-                    seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
-                label = "Worked for \(duration)"
+                label = "Worked for \(workedDuration(seconds: Int(end.timeIntervalSince(start))))"
             } else { label = "Earlier work" }
             return ThreadTurnFold(runID: runID, anchorID: anchor.id,
                 hiddenIDs: Set(hidden.map(\.id)), label: label, date: anchor.date,
                 isExpanded: expandedRunIDs.contains(runID))
         }
+    }
+
+    /// Localized by the system ("2 min, 30 sec"), hours included.
+    static func workedDuration(seconds: Int) -> String {
+        Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
     }
 }

@@ -113,21 +113,55 @@ final class ThreadWorkLogTests: XCTestCase {
         ])
     }
 
-    func testInFlightRowsShimmerAndTerminalOnesDoNot() {
-        XCTAssertTrue(row(command(id: "a", input: "ls", status: "running")).shimmers)
-        XCTAssertTrue(row(command(id: "b", input: "ls", status: "waiting")).shimmers)
-        XCTAssertFalse(row(command(id: "c", input: "ls")).shimmers)
-        XCTAssertFalse(row(command(id: "d", input: "ls", status: "cancelled")).shimmers)
+    func testInFlightRowsRunAndTerminalOnesDoNot() {
+        XCTAssertTrue(row(command(id: "a", input: "ls", status: "running")).isRunning)
+        XCTAssertTrue(row(command(id: "b", input: "ls", status: "waiting")).isRunning)
+        XCTAssertFalse(row(command(id: "c", input: "ls")).isRunning)
+        XCTAssertFalse(row(command(id: "d", input: "ls", status: "cancelled")).isRunning)
+        // Running is not stopped, whatever its provisional status says.
+        XCTAssertNil(row(command(id: "e", input: "ls", status: "running")).trailingStatus)
     }
 
-    /// A background command can stay in flight for an hour; a sweep that long
-    /// pegs the GPU, so it reads as running without animating.
-    func testALiveBackgroundCommandIsInFlightWithoutShimmering() {
-        let live = row(command(id: "a", input: "pnpm dev", status: "running", background: true))
+    /// A background command can stay in flight for an hour, well past its turn.
+    func testALiveBackgroundCommandOutlivesItsRun() {
+        let item = command(id: "a", input: "pnpm dev", status: "running", background: true)
+        let live = ThreadWorkLogRow.make(projected(item), liveRun: ThreadWorkLogLiveRun(isActive: false, activeRunID: nil))
         XCTAssertTrue(live.inProgress)
-        XCTAssertFalse(live.shimmers)
-        // Neutral only because it has not finished, so it carries no stopped dash.
+        XCTAssertFalse(live.isStranded)
+        // Neutral only because it has not finished, so it carries no stopped mark.
         XCTAssertNil(live.trailingStatus)
+    }
+
+    /// An item a crashed or interrupted run never closed must not read as
+    /// work in progress forever.
+    func testInFlightRowsOfAnEndedRunReadAsStopped() {
+        let item = command(id: "a", input: "ls", status: "running")
+        let idle = ThreadWorkLogRow.make(projected(item), liveRun: ThreadWorkLogLiveRun(isActive: false, activeRunID: nil))
+        XCTAssertTrue(idle.isStranded)
+        XCTAssertFalse(idle.isRunning)
+        XCTAssertEqual(idle.trailingStatus, .stopped)
+
+        let otherRun = ThreadWorkLogRow.make(projected(item), liveRun: ThreadWorkLogLiveRun(isActive: true, activeRunID: "another-run"))
+        XCTAssertTrue(otherRun.isStranded)
+
+        let unscoped = ThreadWorkLogRow.make(projected(item), liveRun: ThreadWorkLogLiveRun(isActive: true, activeRunID: nil))
+        XCTAssertTrue(unscoped.isRunning)
+    }
+
+    func testWaitingIsOnlyReportedWhileItsRunIsLive() {
+        let approval = V2Fixture.turnItem(
+            id: "approval", type: "approval_request", status: "waiting",
+            extra: ["requestId": .string("request"), "requestKind": .string("command")]
+        )
+        XCTAssertEqual(row(approval).waiting, .approval)
+        let stale = ThreadWorkLogRow.make(projected(approval), liveRun: ThreadWorkLogLiveRun(isActive: false, activeRunID: nil))
+        XCTAssertNil(stale.waiting)
+        XCTAssertEqual(stale.trailingStatus, .stopped)
+    }
+
+    func testStepCountsNameTheirNoun() {
+        XCTAssertEqual(ThreadWorkLogRow.stepCount(1), "1 step")
+        XCTAssertEqual(ThreadWorkLogRow.stepCount(7), "7 steps")
     }
 
     func testTheTrailingGlyphMarksOnlyDeviations() {

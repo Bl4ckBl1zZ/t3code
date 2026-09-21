@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// A pending approval, in place of the editor.
+///
+/// The detail is capped so a long command or patch can never push the
+/// decision off screen: it scrolls inside its box, and the whole text opens in
+/// a sheet. The decision row is always on screen.
 struct FeatureComposerApprovalPanel: View {
     let approval: FeatureApproval
     let position: Int
@@ -8,143 +13,209 @@ struct FeatureComposerApprovalPanel: View {
     let onDecision: (FeatureApprovalDecision) -> Void
     let onCancelTurn: () -> Void
 
+    /// The button that was tapped, so its spinner says which answer is on
+    /// the way while the others stay readable.
+    private enum Choice: Equatable {
+        case decision(FeatureApprovalDecision)
+        case cancelTurn
+    }
+
+    @State private var pendingChoice: Choice?
+    @State private var showsFullDetail = false
+    @ScaledMetric(relativeTo: .body) private var detailMaximumHeight: CGFloat = 170
+
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    Text("Pending approval")
-                        .font(T3Typography.eyebrow)
-                        .tracking(1.3)
-                        .textCase(.uppercase)
-                        .foregroundStyle(T3Colors.warning)
-
-                    Spacer()
-
-                    if total > 1 {
-                        Text("\(position)/\(total)")
-                            .font(T3Typography.supportingStrong.monospacedDigit())
-                            .foregroundStyle(T3Colors.textTertiary)
-                    }
-                }
-
-                Text(approval.title)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label(approval.title, systemImage: kindSymbol)
                     .font(T3Typography.navigationTitle)
                     .foregroundStyle(T3Colors.textPrimary)
-                    .padding(.top, 5)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(detailLabel)
-                        .font(T3Typography.supportingStrong)
-                        .tracking(0.7)
-                        .textCase(.uppercase)
-                        .foregroundStyle(T3Colors.textTertiary)
-
-                    Text(approval.detail)
-                        .font(
-                            approval.kind == .command
-                                ? T3Typography.code
-                                : T3Typography.threadBody
-                        )
-                        .foregroundStyle(T3Colors.textPrimary.opacity(0.92))
-                        .lineSpacing(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 10))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(T3Colors.border, lineWidth: 1)
-                }
-                .padding(.top, 9)
-            }
-            .padding(.horizontal, 15)
-            .padding(.vertical, 12)
-            .background(T3Colors.subtle)
-
-            Divider().overlay(T3Colors.separator)
-
-            VStack(spacing: 9) {
-                if let options = approval.options {
-                    ForEach(options, id: \.decision) { option in
-                        if let warning = option.warning { Text(warning).font(T3Typography.supporting).foregroundStyle(T3Colors.warning) }
-                        approvalButton(option.label,
-                            background: option.decision == .allowOnce ? T3Colors.accent : Color.clear,
-                            border: T3Colors.border,
-                            foreground: option.decision == .deny ? T3Colors.danger : T3Colors.textPrimary,
-                            action: { onDecision(option.decision) })
-                    }
-                } else {
-                HStack(spacing: 7) {
-                    approvalButton(
-                        "Approve once",
-                        background: T3Colors.accent,
-                        action: { onDecision(.allowOnce) }
-                    )
-
-                    approvalButton(
-                        "Allow this session",
-                        background: Color.clear,
-                        border: T3Colors.border,
-                        foreground: T3Colors.textPrimary,
-                        action: { onDecision(.allowForSession) }
-                    )
-                }
-
-                HStack(spacing: 26) {
-                    Button("Decline", role: .destructive) {
-                        onDecision(.deny)
-                    }
-                    .foregroundStyle(T3Colors.danger)
-
-                    Button("Cancel turn", action: onCancelTurn)
-                        .foregroundStyle(T3Colors.textTertiary)
-                }
-                .font(T3Typography.supportingStrong)
-                .buttonStyle(.plain)
-                .frame(maxWidth: .infinity)
+                if total > 1 {
+                    Text("\(position) of \(total)")
+                        .font(T3Typography.supporting.monospacedDigit())
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 10)
-            .padding(.bottom, 11)
+
+            if hasDetail {
+                detailBox
+            }
+
+            decisions
         }
+        .padding(.horizontal, 12)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
         .disabled(isResponding)
-        .opacity(isResponding ? 0.56 : 1)
+        .t3SensoryFeedback(.warning, trigger: approval.id)
+        .onChange(of: isResponding) { _, responding in
+            if !responding { pendingChoice = nil }
+        }
+        .onChange(of: approval.id) { pendingChoice = nil }
+        .sheet(isPresented: $showsFullDetail) {
+            NavigationStack {
+                ScrollView {
+                    detailText
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+                .navigationTitle(detailTitle)
+                .navigationBarTitleDisplayMode(.inline)
+                .t3SheetToolbar(.close)
+                .t3NavigationChrome()
+            }
+            .presentationDetents([.medium, .large])
+        }
         .accessibilityElement(children: .contain)
     }
 
-    private func approvalButton(
-        _ title: String,
-        background: Color,
-        border: Color = .clear,
-        foreground: Color = .white,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(T3Typography.control.weight(.semibold))
-                .foregroundStyle(foreground)
-                .frame(maxWidth: .infinity)
-                .frame(height: T3Metrics.minimumTapTarget)
-                .background(background, in: RoundedRectangle(cornerRadius: 10))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(border, lineWidth: 1)
-                }
-        }
-        .buttonStyle(.plain)
+    // MARK: - Detail
+
+    private var trimmedDetail: String {
+        approval.detail.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var detailLabel: String {
+    /// An approval with nothing to show gets no box: an empty labelled box
+    /// reads as content that failed to load.
+    private var hasDetail: Bool {
+        !trimmedDetail.isEmpty
+    }
+
+    private var isCode: Bool {
+        approval.kind == .command || approval.kind == .patch
+    }
+
+    /// Long enough that the capped box scrolls, so the full text gets its
+    /// own page. A line count rather than a measurement keeps this off the
+    /// layout pass.
+    private var isLongDetail: Bool {
+        trimmedDetail.count > 400 || trimmedDetail.reduce(0) { $1 == "\n" ? $0 + 1 : $0 } >= 7
+    }
+
+    private var detailText: some View {
+        Text(trimmedDetail)
+            .font(isCode ? T3Typography.code : T3Typography.threadBody)
+            .foregroundStyle(T3Colors.textPrimary.opacity(0.92))
+            .lineSpacing(3)
+            .textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private var detailBox: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        VStack(alignment: .leading, spacing: 6) {
+            ComposerCappedScrollView(maximumHeight: detailMaximumHeight) {
+                detailText
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .background(isCode ? T3Colors.input : Color.clear, in: shape)
+
+            if isLongDetail {
+                Button("Show Full \(detailTitle)") { showsFullDetail = true }
+                    .font(T3Typography.supportingStrong)
+                    .buttonStyle(.borderless)
+                    .frame(minHeight: T3Metrics.minimumTapTarget)
+            }
+        }
+    }
+
+    private var detailTitle: String {
         switch approval.kind {
         case .command: "Command"
-        case .fileRead: "File access"
-        case .fileChange: "File change"
+        case .fileRead: "File Access"
+        case .fileChange: "File Change"
         case .patch: "Patch"
         case .other: "Details"
         }
+    }
+
+    private var kindSymbol: String {
+        switch approval.kind {
+        case .command: "terminal"
+        case .fileRead: "doc"
+        case .fileChange: "pencil"
+        case .patch: "doc.badge.gearshape"
+        case .other: "exclamationmark.shield"
+        }
+    }
+
+    // MARK: - Decisions
+
+    @ViewBuilder
+    private var decisions: some View {
+        if let options = approval.options {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(options, id: \.decision) { option in
+                    decisionButton(option.label, choice: .decision(option.decision))
+                    if let warning = option.warning {
+                        Label(warning, systemImage: "exclamationmark.triangle")
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.warning)
+                    }
+                }
+                decisionButton("Cancel Turn", choice: .cancelTurn)
+            }
+        } else {
+            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                GridRow {
+                    decisionButton("Allow Once", choice: .decision(.allowOnce))
+                    decisionButton("Allow for Session", choice: .decision(.allowForSession))
+                }
+                GridRow {
+                    decisionButton("Decline", choice: .decision(.deny))
+                    decisionButton("Cancel Turn", choice: .cancelTurn)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func decisionButton(_ title: String, choice: Choice) -> some View {
+        let button = Button(role: role(for: choice)) {
+            pendingChoice = choice
+            switch choice {
+            case let .decision(decision): onDecision(decision)
+            case .cancelTurn: onCancelTurn()
+            }
+        } label: {
+            ZStack {
+                Text(title)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .opacity(isPending(choice) ? 0 : 1)
+                if isPending(choice) {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 30)
+        }
+        .buttonBorderShape(.capsule)
+        .controlSize(.large)
+
+        switch choice {
+        case .decision(.allowOnce):
+            button.t3ProminentButtonStyle()
+        case .decision(.deny):
+            button.buttonStyle(.bordered).tint(T3Colors.danger)
+        case .cancelTurn:
+            button.buttonStyle(.bordered).tint(T3Colors.textSecondary)
+        case .decision:
+            button.t3SecondaryButtonStyle()
+        }
+    }
+
+    private func role(for choice: Choice) -> ButtonRole? {
+        choice == .decision(.deny) ? .destructive : nil
+    }
+
+    private func isPending(_ choice: Choice) -> Bool {
+        isResponding && pendingChoice == choice
     }
 }
 
@@ -168,6 +239,10 @@ struct FeatureComposerUserInputPanel: View {
     /// the prompt moves on, which happens without a tap — answering a
     /// single-select question advances it.
     @State private var collapsedQuestionID: String?
+    /// A long question shows four lines until the reader asks for the rest,
+    /// so it cannot grow the pill past the screen.
+    @State private var expandedQuestionID: String?
+    @State private var unansweredWarnings = 0
 
     var body: some View {
         Group {
@@ -181,24 +256,20 @@ struct FeatureComposerUserInputPanel: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 8) {
-                                Text(question.header)
-                                    .font(T3Typography.eyebrow)
-                                    .tracking(1.3)
-                                    .textCase(.uppercase)
-                                    .foregroundStyle(T3Colors.accent)
+                                Text(headerLine(question))
+                                    .font(T3Typography.supporting)
+                                    .foregroundStyle(T3Colors.textSecondary)
+                                    .lineLimit(1)
 
                                 Spacer()
 
-                                if input.questions.count > 1 {
-                                    Text("\(questionIndex + 1)/\(input.questions.count)")
-                                        .font(T3Typography.supportingStrong.monospacedDigit())
-                                        .foregroundStyle(T3Colors.textTertiary)
-                                }
-
-                                Image(systemName: "chevron.down")
+                                Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
                                     .font(T3Typography.supportingStrong)
-                                    .foregroundStyle(T3Colors.textTertiary)
-                                    .rotationEffect(.degrees(isCollapsed ? 0 : 180))
+                                    .foregroundStyle(T3Colors.textSecondary)
+                                    .contentTransition(.symbolEffect(.replace))
+                                    .frame(width: 28, height: 28)
+                                    .t3GlassEffect(.regular, in: Circle())
+                                    .accessibilityHidden(true)
                             }
 
                             // Collapsed, the question itself is the only thing
@@ -208,37 +279,39 @@ struct FeatureComposerUserInputPanel: View {
                                 .font(T3Typography.navigationTitle)
                                 .foregroundStyle(T3Colors.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .lineLimit(isCollapsed ? 1 : nil)
+                                .lineLimit(questionLineLimit(question))
                                 .padding(.top, 5)
-
-                            if question.allowsMultiple, !isCollapsed {
-                                Text("Select one or more options")
-                                    .font(T3Typography.supporting)
-                                    .foregroundStyle(T3Colors.textTertiary)
-                                    .padding(.top, 4)
-                            }
                         }
                         .padding(.horizontal, 15)
-                        .padding(.vertical, 12)
+                        .padding(.top, 12)
+                        .padding(.bottom, needsMoreButton(question) ? 0 : 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
-                    .background(T3Colors.subtle)
                     .accessibilityLabel(question.header)
                     .accessibilityValue(question.question)
                     .accessibilityHint(isCollapsed ? "Show the options" : "Hide the options")
+
+                    if needsMoreButton(question) {
+                        Button("More") { expandedQuestionID = question.id }
+                            .font(T3Typography.supportingStrong)
+                            .buttonStyle(.borderless)
+                            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                            .padding(.horizontal, 15)
+                    }
 
                     if !isCollapsed {
                         collapsibleBody(question)
                     }
                 }
                 .disabled(isResponding)
-                .opacity(isResponding ? 0.56 : 1)
                 .animation(
                     VoiceMorph.appearance(reduceMotion: reduceMotion),
                     value: isCollapsed
                 )
+                .t3SensoryFeedback(.selection, trigger: answers)
+                .t3SensoryFeedback(.warning, trigger: unansweredWarnings)
             }
         }
         .onChange(of: input.id) {
@@ -246,6 +319,7 @@ struct FeatureComposerUserInputPanel: View {
             files = [:]
             questionIndex = 0
             collapsedQuestionID = nil
+            expandedQuestionID = nil
         }
         .onChange(of: questionIDs) { previousIDs, currentIDs in
             questionIndex = FeatureComposerQuestionReconciliation.index(
@@ -267,6 +341,29 @@ struct FeatureComposerUserInputPanel: View {
         )
     }
 
+    /// "Question 1 of 2 · Choose any", or the provider's header alone.
+    private func headerLine(_ question: FeatureInputQuestion) -> String {
+        var parts: [String] = []
+        if input.questions.count > 1 {
+            parts.append("Question \(questionIndex + 1) of \(input.questions.count)")
+        } else if !question.header.isEmpty {
+            parts.append(question.header)
+        }
+        if question.allowsMultiple { parts.append("Choose any") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func questionLineLimit(_ question: FeatureInputQuestion) -> Int? {
+        if isCollapsed { return 1 }
+        return expandedQuestionID == question.id ? nil : 4
+    }
+
+    /// A rough cut on length rather than a measurement: past about four lines'
+    /// worth of text the question folds behind "More".
+    private func needsMoreButton(_ question: FeatureInputQuestion) -> Bool {
+        !isCollapsed && expandedQuestionID != question.id && question.question.count > 180
+    }
+
     @ViewBuilder
     private func collapsibleBody(_ question: FeatureInputQuestion) -> some View {
         VStack(spacing: 0) {
@@ -277,8 +374,8 @@ struct FeatureComposerUserInputPanel: View {
                     ForEach(
                         Array(question.options.enumerated()),
                         id: \.offset
-                    ) { index, option in
-                        optionButton(option, number: index + 1, question: question)
+                    ) { _, option in
+                        optionButton(option, question: question)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -306,63 +403,65 @@ struct FeatureComposerUserInputPanel: View {
             .frame(minHeight: T3Metrics.minimumTapTarget)
             .background(
                 T3Colors.input,
-                in: RoundedRectangle(cornerRadius: 11)
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 11)
-                    .stroke(T3Colors.inputBorder, lineWidth: 1)
-            }
             .padding(.horizontal, 10)
             .padding(.top, 7)
 
             }
             if input.allowsAttachments == true && question.allowCustomAnswer != false {
-                HStack {
-                    FeatureImageAttachmentPicker(attachments: Binding(
-                        get: { files[question.id] ?? [] }, set: { files[question.id] = $0 }
-                    ), preparationState: $preparation, maximumCount: max(0, 8 - files.filter { $0.key != question.id }.values.reduce(0) { $0 + $1.count }))
-                    ScrollView(.horizontal) {
-                        HStack {
-                            ForEach(files[question.id] ?? []) { file in
-                                Button { files[question.id]?.removeAll { $0.id == file.id } } label: {
-                                    Label(file.filename, systemImage: "xmark.circle")
-                                }.accessibilityLabel("Remove \(file.filename)")
-                            }
-                        }
-                    }
-                }.padding(.horizontal, 10)
+                let questionFiles = Binding(
+                    get: { files[question.id] ?? [] },
+                    set: { files[question.id] = $0 }
+                )
+                HStack(alignment: .bottom, spacing: 4) {
+                    FeatureImageAttachmentPicker(
+                        attachments: questionFiles,
+                        preparationState: $preparation,
+                        maximumCount: max(0, 8 - files.filter { $0.key != question.id }.values.reduce(0) { $0 + $1.count })
+                    )
+                    FeatureAttachmentStrip(
+                        attachments: questionFiles,
+                        pendingCount: preparation.pendingItemCount
+                    )
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 4)
             }
             HStack(spacing: 8) {
                 if input.allowsDismiss == true {
                     Button("Dismiss") { onSubmit([:], [:], true) }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .tint(T3Colors.textSecondary)
                         .disabled(preparation.isPreparing)
                 }
                 if questionIndex > 0 {
                     Button("Back") {
                         questionIndex -= 1
                     }
-                    .font(T3Typography.control.weight(.semibold))
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .frame(
-                        minWidth: T3Metrics.minimumTapTarget,
-                        minHeight: T3Metrics.minimumTapTarget
-                    )
+                    .t3SecondaryButtonStyle()
+                    .buttonBorderShape(.capsule)
                 }
 
                 Spacer()
 
                 Button(action: advanceOrSubmit) {
-                    Text(isLastQuestion ? "Submit" : "Next question")
-                        .font(T3Typography.control.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 18)
-                        .frame(height: T3Metrics.minimumTapTarget)
-                        .background(T3Colors.accent, in: Capsule())
+                    ZStack {
+                        Text(isLastQuestion ? "Submit" : "Next")
+                            .opacity(isResponding ? 0 : 1)
+                        if isResponding {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
+                .t3ProminentButtonStyle()
+                .buttonBorderShape(.capsule)
                 .disabled(!canAdvance)
-                .opacity(canAdvance ? 1 : 0.3)
             }
+            .controlSize(.large)
+            .frame(minHeight: T3Metrics.minimumTapTarget)
             .padding(.horizontal, 10)
             .padding(.top, 9)
             .padding(.bottom, 11)
@@ -398,7 +497,6 @@ struct FeatureComposerUserInputPanel: View {
 
     private func optionButton(
         _ option: FeatureInputOption,
-        number: Int,
         question: FeatureInputQuestion
     ) -> some View {
         let isSelected = isOptionSelected(option.answerValue, for: question)
@@ -407,6 +505,16 @@ struct FeatureComposerUserInputPanel: View {
             select(option.answerValue, for: question)
         } label: {
             HStack(alignment: .center, spacing: 10) {
+                // Multiple choice leads with a selection circle, as system
+                // multi-select lists do; single choice gets a trailing check.
+                if question.allowsMultiple {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? T3Colors.accent : T3Colors.textTertiary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .accessibilityHidden(true)
+                }
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .font(T3Typography.control)
@@ -422,37 +530,21 @@ struct FeatureComposerUserInputPanel: View {
 
                 Spacer(minLength: 8)
 
-                if isSelected {
+                if isSelected, !question.allowsMultiple {
                     Image(systemName: "checkmark")
                         .font(T3Typography.supporting.weight(.bold))
                         .foregroundStyle(T3Colors.accent)
-                } else if number <= 9 {
-                    Text("\(number)")
-                        .font(.caption2.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .frame(width: 20, height: 20)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 5)
-                                .stroke(T3Colors.border, lineWidth: 1)
-                        }
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
-            .background(
-                isSelected ? T3Colors.accent.opacity(0.12) : T3Colors.subtle,
-                in: RoundedRectangle(cornerRadius: 10)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(
-                        isSelected ? T3Colors.accent.opacity(0.46) : Color.clear,
-                        lineWidth: 1
-                    )
-            }
+            .background(T3Colors.subtle, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func answerBinding(for question: FeatureInputQuestion) -> Binding<String> {
@@ -514,6 +606,7 @@ struct FeatureComposerUserInputPanel: View {
         } else if let unanswered = input.questions.firstIndex(where: {
             normalizedAnswer(for: $0.id) == nil
         }) {
+            unansweredWarnings += 1
             questionIndex = unanswered
         }
     }

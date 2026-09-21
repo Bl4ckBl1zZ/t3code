@@ -3,21 +3,21 @@ import SwiftUI
 // Ported from apps/mobile/src/features/threads/TimelineSystemDivider.tsx, plus
 // the day-divider label from packages/shared/src/orchestrationV2Timeline.ts.
 
-/// Type roles and metrics the timeline chrome shares. The RN client works in
-/// `text-3xs`/`text-2xs`/`text-xs`; those map onto the two smallest semantic
-/// iOS sizes so the whole transcript still follows Dynamic Type.
+/// Type roles and metrics the timeline chrome shares. Rows read at subheadline
+/// beside a 17pt body, metadata at caption; the web's dense `text-xs` rhythm
+/// read like a log file on a phone. Everything follows Dynamic Type.
 enum ChatTimelineStyle {
-    /// RN `text-3xs` — eyebrow labels inside the inspector.
+    /// Eyebrow labels inside the inspector.
     static let micro = Font.system(.caption2, design: .default)
     static let microStrong = Font.system(.caption2, design: .default, weight: .semibold)
-    /// RN `text-2xs` — divider pills, badges, diffstats.
-    static let small = Font.system(.caption2, design: .default)
-    static let smallStrong = Font.system(.caption2, design: .default, weight: .medium)
-    static let smallMono = Font.system(.caption2, design: .monospaced)
-    /// RN `text-xs` — work-log row text.
-    static let body = Font.system(.caption, design: .default)
-    static let bodyStrong = Font.system(.caption, design: .default, weight: .medium)
-    static let bodyMono = Font.system(.caption, design: .monospaced)
+    /// Divider labels, badges, diffstats.
+    static let small = Font.system(.caption, design: .default)
+    static let smallStrong = Font.system(.caption, design: .default, weight: .medium)
+    static let smallMono = Font.system(.caption, design: .monospaced)
+    /// Work-log row text.
+    static let body = Font.system(.subheadline, design: .default)
+    static let bodyStrong = Font.system(.subheadline, design: .default, weight: .medium)
+    static let bodyMono = Font.system(.subheadline, design: .monospaced)
 
     static let hairline = T3Colors.border
     /// Bottom margin a timeline entry owns, so the feed can stack entries with
@@ -25,8 +25,9 @@ enum ChatTimelineStyle {
     static let entrySpacing: CGFloat = 16
 }
 
-/// A system boundary in the transcript: hairline — pill — hairline. Becomes a
-/// button when `action` is set (e.g. "Open source conversation").
+/// A system boundary in the transcript: hairline, a quiet caption label,
+/// hairline. Becomes a full-width row button when `action` is set (e.g. "Open
+/// source conversation"), because a boundary you can tap has to look like it.
 struct TimelineSystemDivider: View {
     enum Tone: Equatable { case neutral, danger }
     /// Stacked puts the detail on its own centred line under the label.
@@ -37,7 +38,9 @@ struct TimelineSystemDivider: View {
     var tone: Tone = .neutral
     var symbol: String?
     var layout: Layout = .inline
-    /// In-flight system work: swaps the symbol for a spinner.
+    /// In-flight system work. Static on purpose: the composer band already
+    /// shows live work, and a spinner here would repaint for as long as the
+    /// step takes.
     var busy: Bool = false
     var accessibilityActionLabel: String?
     var action: (() -> Void)?
@@ -47,22 +50,22 @@ struct TimelineSystemDivider: View {
     private var iconTint: Color { isDanger ? T3Colors.danger : T3Colors.textTertiary }
 
     var body: some View {
-        HStack(spacing: 10) {
-            hairline
-            // Priority over the hairlines: they are infinitely greedy, and
-            // without this the layout crushes the pill's labels into "Interr…"
-            // instead of shortening the lines beside it.
-            Group {
-                if let action {
-                    Button(action: action) { pill }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(accessibilityActionLabel ?? label)
-                } else {
-                    pill
+        Group {
+            if let action {
+                Button(action: action) { linkRow }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(accessibilityActionLabel ?? label)
+            } else {
+                HStack(spacing: 10) {
+                    hairline
+                    // Priority over the hairlines: they are infinitely greedy,
+                    // and without this the layout crushes the label into
+                    // "Interr…" instead of shortening the lines beside it.
+                    labelStack
+                        .layoutPriority(1)
+                    hairline
                 }
             }
-            .layoutPriority(1)
-            hairline
         }
         .padding(.bottom, ChatTimelineStyle.entrySpacing)
     }
@@ -76,58 +79,54 @@ struct TimelineSystemDivider: View {
     }
 
     @ViewBuilder
-    private var pill: some View {
+    private var labelStack: some View {
         Group {
             if layout == .stacked {
                 VStack(spacing: 2) {
                     HStack(spacing: 6) {
                         icon
                         labelText
-                        trailingArrow
                     }
                     detailText
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(pillFill)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(pillStroke, lineWidth: 1)
-                        )
-                )
             } else {
                 HStack(spacing: 6) {
                     icon
                     labelText
                     detailText
-                    trailingArrow
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(pillFill)
-                        .overlay(Capsule(style: .continuous).strokeBorder(pillStroke, lineWidth: 1))
-                )
             }
         }
         .accessibilityElement(children: .combine)
     }
 
+    /// The one tappable boundary (a fork's source) as a row: accent label and
+    /// a chevron at a 44pt target, where a pill had an arrow as its only hint.
+    private var linkRow: some View {
+        HStack(spacing: 8) {
+            icon
+            labelText
+                .foregroundStyle(T3Colors.accent)
+            detailText
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(ChatTimelineStyle.small.weight(.semibold))
+                .foregroundStyle(T3Colors.textTertiary)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
+        .background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     @ViewBuilder
     private var icon: some View {
-        if busy {
-            // A system step that is still running (a handoff summary being
-            // generated, say) reads as stalled without a live indicator.
-            ProgressView()
-                .controlSize(.mini)
-                .tint(iconTint)
-        } else if let symbol {
+        if let symbol {
             Image(systemName: symbol)
-                .font(.system(size: 11, weight: .medium))
+                .font(ChatTimelineStyle.small.weight(.medium))
                 .foregroundStyle(iconTint)
+                .accessibilityHidden(true)
         }
     }
 
@@ -150,36 +149,26 @@ struct TimelineSystemDivider: View {
                 .truncationMode(.tail)
                 // Bounded so a sentence-length message shortens itself instead
                 // of eating the hairlines entirely.
-                .frame(maxWidth: 220)
+                .frame(maxWidth: 260)
         }
-    }
-
-    @ViewBuilder
-    private var trailingArrow: some View {
-        if action != nil {
-            Image(systemName: "arrow.right")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(T3Colors.textTertiary)
-        }
-    }
-
-    private var pillFill: Color {
-        isDanger ? T3Colors.danger.opacity(0.10) : T3Colors.surface
-    }
-
-    private var pillStroke: Color {
-        isDanger ? T3Colors.danger.opacity(0.25) : T3Colors.border
     }
 }
 
 /// A boundary between calendar days, so a thread picked up over a week doesn't
-/// read as one sitting.
+/// read as one sitting. A plain centred caption, like Messages: the day in
+/// bold and the time of the first thing said on it. A pill read as an event.
 struct TimelineDayDivider: View {
     let date: Date
     var now: Date = Date()
 
     var body: some View {
-        TimelineSystemDivider(label: ThreadTimelineDay.label(for: date, now: now))
+        (Text(verbatim: ThreadTimelineDay.label(for: date, now: now)).fontWeight(.semibold)
+            + Text(verbatim: " " + date.formatted(date: .omitted, time: .shortened)))
+            .font(ChatTimelineStyle.small)
+            .foregroundStyle(T3Colors.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, ChatTimelineStyle.entrySpacing)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -216,12 +205,14 @@ public enum ThreadTimelineDay {
         }
         let sameYear = calendar.component(.year, from: date)
             == calendar.component(.year, from: now)
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.locale = locale
-        formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate(sameYear ? "EEEdMMM" : "EEEdMMMy")
-        return formatter.string(from: date)
+        // A format style rather than a `DateFormatter` built per call: this
+        // runs for every divider on every feed rebuild.
+        var style = Date.FormatStyle.dateTime.weekday(.abbreviated).day().month(.abbreviated)
+        if !sameYear { style = style.year() }
+        style.locale = locale
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
+        return date.formatted(style)
     }
 
     /// Wire timestamps arrive as ISO-8601 strings, usually with fractional

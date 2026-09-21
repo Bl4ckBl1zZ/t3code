@@ -3,21 +3,24 @@ import SwiftUI
 // Ported from apps/mobile/src/features/settings/SettingsVoiceModelRouteScreen.tsx.
 //
 // The transcription model gets its own screen because the OpenRouter audio
-// catalog runs to dozens of entries: it needs a search field and a virtualized
-// list, neither of which belongs inside the Voice Input screen's scroll view.
+// catalog runs to dozens of entries: it needs a search field, which does not
+// belong inside the Voice Input screen. Pushed from Voice Input; choosing a
+// model saves it and pops back.
 
 public struct SettingsVoiceModelPickerView: View {
     private let manager: any FeatureVoiceSettingsManaging
     private let onSelected: () -> Void
 
+    @SwiftUI.Environment(\.dismiss) private var dismiss
     /// `nil` while the catalog is still loading, which is what separates "no
     /// audio models on this account" from "not asked yet".
     @State private var models: [OpenRouterModelOption]?
     @State private var selected: String?
     @State private var query = ""
     @State private var customModel = ""
-    @State private var errorMessage: String?
-    @State private var isSaving = false
+    @State private var loadError: String?
+    @State private var saveError: String?
+    @State private var savingID: String?
 
     public init(
         manager: any FeatureVoiceSettingsManaging,
@@ -31,119 +34,110 @@ public struct SettingsVoiceModelPickerView: View {
         VoiceModelCatalog.filter(models ?? [], query: query)
     }
 
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var trimmedCustomModel: String {
         customModel.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public var body: some View {
-        List {
-            if let errorMessage {
-                Section {
-                    SettingsErrorBanner(message: errorMessage)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                }
-            }
-
-            catalogSection
-            customModelSection
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .scrollDismissesKeyboard(.interactively)
-        .background(T3Colors.background)
-        .navigationTitle("Model")
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(
-            text: $query,
-            placement: .navigationBarDrawer(displayMode: .always),
-            prompt: "Search models"
-        )
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .task { await load() }
+        content
+            .navigationTitle("Model")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(
+                text: $query,
+                placement: .navigationBarDrawer(displayMode: .always),
+                prompt: "Search Models"
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .task { await load() }
     }
 
     @ViewBuilder
-    private var catalogSection: some View {
-        if models == nil {
-            Section {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-                    .listRowBackground(Color.clear)
-                    .accessibilityLabel("Loading models")
+    private var content: some View {
+        if let loadError, models == nil {
+            ContentUnavailableView {
+                Label("Couldn't Load Models", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(loadError)
+            } actions: {
+                Button("Try Again") { Task { await load() } }
             }
-        } else if filtered.isEmpty {
-            Section {
-                Text(
-                    query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? "No audio models are available on this OpenRouter account."
-                        : "No models match that search."
-                )
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 12)
-                .listRowBackground(Color.clear)
-            }
+            .background(T3Colors.background)
+        } else if models?.isEmpty == true, !isSearching, selected.map({ $0.isEmpty }) ?? true {
+            ContentUnavailableView(
+                "No Audio Models",
+                systemImage: "waveform.slash",
+                description: Text("No audio models are available on this OpenRouter account.")
+            )
+            .background(T3Colors.background)
         } else {
-            Section("AUDIO MODELS") {
-                ForEach(filtered) { model in
-                    Button {
-                        Task { await save(model.id) }
-                    } label: {
-                        modelRow(model)
+            SettingsForm {
+                if models == nil {
+                    Section { SettingsPlaceholderRows(count: 4) }
+                } else if !filtered.isEmpty {
+                    Section {
+                        ForEach(filtered) { model in
+                            Button {
+                                Task { await save(model.id) }
+                            } label: {
+                                modelRow(model)
+                            }
+                            .disabled(savingID != nil)
+                        }
+                    } footer: {
+                        if let saveError { Text(saveError).foregroundStyle(T3Colors.danger) }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(isSaving)
-                    .listRowBackground(Color.clear)
+                }
+                if !isSearching {
+                    customSection
+                }
+            }
+            .overlay {
+                if isSearching, models != nil, filtered.isEmpty {
+                    ContentUnavailableView.search(text: query)
                 }
             }
         }
     }
 
-    private var customModelSection: some View {
-        Section("CUSTOM MODEL ID") {
-            VStack(alignment: .leading, spacing: 12) {
-                TextField("provider/model-id", text: $customModel)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .settingsInputField()
-                    .accessibilityLabel("Custom model ID")
-
-                SettingsActionButton(
-                    title: "Use custom model",
-                    systemImage: "checkmark",
-                    tone: .primary,
-                    isBusy: isSaving,
-                    isDisabled: trimmedCustomModel.isEmpty
-                        || trimmedCustomModel == (selected ?? "")
-                ) {
-                    Task { await save(trimmedCustomModel) }
+    /// A model the catalog does not list — set here or on another client —
+    /// shows as its ID with the checkmark.
+    private var customSection: some View {
+        Section {
+            if let selected, let models, !selected.isEmpty, !models.contains(where: { $0.id == selected }) {
+                HStack {
+                    Text(selected).font(.system(.body, design: .monospaced))
+                    Spacer()
+                    Image(systemName: "checkmark").foregroundStyle(T3Colors.accent)
                 }
-                .padding(.horizontal, SettingsMetrics.rowPadding)
-
-                SettingsFootnote(
-                    """
-                    Any OpenRouter model that accepts audio input works here. The default is \
-                    \(VoiceInputSettings.defaultModel).
-                    """
-                )
+                .accessibilityAddTraits(.isSelected)
             }
-            .padding(.vertical, 8)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
+            HStack {
+                TextField("provider/model-id", text: $customModel)
+                    .font(.system(.body, design: .monospaced))
+                    .submitLabel(.done)
+                    .onSubmit { Task { await save(trimmedCustomModel) } }
+                    .accessibilityLabel("Custom model ID")
+                if savingID == trimmedCustomModel, !trimmedCustomModel.isEmpty {
+                    ProgressView()
+                }
+            }
+        } header: {
+            Text("Other Model")
+        } footer: {
+            Text("Any OpenRouter model that accepts audio input. Press Return to use it. The default is \(VoiceInputSettings.defaultModel).")
         }
     }
 
     private func modelRow(_ model: OpenRouterModelOption) -> some View {
         let isSelected = model.id == selected
         return HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(model.name)
-                    .font(T3Typography.homeTitle)
                     .foregroundStyle(T3Colors.textPrimary)
                     .lineLimit(1)
                 Text(model.subtitle)
@@ -152,13 +146,14 @@ public struct SettingsVoiceModelPickerView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            if isSelected {
+            if savingID == model.id {
+                ProgressView()
+            } else if isSelected {
                 Image(systemName: "checkmark")
-                    .font(T3Typography.supportingStrong)
+                    .fontWeight(.semibold)
                     .foregroundStyle(T3Colors.accent)
             }
         }
-        .padding(.vertical, 6)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
@@ -166,33 +161,34 @@ public struct SettingsVoiceModelPickerView: View {
 
     @MainActor
     private func load() async {
+        loadError = nil
         do {
             let settings = try await manager.voiceInputSettings()
             selected = settings.model
-            let catalog = try await manager.listOpenRouterAudioModels()
-            models = catalog
-            // A model the catalog does not list was set from somewhere else, so
-            // it seeds the custom field rather than vanishing from the screen.
-            if !catalog.contains(where: { $0.id == settings.model }) {
-                customModel = settings.model
-            }
+            models = try await manager.listOpenRouterAudioModels()
         } catch {
-            models = []
-            errorMessage = error.localizedDescription
+            loadError = error.localizedDescription
         }
     }
 
     @MainActor
     private func save(_ model: String) async {
-        guard !model.isEmpty else { return }
-        isSaving = true
-        errorMessage = nil
-        defer { isSaving = false }
+        guard !model.isEmpty, savingID == nil else { return }
+        guard model != selected else {
+            dismiss()
+            return
+        }
+        savingID = model
+        saveError = nil
+        defer { savingID = nil }
         do {
             selected = try await manager.patchVoiceInputSettings(.init(model: model)).model
+            PlatformHapticEngine.shared.playSelection()
             onSelected()
+            dismiss()
         } catch {
-            errorMessage = error.localizedDescription
+            PlatformHapticEngine.shared.play(.error)
+            saveError = "Couldn't change the model. \(error.localizedDescription)"
         }
     }
 }

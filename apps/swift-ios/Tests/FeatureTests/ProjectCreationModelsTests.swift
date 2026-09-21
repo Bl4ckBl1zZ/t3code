@@ -159,6 +159,77 @@ struct ProjectCreationModelsTests {
         #expect(bySource[.gitlab]?.detail == "Run glab auth login")
         #expect(bySource[.bitbucket]?.isReady == false)
     }
+
+    @Test
+    func pathIssuesExplainWhyAPathCannotBeAddedYet() {
+        let projects = [
+            FeatureProject(id: "p1", environmentID: "mac", name: "api-server", path: "/srv/api-server"),
+            FeatureProject(id: "p2", environmentID: "linux", name: "web", path: "/srv/web"),
+        ]
+        func issue(_ path: String, serverPath: String? = "/srv") -> ProjectPathIssue? {
+            ProjectCreationPath.issue(
+                for: path,
+                serverPath: serverPath,
+                environmentID: "mac",
+                projects: projects
+            )
+        }
+
+        #expect(issue("  ") == .empty)
+        #expect(issue("relative/project") == .malformed("Use an absolute path, or start with ~/."))
+        #expect(issue(#"C:\work\t3code"#) == .foreignFilesystem)
+        #expect(issue(#"C:\work\t3code"#, serverPath: nil) == nil)
+        #expect(issue("/srv/api-server/") == .alreadyUsed(projectName: "api-server"))
+        // Another environment's project doesn't claim this machine's folder.
+        #expect(issue("/srv/web") == nil)
+        #expect(issue("~/work/t3code") == nil)
+    }
+
+    @Test
+    func addProjectCommitFollowsModeLookupAndClonedCopy() {
+        #expect(AddProjectCommit.folder(pathIssue: nil) == .init(title: "Add", isEnabled: true))
+        #expect(AddProjectCommit.folder(pathIssue: .empty).isEnabled == false)
+
+        let providerUnresolved = AddProjectCommit.clone(
+            remoteURL: "pingdotgg/t3code",
+            needsLookup: true,
+            destinationIssue: nil,
+            hasClonedCopy: false
+        )
+        #expect(providerUnresolved == .init(title: "Clone", isEnabled: false))
+
+        let gitURLReady = AddProjectCommit.clone(
+            remoteURL: "git@github.com:pingdotgg/t3code.git",
+            needsLookup: false,
+            destinationIssue: nil,
+            hasClonedCopy: false
+        )
+        #expect(gitURLReady == .init(title: "Clone", isEnabled: true))
+
+        let missingRemote = AddProjectCommit.clone(
+            remoteURL: "",
+            needsLookup: false,
+            destinationIssue: nil,
+            hasClonedCopy: false
+        )
+        #expect(missingRemote.isEnabled == false)
+
+        let destinationTaken = AddProjectCommit.clone(
+            remoteURL: "git@github.com:pingdotgg/t3code.git",
+            needsLookup: false,
+            destinationIssue: .alreadyUsed(projectName: "t3code"),
+            hasClonedCopy: false
+        )
+        #expect(destinationTaken.isEnabled == false)
+
+        let registrationRetry = AddProjectCommit.clone(
+            remoteURL: "git@github.com:pingdotgg/t3code.git",
+            needsLookup: false,
+            destinationIssue: nil,
+            hasClonedCopy: true
+        )
+        #expect(registrationRetry == .init(title: "Finish Adding", isEnabled: true))
+    }
 }
 
 private extension Result {

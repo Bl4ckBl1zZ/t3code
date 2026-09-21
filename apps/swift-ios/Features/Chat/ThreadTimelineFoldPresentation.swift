@@ -20,7 +20,7 @@ enum ThreadTimelineFoldPresentation {
         }
         let items = entries.map { entry -> ThreadTurnFoldItem in
             switch entry {
-            case let .message(message):
+            case let .message(message, _):
                 return ThreadTurnFoldItem(id: entry.id, runID: itemsByID[message.id]?.base.runId,
                     kind: message.role == .assistant ? .assistant : .user,
                     isLive: message.state == .streaming, isPersistent: !message.attachments.isEmpty,
@@ -28,7 +28,7 @@ enum ThreadTimelineFoldPresentation {
             case let .workLog(work):
                 let runIDs = Set(work.rows.compactMap(\.runID))
                 return ThreadTurnFoldItem(id: entry.id, runID: runIDs.count == 1 ? runIDs.first : nil,
-                    kind: .work, isLive: work.rows.contains(where: \.inProgress), date: entry.date)
+                    kind: .work, isLive: work.rows.contains(where: \.isRunning), date: entry.date)
             case .lifecycle, .dayDivider, .turnFold:
                 return ThreadTurnFoldItem(id: entry.id, runID: nil, kind: .persistent, date: entry.date)
             }
@@ -54,7 +54,7 @@ enum ThreadTimelineFoldPresentation {
             if let fold = foldsByHiddenID[entry.id] {
                 if fold.anchorID == entry.id { append(.turnFold(fold)) }
                 if !fold.isExpanded {
-                    if case let .message(message) = entry {
+                    if case let .message(message, _) = entry {
                         hiddenCitationRunIDs[message.wireMessageID ?? message.id] = fold.runID
                         hiddenCitationRunIDs[message.id] = fold.runID
                     }

@@ -1,670 +1,373 @@
 import SwiftUI
 
+/// Settings, presented as a sheet from Home.
+///
+/// One navigation stack: every row pushes, so nothing stacks a second sheet on
+/// top of this one except the flows that really are modal (pairing a server,
+/// first-run setup). Changes apply as they are made. Client settings are local
+/// and cheap to write, so there is nothing to buffer and nothing a swipe-down
+/// could throw away.
 public struct SettingsView: View {
     @SwiftUI.Environment(\.dismiss) private var dismiss
     @Bindable private var model: FeatureRootModel
     @State private var settings: FeatureSettings
-    @State private var isSaving = false
-    @State private var showingDisconnect = false
-    @State private var showingAddEnvironment = false
-    @State private var showingDevices = false
-    @State private var showingEnvironmentIcons = false
-    @State private var showingDesktopUpdates = false
-    @State private var showingT3Connect = false
-    @State private var showingIntegrations = false
-    @State private var showingAgents = false
+    @State private var path: [SettingsRoute] = []
+    @State private var query = ""
+    @State private var savesInFlight = 0
+    @State private var saveError: String?
     @State private var showingSetup = false
-    @State private var showingProjectDefaults = false
-    @State private var showingThreadOrganization = false
-    @State private var showingLoadBalancing = false
-    @State private var showingVoiceInput = false
-    @State private var showingAutomations = false
-    @State private var showingWorkManagement = false
-    @State private var showingUsage = false
-    @State private var removalTarget: FeatureEnvironment?
-    @State private var saveErrorMessage: String?
 
     public init(model: FeatureRootModel) {
+        self.init(model: model, initialRoute: nil)
+    }
+
+    /// Opens with `initialRoute` already pushed, such as Servers from Home's
+    /// connection banner. Back still returns to the Settings root.
+    init(model: FeatureRootModel, initialRoute: SettingsRoute?) {
         self.model = model
         _settings = State(initialValue: model.snapshot.settings)
+        _path = State(initialValue: initialRoute.map { [$0] } ?? [])
     }
 
     public var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                settingsHeader
-
-                Divider()
-                    .overlay(T3Colors.border)
-
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        connectionSection
-                        t3ConnectSection
-                        agentSection
-                        ThemeSection(
-                            appearance: $settings.appearance,
-                            lightThemeID: $settings.lightThemeID,
-                            darkThemeID: $settings.darkThemeID,
-                            environmentName: activeEnvironment?.name,
-                            environmentThemes: activeEnvironmentThemes
-                        )
-                        ThreadAppearanceSection(
-                            diffColorScheme: $settings.diffColorScheme,
-                            alwaysExpandActivity: $settings.alwaysExpandActivity,
-                            showSkillsInSlashMenu: $settings.showSkillsInSlashMenu
-                        )
-                        preferencesSection
-                        configurationSection
-                        aboutSection
-                    }
-                    .padding(.vertical, 18)
-                }
-                .scrollDismissesKeyboard(.interactively)
-            }
-            .background(T3Colors.background)
-            .toolbar(.hidden, for: .navigationBar)
-            .sheet(isPresented: $showingDesktopUpdates) {
-                NavigationStack { SettingsDesktopUpdatesView(model: model) }
-            }
-            .confirmationDialog(
-                "Disconnect from this server?",
-                isPresented: $showingDisconnect,
-                titleVisibility: .visible
-            ) {
-                Button("Disconnect", role: .destructive) {
-                    Task {
-                        await model.disconnect()
-                        dismiss()
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Your saved server and credentials will stay on this iPhone.")
-            }
-            .alert(
-                "Remove saved server?",
-                isPresented: Binding(
-                    get: { removalTarget != nil },
-                    set: { if !$0 { removalTarget = nil } }
-                ),
-                presenting: removalTarget
-            ) { environment in
-                Button("Remove", role: .destructive) {
-                    Task {
-                        await model.removeEnvironment(environment.id)
-                        removalTarget = nil
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { environment in
-                Text("\(environment.name) will need a new pairing code to be added again.")
-            }
-            .alert(
-                "Couldn’t save settings",
-                isPresented: Binding(
-                    get: { saveErrorMessage != nil },
-                    set: { if !$0 { saveErrorMessage = nil } }
-                )
-            ) {
-                Button("OK") { saveErrorMessage = nil }
-            } message: {
-                Text(saveErrorMessage ?? "Something went wrong.")
-            }
-            .sheet(isPresented: $showingAddEnvironment) {
-                ConnectionOnboardingView(
-                    model: model,
-                    onConnected: {
-                        showingAddEnvironment = false
-                    },
-                    onCancel: {
-                        showingAddEnvironment = false
-                    }
-                )
-            }
-            .sheet(isPresented: $showingLoadBalancing) {
-                NavigationStack { SettingsLoadBalancingView(model: model)
-                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingLoadBalancing = false } } }
+        NavigationStack(path: $path) {
+            SettingsForm {
+                if isSearching {
+                    searchResults
+                } else {
+                    rootSections
                 }
             }
-            .sheet(isPresented: $showingThreadOrganization) {
-                NavigationStack { SettingsThreadOrganizationView(model: model)
-                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingThreadOrganization = false } } }
+            .overlay {
+                if isSearching, searchMatches.isEmpty {
+                    ContentUnavailableView.search(text: query)
                 }
             }
-            .sheet(isPresented: $showingProjectDefaults) {
-                NavigationStack {
-                    SettingsProjectDefaultsView(model: model)
-                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingProjectDefaults = false } } }
-                }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.large)
+            .searchable(
+                text: $query,
+                placement: .navigationBarDrawer(displayMode: .always),
+                prompt: "Search"
+            )
+            .t3SheetToolbar(.close)
+            .navigationDestination(for: SettingsRoute.self) { route in
+                destination(route)
             }
-            .sheet(isPresented: $showingEnvironmentIcons) {
-                NavigationStack {
-                    SettingsEnvironmentIconsView(model: model)
-                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingEnvironmentIcons = false } } }
-                }
-            }
-            .sheet(isPresented: $showingDevices) {
-                NavigationStack {
-                    DevicesView(manager: deviceManager)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showingDevices = false }
-                            }
-                        }
-                }
-                .presentationDragIndicator(.visible)
-            }
-            .sheet(isPresented: $showingIntegrations) {
-                NavigationStack {
-                    SettingsIntegrationsView(
-                        manager: voiceSettingsManager,
-                        serverSettings: serverSettingsManager,
-                        environmentID: activeEnvironmentID,
-                        preferences: activeEnvironmentPreferences
-                    )
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showingIntegrations = false }
-                            }
-                        }
-                }
-                .presentationDragIndicator(.visible)
-            }
-            .sheet(isPresented: $showingSetup) { AgentSetupView(model: model) }
-            .sheet(isPresented: $showingAgents) {
-                NavigationStack {
-                    SettingsAgentsView(
-                        serverSettings: serverSettingsManager,
-                        environmentID: activeEnvironmentID,
-                        preferences: activeEnvironmentPreferences,
-                        environments: model.snapshot.environments
-                    )
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showingAgents = false }
-                            }
-                        }
-                }
-                .presentationDragIndicator(.visible)
-            }
-            .sheet(isPresented: $showingVoiceInput) {
-                NavigationStack {
-                    SettingsVoiceInputView(manager: voiceSettingsManager)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showingVoiceInput = false }
-                            }
-                        }
-                }
-                .presentationDragIndicator(.visible)
-            }
-            .sheet(isPresented: $showingAutomations) {
-                NavigationStack {
-                    SettingsAutomationsView(model: model, manager: scheduledTaskManager)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showingAutomations = false }
-                            }
-                        }
-                }
-                .presentationDragIndicator(.visible)
-            }
-            .sheet(isPresented: $showingUsage) {
-                NavigationStack {
-                    SettingsUsageView(model: model)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showingUsage = false }
-                            }
-                        }
-                }
-                .presentationDragIndicator(.visible)
-            }
-            .sheet(isPresented: $showingWorkManagement) {
-                NavigationStack {
-                    WorkManagementView(model: model)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showingWorkManagement = false }
-                            }
-                        }
-                }
-            }
-            .sheet(isPresented: $showingT3Connect) {
-                if let capability = model.client as? any T3ConnectCapable {
-                    NavigationStack {
-                        T3ConnectView(capability: capability)
-                            .toolbar {
-                                ToolbarItem(placement: .cancellationAction) {
-                                    Button("Done") { showingT3Connect = false }
-                                }
-                            }
-                    }
-                    .presentationDragIndicator(.visible)
-                }
-            }
-            .onAppear {
-                model.setConnectionManagementPresented(true)
-            }
-            .onDisappear {
-                model.setConnectionManagementPresented(false)
-            }
-            .onChange(of: model.snapshot.settings) { previous, next in
-                // A live `t3 theme set` may update the saved client settings
-                // while this sheet is open. Preserve local edits, but keep an
-                // untouched form from becoming a stale overwrite.
-                if settings == previous { settings = next }
-            }
-
         }
         .presentationDragIndicator(.visible)
-    }
-
-    private var settingsHeader: some View {
-        // The title is centred by overlay rather than by two fixed-width
-        // columns: "Saving…" is wider than "Save", and the old 72pt column
-        // truncated it while shifting the title off centre as it changed.
-        HStack(spacing: 12) {
-            Button("Cancel") { dismiss() }
-                .foregroundStyle(T3Colors.accent)
-
-            Spacer(minLength: 12)
-
-            Button {
-                save()
-            } label: {
-                if isSaving {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityLabel("Saving")
-                } else {
-                    Text("Save").fontWeight(.semibold)
-                }
-            }
-            .foregroundStyle(canSave ? T3Colors.accent : T3Colors.textTertiary)
-            .disabled(!canSave)
-        }
-        .font(T3Typography.control)
-        .overlay {
-            Text("Settings")
-                .font(T3Typography.navigationTitle)
-                .foregroundStyle(T3Colors.textPrimary)
-                .accessibilityAddTraits(.isHeader)
-        }
-        .padding(.horizontal, SettingsMetrics.headerInset)
-        .frame(minHeight: 54)
-    }
-
-    private var connectionSection: some View {
-        SettingsSection(title: "Connections") {
-            VStack(spacing: 0) {
-                if model.snapshot.environments.isEmpty {
-                    connectionFallbackRow
-                } else {
-                    ForEach(Array(model.snapshot.environments.enumerated()), id: \.element.id) {
-                        index, environment in
-                        if index > 0 {
-                            settingsDivider
-                        }
-                        environmentRow(environment)
-                    }
-                }
-
-                settingsDivider
-
-                Button { showingDesktopUpdates = true } label: {
-                    SettingsNavigationRow(title: "Desktop updates", systemImage: "arrow.down.circle")
-                }.buttonStyle(.plain)
-                settingsDivider
-
-                Button { showingEnvironmentIcons = true } label: {
-                    SettingsNavigationRow(title: "Environment icons", systemImage: "server.rack")
-                }.buttonStyle(.plain)
-                settingsDivider
-
-                Button {
-                    showingDevices = true
-                } label: {
-                    SettingsNavigationRow(
-                        title: "Devices and sessions",
-                        systemImage: "laptopcomputer.and.iphone"
-                    )
-                }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                Button {
-                    showingAddEnvironment = true
-                } label: {
-                    SettingsActionRow(
-                        title: "Add server",
-                        systemImage: "plus"
-                    )
-                }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                Button(role: .destructive) {
-                    showingDisconnect = true
-                } label: {
-                    SettingsActionRow(
-                        title: "Disconnect current server",
-                        systemImage: "rectangle.portrait.and.arrow.right",
-                        color: T3Colors.danger
-                    )
-                }
-                .buttonStyle(.plain)
-            }
+        .sheet(isPresented: $showingSetup) { AgentSetupView(model: model) }
+        .onAppear { model.setConnectionManagementPresented(true) }
+        .onDisappear { model.setConnectionManagementPresented(false) }
+        .onChange(of: settings) { _, next in persist(next) }
+        .onChange(of: model.snapshot.settings) { _, next in
+            // Another writer — `t3 theme set`, or the root turning Notifications
+            // off when iOS permission is missing — changed the saved settings.
+            // Adopt them unless one of this screen's own writes is still landing.
+            guard savesInFlight == 0, next != settings else { return }
+            settings = next
         }
     }
 
-    private var agentSection: some View {
-        SettingsSection(title: "Default agent") {
-            VStack(spacing: 0) {
+    // MARK: - Root
+
+    @ViewBuilder
+    private var rootSections: some View {
+        Section { serverCard }
+
+        if hasServers {
+            Section {
+                routeLink(.agents)
                 ProviderModelPicker(
                     providers: model.snapshot.providers,
                     selection: $settings.defaultSelection,
-                    setupContext: ProviderSetupContext(client: model.client, environmentID: model.snapshot.environments.first(where: \.isActive)?.id)
+                    setupContext: ProviderSetupContext(client: model.client, environmentID: activeEnvironment?.id)
                 )
-                .padding(.horizontal, SettingsMetrics.rowPadding)
-                .frame(minHeight: 58)
-
-                if let provider = selectedProvider {
-                    SettingsRowDivider(isInsetForIcon: false)
-
-                    SettingsValueRow(title: "Provider", value: provider.name)
-                }
-
-                if let detail = selectedModel?.detail {
-                    SettingsRowDivider(isInsetForIcon: false)
-
-                    Text(detail)
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textSecondary)
-                        .padding(.horizontal, SettingsMetrics.rowPadding)
-                        .padding(.vertical, 12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
-
-    private var t3ConnectSection: some View {
-        SettingsSection(
-            title: "T3 Connect",
-            footer: "Optional account sync for relay-managed environments."
-        ) {
-            if model.client is any T3ConnectCapable {
-                Button {
-                    showingT3Connect = true
-                } label: {
-                    SettingsNavigationRow(
-                        title: "Cloud environments",
-                        systemImage: "cloud"
-                    )
-                }
-                .buttonStyle(.plain)
-            } else {
-                SettingsValueRow(
-                    title: "Cloud environments",
-                    value: "Unavailable",
-                    systemImage: "cloud.slash"
-                )
-            }
-        }
-    }
-
-    private var preferencesSection: some View {
-        SettingsSection(title: "Preferences") {
-            VStack(spacing: 0) {
-                // Appearance moved into ThemeSection, where it sits with the
-                // palette it selects a half of.
-                SettingsToggleRow(
-                    title: "Haptics",
-                    systemImage: "iphone.radiowaves.left.and.right",
-                    isOn: $settings.hapticsEnabled
-                )
-                settingsDivider
-                SettingsToggleRow(
-                    title: "Notifications",
-                    systemImage: "bell",
-                    isOn: $settings.notificationsEnabled
-                )
-                settingsDivider
-                SettingsToggleRow(
-                    title: "Live Activities",
-                    systemImage: "waveform.path.ecg.rectangle",
-                    isOn: $settings.liveActivitiesEnabled
-                )
-                settingsDivider
-                SettingsToggleRow(
-                    title: "Confirm before unpinning",
-                    systemImage: "pin.slash",
-                    isOn: $settings.confirmThreadUnpin
-                )
-            }
-        }
-    }
-
-    /// The three screens the React Native client files under Configuration,
-    /// General and Threads. They are one section here because this sheet is a
-    /// single scroll rather than a navigation tree: three one-row sections would
-    /// be three headers introducing nothing.
-    private var configurationSection: some View {
-        SettingsSection(title: "Features") {
-            VStack(spacing: 0) {
-                Button { showingThreadOrganization = true } label: {
-                    SettingsNavigationRow(title: "Shared preferences", systemImage: "tray.full")
-                }.buttonStyle(.plain)
-                settingsDivider
-
-                Button { showingLoadBalancing = true } label: {
-                    SettingsNavigationRow(title: "Load balancing", systemImage: "scalemass")
-                }.buttonStyle(.plain)
-                settingsDivider
-
-                Button { showingProjectDefaults = true } label: {
-                    SettingsNavigationRow(title: "Project defaults", systemImage: "arrow.down.circle")
-                }.buttonStyle(.plain)
-                settingsDivider
-
                 Button { showingSetup = true } label: {
-                    SettingsNavigationRow(title: "Set up T3 Code", systemImage: "checklist")
-                }.buttonStyle(.plain)
-                settingsDivider
-
-                Button {
-                    showingAgents = true
-                } label: {
-                    SettingsNavigationRow(
-                        title: "Agents",
-                        systemImage: "sparkles"
-                    )
+                    SettingsTileLabel(title: "Set Up T3 Code", systemImage: "checklist", tint: .green)
                 }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                Button {
-                    showingIntegrations = true
-                } label: {
-                    SettingsNavigationRow(
-                        title: "Integrations",
-                        systemImage: "point.3.connected.trianglepath.dotted"
-                    )
-                }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                Button {
-                    showingVoiceInput = true
-                } label: {
-                    SettingsNavigationRow(
-                        title: "Voice Input",
-                        systemImage: "mic"
-                    )
-                }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                Button {
-                    showingAutomations = true
-                } label: {
-                    SettingsNavigationRow(
-                        title: "Automations",
-                        systemImage: "calendar.badge.clock"
-                    )
-                }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                Button {
-                    showingWorkManagement = true
-                } label: {
-                    SettingsNavigationRow(
-                        title: "Work settings",
-                        systemImage: "clock.arrow.circlepath"
-                    )
-                }
-                .buttonStyle(.plain)
-
-                settingsDivider
-
-                Button {
-                    showingUsage = true
-                } label: {
-                    SettingsNavigationRow(
-                        title: "Usage",
-                        systemImage: "chart.bar.xaxis"
-                    )
-                }
-                .buttonStyle(.plain)
+            } footer: {
+                if let detail = selectedModel?.detail { Text(detail) }
             }
         }
-    }
 
-    private var aboutSection: some View {
-        SettingsSection(title: "About") {
-            VStack(spacing: 0) {
-                SettingsValueRow(
-                    title: "Version",
-                    value: appVersion,
-                    systemImage: "info.circle"
-                )
-                settingsDivider
-                Link(destination: URL(string: "https://github.com/pingdotgg/t3code")!) {
-                    SettingsNavigationRow(
-                        title: "Open source",
+        Section {
+            NavigationLink(value: SettingsRoute.appearance) {
+                LabeledContent {
+                    Text(appearanceLabel)
+                } label: {
+                    routeLabel(.appearance)
+                }
+            }
+            routeLink(.threads)
+            routeLink(.notifications)
+            Toggle(isOn: $settings.hapticsEnabled) {
+                SettingsTileLabel(title: "Haptics", systemImage: "hand.tap", tint: .pink)
+            }
+        } footer: {
+            SettingsFooter(error: saveError)
+        }
+
+        if let activeEnvironment {
+            Section("On \(activeEnvironment.name)") {
+                routeLink(.sharedPreferences)
+                routeLink(.projectDefaults)
+            }
+        }
+
+        if hasServers {
+            Section {
+                routeLink(.automations)
+                routeLink(.work)
+                routeLink(.usage)
+            }
+            Section {
+                routeLink(.loadBalancing)
+                routeLink(.integrations)
+                routeLink(.voiceInput)
+            }
+        }
+
+        Section {
+            LabeledContent {
+                Text(appVersion)
+            } label: {
+                SettingsTileLabel(title: "Version", systemImage: "info.circle", tint: .gray)
+            }
+            Link(destination: URL(string: "https://github.com/pingdotgg/t3code")!) {
+                HStack {
+                    SettingsTileLabel(
+                        title: "Open Source",
                         systemImage: "chevron.left.forwardslash.chevron.right",
-                        trailingSystemImage: "arrow.up.right"
+                        tint: .ink
+                    )
+                    Spacer(minLength: 8)
+                    Image(systemName: "arrow.up.forward.square")
+                        .foregroundStyle(T3Colors.textTertiary)
+                        .accessibilityHidden(true)
+                }
+            }
+        }
+    }
+
+    /// The account-card equivalent: the active server, how it is doing, and the
+    /// way into managing the rest. With nothing paired it becomes the way in.
+    @ViewBuilder
+    private var serverCard: some View {
+        if let environment = activeEnvironment ?? model.snapshot.environments.first {
+            let status = SettingsServerStatus.card(
+                for: environment,
+                isActive: environment.isActive,
+                connection: model.snapshot.connection.state
+            )
+            NavigationLink(value: SettingsRoute.servers) {
+                SettingsServerCard(
+                    title: environment.isActive ? environment.name : "Choose a Server",
+                    systemImage: environment.machineSymbol,
+                    tint: environment.isActive ? .ink : .gray,
+                    status: environment.isActive ? status : nil,
+                    detail: environment.isActive
+                        ? SettingsServerStatus.host(environment.endpoint)
+                        : "\(model.snapshot.environments.count) saved"
+                )
+            }
+            if environment.isActive, model.snapshot.connection.state == .disconnected {
+                Button("Reconnect") {
+                    Task { await model.activateEnvironment(environment.id) }
+                }
+            }
+        } else {
+            NavigationLink(value: SettingsRoute.addServer) {
+                SettingsServerCard(
+                    title: "Connect a Server",
+                    systemImage: "server.rack",
+                    tint: .gray,
+                    status: nil,
+                    detail: "Pair with T3 Code on a Mac or Linux machine, or sign in to T3 Connect."
+                )
+            }
+        }
+    }
+
+    // MARK: - Search
+
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var searchMatches: [SettingsSearchEntry] {
+        SettingsSearchIndex.results(for: query, available: availableRoutes)
+    }
+
+    private var searchResults: some View {
+        Section {
+            ForEach(searchMatches) { entry in
+                NavigationLink(value: entry.route) {
+                    SettingsTileLabel(
+                        title: entry.title,
+                        systemImage: entry.route.systemImage,
+                        tint: entry.route.tint,
+                        subtitle: entry.breadcrumb
                     )
                 }
-                .buttonStyle(.plain)
             }
         }
     }
 
-    private var connectionFallbackRow: some View {
-        HStack(spacing: 12) {
-            SettingsRowIcon(systemName: connectionSymbol, color: connectionColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(model.snapshot.connection.environmentName ?? "T3 server")
-                    .font(T3Typography.homeTitle)
-                    .foregroundStyle(T3Colors.textPrimary)
-                Text(connectionDescription)
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Text(connectionStatus)
-                .font(T3Typography.supportingStrong)
-                .foregroundStyle(connectionColor)
-        }
-        .padding(.horizontal, SettingsMetrics.rowPadding)
-        .frame(minHeight: 58)
-        .accessibilityElement(children: .combine)
+    /// Search only offers what the root would: server pages once a server is
+    /// paired, T3 Connect when this build can reach it.
+    private var availableRoutes: Set<SettingsRoute> {
+        Set(SettingsRoute.allCases.filter { route in
+            if route.requiresServer, !hasServers { return false }
+            if route == .t3Connect { return model.client is any T3ConnectCapable }
+            return true
+        })
     }
 
-    private func environmentRow(_ environment: FeatureEnvironment) -> some View {
-        Button {
-            guard !environment.isActive else { return }
-            Task { await model.activateEnvironment(environment.id) }
-        } label: {
-            HStack(spacing: 12) {
-                let status = environmentStatus(for: environment)
-                let activeIsConnected = environment.isActive
-                    && model.snapshot.connection.state == .connected
-                SettingsRowIcon(
-                    systemName: environment.machineSymbol,
-                    color: activeIsConnected ? T3Colors.success : T3Colors.textTertiary
+    // MARK: - Destinations
+
+    @ViewBuilder
+    private func destination(_ route: SettingsRoute) -> some View {
+        switch route {
+        case .servers:
+            SettingsServersView(
+                model: model,
+                onAddServer: { path.append(.addServer) },
+                onDisconnected: { dismiss() }
+            )
+        case .agents:
+            SettingsAgentsView(
+                serverSettings: serverSettingsManager,
+                environmentID: activeEnvironment?.id,
+                preferences: activeEnvironmentPreferences,
+                environments: model.snapshot.environments
+            )
+        case .appearance:
+            SettingsAppearanceView(
+                settings: $settings,
+                environmentName: activeEnvironment?.name,
+                environmentThemes: activeEnvironmentThemes,
+                saveError: saveError
+            )
+        case .threads:
+            SettingsThreadsView(settings: $settings, saveError: saveError)
+        case .notifications:
+            SettingsNotificationsView(settings: $settings, saveError: saveError)
+        case .sharedPreferences:
+            SettingsThreadOrganizationView(model: model)
+        case .projectDefaults:
+            SettingsProjectDefaultsView(model: model)
+        case .automations:
+            SettingsAutomationsView(
+                model: model,
+                manager: scheduledTaskManager,
+                onAddServer: { path.append(.addServer) }
+            )
+        case .work:
+            WorkManagementView(model: model)
+        case .usage:
+            SettingsUsageView(model: model)
+        case .loadBalancing:
+            SettingsLoadBalancingView(model: model, onAddServer: { path.append(.addServer) })
+        case .integrations:
+            SettingsIntegrationsView(
+                manager: voiceSettingsManager,
+                serverSettings: serverSettingsManager,
+                environmentID: activeEnvironment?.id,
+                preferences: activeEnvironmentPreferences
+            )
+        case .voiceInput:
+            SettingsVoiceInputView(manager: voiceSettingsManager)
+        case .devices:
+            DevicesView(manager: deviceManager)
+        case .desktopUpdates:
+            SettingsDesktopUpdatesView(model: model)
+        case .environmentIcons:
+            SettingsEnvironmentIconsView(model: model)
+        case .addServer:
+            // Pushed without `onCancel`: Back leaves, and it pops itself once
+            // the server connects.
+            ConnectionOnboardingView(model: model, onConnected: {})
+        case .t3Connect:
+            if let capability = model.client as? any T3ConnectCapable {
+                T3ConnectView(
+                    capability: capability,
+                    activeEnvironmentID: model.snapshot.environments.first(where: \.isActive)?.id
                 )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(environment.name)
-                        .font(T3Typography.homeTitle)
-                        .foregroundStyle(T3Colors.textPrimary)
-                        .lineLimit(1)
-                    Text(environment.endpoint)
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer(minLength: 8)
-
-                Label(status.title, systemImage: status.symbol)
-                    .labelStyle(SettingsStatusLabelStyle())
-                    .font(T3Typography.supportingStrong)
-                    .foregroundStyle(status.color)
-
-            }
-            .padding(.leading, SettingsMetrics.rowPadding)
-            .padding(.trailing, environment.isActive ? SettingsMetrics.rowPadding : 52)
-            .frame(minHeight: 62)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityHint(environment.isActive ? "Current server" : "Switch to this server")
-        .overlay(alignment: .trailing) {
-            if !environment.isActive {
-                Menu {
-                    Button(role: .destructive) {
-                        removalTarget = environment
-                    } label: {
-                        Label("Remove saved server", systemImage: "trash")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(T3Typography.control)
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .frame(width: T3Metrics.minimumTapTarget, height: 62)
-                        .contentShape(Rectangle())
-                }
-                .padding(.trailing, 8)
-                .accessibilityLabel("Actions for \(environment.name)")
-            }
-        }
-        .contextMenu {
-            if !environment.isActive {
-                Button(role: .destructive) {
-                    removalTarget = environment
-                } label: {
-                    Label("Remove saved server", systemImage: "trash")
-                }
+            } else {
+                ContentUnavailableView(
+                    "T3 Connect Unavailable",
+                    systemImage: "cloud.slash",
+                    description: Text("Direct and local connections still work without an account.")
+                )
             }
         }
     }
 
-    private var settingsDivider: some View { SettingsRowDivider() }
+    private func routeLink(_ route: SettingsRoute) -> some View {
+        NavigationLink(value: route) { routeLabel(route) }
+    }
+
+    private func routeLabel(_ route: SettingsRoute) -> some View {
+        SettingsTileLabel(title: route.title, systemImage: route.systemImage, tint: route.tint)
+    }
+
+    // MARK: - Saving
+
+    /// Writes one change as soon as it is made. A failed write puts the
+    /// controls back to what is actually saved and says so under them.
+    private func persist(_ next: FeatureSettings) {
+        guard next != model.snapshot.settings else { return }
+        savesInFlight += 1
+        Task { @MainActor in
+            let saved = await model.saveSettings(next)
+            savesInFlight -= 1
+            if saved {
+                saveError = nil
+                return
+            }
+            // The failure is reported here, beside the control, rather than as
+            // the root's generic alert once Settings closes.
+            let reason = model.errorMessage
+            model.errorMessage = nil
+            saveError = ["Couldn't save.", reason].compactMap { $0 }.joined(separator: " ")
+            PlatformHapticEngine.shared.play(.error)
+            if savesInFlight == 0 { settings = model.snapshot.settings }
+        }
+    }
+
+    // MARK: - Derived state
+
+    private var hasServers: Bool { !model.snapshot.environments.isEmpty }
+
+    private var activeEnvironment: FeatureEnvironment? {
+        model.snapshot.environments.first(where: \.isActive)
+    }
+
+    private var activeEnvironmentPreferences: FeatureEnvironmentPreferences? {
+        guard let id = activeEnvironment?.id else { return nil }
+        return model.snapshot.preferencesByEnvironment?[id]
+    }
+
+    private var activeEnvironmentThemes: [EnvironmentTheme] {
+        guard let id = activeEnvironment?.id else { return [] }
+        return model.snapshot.environmentThemesByEnvironment?[id] ?? []
+    }
+
+    private var appearanceLabel: String {
+        switch settings.appearance {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    private var selectedModel: FeatureModel? {
+        guard let selection = settings.defaultSelection else { return nil }
+        return model.snapshot.providers
+            .first { $0.id == selection.providerID }?
+            .models.first { $0.id == selection.modelID }
+    }
 
     /// Marketing version and build, which is what a reader is being asked for
     /// when they are asked which version they are on.
@@ -677,10 +380,6 @@ public struct SettingsView: View {
         case let (version?, nil): return version
         default: return "Unknown"
         }
-    }
-
-    private var canSave: Bool {
-        !isSaving && settings != model.snapshot.settings
     }
 
     private var deviceManager: any FeatureDeviceManaging {
@@ -700,326 +399,117 @@ public struct SettingsView: View {
             ?? EmptyFeatureServerSettingsManager.shared
     }
 
-    /// The server a server-authoritative row writes to. Settings is otherwise
-    /// scoped to the connected environment — it is the one "Disconnect current
-    /// server" means — so a setting belonging to a server follows the same one.
-    private var activeEnvironmentID: String? {
-        model.snapshot.environments.first(where: \.isActive)?.id
-    }
-
-    private var activeEnvironmentPreferences: FeatureEnvironmentPreferences? {
-        guard let activeEnvironmentID else { return nil }
-        return model.snapshot.preferencesByEnvironment?[activeEnvironmentID]
-    }
-
-    private var activeEnvironment: FeatureEnvironment? {
-        model.snapshot.environments.first(where: \.isActive)
-    }
-
-    private var activeEnvironmentThemes: [EnvironmentTheme] {
-        guard let environmentID = activeEnvironment?.id else { return [] }
-        return model.snapshot.environmentThemesByEnvironment?[environmentID] ?? []
-    }
-
     private var scheduledTaskManager: any FeatureScheduledTaskManaging {
         (model.client as? any FeatureScheduledTaskManaging)
             ?? EmptyFeatureScheduledTaskManager.shared
     }
+}
 
-    private var selectedProvider: FeatureProvider? {
-        guard let selection = settings.defaultSelection else { return nil }
-        return model.snapshot.providers.first { $0.id == selection.providerID }
-    }
+/// The large row at the top of Settings, shaped like the account card in the
+/// system Settings app.
+private struct SettingsServerCard: View {
+    let title: String
+    let systemImage: String
+    let tint: T3SettingsTile.Tint
+    let status: SettingsServerStatus?
+    let detail: String?
 
-    private var selectedModel: FeatureModel? {
-        guard let selection = settings.defaultSelection else { return nil }
-        return selectedProvider?.models.first { $0.id == selection.modelID }
-    }
+    @ScaledMetric(relativeTo: .title3) private var tileSize: CGFloat = 56
 
-    private var connectionStatus: String {
-        switch model.snapshot.connection.state {
-        case .connected: "Online"
-        case .connecting: "Connecting"
-        case .reconnecting: "Reconnecting"
-        case .disconnected: "Offline"
-        }
-    }
-
-    private var connectionSymbol: String {
-        model.snapshot.connection.state == .connected ? "checkmark.circle.fill" : "network.slash"
-    }
-
-    private var connectionColor: Color {
-        model.snapshot.connection.state == .connected ? .green : .secondary
-    }
-
-    private var connectionDescription: String {
-        model.snapshot.connection.endpoint ?? "No active server"
-    }
-
-    private func environmentStatus(
-        for environment: FeatureEnvironment
-    ) -> EnvironmentStatusPresentation {
-        let state = environment.isActive
-            ? model.snapshot.connection.state
-            : environment.connectionState
-        switch state {
-        case .connected where environment.isActive:
-            return EnvironmentStatusPresentation(
-                title: "Active",
-                symbol: "dot.radiowaves.left.and.right",
-                color: T3Colors.accent
-            )
-        case .connected:
-            return EnvironmentStatusPresentation(
-                title: "Ready",
-                symbol: "network",
-                color: T3Colors.textSecondary
-            )
-        case .connecting, .reconnecting:
-            return EnvironmentStatusPresentation(
-                title: "Checking",
-                symbol: "arrow.triangle.2.circlepath",
-                color: T3Colors.warning
-            )
-        case .disconnected:
-            return EnvironmentStatusPresentation(
-                title: "Offline",
-                symbol: "network.slash",
-                color: T3Colors.danger
-            )
-        case nil:
-            return EnvironmentStatusPresentation(
-                title: "Saved",
-                symbol: "bookmark",
-                color: T3Colors.textTertiary
-            )
-        }
-    }
-
-    @MainActor
-    private func save() {
-        isSaving = true
-        Task {
-            let didSave = await model.saveSettings(settings)
-            isSaving = false
-            if didSave {
-                dismiss()
-            } else {
-                saveErrorMessage = model.errorMessage ?? "Settings could not be saved."
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: tileSize * 0.48, weight: .medium))
+                .foregroundStyle(tint.glyph)
+                .frame(width: tileSize, height: tileSize)
+                .background(tint.fill, in: RoundedRectangle(cornerRadius: tileSize * 0.25, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .lineLimit(2)
+                statusLine
             }
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var statusLine: some View {
+        let parts = [status?.title, detail].compactMap { $0 }.filter { !$0.isEmpty }
+        // A problem reads in its own color; a healthy line stays secondary.
+        let textColor = status.flatMap { $0.isWarning ? $0.color : nil } ?? T3Colors.textSecondary
+        if !parts.isEmpty {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                if let status {
+                    Image(systemName: status.symbol)
+                        .imageScale(.small)
+                        .foregroundStyle(status.color)
+                        .accessibilityHidden(true)
+                }
+                Text(parts.joined(separator: " · "))
+                    .foregroundStyle(textColor)
+                    .lineLimit(2)
+            }
+            .font(T3Typography.supporting)
         }
     }
 }
 
-private struct EnvironmentStatusPresentation {
+/// How a saved server is doing, in the words and colors every Settings row uses.
+struct SettingsServerStatus: Equatable {
     let title: String
     let symbol: String
     let color: Color
-}
+    var isWarning = false
 
-/// The settings row vocabulary. Internal rather than private so every settings
-/// screen in this folder renders from the same chrome instead of re-deriving it.
-/// Shared metrics for the settings screens.
-///
-/// Named rather than repeated so a row, its divider and its card cannot drift
-/// apart — the previous inset was a literal in five files and had already
-/// stopped matching the icon it was supposed to clear.
-enum SettingsMetrics {
-    /// Card inset from the screen edge.
-    static let cardInset: CGFloat = 16
-    /// Row padding inside a card.
-    static let rowPadding: CGFloat = 12
-    static let rowMinHeight: CGFloat = 52
-    static let iconSize: CGFloat = 36
-    static let iconGap: CGFloat = 12
-    /// Starts at the icon's trailing edge, so the rule reads as a list
-    /// separator instead of cutting the card in half.
-    static let dividerInset: CGFloat = rowPadding + iconSize
-    static let cardRadius: CGFloat = 20
-    /// Section headers, and the footnotes that sit beside cards rather than in
-    /// them, align here — the card's own inset plus its internal header inset.
-    static let headerInset: CGFloat = cardInset + 4
-}
-
-/// A titled card of rows.
-///
-/// Matches `ThreadDetailsSection`, which is the card treatment the rest of the
-/// app already uses. Settings previously drew its rows straight onto the page
-/// background with a full-bleed rule between them, so the one screen a reader
-/// opens to change something looked less finished than the sheet they opened it
-/// from.
-struct SettingsSection<Content: View>: View {
-    let title: String
-    let footer: String?
-    let content: Content
-
-    init(
-        title: String,
-        footer: String? = nil,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.title = title
-        self.footer = footer
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(T3Typography.eyebrow)
-                .kerning(0.9)
-                .foregroundStyle(T3Colors.textTertiary)
-                .padding(.horizontal, 4)
-                .frame(minHeight: 24, alignment: .leading)
-                .accessibilityAddTraits(.isHeader)
-
-            VStack(spacing: 0) {
-                content
-            }
-            .background(T3Colors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius, style: .continuous)
-                    .strokeBorder(T3Colors.border, lineWidth: 1)
-            )
-
-            if let footer {
-                Text(footer)
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .padding(.horizontal, 4)
-                    .padding(.top, 2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+    /// The card's subtitle for the server Settings is scoped to.
+    static func card(
+        for environment: FeatureEnvironment,
+        isActive: Bool,
+        connection: FeatureConnection.State
+    ) -> SettingsServerStatus {
+        guard isActive else { return row(for: environment, connection: connection) }
+        switch connection {
+        case .connected:
+            return .init(title: "Connected", symbol: "circle.fill", color: T3Colors.success)
+        case .connecting:
+            return .init(title: "Connecting…", symbol: "wifi.exclamationmark", color: T3Colors.warning, isWarning: true)
+        case .reconnecting:
+            return .init(title: "Reconnecting…", symbol: "wifi.exclamationmark", color: T3Colors.warning, isWarning: true)
+        case .disconnected:
+            return .init(title: "Offline", symbol: "wifi.slash", color: T3Colors.danger, isWarning: true)
         }
-        .padding(.horizontal, SettingsMetrics.cardInset)
     }
-}
 
-/// The icon puck, matching `ThreadDetailsRowIcon`.
-///
-/// Neutral by default. Color is spent only where it carries meaning — a
-/// destructive action, a connected server — rather than tinting every row,
-/// which made the old screen read as a wall of accent blue with no hierarchy.
-struct SettingsRowIcon: View {
-    let systemName: String
-    var color: Color = T3Colors.textSecondary
-
-    var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(color)
-            .frame(width: SettingsMetrics.iconSize, height: SettingsMetrics.iconSize)
-            .background(T3Colors.subtle, in: Circle())
-            .accessibilityHidden(true)
-    }
-}
-
-struct SettingsNavigationRow: View {
-    let title: String
-    let systemImage: String
-    var trailingSystemImage = "chevron.right"
-    /// Unread-style count shown before the chevron. `nil` draws no badge, so a
-    /// row that has nothing waiting keeps its plain shape.
-    var badge: String?
-
-    var body: some View {
-        HStack(spacing: 12) {
-            SettingsRowIcon(systemName: systemImage)
-            Text(title)
-                .font(T3Typography.threadBody)
-                .foregroundStyle(T3Colors.textPrimary)
-            Spacer(minLength: 8)
-            if let badge {
-                Text(badge)
-                    .font(T3Typography.supportingStrong)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(T3Colors.accent, in: Capsule())
-                    .accessibilityLabel("\(badge) unread")
-            }
-            Image(systemName: trailingSystemImage)
-                .font(T3Typography.supportingStrong)
-                .foregroundStyle(T3Colors.textTertiary)
-                .accessibilityHidden(true)
+    /// A server's value in the Servers list. The active one reads the live
+    /// connection; the others read their last probe.
+    static func row(
+        for environment: FeatureEnvironment,
+        connection: FeatureConnection.State
+    ) -> SettingsServerStatus {
+        let state = environment.isActive ? connection : environment.connectionState
+        switch state {
+        case .connected where environment.isActive:
+            return .init(title: "Connected", symbol: "circle.fill", color: T3Colors.success)
+        case .connected:
+            return .init(title: "Ready", symbol: "network", color: T3Colors.textSecondary)
+        case .connecting, .reconnecting:
+            return .init(title: environment.isActive ? "Connecting…" : "Checking", symbol: "wifi.exclamationmark", color: T3Colors.warning)
+        case .disconnected:
+            return .init(title: "Offline", symbol: "wifi.slash", color: T3Colors.danger)
+        case nil:
+            return .init(title: "Saved", symbol: "bookmark", color: T3Colors.textTertiary)
         }
-        .padding(.horizontal, SettingsMetrics.rowPadding)
-        .frame(minHeight: SettingsMetrics.rowMinHeight)
-        .contentShape(Rectangle())
     }
-}
 
-struct SettingsActionRow: View {
-    let title: String
-    let systemImage: String
-    var color: Color = T3Colors.accent
-
-    var body: some View {
-        HStack(spacing: 12) {
-            SettingsRowIcon(systemName: systemImage, color: color)
-            Text(title)
-                .font(T3Typography.threadBody)
-                .foregroundStyle(color)
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, SettingsMetrics.rowPadding)
-        .frame(minHeight: SettingsMetrics.rowMinHeight)
-        .contentShape(Rectangle())
-    }
-}
-
-struct SettingsValueRow: View {
-    let title: String
-    let value: String
-    var systemImage: String? = nil
-
-    var body: some View {
-        HStack(spacing: SettingsMetrics.iconGap) {
-            if let systemImage {
-                SettingsRowIcon(systemName: systemImage)
-            }
-            Text(title)
-                .font(T3Typography.threadBody)
-                .foregroundStyle(T3Colors.textPrimary)
-            Spacer(minLength: 12)
-            Text(value)
-                .font(T3Typography.threadBody)
-                .foregroundStyle(T3Colors.textSecondary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, SettingsMetrics.rowPadding)
-        .frame(minHeight: SettingsMetrics.rowMinHeight)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-struct SettingsToggleRow: View {
-    let title: String
-    let systemImage: String
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            HStack(spacing: 12) {
-                SettingsRowIcon(systemName: systemImage)
-                Text(title)
-                    .font(T3Typography.threadBody)
-                    .foregroundStyle(T3Colors.textPrimary)
-            }
-        }
-        .tint(T3Colors.accent)
-        .padding(.horizontal, SettingsMetrics.rowPadding)
-        .frame(minHeight: SettingsMetrics.rowMinHeight)
-    }
-}
-
-private struct SettingsStatusLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 4) {
-            configuration.icon
-            configuration.title
-        }
+    /// The part of an endpoint worth reading on a phone: its host. Empty when
+    /// the endpoint is unknown, so the caller drops it rather than printing a
+    /// placeholder.
+    static func host(_ endpoint: String) -> String {
+        let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        return URL(string: trimmed)?.host ?? trimmed
     }
 }

@@ -30,6 +30,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     let onSettle: (FeatureThread, Bool) -> Void
     let onSnooze: (FeatureThread, Date?) -> Void
     let onPin: (FeatureThread, Bool) -> Void
+    /// Asks; the caller confirms before anything is deleted.
     let onDelete: (FeatureThread) -> Void
     /// Both are slow server round trips whose result is a pasteboard write or a
     /// streamed title, so the row hands them off rather than awaiting anything.
@@ -43,14 +44,39 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     var isSelecting = false
     var batchSelection: Set<String> = []
     var onToggleSelection: (String) -> Void = { _ in }
+    /// A two-finger pan started selecting rows.
+    var onBeginSelection: () -> Void = {}
     var onDiscardDraft: (FeatureThread) -> Void = { _ in }
     var onDropFiles: ((FeatureThread, [NSItemProvider]) -> Bool)? = nil
     var onCustomSnooze: (FeatureThread) -> Void = { _ in }
+    /// The leading Snooze swipe: the caller offers the presets.
+    var onSnoozeRequest: (FeatureThread) -> Void = { _ in }
     /// Message-content matches for the current query, by thread id. Title
     /// matching already happened in `presentation`; these add the excerpt.
     var contentMatches: [String: FeatureThreadSearchMatch] = [:]
     /// True while message search for the current query has not answered yet.
     var isSearchingContent = false
+    /// Handoff scripts being generated, by thread id.
+    var generatingHandoffIDs: Set<String> = []
+
+    /// False for a tab that is not on screen: its list keeps its rows and scroll
+    /// position but skips every update and stops its clock until it is shown.
+    var isActive = true
+    /// Redacted stand-ins while the first snapshot is on its way.
+    var isPlaceholder = false
+    /// The list's subtitle, as its first row, where the navigation bar has no
+    /// subtitle of its own (before iOS 26).
+    var subtitle: String?
+    var banner: HomeConnectionBanner?
+    var onReconnect: () -> Void = {}
+    var onOpenConnections: () -> Void = {}
+    /// What the list offers when it has no rows at all.
+    var emptyState: HomeEmptyState?
+    var onEmptyAction: (HomeEmptyState.Action) -> Void = { _ in }
+    var onRefresh: (() async -> Void)?
+    /// iPad and other regular-width windows: arrow keys move the selection,
+    /// and on iOS 26 the list leaves the floating glass sidebar unpainted.
+    var isRegularWidth = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -62,23 +88,36 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         configuration.showsSeparators = false
         configuration.headerMode = .none
         configuration.footerMode = .none
+        configuration.leadingSwipeActionsConfigurationProvider = { [weak coordinator = context.coordinator] indexPath in
+            coordinator?.leadingSwipeActions(at: indexPath)
+        }
         configuration.trailingSwipeActionsConfigurationProvider = { [weak coordinator = context.coordinator] indexPath in
             coordinator?.trailingSwipeActions(at: indexPath)
         }
 
-        let collectionView = UICollectionView(
+        let collectionView = HomeListCollectionView(
             frame: .zero,
             collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration)
         )
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
-        collectionView.contentInset = UIEdgeInsets(top: 4, left: 0, bottom: 74, right: 0)
-        collectionView.verticalScrollIndicatorInsets = UIEdgeInsets(top: 4, left: 0, bottom: 74, right: 0)
+        collectionView.allowsMultipleSelectionDuringEditing = true
+        collectionView.allowsFocus = true
         collectionView.delegate = context.coordinator
         collectionView.dropDelegate = context.coordinator
+        if onRefresh != nil {
+            let refreshControl = UIRefreshControl()
+            refreshControl.addTarget(
+                context.coordinator,
+                action: #selector(Coordinator.refresh(_:)),
+                for: .valueChanged
+            )
+            collectionView.refreshControl = refreshControl
+        }
         context.coordinator.configure(collectionView)
-        context.coordinator.themeRefresh = T3ThemeRefresh { [weak collectionView] in
-            collectionView?.backgroundColor = T3Colors.uiBackground
+        context.coordinator.themeRefresh = T3ThemeRefresh { [weak collectionView, weak coordinator = context.coordinator] in
+            guard let collectionView else { return }
+            coordinator?.applyChrome(to: collectionView)
         }
         return collectionView
     }
@@ -109,6 +148,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         var themeRefresh: T3ThemeRefresh?
         private var timerTick = 0
         private var timerInterval: TimeInterval = 0
+        private var hasLoaded = false
 
         init(parent: HomeThreadCollectionView) {
             self.parent = parent
@@ -139,11 +179,20 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         }
 
         func update(parent: HomeThreadCollectionView, collectionView: UICollectionView) {
+            // A hidden tab keeps what it last showed. Rebuilding its rows on
+            // every change to another tab's list would triple the work of each
+            // snapshot for rows nobody can see.
+            guard parent.isActive || !hasLoaded else {
+                invalidateTimer()
+                return
+            }
+            hasLoaded = true
             let previousItems = itemsByID
             let previousSelection = selectedThreadID
             let previousParent = self.parent
             self.parent = parent
             selectedThreadID = parent.selectedThreadID
+            applyChrome(to: collectionView)
 
             var seenIdentifiers = Set<HomeCollectionItem.ID>()
             let items = parent.collectionItems.filter { item in
@@ -154,6 +203,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             // 60s otherwise, and is a no-op when the interval is unchanged.
             startTimer()
 
+            if collectionView.isEditing != parent.isSelecting {
+                collectionView.isEditing = parent.isSelecting
+            }
+
             guard let dataSource else { return }
             let currentIdentifiers = dataSource.snapshot().itemIdentifiers
             let newIdentifiers = items.map(\.id)
@@ -163,6 +216,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     if previousItems[id] != itemsByID[id] { return true }
                     guard case let .thread(thread, _, _, _, _) = itemsByID[id] else { return false }
                     let key = FeatureComposerDraftStore.threadKey(thread)
+                    // Selection mode changes what VoiceOver says about a row,
+                    // even though UIKit draws the check itself.
                     return previousParent.isSelecting != parent.isSelecting
                         || previousParent.batchSelection.contains(thread.id) != parent.batchSelection.contains(thread.id)
                         || previousParent.draftKeys.contains(key) != parent.draftKeys.contains(key)
@@ -180,7 +235,18 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 var snapshot = NSDiffableDataSourceSnapshot<Section, HomeCollectionItem.ID>()
                 snapshot.appendSections([.main])
                 snapshot.appendItems(newIdentifiers, toSection: .main)
-                dataSource.apply(snapshot, animatingDifferences: false)
+                // Opening a shelf or paging it is the user's own gesture, so
+                // rows slide in; everything else (a turn landing, a row
+                // re-sorting) updates in place rather than moving under a
+                // reading eye.
+                let isUserDisclosure = previousParent.isSnoozedExpanded != parent.isSnoozedExpanded
+                    || previousParent.isSettledExpanded != parent.isSettledExpanded
+                    || previousParent.isArchiveExpanded != parent.isArchiveExpanded
+                    || previousParent.settledLimit != parent.settledLimit
+                dataSource.apply(
+                    snapshot,
+                    animatingDifferences: isUserDisclosure && !UIAccessibility.isReduceMotionEnabled
+                )
             }
 
             synchronizeSelection(in: collectionView)
@@ -189,6 +255,43 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         func invalidateTimer() {
             timer?.invalidate()
             timer = nil
+        }
+
+        /// Background and keyboard behavior, which follow the window's width.
+        func applyChrome(to collectionView: UICollectionView) {
+            let background: UIColor
+            if #available(iOS 26, *), parent.isRegularWidth {
+                background = .clear
+            } else {
+                background = T3Colors.uiBackground
+            }
+            if collectionView.backgroundColor != background {
+                collectionView.backgroundColor = background
+            }
+            if collectionView.selectionFollowsFocus != parent.isRegularWidth {
+                collectionView.selectionFollowsFocus = parent.isRegularWidth
+            }
+        }
+
+        /// Arrow keys open threads as they pass, as in Mail; landing on a shelf
+        /// heading must not toggle it.
+        func collectionView(
+            _ collectionView: UICollectionView,
+            selectionFollowsFocusForItemAt indexPath: IndexPath
+        ) -> Bool {
+            guard case .thread = item(at: indexPath) else { return false }
+            return !collectionView.isEditing
+        }
+
+        @objc func refresh(_ sender: UIRefreshControl) {
+            guard let onRefresh = parent.onRefresh else {
+                sender.endRefreshing()
+                return
+            }
+            Task { @MainActor in
+                await onRefresh()
+                sender.endRefreshing()
+            }
         }
 
         func collectionView(_ collectionView: UICollectionView, canHandle session: UIDropSession) -> Bool {
@@ -214,13 +317,27 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             for item in coordinator.items { coordinator.drop(item.dragItem, toItemAt: indexPath) }
         }
 
+        func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+            guard let item = item(at: indexPath) else { return false }
+            switch item {
+            case .thread, .shelfHeader, .showMoreSettled:
+                return true
+            case let .banner(banner):
+                return banner.opensConnections && !collectionView.isEditing
+            case .empty, .searchEmpty, .searchStatus, .workSectionHeader, .sectionTitle,
+                 .subtitle, .placeholder:
+                return false
+            }
+        }
+
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
             guard let item = item(at: indexPath) else { return }
             switch item {
             case let .thread(thread, _, _, _, _):
-                if parent.isSelecting {
-                    collectionView.deselectItem(at: indexPath, animated: false)
-                    parent.onToggleSelection(thread.id)
+                if collectionView.isEditing {
+                    if !parent.batchSelection.contains(thread.id) {
+                        parent.onToggleSelection(thread.id)
+                    }
                     return
                 }
                 let previousSelection = selectedThreadID
@@ -236,9 +353,37 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             case .showMoreSettled:
                 collectionView.deselectItem(at: indexPath, animated: false)
                 parent.onShowMoreSettled()
-            case .empty, .searchEmpty, .pinnedDivider, .workSectionHeader:
+            case .banner:
+                collectionView.deselectItem(at: indexPath, animated: true)
+                parent.onOpenConnections()
+            case .empty, .searchEmpty, .searchStatus, .workSectionHeader, .sectionTitle,
+                 .subtitle, .placeholder:
                 collectionView.deselectItem(at: indexPath, animated: false)
             }
+        }
+
+        func collectionView(_ collectionView: UICollectionView, didDeselectItemAt indexPath: IndexPath) {
+            guard collectionView.isEditing,
+                  case let .thread(thread, _, _, _, _) = item(at: indexPath),
+                  parent.batchSelection.contains(thread.id) else { return }
+            parent.onToggleSelection(thread.id)
+        }
+
+        /// Two-finger pan selection, as in Mail and Files. Only thread rows
+        /// start it; UIKit enters editing mode on its own once it begins.
+        func collectionView(
+            _ collectionView: UICollectionView,
+            shouldBeginMultipleSelectionInteractionAt indexPath: IndexPath
+        ) -> Bool {
+            guard case .thread = item(at: indexPath) else { return false }
+            return true
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            didBeginMultipleSelectionInteractionAt indexPath: IndexPath
+        ) {
+            if !parent.isSelecting { parent.onBeginSelection() }
         }
 
         func collectionView(
@@ -246,7 +391,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             contextMenuConfigurationForItemAt indexPath: IndexPath,
             point: CGPoint
         ) -> UIContextMenuConfiguration? {
-            guard case let .thread(thread, _, _, isArchived, _) = item(at: indexPath) else {
+            guard !collectionView.isEditing,
+                  case let .thread(thread, _, _, isArchived, _) = item(at: indexPath) else {
                 return nil
             }
 
@@ -256,17 +402,68 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             }
         }
 
+        /// Pin and Snooze, as Messages and Mail put their keep-it actions on
+        /// the leading edge. A full swipe pins.
+        func leadingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+            guard !parent.isSelecting,
+                  case let .thread(thread, _, _, isArchived, _) = item(at: indexPath),
+                  !isArchived else {
+                return nil
+            }
+            var actions: [UIContextualAction] = []
+            if thread.canTogglePin {
+                let isPinned = thread.pinnedAt != nil
+                let pin = UIContextualAction(style: .normal, title: isPinned ? "Unpin" : "Pin") {
+                    [weak self] _, _, finish in
+                    guard let self else {
+                        finish(false)
+                        return
+                    }
+                    self.parent.onPin(thread, !isPinned)
+                    // A pending unpin confirmation closes the swipe without
+                    // committing it, so cancelling leaves the row in place.
+                    finish(!(isPinned && self.parent.confirmThreadUnpin))
+                }
+                pin.image = UIImage(systemName: isPinned ? "pin.slash.fill" : "pin.fill")
+                pin.backgroundColor = .systemOrange
+                actions.append(pin)
+            }
+            if Self.canSnooze(thread, in: parent.workspace) {
+                let isSnoozed = thread.isEffectivelySnoozed(at: .now)
+                let snooze = UIContextualAction(style: .normal, title: isSnoozed ? "Unsnooze" : "Snooze") {
+                    [weak self] _, _, finish in
+                    if isSnoozed {
+                        self?.parent.onSnooze(thread, nil)
+                    } else {
+                        self?.parent.onSnoozeRequest(thread)
+                    }
+                    finish(true)
+                }
+                snooze.image = UIImage(systemName: isSnoozed ? "bell.fill" : "moon.zzz.fill")
+                snooze.backgroundColor = .systemIndigo
+                actions.append(snooze)
+            }
+            guard !actions.isEmpty else { return nil }
+            let configuration = UISwipeActionsConfiguration(actions: actions)
+            configuration.performsFirstActionWithFullSwipe = true
+            return configuration
+        }
+
+        /// Settle (or Reopen, or Restore) is outermost and takes a full swipe,
+        /// like Mail's Archive. Delete sits inside it, tap-only, and asks first.
         func trailingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
             guard !parent.isSelecting else { return nil }
             guard case let .thread(thread, _, _, isArchived, _) = item(at: indexPath) else {
                 return nil
             }
 
-            let delete = UIContextualAction(style: .destructive, title: "Delete") { [weak self] _, _, finish in
+            let delete = UIContextualAction(style: .normal, title: "Delete") { [weak self] _, _, finish in
                 self?.parent.onDelete(thread)
-                finish(true)
+                // The row stays until the deletion is confirmed.
+                finish(false)
             }
             delete.image = UIImage(systemName: "trash")
+            delete.backgroundColor = .systemRed
 
             let primaryAction: UIContextualAction
             if isArchived {
@@ -277,27 +474,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 }
                 primaryAction.image = UIImage(systemName: "arrow.uturn.backward")
                 primaryAction.backgroundColor = .systemBlue
-            } else if thread.pinnedAt != nil, thread.canTogglePin {
-                primaryAction = UIContextualAction(style: .normal, title: "Unpin") {
-                    [weak self] _, _, finish in
-                    guard let self else {
-                        finish(false)
-                        return
-                    }
-                    self.parent.onPin(thread, false)
-                    // A pending confirmation must close the swipe without
-                    // committing it. Cancelling then restores the row instead
-                    // of leaving the destructive action exposed.
-                    finish(!self.parent.confirmThreadUnpin)
-                }
-                primaryAction.image = UIImage(systemName: "pin.slash")
-                primaryAction.backgroundColor = .systemBlue
             } else if parent.workspace == .chat || !thread.canShelveSettled {
-                // Chat has no parking: a conversation is either there or
-                // deleted, so the swipe offers nothing beside Delete. The same
-                // goes for a thread the Settled shelf may not claim — an
-                // environment without the capability, or the Work Main thread,
-                // whose settle command the server refuses.
+                // Chat has no parking, and a thread the Settled shelf may not
+                // claim (no capability, or Work's Main thread, whose settle the
+                // server refuses) has nothing to settle into.
                 let configuration = UISwipeActionsConfiguration(actions: [delete])
                 configuration.performsFirstActionWithFullSwipe = false
                 return configuration
@@ -319,9 +499,13 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 primaryAction.backgroundColor = isSettled ? .systemBlue : .systemGreen
             }
 
-            let configuration = UISwipeActionsConfiguration(actions: [delete, primaryAction])
-            configuration.performsFirstActionWithFullSwipe = false
+            let configuration = UISwipeActionsConfiguration(actions: [primaryAction, delete])
+            configuration.performsFirstActionWithFullSwipe = true
             return configuration
+        }
+
+        private static func canSnooze(_ thread: FeatureThread, in workspace: MobileWorkspace) -> Bool {
+            HomeBatchAvailability.canSnooze(thread, in: workspace)
         }
 
         private func configure(
@@ -330,22 +514,26 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             now: Date
         ) {
             guard let item = itemsByID[identifier] else { return }
+            let parent = parent
             cell.contentConfiguration = UIHostingConfiguration {
                 HomeCollectionCellContent(
                     item: item,
                     isSelected: identifier.threadID == selectedThreadID,
                     now: now,
                     hasDraft: hasDraft(item),
-                    isSelecting: parent.isSelecting,
-                    isBatchSelected: identifier.threadID.map { parent.batchSelection.contains($0) } ?? false
+                    onReconnect: parent.onReconnect,
+                    onEmptyAction: parent.onEmptyAction
                 )
             }
             .margins(.all, 0)
 
             cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
-            cell.accessories = []
+            if case .thread = item {
+                cell.accessories = [.multiselect(displayed: .whenEditing)]
+            } else {
+                cell.accessories = []
+            }
             cell.tintColor = T3Colors.uiTextPrimary
-            cell.contentView.accessibilityElementsHidden = true
             configureAccessibility(cell, item: item)
         }
 
@@ -355,16 +543,37 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         }
 
         private func configureAccessibility(_ cell: HomeCollectionCell, item: HomeCollectionItem) {
+            // Interactive rows (the banner's Reconnect, an empty state's
+            // action) keep their SwiftUI elements; every other row speaks as
+            // one element composed here.
             switch item {
-            case let .thread(thread, context, _, _, _):
+            case .banner, .empty:
+                cell.isAccessibilityElement = false
+                cell.contentView.accessibilityElementsHidden = false
+                cell.onAccessibilityActivate = nil
+                return
+            default:
+                cell.contentView.accessibilityElementsHidden = true
+            }
+            switch item {
+            case let .thread(thread, context, style, _, _):
                 cell.isAccessibilityElement = true
                 cell.accessibilityTraits = (parent.isSelecting ? parent.batchSelection.contains(thread.id) : selectedThreadID == thread.id)
                     ? [.button, .selected]
                     : .button
                 cell.accessibilityLabel = thread.title + (hasDraft(item) ? ", unsent draft" : "")
                     + (context.searchExcerpt.map { ", \($0.speaker) \($0.match.snippet)" } ?? "")
-                cell.accessibilityValue = threadAccessibilityValue(thread, context: context)
-                cell.accessibilityHint = parent.isSelecting ? "Toggles selection" : "Opens task"
+                // The row's own style decides what it says: a Chat row has no
+                // project or account worth reading on every row.
+                cell.accessibilityValue = FeatureThreadRow.accessibilityValue(
+                    thread: thread,
+                    context: context,
+                    style: style,
+                    now: .now
+                )
+                cell.accessibilityHint = parent.isSelecting
+                    ? "Toggles selection"
+                    : FeatureThreadRow.accessibilityHint(for: style)
                 cell.onAccessibilityActivate = { [weak self] in
                     guard let self else { return }
                     if self.parent.isSelecting {
@@ -383,8 +592,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 }
             case let .shelfHeader(shelf, count, isExpanded):
                 cell.isAccessibilityElement = true
-                cell.accessibilityTraits = .button
-                cell.accessibilityLabel = "\(shelf.title), \(count) tasks"
+                cell.accessibilityTraits = [.header, .button]
+                cell.accessibilityLabel = "\(shelf.title), \(count) \(count == 1 ? "thread" : "threads")"
                 cell.accessibilityValue = isExpanded ? "Expanded" : "Collapsed"
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = { [weak self] in self?.toggle(shelf) }
@@ -397,63 +606,70 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 cell.accessibilityValue = nil
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = nil
+            case let .sectionTitle(title):
+                cell.isAccessibilityElement = true
+                cell.accessibilityTraits = .header
+                cell.accessibilityLabel = title
+                cell.accessibilityValue = nil
+                cell.accessibilityHint = nil
+                cell.onAccessibilityActivate = nil
             case let .showMoreSettled(remaining):
                 cell.isAccessibilityElement = true
                 cell.accessibilityTraits = .button
-                cell.accessibilityLabel = "Show \(remaining) more settled tasks"
+                cell.accessibilityLabel = "Show \(remaining) more settled threads"
                 cell.accessibilityValue = nil
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = { [weak self] in
                     self?.parent.onShowMoreSettled()
                 }
-            case let .empty(shelf):
+            case let .searchEmpty(query, isSearchingContent):
                 cell.isAccessibilityElement = true
                 cell.accessibilityTraits = .staticText
-                cell.accessibilityLabel = shelf == .active ? "No active tasks" : "No \(shelf.title.lowercased()) tasks"
+                cell.accessibilityLabel = isSearchingContent
+                    ? "Searching messages"
+                    : "No results for \(query)"
                 cell.accessibilityValue = nil
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = nil
-            case let .searchEmpty(_, isSearchingContent):
+            case let .searchStatus(text), let .subtitle(text):
                 cell.isAccessibilityElement = true
                 cell.accessibilityTraits = .staticText
-                cell.accessibilityLabel = isSearchingContent ? "Searching thread messages" : "No matching tasks"
+                cell.accessibilityLabel = text
                 cell.accessibilityValue = nil
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = nil
-            case .pinnedDivider:
-                cell.isAccessibilityElement = false
+            case let .placeholder(index):
+                // One announcement for the whole stack of stand-ins.
+                cell.isAccessibilityElement = index == 0
+                cell.accessibilityTraits = .staticText
+                cell.accessibilityLabel = "Loading threads"
+                cell.accessibilityValue = nil
+                cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = nil
+            case .banner, .empty:
+                break
             }
-        }
-
-        private func threadAccessibilityValue(
-            _ thread: FeatureThread,
-            context: HomeThreadRowContext
-        ) -> String {
-            var values = [thread.homeStatusLabel ?? "Ready", "Project \(context.projectName)"]
-            values.append("Account \(FeatureAccountLabel.display(context.providerName, fallback: context.providerDriver))")
-            if let duration = thread.homeWorkingDuration(at: .now) {
-                values.append("for \(duration)")
-            }
-            if let environment = context.environmentLabel {
-                values.append("on \(environment)")
-            }
-            return values.joined(separator: ". ")
         }
 
         private func synchronizeSelection(in collectionView: UICollectionView) {
+            // While selecting, the collection view's own selection is the
+            // batch; otherwise it is the one open thread.
+            let wanted: Set<String> = collectionView.isEditing
+                ? parent.batchSelection
+                : selectedThreadID.map { [$0] } ?? []
             for indexPath in collectionView.indexPathsForSelectedItems ?? [] {
-                guard dataSource?.itemIdentifier(for: indexPath)?.threadID != selectedThreadID else {
+                guard let id = dataSource?.itemIdentifier(for: indexPath)?.threadID,
+                      wanted.contains(id) else {
+                    collectionView.deselectItem(at: indexPath, animated: false)
                     continue
                 }
-                collectionView.deselectItem(at: indexPath, animated: false)
             }
-            guard let selectedThreadID,
-                  let indexPath = dataSource?.indexPath(for: .thread(selectedThreadID)),
-                  !collectionView.indexPathsForSelectedItems.orEmpty.contains(indexPath) else {
-                return
+            let selected = Set(collectionView.indexPathsForSelectedItems ?? [])
+            for id in wanted {
+                guard let indexPath = dataSource?.indexPath(for: .thread(id)),
+                      !selected.contains(indexPath) else { continue }
+                collectionView.selectItem(at: indexPath, animated: false, scrollPosition: [])
             }
-            collectionView.selectItem(at: indexPath, animated: false, scrollPosition: [])
         }
 
         private func refreshSelection(in collectionView: UICollectionView, ids: [String]) {
@@ -503,28 +719,60 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 hasWorktreePath: ThreadCopy.value(for: .path, on: thread) != nil,
                 hasBranch: ThreadCopy.value(for: .branch, on: thread) != nil,
                 titleRegenerationSupported: thread.canRegenerateTitle,
-                isRegeneratingTitle: thread.isRegeneratingTitle
+                isRegeneratingTitle: thread.isRegeneratingTitle,
+                canArchive: thread.canArchive,
+                isGeneratingHandoffScript: parent.generatingHandoffIDs.contains(thread.id),
+                snoozedUntil: thread.snoozedUntil
             )
 
             // One inline `UIMenu` per section, so the separators the menu data
-            // asks for are the rules UIKit draws between groups.
-            var extras: [UIMenuElement] = [UIAction(title: "Select thread", image: UIImage(systemName: "checkmark.circle")) { [weak self] _ in
+            // asks for are the rules UIKit draws between groups. The lifecycle
+            // trio (pin, settle, snooze) is the top row of medium buttons.
+            let sections = ThreadRowMenu.sections(ThreadRowMenuActions.homeRowActions(context, now: now))
+            var menus: [UIMenuElement] = sections.map { section in
+                let menu = UIMenu(
+                    title: "",
+                    options: .displayInline,
+                    children: section.map { menuElement(for: $0, on: thread) }
+                )
+                if let first = section.first, Self.lifecycleActionIDs.contains(first.id) {
+                    menu.preferredElementSize = .medium
+                }
+                return menu
+            }
+
+            let select = UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { [weak self] _ in
                 self?.parent.onToggleSelection(thread.id)
-            }]
+            }
+            var destructive: [UIMenuElement] = []
             if parent.draftKeys.contains(FeatureComposerDraftStore.threadKey(thread)) {
-                extras.append(UIAction(title: "Discard draft", image: UIImage(systemName: "eraser"), attributes: .destructive) { [weak self] _ in
+                destructive.append(UIAction(title: "Discard Draft", image: UIImage(systemName: "eraser"), attributes: .destructive) { [weak self] _ in
                     self?.parent.onDiscardDraft(thread)
                 })
             }
-            return extras + ThreadRowMenu.sections(ThreadRowMenuActions.homeRowActions(context, now: now))
-                .map { section in
-                    UIMenu(
-                        title: "",
-                        options: .displayInline,
-                        children: section.map { menuElement(for: $0, on: thread) }
-                    )
-                }
+            // Select joins its own group above the archive-and-delete group;
+            // Discard Draft sits beside Delete, the other thing that throws
+            // work away.
+            let lastIndex = menus.count - 1
+            if lastIndex >= 0, let last = menus[lastIndex] as? UIMenu {
+                var children = last.children
+                children.insert(contentsOf: destructive, at: max(0, children.count - 1))
+                menus[lastIndex] = UIMenu(title: "", options: .displayInline, children: children)
+                menus.insert(UIMenu(title: "", options: .displayInline, children: [select]), at: lastIndex)
+            } else {
+                menus.append(UIMenu(title: "", options: .displayInline, children: [select] + destructive))
+            }
+            return menus
         }
+
+        private static let lifecycleActionIDs: Set<String> = [
+            ThreadRowMenuActions.pinActionID,
+            ThreadRowMenuActions.unpinActionID,
+            ThreadRowMenuActions.settleActionID,
+            ThreadRowMenuActions.unsettleActionID,
+            ThreadRowMenuActions.snoozeActionID,
+            ThreadRowMenuActions.unsnoozeActionID,
+        ]
 
         private func menuElement(
             for action: ThreadRowMenuAction,
@@ -669,45 +917,68 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         return context
     }
 
+    private func row(_ thread: FeatureThread, style: FeatureThreadRow.Style, isArchived: Bool = false) -> HomeCollectionItem {
+        .thread(thread, rowContext(for: thread), style, isArchived, forceRichRows)
+    }
+
+    /// Rows that lead the list whatever it holds: the subtitle (before iOS 26)
+    /// and the connection banner.
+    private var leadingItems: [HomeCollectionItem] {
+        var items: [HomeCollectionItem] = []
+        if let subtitle, !subtitle.isEmpty { items.append(.subtitle(subtitle)) }
+        if let banner { items.append(.banner(banner)) }
+        return items
+    }
+
     var collectionItems: [HomeCollectionItem] {
+        var items = leadingItems
+        if isPlaceholder {
+            return items + (0..<6).map(HomeCollectionItem.placeholder)
+        }
+
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalizedQuery.isEmpty {
-            if presentation.searchResults.isEmpty {
-                return [.searchEmpty(normalizedQuery, isSearchingContent)]
+            let titleMatches = presentation.searchTitleResults
+            let messageMatches = presentation.searchMessageResults
+            if titleMatches.isEmpty, messageMatches.isEmpty {
+                return items + [.searchEmpty(normalizedQuery, isSearchingContent)]
             }
-            return presentation.searchResults.map { thread -> HomeCollectionItem in
+            func result(_ thread: FeatureThread) -> HomeCollectionItem {
                 var context = rowContext(for: thread)
                 context.searchExcerpt = contentMatches[thread.id].map {
                     HomeThreadSearchExcerpt(match: $0, query: normalizedQuery)
                 }
-                return .thread(
-                    thread,
-                    context,
-                    primaryRowStyle,
-                    thread.isArchived,
-                    forceRichRows
-                )
+                context.showsArchivedBadge = thread.isArchived
+                return .thread(thread, context, primaryRowStyle, thread.isArchived, forceRichRows)
             }
+            items.append(contentsOf: titleMatches.map(result))
+            if !messageMatches.isEmpty {
+                items.append(.sectionTitle("Messages"))
+                items.append(contentsOf: messageMatches.map(result))
+            }
+            // A slow environment must not look like one that has finished.
+            if isSearchingContent {
+                items.append(.searchStatus("Still searching messages…"))
+            }
+            return items
         }
 
         let mainStyle = primaryRowStyle
-        var items = presentation.pinned.map {
-            HomeCollectionItem.thread(
-                $0,
-                rowContext(for: $0),
-                mainStyle,
-                false,
-                forceRichRows
-            )
+        let shelvesAreEmpty = presentation.snoozed.isEmpty
+            && presentation.settled.isEmpty
+            && presentation.archived.isEmpty
+        if presentation.pinned.isEmpty, presentation.active.isEmpty, shelvesAreEmpty {
+            if let emptyState { items.append(.empty(emptyState)) }
+            return items
         }
-        if !presentation.pinned.isEmpty, !presentation.active.isEmpty {
-            items.append(.pinnedDivider)
+
+        if !presentation.pinned.isEmpty {
+            items.append(.sectionTitle("Pinned"))
+            items.append(contentsOf: presentation.pinned.map { row($0, style: mainStyle) })
         }
-        if presentation.active.isEmpty, presentation.pinned.isEmpty {
-            items.append(.empty(.active))
-        } else if workspace == .work {
+        if workspace == .work {
             // `\.workInboxRole` rather than the closure's nil default: without
-            // the role every row lands in Needs you / Active and the Main
+            // the role every row lands in Needs You / Active and the Main
             // section never appears at all.
             let groups = WorkInboxSections.groups(
                 active: presentation.active,
@@ -715,59 +986,31 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             )
             for group in groups {
                 items.append(.workSectionHeader(group.header))
-                items.append(contentsOf: group.rows.map {
-                    .thread(
-                        $0,
-                        rowContext(for: $0),
-                        primaryRowStyle,
-                        false,
-                        forceRichRows
-                    )
-                })
+                items.append(contentsOf: group.rows.map { row($0, style: mainStyle) })
             }
-        } else {
-            items.append(contentsOf: presentation.active.map {
-                .thread(
-                    $0,
-                    rowContext(for: $0),
-                    mainStyle,
-                    false,
-                    forceRichRows
-                )
-            })
+        } else if !presentation.active.isEmpty {
+            if !presentation.pinned.isEmpty {
+                items.append(.sectionTitle(workspace == .chat ? "Recent" : "Active"))
+            }
+            items.append(contentsOf: presentation.active.map { row($0, style: mainStyle) })
         }
 
-        // Chat has neither shelf: a conversation is either in the list or
-        // deleted, so the parked sections would only ever be empty chrome.
+        // Chat has neither parking shelf: a conversation is either in the list
+        // or deleted. Empty shelves are not drawn at all.
         if workspace != .chat {
-            items.append(.shelfHeader(.snoozed, presentation.snoozed.count, isSnoozedExpanded))
-            if isSnoozedExpanded {
-                items.append(contentsOf: presentation.snoozed.isEmpty
-                    ? [.empty(.snoozed)]
-                    : presentation.snoozed.map {
-                        .thread(
-                            $0,
-                            rowContext(for: $0),
-                            shelfRowStyle,
-                            false,
-                            forceRichRows
-                        )
-                    })
+            if !presentation.snoozed.isEmpty {
+                items.append(.shelfHeader(.snoozed, presentation.snoozed.count, isSnoozedExpanded))
+                if isSnoozedExpanded {
+                    items.append(contentsOf: presentation.snoozed.map { row($0, style: shelfRowStyle) })
+                }
             }
-
-            items.append(.shelfHeader(.settled, presentation.settled.count, isSettledExpanded))
-            if isSettledExpanded {
-                items.append(contentsOf: presentation.settled.prefix(settledLimit).map {
-                    .thread(
-                        $0,
-                        rowContext(for: $0),
-                        shelfRowStyle,
-                        false,
-                        forceRichRows
-                    )
-                })
-                if presentation.settled.count > settledLimit {
-                    items.append(.showMoreSettled(presentation.settled.count - settledLimit))
+            if !presentation.settled.isEmpty {
+                items.append(.shelfHeader(.settled, presentation.settled.count, isSettledExpanded))
+                if isSettledExpanded {
+                    items.append(contentsOf: presentation.settled.prefix(settledLimit).map { row($0, style: shelfRowStyle) })
+                    if presentation.settled.count > settledLimit {
+                        items.append(.showMoreSettled(presentation.settled.count - settledLimit))
+                    }
                 }
             }
         }
@@ -775,18 +1018,25 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         if !presentation.archived.isEmpty {
             items.append(.shelfHeader(.archived, presentation.archived.count, isArchiveExpanded))
             if isArchiveExpanded {
-                items.append(contentsOf: presentation.archived.map {
-                    .thread(
-                        $0,
-                        rowContext(for: $0),
-                        shelfRowStyle,
-                        true,
-                        forceRichRows
-                    )
-                })
+                items.append(contentsOf: presentation.archived.map { row($0, style: shelfRowStyle, isArchived: true) })
             }
         }
         return items
+    }
+}
+
+/// Registers itself as its view controller's content scroll view, so the
+/// navigation bar's large title collapses and the tab bar minimizes as it
+/// scrolls. SwiftUI only does that for its own scroll views.
+private final class HomeListCollectionView: UICollectionView {
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        var responder: UIResponder? = next
+        while let current = responder, !(current is UIViewController) {
+            responder = current.next
+        }
+        (responder as? UIViewController)?.setContentScrollView(self)
     }
 }
 
@@ -823,10 +1073,14 @@ enum HomeCollectionItem: Equatable {
         case thread(String)
         case shelfHeader(HomeShelf)
         case workSectionHeader(MobileWorkInboxSection)
-        case empty(HomeShelf)
+        case sectionTitle(String)
+        case empty
         case showMoreSettled
         case searchEmpty
-        case pinnedDivider
+        case searchStatus
+        case subtitle
+        case banner
+        case placeholder(Int)
 
         var threadID: String? {
             guard case let .thread(id) = self else { return nil }
@@ -837,21 +1091,31 @@ enum HomeCollectionItem: Equatable {
     case thread(FeatureThread, HomeThreadRowContext, FeatureThreadRow.Style, Bool, Bool)
     case shelfHeader(HomeShelf, Int, Bool)
     case workSectionHeader(WorkInboxSectionHeader)
-    case empty(HomeShelf)
+    /// A plain section heading: Pinned, Active, Messages.
+    case sectionTitle(String)
+    case empty(HomeEmptyState)
     case showMoreSettled(Int)
     /// The query, and whether message search may still add results.
     case searchEmpty(String, Bool)
-    case pinnedDivider
+    /// A footer while message search is still out.
+    case searchStatus(String)
+    case subtitle(String)
+    case banner(HomeConnectionBanner)
+    case placeholder(Int)
 
     var id: ID {
         switch self {
         case let .thread(thread, _, _, _, _): .thread(thread.id)
         case let .shelfHeader(shelf, _, _): .shelfHeader(shelf)
         case let .workSectionHeader(header): .workSectionHeader(header.section)
-        case let .empty(shelf): .empty(shelf)
+        case let .sectionTitle(title): .sectionTitle(title)
+        case .empty: .empty
         case .showMoreSettled: .showMoreSettled
         case .searchEmpty: .searchEmpty
-        case .pinnedDivider: .pinnedDivider
+        case .searchStatus: .searchStatus
+        case .subtitle: .subtitle
+        case .banner: .banner
+        case let .placeholder(index): .placeholder(index)
         }
     }
 }
@@ -861,91 +1125,101 @@ private struct HomeCollectionCellContent: View {
     let isSelected: Bool
     let now: Date
     var hasDraft = false
-    var isSelecting = false
-    var isBatchSelected = false
+    var onReconnect: () -> Void = {}
+    var onEmptyAction: (HomeEmptyState.Action) -> Void = { _ in }
 
     @ViewBuilder
     var body: some View {
         switch item {
         case let .thread(thread, context, style, _, allowsMultilineTitle):
-            HStack(spacing: 0) {
-                if isSelecting {
-                    Image(systemName: isBatchSelected ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(isBatchSelected ? T3Colors.accent : T3Colors.textTertiary)
-                        .padding(.leading, 12)
-                }
-                VStack(alignment: .leading, spacing: 0) {
-                    if hasDraft {
-                        Label("Draft", systemImage: "pencil")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(T3Colors.accent)
-                            .padding(.leading, 34)
-                    }
-                    FeatureThreadRow(
-                thread: thread,
-                context: context,
-                isSelected: isSelected,
-                style: style,
-                now: now,
-                allowsMultilineTitle: allowsMultilineTitle
-            )
-            .equatable()
-                    if let excerpt = context.searchExcerpt {
-                        HomeThreadSearchExcerptText(excerpt: excerpt)
-                            .padding(.leading, 34)
-                            .padding(.trailing, 18)
-                            .padding(.bottom, 8)
-                    }
+            VStack(alignment: .leading, spacing: 0) {
+                FeatureThreadRow(
+                    thread: thread,
+                    context: context,
+                    isSelected: isSelected,
+                    style: style,
+                    now: now,
+                    allowsMultilineTitle: allowsMultilineTitle,
+                    hasDraft: hasDraft
+                )
+                .equatable()
+                if let excerpt = context.searchExcerpt {
+                    HomeThreadSearchExcerptText(excerpt: excerpt)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 8)
                 }
             }
+            // A reused cell showing another thread is a new row, so a status
+            // glyph only bounces when its own thread's status changes.
+            .id(thread.id)
         case let .shelfHeader(shelf, count, isExpanded):
-            HomeShelfHeader(
-                title: shelf.title,
-                count: count,
-                isExpanded: isExpanded,
-                accent: shelf == .snoozed ? T3Colors.accent : nil
-            )
+            HomeShelfHeader(title: shelf.title, count: count, isExpanded: isExpanded)
         case let .workSectionHeader(header):
             WorkInboxSectionDivider(header: header)
-        case let .empty(shelf):
-            Text(shelf == .active ? "No active tasks" : "None")
-                .font(T3Typography.homeMetadata)
-                .foregroundStyle(T3Colors.textTertiary)
-                .frame(maxWidth: .infinity, minHeight: shelf == .active ? 68 : 34, alignment: .center)
-        case let .showMoreSettled(remaining):
-            HStack {
-                Text("Show more")
-                Spacer()
-                Text("\(remaining)")
-                    .monospacedDigit()
-                    .foregroundStyle(T3Colors.textTertiary)
+        case let .sectionTitle(title):
+            HomeSectionTitle(title: title)
+        case let .empty(state):
+            ContentUnavailableView {
+                Label(state.title, systemImage: state.systemImage)
+            } description: {
+                Text(state.message)
+            } actions: {
+                Button(state.actionTitle) { onEmptyAction(state.action) }
+                    .t3ProminentButtonStyle()
             }
-            .font(T3Typography.homeMetadata.weight(.semibold))
-            .foregroundStyle(T3Colors.textSecondary)
-            .padding(.horizontal, 34)
-            .frame(minHeight: T3Metrics.minimumTapTarget)
-        case let .searchEmpty(_, isSearchingContent):
+            .frame(maxWidth: .infinity, minHeight: 360)
+        case let .showMoreSettled(remaining):
+            Text("Show \(remaining) More")
+                .font(T3Typography.homeMetadata.weight(.semibold))
+                .foregroundStyle(T3Colors.accent)
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
+        case let .searchEmpty(query, isSearchingContent):
             Group {
                 if isSearchingContent {
-                    ProgressView("Searching thread messages…")
+                    // Static: a waiting state, not a spinner.
+                    Text("Searching messages…")
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textSecondary)
                 } else {
-                    ContentUnavailableView("No matching tasks", systemImage: "magnifyingglass")
+                    ContentUnavailableView.search(text: query)
                 }
             }
-            .foregroundStyle(T3Colors.textSecondary)
-            .frame(maxWidth: .infinity, minHeight: 160)
-        case .pinnedDivider:
-            Rectangle()
-                .fill(T3Colors.textTertiary.opacity(0.18))
-                .frame(height: 1)
+            .frame(maxWidth: .infinity, minHeight: 200)
+        case let .searchStatus(text):
+            Text(text)
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textTertiary)
                 .padding(.horizontal, 18)
-                .padding(.vertical, 3)
+                .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
+        case let .subtitle(text):
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(T3Colors.textSecondary)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case let .banner(banner):
+            HomeConnectionBannerRow(banner: banner, onReconnect: onReconnect)
+        case let .placeholder(index):
+            HomePlaceholderRow(index: index)
         }
     }
 }
 
-private extension Optional where Wrapped == [IndexPath] {
-    var orEmpty: [IndexPath] { self ?? [] }
+/// A plain heading between groups of rows: Pinned, Active, Messages.
+private struct HomeSectionTitle: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(T3Colors.textSecondary)
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }
 
 /// "You:" or "Agent:" plus the matched message, the query in bold.

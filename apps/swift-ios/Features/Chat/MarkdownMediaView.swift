@@ -105,26 +105,24 @@ struct MarkdownMediaView: View {
     @State private var exportFile: MediaExportFile?
     @State private var isSharing = false
     @State private var exportTask: Task<Void, Never>?
-    @State private var exportNotice: String?
+    @State private var exportError: String?
+    @ScaledMetric(relativeTo: .title3) private var placeholderGlyphSize: CGFloat = 20
 
     var body: some View {
         content
             .frame(maxWidth: .infinity)
             .frame(height: MarkdownMedia.frameHeight)
             .background(T3Colors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(T3Colors.border, lineWidth: 1)
-            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 14, style: .continuous))
             .contextMenu {
                 Button {
                     exportMedia(saveToPhotos: true)
-                } label: { Label(isVideo ? "Save video" : "Save image", systemImage: "square.and.arrow.down") }
+                } label: { Label(isVideo ? "Save Video" : "Save Image", systemImage: "square.and.arrow.down") }
                 .disabled(exportTask != nil)
                 Button {
                     exportMedia(saveToPhotos: false)
-                } label: { Label("Share original…", systemImage: "square.and.arrow.up") }
+                } label: { Label("Share Original…", systemImage: "square.and.arrow.up") }
                 .disabled(exportTask != nil)
             }
             .overlay(alignment: .topTrailing) {
@@ -133,9 +131,9 @@ struct MarkdownMediaView: View {
             .sheet(isPresented: $isSharing, onDismiss: clearExport) {
                 if let exportFile { MediaShareSheet(url: exportFile.url) }
             }
-            .alert("Media", isPresented: Binding(
-                get: { exportNotice != nil }, set: { if !$0 { exportNotice = nil } }
-            )) { Button("OK") { exportNotice = nil } } message: { Text(exportNotice ?? "") }
+            .alert(isVideo ? "Couldn't Save Video" : "Couldn't Save Image", isPresented: Binding(
+                get: { exportError != nil }, set: { if !$0 { exportError = nil } }
+            )) { Button("OK") { exportError = nil } } message: { Text(exportError ?? "") }
             .onChange(of: request) { _, _ in
                 exportTask?.cancel()
                 exportTask = nil
@@ -157,10 +155,16 @@ struct MarkdownMediaView: View {
             Button {
                 isExpanded = true
             } label: {
-                Image(uiImage: loadedImage)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Filled into the reserved frame, never letterboxed; the
+                // full-screen viewer shows the whole picture.
+                Color.clear
+                    .overlay {
+                        Image(uiImage: loadedImage)
+                            .resizable()
+                            .scaledToFill()
+                    }
+                    .clipped()
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(caption)
@@ -173,7 +177,7 @@ struct MarkdownMediaView: View {
     private var placeholder: some View {
         VStack(spacing: 6) {
             Image(systemName: placeholderSymbol)
-                .font(.system(size: 20, weight: .medium))
+                .font(.system(size: placeholderGlyphSize, weight: .medium))
             Text(caption)
                 .font(T3Typography.supporting)
                 .multilineTextAlignment(.center)
@@ -293,7 +297,8 @@ struct MarkdownMediaView: View {
                     if saveToPhotos {
                         try await MediaExport.saveToPhotos(file)
                         file.remove()
-                        exportNotice = "Saved to Photos."
+                        PlatformHapticEngine.shared.play(.success)
+                        T3HUD.show("Saved to Photos", systemImage: "checkmark")
                     } else {
                         clearExport()
                         exportFile = file
@@ -307,7 +312,8 @@ struct MarkdownMediaView: View {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
-                exportNotice = error.localizedDescription
+                PlatformHapticEngine.shared.play(.error)
+                exportError = error.localizedDescription
             }
         }
     }
@@ -328,71 +334,41 @@ struct MarkdownMediaView: View {
     }
 }
 
-/// Full-screen image viewer shared by message attachments and assistant media.
-/// A nil URL is a normal state: markdown media mints its signed URL while the
-/// viewer is already on screen.
-struct FeatureImagePreviewSheet: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
-    let url: URL?
-    let title: String
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                if let url {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case let .success(image):
-                            ZoomableMessageImage(image: image)
-                        case .failure:
-                            ContentUnavailableView(
-                                "Image unavailable",
-                                systemImage: "exclamationmark.triangle"
-                            )
-                        case .empty:
-                            ProgressView()
-                        @unknown default:
-                            ProgressView()
-                        }
-                    }
-                    .padding(12)
-                } else {
-                    ProgressView()
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .t3NavigationChrome()
-        }
-        .preferredColorScheme(.dark)
-    }
-}
-
-
 /// Resolves only the selected page and its neighbours. Signed URLs are minted
 /// for each presentation, so reopening an old message does not reuse an expired URL.
+/// A black canvas in dark appearance, like Photos; a tap hides the chrome.
 struct MarkdownGallerySheet: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
+    private struct PageLoad: Hashable {
+        let index: Int
+        let attempt: Int
+    }
+
     let images: [MarkdownInlineImage]
     let context: MarkdownMediaContext?
     @State private var index: Int
     @State private var urls: [Int: URL] = [:]
     @State private var failures: Set<Int> = []
+    @State private var attempt = 0
     @State private var exporting = false
     @State private var exportFile: MediaExportFile?
     @State private var sharing = false
-    @State private var notice: String?
+    @State private var exportError: String?
+    @State private var chromeHidden = false
 
     init(images: [MarkdownInlineImage], initial: MarkdownInlineImage, context: MarkdownMediaContext?) {
         self.images = images.isEmpty ? [initial] : images
         self.context = context
         _index = State(initialValue: images.firstIndex(of: initial) ?? 0)
+    }
+
+    private var title: String {
+        let image = images[index]
+        return image.alt.isEmpty ? MarkdownMediaSource.fileName(image.src) : image.alt
+    }
+
+    /// Nil for a single image: there is no position to report.
+    private var position: String? {
+        images.count > 1 ? "\(index + 1) of \(images.count)" : nil
     }
 
     var body: some View {
@@ -406,61 +382,84 @@ struct MarkdownGallerySheet: View {
                             AsyncImage(url: url) { phase in
                                 switch phase {
                                 case let .success(image): ZoomableMessageImage(image: image, isCurrentPage: page == index)
-                                case .failure: ContentUnavailableView("Image unavailable", systemImage: "photo")
+                                case .failure: unavailable(page)
                                 default: ProgressView()
                                 }
                             }
                         } else if failures.contains(page) {
-                            ContentUnavailableView("Image unavailable", systemImage: "photo")
+                            unavailable(page)
                         } else { ProgressView() }
                     }
                     .padding(12).tag(page)
                     .accessibilityLabel(images[page].alt)
                 }
             }
-            .tabViewStyle(.page)
-            .navigationTitle("Image \(index + 1) of \(images.count)")
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .background(Color.black.ignoresSafeArea())
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.snappy) { chromeHidden.toggle() } }
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .modifier(GalleryPositionSubtitle(position: position))
+            .t3SheetToolbar(.close)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                ToolbarItemGroup(placement: .bottomBar) {
-                    Button("Previous", systemImage: "chevron.left") { index -= 1 }.disabled(index == 0)
-                    Spacer()
+                ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button("Share original…", systemImage: "square.and.arrow.up") { export(save: false) }
-                        Button("Save image", systemImage: "square.and.arrow.down") { export(save: true) }
-                    } label: { Image(systemName: "square.and.arrow.up") }
+                        Button("Share Original…", systemImage: "square.and.arrow.up") { export(save: false) }
+                        Button("Save Image", systemImage: "square.and.arrow.down") { export(save: true) }
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
                     .disabled(exporting || urls[index] == nil)
-                    Spacer()
-                    Button("Next", systemImage: "chevron.right") { index += 1 }.disabled(index + 1 == images.count)
                 }
             }
+            .toolbar(chromeHidden ? .hidden : .visible, for: .navigationBar)
+            .statusBarHidden(chromeHidden)
             .sheet(isPresented: $sharing, onDismiss: { exportFile?.remove(); exportFile = nil }) {
                 if let exportFile { MediaShareSheet(url: exportFile.url) }
             }
-            .alert("Image", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
-                Button("OK") { notice = nil }
-            } message: { Text(notice ?? "") }
-            .t3NavigationChrome()
-            .task(id: index) {
+            .alert("Couldn't Export Image", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+                Button("OK") { exportError = nil }
+            } message: { Text(exportError ?? "") }
+            .task(id: PageLoad(index: index, attempt: attempt)) {
                 for page in max(0, index - 1)...min(images.count - 1, index + 1) where urls[page] == nil {
                     do {
-                        let url: URL
-                        switch MarkdownMediaSource.resolve(images[page].src, threadID: context?.threadID ?? "") {
-                        case let .direct(value):
-                            guard let resolved = URL(string: value) else { throw FeatureAttachmentThumbnailError.invalidResponse }
-                            url = resolved
-                        case let .resource(resource):
-                            guard let context else { throw FeatureCapabilityUnavailable("Signed media URLs") }
-                            url = try await context.resolveAssetURL(resource)
-                        }
+                        let url = try await resolve(images[page])
                         try Task.checkCancellation()
                         urls[page] = url
+                        failures.remove(page)
                     } catch { if !Task.isCancelled { failures.insert(page) } }
                 }
             }
         }
+        .preferredColorScheme(.dark)
     }
+
+    private func unavailable(_ page: Int) -> some View {
+        ContentUnavailableView {
+            Label("Image Unavailable", systemImage: "photo.badge.exclamationmark")
+        } actions: {
+            Button("Try Again") {
+                // A fresh URL, since a signed one may be what expired.
+                urls[page] = nil
+                failures.remove(page)
+                attempt += 1
+            }
+            .t3SecondaryButtonStyle()
+        }
+    }
+
+    private func resolve(_ image: MarkdownInlineImage) async throws -> URL {
+        switch MarkdownMediaSource.resolve(image.src, threadID: context?.threadID ?? "") {
+        case let .direct(value):
+            guard let resolved = URL(string: value) else { throw FeatureAttachmentThumbnailError.invalidResponse }
+            return resolved
+        case let .resource(resource):
+            guard let context else { throw FeatureCapabilityUnavailable("Signed media URLs") }
+            return try await context.resolveAssetURL(resource)
+        }
+    }
+
     private func export(save: Bool) {
         guard !exporting else { return }
         let selected = images[index]
@@ -468,25 +467,34 @@ struct MarkdownGallerySheet: View {
         Task {
             defer { exporting = false }
             do {
-                let url: URL
-                switch MarkdownMediaSource.resolve(selected.src, threadID: context?.threadID ?? "") {
-                case let .direct(value):
-                    guard let resolved = URL(string: value) else { throw FeatureAttachmentThumbnailError.invalidResponse }
-                    url = resolved
-                case let .resource(resource):
-                    guard let context else { throw FeatureCapabilityUnavailable("Signed media URLs") }
-                    url = try await context.resolveAssetURL(resource)
-                }
-                let file = try await MediaExport.download(url)
+                let file = try await MediaExport.download(try await resolve(selected))
                 do {
                     if save {
                         try await MediaExport.saveToPhotos(file)
                         file.remove()
-                        notice = "Saved to Photos."
+                        PlatformHapticEngine.shared.play(.success)
+                        T3HUD.show("Saved to Photos", systemImage: "checkmark")
                     } else { exportFile?.remove(); exportFile = file; sharing = true }
                 } catch { file.remove(); throw error }
-            } catch { notice = error.localizedDescription }
+            } catch {
+                PlatformHapticEngine.shared.play(.error)
+                exportError = error.localizedDescription
+            }
         }
     }
-
 }
+
+/// "2 of 5" under the title on iOS 26; earlier systems have no subtitle and
+/// swiping is its own indicator.
+private struct GalleryPositionSubtitle: ViewModifier {
+    let position: String?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), let position {
+            content.navigationSubtitle(position)
+        } else {
+            content
+        }
+    }
+}
+

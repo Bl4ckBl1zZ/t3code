@@ -128,21 +128,36 @@ struct NativeProviderAccountDraft: Equatable {
 
     /// Rebase only edited leaves on the latest server answer. Detect edits to
     /// the same field instead of overwriting another client's changes.
-    func merging(into instances: [String: JSONValue], latest: [String: JSONValue]?) throws -> [String: JSONValue] {
-        guard instanceID.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) != nil else {
-            throw ProviderAccountEditError.invalid("Use an account ID of 1–64 letters, numbers, underscores or hyphens, starting with a letter.")
-        }
-        let normalizedAccent = accent.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !normalizedAccent.isEmpty, normalizedAccent.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) == nil {
-            throw ProviderAccountEditError.invalid("Use a six-digit hex color such as #4F7AFF, or leave it empty.")
-        }
+    /// What is wrong with the account ID, for showing under the field as it is typed.
+    var instanceIDIssue: String? {
+        instanceID.range(of: "^[A-Za-z][A-Za-z0-9_-]{0,63}$", options: .regularExpression) == nil
+            ? "Use 1–64 letters, numbers, underscores or hyphens, starting with a letter."
+            : nil
+    }
+
+    var accentIssue: String? {
+        let normalized = accent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !normalized.isEmpty && normalized.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) == nil
+            ? "Use a six-digit hex color such as #4F7AFF, or the default."
+            : nil
+    }
+
+    var environmentIssue: String? {
         var names = Set<String>()
         for row in environment {
             let name = row["name"]?.stringValue ?? ""
             guard name.range(of: "^[A-Za-z_][A-Za-z0-9_]{0,127}$", options: .regularExpression) != nil, names.insert(name).inserted else {
-                throw ProviderAccountEditError.invalid("Environment variable names must be unique and contain only letters, numbers and underscores, starting with a letter or underscore.")
+                return "Variable names must be unique and contain only letters, numbers and underscores, starting with a letter or underscore."
             }
         }
+        return nil
+    }
+
+    /// The first problem that would stop a save; `nil` when the draft can be sent.
+    var validationIssue: String? { instanceIDIssue ?? accentIssue ?? environmentIssue }
+
+    func merging(into instances: [String: JSONValue], latest: [String: JSONValue]?) throws -> [String: JSONValue] {
+        if let validationIssue { throw ProviderAccountEditError.invalid(validationIssue) }
         var edited = envelope
         for key in ["displayName", "accentColor"] {
             if let text = edited[key]?.stringValue {

@@ -118,13 +118,15 @@ enum HtmlEmbed {
     /// merges its `<html>` attributes, and reparents its head content into the
     /// body, where `<style>`/`<script>`/`<meta>` still function. Trailing
     /// scripts are likewise reparented, so height reporting still works.
-    static func document(html code: String, theme: Theme) -> String {
+    /// `bodyFontSize` is the reader's text size for fragments; a full document
+    /// brings its own type.
+    static func document(html code: String, theme: Theme, bodyFontSize: CGFloat = 14) -> String {
         let head = "\(cspMetaTag)\(headMetaTags)"
         if isFullDocument(code) {
             return "<!doctype html><html><head>\(head)</head>"
                 + "\(code)\n\(heightReporterScript)</html>"
         }
-        return "<!doctype html><html><head>\(head)<style>\(baseStyle(theme: theme))</style></head>"
+        return "<!doctype html><html><head>\(head)<style>\(baseStyle(theme: theme, bodyFontSize: bodyFontSize))</style></head>"
             + "<body>\(code)\n\(heightReporterScript)</body></html>"
     }
 
@@ -145,11 +147,12 @@ enum HtmlEmbed {
 
     /// `color-scheme` plus system `CanvasText` lets a fragment inherit the
     /// app's appearance without the embed having to know either palette.
-    private static func baseStyle(theme: Theme) -> String {
-        ":root{color-scheme:\(theme.rawValue)}"
+    private static func baseStyle(theme: Theme, bodyFontSize: CGFloat) -> String {
+        let fontSize = String(format: "%.1f", Double(bodyFontSize))
+        return ":root{color-scheme:\(theme.rawValue)}"
             + "html,body{margin:0;background:transparent}"
             + "body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;"
-            + "font-size:14px;line-height:1.45;color:CanvasText;padding:12px;"
+            + "font-size:\(fontSize)px;line-height:1.45;color:CanvasText;padding:12px;"
             + "box-sizing:border-box;overflow-wrap:break-word}"
     }
 
@@ -214,22 +217,15 @@ extension EnvironmentValues {
 
 /// What stands in for an embed whose fence has not closed.
 ///
-/// One opacity curve on the whole stack rather than per bar, so the compositor
-/// animates a single layer — the native counterpart of the web app's stepped
-/// skeleton breath. Scene, visibility and reduced-motion changes stop it, the
-/// same discipline every other repeating animation in the app follows.
+/// Static on purpose: waiting is shown, not animated. The "Building" label in
+/// the header says it is coming; a breathing skeleton would repaint for the
+/// whole stream.
 private struct HtmlEmbedPlaceholder: View {
     let isBuilding: Bool
-
-    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @SwiftUI.Environment(\.scenePhase) private var scenePhase
-    @State private var visible = false
-    @State private var dimmed = false
 
     /// Enough shape to read as a pending embed; fixed, so the card never reflows.
     private static let barWidths: [CGFloat] = [0.4, 0.8, 0.6]
     private let barHeight: CGFloat = 10
-    private var animates: Bool { isBuilding && !reduceMotion && visible && scenePhase == .active }
 
     var body: some View {
         Group {
@@ -240,7 +236,7 @@ private struct HtmlEmbedPlaceholder: View {
                         // job here: a container-relative frame would measure the
                         // transcript instead and overflow the card it sits in.
                         GeometryReader { proxy in
-                            RoundedRectangle(cornerRadius: 5)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(T3Colors.textTertiary.opacity(0.28))
                                 .frame(width: proxy.size.width * width, height: barHeight)
                         }
@@ -249,12 +245,8 @@ private struct HtmlEmbedPlaceholder: View {
                 }
                 .padding(.horizontal, 13)
                 .padding(.vertical, 14)
-                .opacity(dimmed ? 0.55 : 1)
                 .accessibilityElement()
                 .accessibilityLabel("Building interactive embed")
-                .onAppear { visible = true; synchronize() }
-                .onDisappear { visible = false; synchronize() }
-                .onChange(of: animates) { synchronize() }
             } else {
                 Text("The agent stopped before finishing this embed.")
                     .font(T3Typography.supporting)
@@ -264,16 +256,6 @@ private struct HtmlEmbedPlaceholder: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func synchronize() {
-        guard animates else {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { dimmed = false }
-            return
-        }
-        withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { dimmed = true }
     }
 }
 
@@ -288,6 +270,7 @@ struct HtmlEmbedView: View {
     private let terminated: Bool
 
     @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @SwiftUI.Environment(\.markdownIsStreaming) private var isStreaming
     @State private var inlineHeight = HtmlEmbed.defaultHeight
     @State private var isExpanded = false
@@ -324,11 +307,7 @@ struct HtmlEmbedView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(T3Colors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(T3Colors.border, lineWidth: 1)
-        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .sheet(isPresented: $isExpanded) {
             expandedEmbed
         }
@@ -337,13 +316,21 @@ struct HtmlEmbedView: View {
     private var document: String {
         HtmlEmbed.document(
             html: html,
-            theme: colorScheme == .dark ? .dark : .light
+            theme: colorScheme == .dark ? .dark : .light,
+            bodyFontSize: bodyFontSize
         )
+    }
+
+    /// The web client's 14px at the default text size, following Dynamic Type
+    /// from there. Reads `dynamicTypeSize` so a size change rebuilds the document.
+    private var bodyFontSize: CGFloat {
+        _ = dynamicTypeSize
+        return UIFontMetrics(forTextStyle: .body).scaledValue(for: 14)
     }
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Interactive embed")
+            Text("Interactive Embed")
                 .font(T3Typography.supporting)
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(1)
@@ -361,7 +348,8 @@ struct HtmlEmbedView: View {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(T3Typography.control)
                         .foregroundStyle(T3Colors.textSecondary)
-                        .frame(minWidth: 32, minHeight: 32)
+                        .frame(minWidth: T3Metrics.minimumTapTarget, minHeight: T3Metrics.minimumTapTarget)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Expand embed")
@@ -369,37 +357,12 @@ struct HtmlEmbedView: View {
             }
         }
         .padding(.leading, 13)
-        .padding(.trailing, 5)
+        .padding(.trailing, 0)
         .frame(minHeight: 36)
     }
 
     private var expandedEmbed: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text("Interactive embed")
-                    .font(T3Typography.navigationTitle)
-                    .foregroundStyle(T3Colors.textPrimary)
-                Spacer(minLength: 8)
-                Button {
-                    isExpanded = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(T3Typography.control)
-                        .foregroundStyle(T3Colors.textSecondary)
-                        .frame(
-                            minWidth: T3Metrics.minimumTapTarget,
-                            minHeight: T3Metrics.minimumTapTarget
-                        )
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close embed")
-            }
-            .padding(.leading, 16)
-            .padding(.trailing, 6)
-            .padding(.vertical, 4)
-            Rectangle()
-                .fill(T3Colors.separator)
-                .frame(height: 1)
+        NavigationStack {
             // Full screen is the one place the document may scroll itself: it
             // is bounded by the sheet rather than by a row that has to grow.
             HtmlEmbedWebView(
@@ -408,8 +371,19 @@ struct HtmlEmbedView: View {
                 onReportedHeight: nil
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(T3Colors.surface)
+            .navigationTitle("Interactive Embed")
+            .navigationBarTitleDisplayMode(.inline)
+            .t3NavigationChrome()
+            .t3SheetToolbar(.close)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    ShareLink(item: html) {
+                        Label("Share HTML", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
         }
-        .background(T3Colors.surface)
     }
 
     private func applyReportedHeight(_ reported: Double) {

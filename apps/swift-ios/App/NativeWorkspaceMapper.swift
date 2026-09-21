@@ -36,25 +36,7 @@ enum NativeWorkspaceMapper {
     }
 
     static func language(for path: String) -> String? {
-        switch URL(fileURLWithPath: path).pathExtension.lowercased() {
-        case "swift": "swift"
-        case "ts", "tsx": "typescript"
-        case "js", "jsx", "mjs", "cjs": "javascript"
-        case "json": "json"
-        case "md", "mdx": "markdown"
-        case "css", "scss": "css"
-        case "html", "htm": "html"
-        case "xml", "svg": "xml"
-        case "sh", "zsh", "bash": "shell"
-        case "py": "python"
-        case "rs": "rust"
-        case "go": "go"
-        case "rb": "ruby"
-        case "sql": "sql"
-        case "toml": "toml"
-        case "yml", "yaml": "yaml"
-        default: nil
-        }
+        FeatureSourceHighlighter.language(forPath: path)
     }
 
     static func review(_ preview: ReviewDiffPreview) -> FeatureReview {

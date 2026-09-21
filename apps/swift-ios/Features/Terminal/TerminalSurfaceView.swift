@@ -15,6 +15,9 @@ struct GhosttyTerminalSurface: UIViewRepresentable {
     let onResize: (Int, Int) -> Void
     let onClear: () -> Void
     let onFontSizeStep: (Int) -> Void
+    /// Reports keyboard focus, so the sheet can stop a history scroll from
+    /// dragging it away while someone is typing.
+    var onFocusChange: (Bool) -> Void = { _ in }
 
     func makeUIView(context _: Context) -> GhosttyTerminalView {
         let view = GhosttyTerminalView()
@@ -32,6 +35,7 @@ struct GhosttyTerminalSurface: UIViewRepresentable {
         view.onResize = onResize
         view.onClear = onClear
         view.onFontSizeStep = onFontSizeStep
+        view.onFocusChange = onFocusChange
         view.terminalKey = terminalKey
         view.fontSize = fontSize
         view.isRunning = isRunning
@@ -189,6 +193,14 @@ private final class TerminalInputField: UITextField {
     var onInsert: ((String) -> Void)?
     var onCopyOutput: (() -> Void)?
     var onPasteText: (() -> Void)?
+    /// The last lines of output, read by VoiceOver in place of the field's
+    /// (always empty) text. Computed only when VoiceOver asks.
+    var recentOutput: (() -> String?)?
+
+    override var accessibilityValue: String? {
+        get { recentOutput?() }
+        set {}
+    }
 
     private static let terminalKeyCommands = TerminalHardwareKeyEncoder.makeKeyCommands(
         action: #selector(handleHardwareKeyCommand(_:))
@@ -236,22 +248,51 @@ private enum TerminalAccessoryAction: String {
     case dash
     case dismiss
 
-    var label: String {
+    /// The key cap. Modifiers use the symbols printed on hardware keyboards;
+    /// "command" sends an Esc (Meta) prefix, which is what Option does in a
+    /// terminal, so it reads ⌥.
+    var label: String? {
         switch self {
         case .escape: "esc"
-        case .command: "cmd"
-        case .control: "ctrl"
-        case .tab: "tab"
-        case .clear: "clear"
-        case .up: "↑"
-        case .down: "↓"
-        case .left: "←"
-        case .right: "→"
+        case .command: "⌥"
+        case .control: "⌃"
+        case .tab: "⇥"
         case .tilde: "~"
         case .pipe: "|"
         case .slash: "/"
         case .dash: "-"
-        case .dismiss: ""
+        case .clear, .up, .down, .left, .right, .dismiss: nil
+        }
+    }
+
+    var symbolName: String? {
+        switch self {
+        case .clear: "eraser"
+        case .up: "arrow.up"
+        case .down: "arrow.down"
+        case .left: "arrow.left"
+        case .right: "arrow.right"
+        case .dismiss: "keyboard.chevron.compact.down"
+        default: nil
+        }
+    }
+
+    var accessibilityName: String {
+        switch self {
+        case .escape: "Escape"
+        case .command: "Option"
+        case .control: "Control"
+        case .tab: "Tab"
+        case .clear: "Clear"
+        case .up: "Up Arrow"
+        case .down: "Down Arrow"
+        case .left: "Left Arrow"
+        case .right: "Right Arrow"
+        case .tilde: "Tilde"
+        case .pipe: "Pipe"
+        case .slash: "Slash"
+        case .dash: "Dash"
+        case .dismiss: "Dismiss keyboard"
         }
     }
 
@@ -271,15 +312,6 @@ private enum TerminalAccessoryAction: String {
         }
     }
 
-    var width: CGFloat {
-        switch self {
-        case .escape, .tab: 44
-        case .command: 48
-        case .control, .clear: 50
-        case .up, .down, .left, .right, .tilde, .pipe, .slash, .dash: 38
-        case .dismiss: 36
-        }
-    }
 }
 
 private final class TerminalAccessoryButton: UIButton {
@@ -294,7 +326,7 @@ private final class TerminalAccessoryButton: UIButton {
     required init?(coder _: NSCoder) { nil }
 }
 
-private final class TerminalAccessoryView: UIInputView {
+private final class TerminalAccessoryView: UIInputView, UIInputViewAudioFeedback {
     private let scrollView = UIScrollView()
     private let stackView = UIStackView()
     private let dismissButton = TerminalAccessoryButton(action: .dismiss)
@@ -302,17 +334,21 @@ private final class TerminalAccessoryView: UIInputView {
     private var activeModifier: TerminalAccessoryAction?
     var onAction: ((TerminalAccessoryAction) -> Void)?
 
+    var enableInputClicksWhenVisible: Bool { true }
+
     init() {
-        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: 50), inputViewStyle: .keyboard)
+        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: 56), inputViewStyle: .keyboard)
         allowsSelfSizing = true
-        backgroundColor = T3Colors.uiBackground
+        // Clear, so the row sits on the keyboard's own (glass on iOS 26)
+        // background instead of an opaque slab above it.
+        backgroundColor = .clear
 
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.alwaysBounceHorizontal = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         stackView.axis = .horizontal
         stackView.alignment = .center
-        stackView.spacing = 7
+        stackView.spacing = 6
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(scrollView)
@@ -325,25 +361,25 @@ private final class TerminalAccessoryView: UIInputView {
         ]
         for action in actions {
             let button = TerminalAccessoryButton(action: action)
-            configure(button, label: action.label)
+            configure(button)
             actionButtons[action] = button
             stackView.addArrangedSubview(button)
         }
 
-        dismissButton.accessibilityLabel = "Dismiss keyboard"
+        dismissButton.accessibilityLabel = TerminalAccessoryAction.dismiss.accessibilityName
         dismissButton.addTarget(self, action: #selector(handleButton(_:)), for: .touchUpInside)
         dismissButton.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 50),
+            heightAnchor.constraint(equalToConstant: 56),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrollView.trailingAnchor.constraint(equalTo: dismissButton.leadingAnchor),
             dismissButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             dismissButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            dismissButton.widthAnchor.constraint(equalToConstant: TerminalAccessoryAction.dismiss.width),
-            dismissButton.heightAnchor.constraint(equalToConstant: 42),
+            dismissButton.widthAnchor.constraint(equalToConstant: 44),
+            dismissButton.heightAnchor.constraint(equalToConstant: 44),
             stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 8),
             stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -8),
             stackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
@@ -351,7 +387,7 @@ private final class TerminalAccessoryView: UIInputView {
             stackView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
         ])
         refreshAppearance()
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitPreferredContentSizeCategory.self]) {
             (self: Self, _: UITraitCollection) in
             self.refreshAppearance()
         }
@@ -375,7 +411,6 @@ private final class TerminalAccessoryView: UIInputView {
     }
 
     func refreshAppearance() {
-        backgroundColor = T3Colors.uiBackground
         for (action, button) in actionButtons {
             applyStyle(to: button, active: action == activeModifier)
         }
@@ -387,54 +422,49 @@ private final class TerminalAccessoryView: UIInputView {
         dismissButton.configuration = dismissConfiguration
     }
 
-    private func configure(_ button: TerminalAccessoryButton, label: String) {
-        button.setTitle(label.uppercased(), for: .normal)
-        button.titleLabel?.font = .systemFont(ofSize: 10, weight: .semibold)
-        button.accessibilityLabel = label
+    private func configure(_ button: TerminalAccessoryButton) {
+        button.accessibilityLabel = button.terminalAction.accessibilityName
         button.addTarget(self, action: #selector(handleButton(_:)), for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.heightAnchor.constraint(equalToConstant: 34).isActive = true
-        button.widthAnchor.constraint(equalToConstant: button.terminalAction.width).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         applyStyle(to: button, active: false)
     }
 
-    private func applyStyle(to button: UIButton, active: Bool) {
-        var configuration = UIButton.Configuration.plain()
-        if let terminalButton = button as? TerminalAccessoryButton,
-           terminalButton.terminalAction != .dismiss {
-            configuration.title = terminalButton.terminalAction.label.uppercased()
-        }
-        let isDark = traitCollection.userInterfaceStyle == .dark
-        configuration.baseForegroundColor = if active {
-            isDark ? UIColor(white: 0.04, alpha: 1) : .white
+    /// Glass keys on iOS 26, gray ones before; a latched modifier is ink.
+    private func applyStyle(to button: TerminalAccessoryButton, active: Bool) {
+        var configuration: UIButton.Configuration
+        if active {
+            configuration = .filled()
+            configuration.baseBackgroundColor = UIColor(T3Colors.primaryAction)
+            configuration.baseForegroundColor = UIColor(T3Colors.primaryActionForeground)
+        } else if #available(iOS 26, *) {
+            configuration = .glass()
+            configuration.baseForegroundColor = .label
         } else {
-            isDark ? UIColor(white: 0.88, alpha: 1) : T3Colors.uiTextPrimary
+            configuration = .gray()
+            configuration.baseForegroundColor = .label
         }
-        configuration.background.backgroundColor = if active {
-            isDark ? UIColor(white: 0.94, alpha: 1) : T3Colors.uiTextPrimary
-        } else {
-            isDark ? UIColor(white: 0.08, alpha: 1) : .white
+        configuration.cornerStyle = .capsule
+        let font = UIFont.preferredFont(forTextStyle: .callout)
+        if let title = button.terminalAction.label {
+            configuration.title = title
+            configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+                var attributes = $0
+                attributes.font = font
+                return attributes
+            }
         }
-        configuration.background.cornerRadius = 7
-        configuration.background.strokeColor = isDark
-            ? UIColor(white: active ? 0.55 : 0.20, alpha: 1)
-            : UIColor(white: 0, alpha: active ? 0.18 : 0.10)
-        configuration.background.strokeWidth = 1
-        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
-            var attributes = $0
-            attributes.font = .systemFont(ofSize: 10, weight: .semibold)
-            return attributes
+        if let symbolName = button.terminalAction.symbolName {
+            configuration.image = UIImage(systemName: symbolName)
+            configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(font: font)
         }
-        configuration.contentInsets = NSDirectionalEdgeInsets(
-            top: 0,
-            leading: 4,
-            bottom: 0,
-            trailing: 4
-        )
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)
         button.configuration = configuration
     }
 
     @objc private func handleButton(_ sender: TerminalAccessoryButton) {
+        UIDevice.current.playInputClick()
         onAction?(sender.terminalAction)
     }
 }
@@ -442,57 +472,42 @@ private final class TerminalAccessoryView: UIInputView {
 final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInteractionDelegate {
     private static let minimumVerticalScrollStepPoints: CGFloat = 18
     private static let verticalScrollStepMultiplier: CGFloat = 1.15
-    private static let darkThemeConfig = """
-    background = #0a0a0a
-    foreground = #adadb1
-    cursor-color = #009fff
-    cursor-text = #0a0a0a
-    cursor-style-blink = false
-    palette = 0=#141415
-    palette = 1=#ff2e3f
-    palette = 2=#0dbe4e
-    palette = 3=#ffca00
-    palette = 4=#009fff
-    palette = 5=#c635e4
-    palette = 6=#08c0ef
-    palette = 7=#c6c6c8
-    palette = 8=#141415
-    palette = 9=#ff2e3f
-    palette = 10=#0dbe4e
-    palette = 11=#ffca00
-    palette = 12=#009fff
-    palette = 13=#c635e4
-    palette = 14=#08c0ef
-    palette = 15=#c6c6c8
-    """
-    private static let lightThemeConfig = """
-    background = #f2f2f7
-    foreground = #6c6c71
-    cursor-color = #009fff
-    cursor-text = #f2f2f7
-    cursor-style-blink = false
-    palette = 0=#1f1f21
-    palette = 1=#ff2e3f
-    palette = 2=#0dbe4e
-    palette = 3=#ffca00
-    palette = 4=#009fff
-    palette = 5=#c635e4
-    palette = 6=#08c0ef
-    palette = 7=#c6c6c8
-    palette = 8=#1f1f21
-    palette = 9=#ff2e3f
-    palette = 10=#0dbe4e
-    palette = 11=#ffca00
-    palette = 12=#009fff
-    palette = 13=#c635e4
-    palette = 14=#08c0ef
-    palette = 15=#c6c6c8
-    """
+    /// ANSI colors, readable on the palette background in each scheme. The
+    /// light set uses Apple's high-contrast system colors: the dark set's
+    /// yellow and white are unreadable on a light background.
+    private static let darkANSI = [
+        "#141415", "#ff453a", "#30d158", "#ffd60a", "#0a84ff", "#bf5af2", "#64d2ff", "#c6c6c8",
+        "#636366", "#ff6961", "#4cd964", "#ffe066", "#409cff", "#da8fff", "#70d7ff", "#f2f2f7",
+    ]
+    private static let lightANSI = [
+        "#1c1c1e", "#d70015", "#248a3d", "#935f00", "#0040dd", "#ad1aaf", "#0071a4", "#6c6c70",
+        "#48484a", "#ff3b30", "#1f9c3f", "#a05a00", "#0055ff", "#c030c0", "#00809c", "#3a3a3c",
+    ]
+
+    /// The Ghostty theme for the current T3 palette, so the grid matches the
+    /// chrome around it in every theme instead of a hardcoded black or gray.
+    private func themeConfig() -> String {
+        let traits = UITraitCollection(userInterfaceStyle: isDarkMode ? .dark : .light)
+        let background = T3Colors.uiBackground.resolvedColor(with: traits).t3Hex
+        let foreground = T3Colors.uiTextPrimary.resolvedColor(with: traits).t3Hex
+        let cursor = UIColor(T3Colors.accent).resolvedColor(with: traits).t3Hex
+        let palette = (isDarkMode ? Self.darkANSI : Self.lightANSI)
+            .enumerated()
+            .map { "palette = \($0.offset)=\($0.element)" }
+        return ([
+            "background = \(background)",
+            "foreground = \(foreground)",
+            "cursor-color = \(cursor)",
+            "cursor-text = \(background)",
+            "cursor-style-blink = false",
+        ] + palette).joined(separator: "\n")
+    }
 
     var onInput: ((String) -> Void)?
     var onResize: ((Int, Int) -> Void)?
     var onClear: (() -> Void)?
     var onFontSizeStep: ((Int) -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
 
     var isDarkMode = true {
         didSet {
@@ -598,7 +613,7 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
         inputField.spellCheckingType = .no
         inputField.smartDashesType = .no
         inputField.smartQuotesType = .no
-        inputField.returnKeyType = .send
+        inputField.returnKeyType = .default
         inputField.keyboardType = .asciiCapable
         inputField.enablesReturnKeyAutomatically = false
         inputField.translatesAutoresizingMaskIntoConstraints = false
@@ -611,6 +626,7 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
         inputField.onInsert = { [weak self] in self?.sendInput($0) }
         inputField.onCopyOutput = { [weak self] in self?.copyOutput() }
         inputField.onPasteText = { [weak self] in self?.pasteText() }
+        inputField.recentOutput = { [weak self] in self?.recentOutputForAccessibility() }
 
         keyboardButton.accessibilityLabel = "Show keyboard"
         keyboardButton.isHidden = true
@@ -650,12 +666,31 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
             keyboardButton.heightAnchor.constraint(equalToConstant: 48),
         ])
         applyChromeAppearance()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(themeDidChange),
+            name: .t3ThemeDidChange,
+            object: nil
+        )
     }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) { nil }
 
     deinit { destroySurface() }
+
+    @objc private func themeDidChange() {
+        applyChromeAppearance()
+        refreshSurface()
+    }
+
+    /// The last few non-empty lines, for VoiceOver.
+    private func recentOutputForAccessibility() -> String? {
+        let lines = TerminalText.plainText(from: buffer)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .suffix(5)
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -702,7 +737,7 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
     ) -> UIContextMenuConfiguration? {
         UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
             guard let self else { return UIMenu() }
-            let copy = UIAction(title: "Copy output", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+            let copy = UIAction(title: "Copy Output", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 self?.copyOutput()
             }
             let paste = UIAction(
@@ -794,26 +829,22 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
     }
 
     private func applyChromeAppearance() {
-        let background =
-            isDarkMode
-            ? UIColor(red: 10 / 255, green: 10 / 255, blue: 10 / 255, alpha: 1)
-            : UIColor(red: 242 / 255, green: 242 / 255, blue: 247 / 255, alpha: 1)
+        let traits = UITraitCollection(userInterfaceStyle: isDarkMode ? .dark : .light)
+        let background = T3Colors.uiBackground.resolvedColor(with: traits)
         backgroundColor = background
         terminalViewport.backgroundColor = background
         accessoryView.overrideUserInterfaceStyle = isDarkMode ? .dark : .light
         accessoryView.refreshAppearance()
 
-        var keyboardConfiguration = UIButton.Configuration.filled()
+        var keyboardConfiguration: UIButton.Configuration
+        if #available(iOS 26, *) {
+            keyboardConfiguration = .glass()
+        } else {
+            keyboardConfiguration = .gray()
+        }
         keyboardConfiguration.image = UIImage(systemName: "keyboard")
-        keyboardConfiguration.baseForegroundColor = isDarkMode ? .white : T3Colors.uiTextPrimary
-        keyboardConfiguration.baseBackgroundColor =
-            isDarkMode ? UIColor(white: 0.10, alpha: 0.96) : .white
-        keyboardConfiguration.background.cornerRadius = 24
-        keyboardConfiguration.background.strokeColor =
-            isDarkMode
-            ? UIColor(white: 0.25, alpha: 1)
-            : UIColor(white: 0, alpha: 0.10)
-        keyboardConfiguration.background.strokeWidth = 1
+        keyboardConfiguration.baseForegroundColor = T3Colors.uiTextPrimary
+        keyboardConfiguration.cornerStyle = .capsule
         keyboardButton.configuration = keyboardConfiguration
     }
 
@@ -1004,7 +1035,7 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-swiftui-terminal.ghostty")
         do {
-            let themeConfig = isDarkMode ? Self.darkThemeConfig : Self.lightThemeConfig
+            let themeConfig = themeConfig()
             if (try? String(contentsOf: url, encoding: .utf8)) != themeConfig {
                 try themeConfig.write(to: url, atomically: true, encoding: .utf8)
             }
@@ -1055,25 +1086,39 @@ final class GhosttyTerminalView: UIView, UITextFieldDelegate, UIContextMenuInter
     @objc private func viewportPinched(_ gesture: UIPinchGestureRecognizer) {
         guard gesture.state == .ended else { return }
         if gesture.scale >= 1.08 {
+            PlatformHapticEngine.shared.playSelection()
             onFontSizeStep?(1)
         } else if gesture.scale <= 0.92 {
+            PlatformHapticEngine.shared.playSelection()
             onFontSizeStep?(-1)
         }
     }
 
     @objc private func inputDidBegin() {
         keyboardButton.isHidden = true
+        onFocusChange?(true)
         if let surface { ghostty_surface_set_focus(surface, true) }
         if let app { ghostty_app_keyboard_changed(app) }
     }
 
     @objc private func inputDidEnd() {
         pendingModifier = nil
+        onFocusChange?(false)
         keyboardButton.isHidden = !isRunning
         if let surface { ghostty_surface_set_focus(surface, false) }
     }
 
     @objc private func showKeyboard() {
         requestKeyboardFocus()
+    }
+}
+
+private extension UIColor {
+    /// `#rrggbb` for Ghostty's config, from an already-resolved color.
+    var t3Hex: String {
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        func channel(_ value: CGFloat) -> Int { Int((min(max(value, 0), 1) * 255).rounded()) }
+        return String(format: "#%02x%02x%02x", channel(red), channel(green), channel(blue))
     }
 }

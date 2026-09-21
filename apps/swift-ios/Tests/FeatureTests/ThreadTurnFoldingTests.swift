@@ -16,7 +16,8 @@ final class ThreadTurnFoldingTests: XCTestCase {
         let fold = try XCTUnwrap(ThreadTurnFolding.folds(items: items, runs: [run]).first)
         XCTAssertEqual(fold.hiddenIDs, ["opening", "work"])
         XCTAssertEqual(fold.anchorID, "opening")
-        XCTAssertEqual(fold.label, "Worked for 1m 8s")
+        XCTAssertEqual(fold.label, "Worked for \(ThreadTurnFolding.workedDuration(seconds: 68))")
+        XCTAssertTrue(ThreadTurnFolding.workedDuration(seconds: 68).contains("8"))
         XCTAssertFalse(fold.isExpanded)
     }
 

@@ -39,7 +39,7 @@ struct ThreadActivityInspectorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(model.blocks.enumerated()), id: \.offset) { _, block in
-                blockView(block, maxHeight: 240)
+                blockView(block)
             }
 
             if let ending = model.ending {
@@ -56,14 +56,14 @@ struct ThreadActivityInspectorView: View {
             }
 
             if let files = model.checkpointFiles, !files.isEmpty {
-                section("Changed files") {
+                section("Changed Files") {
                     checkpointFileList(files)
                 }
             }
 
             if !model.fileLinks.isEmpty {
                 section("Files") {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(model.fileLinks.enumerated()), id: \.offset) { _, link in
                             fileLinkRow(link)
                         }
@@ -73,7 +73,7 @@ struct ThreadActivityInspectorView: View {
 
             if !model.webLinks.isEmpty {
                 section("Sources") {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 0) {
                         ForEach(model.webLinks, id: \.url) { link in
                             webLinkRow(link)
                         }
@@ -92,16 +92,8 @@ struct ThreadActivityInspectorView: View {
     // MARK: - Blocks
 
     @ViewBuilder
-    private func blockView(_ block: ThreadActivityInspectorBlock, maxHeight: CGFloat) -> some View {
-        let text = ScrollView(.vertical) {
-            Text(verbatim: block.value)
-                .font(block.monospaced ? ChatTimelineStyle.smallMono : ChatTimelineStyle.small)
-                .foregroundStyle(T3Colors.textSecondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.trailing, 8)
-        }
-        .frame(maxHeight: maxHeight)
+    private func blockView(_ block: ThreadActivityInspectorBlock) -> some View {
+        let text = InspectorBlockText(block: block)
 
         if let label = block.label {
             section(label) { text }
@@ -129,16 +121,14 @@ struct ThreadActivityInspectorView: View {
                 .frame(height: 1)
 
             Button {
-                showsDetails.toggle()
+                withAnimation(.snappy) { showsDetails.toggle() }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: showsDetails ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .frame(width: 12)
                     sectionLabel("Details")
+                    Spacer(minLength: 8)
+                    TimelineDisclosureChevron(isExpanded: showsDetails)
                 }
-                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -149,13 +139,12 @@ struct ThreadActivityInspectorView: View {
                     fieldsGrid
                 }
                 ForEach(Array(model.detailBlocks.enumerated()), id: \.offset) { _, block in
-                    blockView(block, maxHeight: 240)
+                    blockView(block)
                 }
                 blockView(
                     ThreadActivityInspectorBlock(
-                        label: "Raw item", value: model.structuredDetails, monospaced: true
-                    ),
-                    maxHeight: 280
+                        label: "Raw Item", value: model.structuredDetails, monospaced: true
+                    )
                 )
             }
         }
@@ -210,15 +199,11 @@ struct ThreadActivityInspectorView: View {
                         .foregroundStyle(T3Colors.textSecondary)
                     WorkRowDiffStat(additions: file.additions, deletions: file.deletions)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .frame(minHeight: T3Metrics.minimumTapTarget)
             }
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(T3Colors.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     @ViewBuilder
@@ -239,24 +224,11 @@ struct ThreadActivityInspectorView: View {
                 )
             )
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(T3Colors.textTertiary)
-                Text(verbatim: link.label)
-                    .font(ChatTimelineStyle.small)
-                    .foregroundStyle(T3Colors.textPrimary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .frame(minHeight: 36)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(T3Colors.border, lineWidth: 1)
+            linkRowLabel(
+                symbol: "doc.text",
+                label: link.label,
+                opens: relativePath != nil
             )
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(relativePath == nil)
@@ -267,27 +239,33 @@ struct ThreadActivityInspectorView: View {
             guard let url = URL(string: link.url) else { return }
             onOpenURL(url)
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.up.right.square")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(T3Colors.textTertiary)
-                Text(verbatim: link.label)
-                    .font(ChatTimelineStyle.small)
-                    .foregroundStyle(T3Colors.textPrimary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .frame(minHeight: 36)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(T3Colors.border, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            linkRowLabel(symbol: "safari", label: link.label, opens: true)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(.isLink)
+    }
+
+    /// Borderless and a full 44pt tall, with a chevron when it goes somewhere.
+    private func linkRowLabel(symbol: String, label: String, opens: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(ChatTimelineStyle.small.weight(.medium))
+                .foregroundStyle(T3Colors.textTertiary)
+                .accessibilityHidden(true)
+            Text(verbatim: label)
+                .font(ChatTimelineStyle.small)
+                .foregroundStyle(opens ? T3Colors.textPrimary : T3Colors.textSecondary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if opens {
+                Image(systemName: "chevron.right")
+                    .font(ChatTimelineStyle.small.weight(.semibold))
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(minHeight: T3Metrics.minimumTapTarget)
+        .contentShape(Rectangle())
     }
 
     private func rollbackButton(_ target: ThreadActivityRollbackTarget) -> some View {
@@ -296,22 +274,13 @@ struct ThreadActivityInspectorView: View {
             // confirmation, so no local busy latch.
             onRollback(target)
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(T3Colors.textTertiary)
-                Text(verbatim: "Restore to this point…")
-                    .font(ChatTimelineStyle.bodyStrong)
-                    .foregroundStyle(T3Colors.textPrimary)
-            }
-            .frame(maxWidth: .infinity, minHeight: 40)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(T3Colors.border, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            Label("Restore to This Point…", systemImage: "clock.arrow.circlepath")
+                .font(ChatTimelineStyle.bodyStrong)
+                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.bordered)
+        .tint(T3Colors.textPrimary)
+        .controlSize(.large)
         .disabled(isRollingBack)
         .accessibilityLabel("Roll back to this checkpoint")
     }
@@ -331,6 +300,47 @@ struct ThreadActivityInspectorView: View {
         VStack(alignment: .leading, spacing: 4) {
             sectionLabel(label)
             content()
+        }
+    }
+}
+
+/// Inspector output inline in the transcript: a few lines, then "Show More".
+/// Never a scroll view of its own, which would trap the transcript's scroll.
+private struct InspectorBlockText: View {
+    let block: ThreadActivityInspectorBlock
+    @State private var isExpanded = false
+
+    private static let collapsedLineLimit = 8
+
+    /// Counted, not measured: newlines or length past what eight lines hold.
+    private var isLong: Bool {
+        var lines = 1
+        for character in block.value where character == "\n" {
+            lines += 1
+            if lines > Self.collapsedLineLimit { return true }
+        }
+        return block.value.count > Self.collapsedLineLimit * 60
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: block.value)
+                .font(block.monospaced ? ChatTimelineStyle.smallMono : ChatTimelineStyle.small)
+                .foregroundStyle(T3Colors.textSecondary)
+                .lineLimit(isExpanded ? nil : Self.collapsedLineLimit)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if isLong {
+                Button(isExpanded ? "Show Less" : "Show More") {
+                    withAnimation(.snappy) { isExpanded.toggle() }
+                }
+                .font(ChatTimelineStyle.smallStrong)
+                .foregroundStyle(T3Colors.accent)
+                .buttonStyle(.plain)
+                .frame(minHeight: T3Metrics.minimumTapTarget)
+                .contentShape(Rectangle())
+            }
         }
     }
 }

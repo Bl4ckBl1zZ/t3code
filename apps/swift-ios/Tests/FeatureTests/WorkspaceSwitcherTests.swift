@@ -82,36 +82,12 @@ final class WorkspaceSwitcherTests: XCTestCase {
         )
     }
 
-    // MARK: - Menu
+    // MARK: - Labels
 
-    func testMenuOffersEveryWorkspaceInTabOrderAndOnlyTheCurrentOneChecked() {
-        let items = WorkspaceSwitcher.menuItems(current: .code)
-
-        XCTAssertEqual(items.map(\.id), ["workspace:code", "workspace:work", "workspace:chat"])
-        XCTAssertEqual(items.map(\.title), ["T3 Code", "T3 Work", "T3 Chat"])
+    func testTabsAreNamedByTheirWorkspace() {
         XCTAssertEqual(
-            items.map(\.subtitle),
-            ["Build, debug, and ship", "Create, learn, and explore", "Talk it through"]
-        )
-        XCTAssertEqual(items.map(\.isOn), [true, false, false])
-    }
-
-    func testMenuActionIDsRoundTrip() {
-        for workspace in MobileWorkspace.allCases {
-            XCTAssertEqual(
-                WorkspaceSwitcher.workspace(
-                    forMenuActionID: WorkspaceSwitcher.menuActionID(for: workspace)
-                ),
-                workspace
-            )
-        }
-        XCTAssertNil(WorkspaceSwitcher.workspace(forMenuActionID: "workspace:something-else"))
-    }
-
-    func testAccessibilityLabelNamesTheControlAndItsCurrentValue() {
-        XCTAssertEqual(
-            WorkspaceSwitcher.accessibilityLabel(current: .work),
-            "Switch workspace. Current workspace: T3 Work"
+            MobileWorkspace.allCases.map(WorkspaceSwitcher.shortTitle),
+            ["Code", "Work", "Chat"]
         )
     }
 
@@ -136,29 +112,6 @@ final class WorkspaceSwitcherTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceSwitcher.projectFilter(.code, selectedProjectID: "project-1"),
             "project-1"
-        )
-    }
-
-    func testFilterIconFillsOnlyWhenAScopeFilterIsSet() {
-        XCTAssertFalse(
-            WorkspaceSwitcher.hasCustomListOptions(
-                selectedEnvironmentID: nil,
-                selectedProjectID: nil
-            )
-        )
-        XCTAssertTrue(
-            WorkspaceSwitcher.hasCustomListOptions(
-                selectedEnvironmentID: "environment:local",
-                selectedProjectID: nil
-            )
-        )
-        XCTAssertEqual(
-            WorkspaceSwitcher.filterSymbol(hasCustomListOptions: true),
-            "line.3.horizontal.decrease.circle.fill"
-        )
-        XCTAssertEqual(
-            WorkspaceSwitcher.filterSymbol(hasCustomListOptions: false),
-            "line.3.horizontal.decrease.circle"
         )
     }
 

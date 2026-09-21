@@ -354,35 +354,77 @@ public struct AutomationDraft: Equatable, Sendable {
     }
 }
 
-/// Monday-first, matching how a week reads, while the stored numbering stays
-/// Sunday-zero because that is what the wire contract uses.
-public extension ScheduledTaskWeekday {
-    static let pickerOrder: [ScheduledTaskWeekday] = [
-        .monday, .tuesday, .wednesday, .thursday, .friday, .saturday, .sunday,
-    ]
-
-    /// Two letters so all seven fit a phone width without wrapping.
-    var initials: String {
-        switch self {
-        case .sunday: "Su"
-        case .monday: "Mo"
-        case .tuesday: "Tu"
-        case .wednesday: "We"
-        case .thursday: "Th"
-        case .friday: "Fr"
-        case .saturday: "Sa"
-        }
+extension AutomationDraft {
+    /// The fixed time as a moment on `day`, for a time picker. A time the
+    /// draft cannot read opens the picker at the default nine o'clock.
+    func timeOfDayDate(on day: Date = .now, calendar: Calendar = .current) -> Date {
+        let parts = timeOfDay.split(separator: ":").compactMap { Int($0) }
+        let hour = parts.count == 2 && (0...23).contains(parts[0]) ? parts[0] : 9
+        let minute = parts.count == 2 && (0...59).contains(parts[1]) ? parts[1] : 0
+        return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
     }
 
-    var accessibilityName: String {
-        switch self {
-        case .sunday: "Sunday"
-        case .monday: "Monday"
-        case .tuesday: "Tuesday"
-        case .wednesday: "Wednesday"
-        case .thursday: "Thursday"
-        case .friday: "Friday"
-        case .saturday: "Saturday"
-        }
+    /// Stores a picked time as the zero-padded 24-hour "HH:MM" the server
+    /// expects, whatever clock the reader's device shows.
+    mutating func setTimeOfDay(_ date: Date, calendar: Calendar = .current) {
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        timeOfDay = String(format: "%02d:%02d", parts.hour ?? 9, parts.minute ?? 0)
+    }
+
+    /// Forgets what belongs to the previous server when a new automation moves
+    /// to another one: its project, thread and model do not exist there.
+    mutating func clearEnvironmentScopedFields() {
+        projectID = ""
+        threadID = nil
+        modelSelection = nil
+    }
+}
+
+/// Where a new automation is created.
+enum AutomationEnvironmentChoice {
+    /// The server the reader picked when it still exists, else the active one,
+    /// else the first saved. `nil` only when nothing is paired. Replaces an
+    /// unconditional first-server default, which made every other server
+    /// unreachable from New Automation.
+    static func initialEnvironmentID(
+        requested: String?,
+        environments: [FeatureEnvironment]
+    ) -> String? {
+        if let requested, environments.contains(where: { $0.id == requested }) { return requested }
+        return environments.first(where: \.isActive)?.id ?? environments.first?.id
+    }
+
+    /// Servers in the order New Automation offers them: the active one first,
+    /// the rest as saved.
+    static func ordered(_ environments: [FeatureEnvironment]) -> [FeatureEnvironment] {
+        environments.filter(\.isActive) + environments.filter { !$0.isActive }
+    }
+}
+
+/// The week as the reader's calendar lays it out, and a Repeat summary in its
+/// words. The stored numbering stays Sunday-zero because that is the wire's.
+extension ScheduledTaskWeekday {
+    /// All seven days starting from the calendar's first weekday.
+    static func ordered(calendar: Calendar = .current) -> [ScheduledTaskWeekday] {
+        (0..<7).compactMap { ScheduledTaskWeekday(rawValue: (calendar.firstWeekday - 1 + $0) % 7) }
+    }
+
+    func name(calendar: Calendar = .current) -> String {
+        calendar.standaloneWeekdaySymbols[rawValue]
+    }
+
+    /// "Never", "Every Day", "Weekdays", "Weekends", or the short day names in
+    /// calendar order, like the Repeat row in Clock.
+    static func repeatSummary(_ days: Set<ScheduledTaskWeekday>, calendar: Calendar = .current) -> String {
+        let everyDay = Set(allCases)
+        let weekend: Set<ScheduledTaskWeekday> = [.saturday, .sunday]
+        if days.isEmpty { return "Never" }
+        if days == everyDay { return "Every Day" }
+        if days == everyDay.subtracting(weekend) { return "Weekdays" }
+        if days == weekend { return "Weekends" }
+        return ordered(calendar: calendar)
+            .filter(days.contains)
+            .map { calendar.shortStandaloneWeekdaySymbols[$0.rawValue] }
+            .joined(separator: ", ")
     }
 }

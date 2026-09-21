@@ -287,3 +287,67 @@ struct ProjectCreationValidationError: LocalizedError, Equatable {
 
     var errorDescription: String? { message }
 }
+
+/// Why the Add Project sheet can't submit a typed path yet. The sheet shows
+/// it under the field while the user types and keeps its confirm disabled.
+enum ProjectPathIssue: Equatable {
+    /// Nothing typed. Incomplete rather than wrong, so it carries no message.
+    case empty
+    case malformed(String)
+    /// An absolute path in the other platform's style, such as `C:\` for a Mac.
+    case foreignFilesystem
+    /// A project on the same environment is already rooted here.
+    case alreadyUsed(projectName: String)
+}
+
+extension ProjectCreationPath {
+    /// Checks a typed path before it's sent. `serverPath` is any folder the
+    /// environment reported, used to recognise its path style.
+    static func issue(
+        for rawValue: String,
+        serverPath: String?,
+        environmentID: String,
+        projects: [FeatureProject]
+    ) -> ProjectPathIssue? {
+        let path = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return .empty }
+        if case let .failure(error) = validated(path) {
+            return .malformed(error.message)
+        }
+        if let serverPath, !isCompatibleWithServerPath(path, serverPath: serverPath) {
+            return .foreignFilesystem
+        }
+        let normalized = normalizedForComparison(path)
+        if let existing = projects.first(where: {
+            $0.environmentID == environmentID
+                && normalizedForComparison($0.path) == normalized
+        }) {
+            return .alreadyUsed(projectName: existing.name)
+        }
+        return nil
+    }
+}
+
+/// The Add Project sheet's toolbar commit for the current form state.
+struct AddProjectCommit: Equatable {
+    let title: String
+    let isEnabled: Bool
+
+    static func folder(pathIssue: ProjectPathIssue?) -> AddProjectCommit {
+        AddProjectCommit(title: "Add", isEnabled: pathIssue == nil)
+    }
+
+    /// A provider repository commits only once it's been looked up. A clone
+    /// that landed but failed to register retries just the registration.
+    static func clone(
+        remoteURL: String,
+        needsLookup: Bool,
+        destinationIssue: ProjectPathIssue?,
+        hasClonedCopy: Bool
+    ) -> AddProjectCommit {
+        AddProjectCommit(
+            title: hasClonedCopy ? "Finish Adding" : "Clone",
+            isEnabled: !needsLookup && !remoteURL.isEmpty && destinationIssue == nil
+        )
+    }
+}

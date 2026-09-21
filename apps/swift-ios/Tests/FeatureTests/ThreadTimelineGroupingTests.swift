@@ -96,7 +96,7 @@ final class ThreadTimelineGroupingTests: XCTestCase {
         guard case let .divider(divider) = ThreadLifecycle.resolvePresentation(item) else {
             return XCTFail("expected a divider")
         }
-        XCTAssertEqual(divider.label, "Preparing context handoff")
+        XCTAssertEqual(divider.label, "Handing off…")
         XCTAssertTrue(divider.busy, "the wait is the whole point of the row")
         // `endpointLabel` prefers the model over the instance id.
         XCTAssertEqual(divider.detail, "opus → gpt-5")
@@ -120,7 +120,7 @@ final class ThreadTimelineGroupingTests: XCTestCase {
         )
 
         let bubbles = entries.compactMap { entry -> FeatureMessage? in
-            guard case let .message(message) = entry else { return nil }
+            guard case let .message(message, _) = entry else { return nil }
             return message
         }
         XCTAssertEqual(bubbles.map(\.id), ["item-1"], "the optimistic twin must not survive its echo")
@@ -135,7 +135,7 @@ final class ThreadTimelineGroupingTests: XCTestCase {
         let entries = ThreadTimelineFeed.entries(timelineItems: [], messages: [optimistic])
 
         let bubbles = entries.compactMap { entry -> FeatureMessage? in
-            guard case let .message(message) = entry else { return nil }
+            guard case let .message(message, _) = entry else { return nil }
             return message
         }
         XCTAssertEqual(bubbles.map(\.id), ["message-pending"])

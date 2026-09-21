@@ -114,6 +114,19 @@ public struct FeatureFilesView: View {
     }
 }
 
+/// Where the search field looks: the folder on screen, or the whole workspace
+/// through the server's recursive search.
+private enum FileSearchScope: Hashable {
+    case folder
+    case workspace
+}
+
+private struct WorkspaceSearchKey: Equatable {
+    let query: String
+    let scope: FileSearchScope
+    let includesHidden: Bool
+}
+
 private struct FeatureFileDirectoryView: View {
     @SwiftUI.Environment(\.workspaceMutationRevision) private var mutationRevision
     @State private var loadGeneration = UUID()
@@ -125,66 +138,149 @@ private struct FeatureFileDirectoryView: View {
 
     @State private var entries: [FeatureFileEntry] = []
     @State private var searchText = ""
-    @State private var includesHidden = false
+    @State private var searchScope = FileSearchScope.folder
+    @State private var workspaceResults: [FeatureFileEntry] = []
+    @State private var isSearchingWorkspace = false
+    @State private var workspaceSearchError: String?
+    @AppStorage("t3.files.showHidden") private var includesHidden = false
     @State private var isLoading = true
     @State private var errorMessage: String?
 
     var body: some View {
-        Group {
-            if isLoading, entries.isEmpty {
-                ProgressView("Loading files…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let errorMessage, entries.isEmpty {
-                ContentUnavailableView(
-                    "Files unavailable",
-                    systemImage: "folder.badge.questionmark",
-                    description: Text(errorMessage)
-                )
-            } else if filteredEntries.isEmpty {
-                ContentUnavailableView(
-                    searchText.isEmpty ? "Empty folder" : "No matches",
-                    systemImage: "folder",
-                    description: Text(searchText.isEmpty ? "This folder has no visible files." : "Try another search.")
-                )
-            } else {
-                List(filteredEntries) { entry in
-                    NavigationLink {
-                        destination(for: entry)
+        content
+            .background(T3Colors.background)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, prompt: searchScope == .folder ? "Search \(title)" : "Search Workspace")
+            .searchScopes($searchScope) {
+                Text("This Folder").tag(FileSearchScope.folder)
+                Text("Workspace").tag(FileSearchScope.workspace)
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Toggle(isOn: $includesHidden) {
+                            Label("Show Hidden Files", systemImage: "eye")
+                        }
                     } label: {
-                        FeatureFileRow(entry: entry)
+                        Label("File Browser Options", systemImage: "ellipsis")
                     }
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .refreshable { await load() }
             }
-        }
-        .background(T3Colors.background)
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, prompt: "Filter files")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Toggle("Show hidden files", isOn: $includesHidden)
-                    Button {
-                        reloadAttempt += 1
-                    } label: {
-                        Label("Reload", systemImage: "arrow.clockwise")
+            .t3NavigationChrome()
+            .task(id: FileRefreshIdentity(threadID: threadID, path: path, mutation: mutationRevision, attempt: reloadAttempt)) { await load() }
+            .task(id: WorkspaceSearchKey(query: trimmedQuery, scope: searchScope, includesHidden: includesHidden)) {
+                await searchWorkspace()
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if searchScope == .workspace, !trimmedQuery.isEmpty {
+            workspaceSearchResults
+        } else if isLoading, entries.isEmpty {
+            ProgressView("Loading files…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let errorMessage, entries.isEmpty {
+            ContentUnavailableView {
+                Label("Couldn't Load Files", systemImage: "folder.badge.questionmark")
+            } description: {
+                Text(errorMessage)
+            } actions: {
+                Button("Try Again") { reloadAttempt += 1 }
+                    .t3SecondaryButtonStyle()
+            }
+        } else if filteredEntries.isEmpty {
+            emptyState
+        } else {
+            List {
+                if let errorMessage {
+                    Section {
+                        T3ToolBanner(
+                            tone: .warning,
+                            title: "Couldn't Refresh",
+                            message: errorMessage,
+                            actionTitle: "Retry",
+                            action: { reloadAttempt += 1 }
+                        )
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     }
+                }
+                Section {
+                    ForEach(filteredEntries) { entry in
+                        NavigationLink {
+                            destination(for: entry)
+                        } label: {
+                            FeatureFileRow(entry: entry)
+                        }
+                        .listRowBackground(Color.clear)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .animation(.default, value: filteredEntries.map(\.id))
+            .refreshable { await load() }
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        if !trimmedQuery.isEmpty {
+            ContentUnavailableView {
+                Label("No Results for “\(trimmedQuery)”", systemImage: "magnifyingglass")
+            } description: {
+                Text("Nothing in this folder matches.")
+            } actions: {
+                Button("Search Workspace") { searchScope = .workspace }
+                    .t3SecondaryButtonStyle()
+            }
+        } else if !includesHidden, entries.contains(where: \.isHidden) {
+            ContentUnavailableView {
+                Label("Empty Folder", systemImage: "folder")
+            } description: {
+                Text("This folder only has hidden files.")
+            } actions: {
+                Button("Show Hidden Files") { includesHidden = true }
+                    .t3SecondaryButtonStyle()
+            }
+        } else {
+            ContentUnavailableView(
+                "Empty Folder",
+                systemImage: "folder",
+                description: Text("This folder has no files.")
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceSearchResults: some View {
+        let results = includesHidden ? workspaceResults : workspaceResults.filter { !$0.isHidden }
+        if isSearchingWorkspace, results.isEmpty {
+            ProgressView("Searching workspace…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let workspaceSearchError, results.isEmpty {
+            ContentUnavailableView {
+                Label("Couldn't Search", systemImage: "magnifyingglass")
+            } description: {
+                Text(workspaceSearchError)
+            }
+        } else if results.isEmpty {
+            ContentUnavailableView.search(text: trimmedQuery)
+        } else {
+            List(results) { entry in
+                NavigationLink {
+                    destination(for: entry)
                 } label: {
-                    Image(systemName: "ellipsis")
+                    FeatureFileRow(entry: entry, showsLocation: true)
                 }
-                .accessibilityLabel("File browser options")
+                .listRowBackground(Color.clear)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let errorMessage, !entries.isEmpty {
-                Text("Couldn’t refresh: " + errorMessage).font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary).padding(12)
-            }
-        }
-        .task(id: FileRefreshIdentity(threadID: threadID, path: path, mutation: mutationRevision, attempt: reloadAttempt)) { await load() }
     }
 
     @ViewBuilder
@@ -199,6 +295,10 @@ private struct FeatureFileDirectoryView: View {
         } else {
             FeatureFilePreviewView(client: client, threadID: threadID, entry: entry)
         }
+    }
+
+    private var trimmedQuery: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var filteredEntries: [FeatureFileEntry] {
@@ -220,29 +320,80 @@ private struct FeatureFileDirectoryView: View {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// Recursive search across the workspace, debounced so each keystroke
+    /// does not become a server call.
+    private func searchWorkspace() async {
+        let query = trimmedQuery
+        guard searchScope == .workspace, !query.isEmpty else {
+            workspaceResults = []
+            workspaceSearchError = nil
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !Task.isCancelled else { return }
+        isSearchingWorkspace = true
+        defer { isSearchingWorkspace = false }
+        do {
+            let results = try await client.searchThreadFiles(threadID: threadID, query: query, limit: 200)
+            guard !Task.isCancelled else { return }
+            workspaceResults = results
+            workspaceSearchError = nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            workspaceResults = []
+            workspaceSearchError = error.localizedDescription
+        }
+    }
 }
 
 private struct FeatureFileRow: View {
     let entry: FeatureFileEntry
+    /// Search results come from anywhere in the workspace, so they say where.
+    var showsLocation = false
+
+    @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var glyphWidth: CGFloat = 24
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 15))
-                .foregroundStyle(entry.kind == .directory ? .blue : .secondary)
-                .frame(width: 20)
-            Text(entry.name)
-                .font(T3Typography.threadBody)
-                .lineLimit(1)
-            Spacer()
-            if let size = entry.sizeBytes, entry.kind != .directory {
-                Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
-                    .font(T3Typography.tool.monospacedDigit())
-                    .foregroundStyle(T3Colors.textSecondary)
+                .font(.body)
+                .foregroundStyle(entry.kind == .directory ? T3Colors.accent : T3Colors.textSecondary)
+                .frame(width: glyphWidth)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name)
+                    .font(T3Typography.threadBody)
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                    .truncationMode(.middle)
+                if let detail {
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(showsLocation ? .head : .tail)
+                }
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
+        .opacity(entry.isHidden ? 0.55 : 1)
         .accessibilityElement(children: .combine)
+    }
+
+    /// The folder for a search result; size and kind for a file.
+    private var detail: String? {
+        if showsLocation {
+            let folder = (entry.path as NSString).deletingLastPathComponent
+            return folder.isEmpty ? "Workspace" : folder
+        }
+        guard entry.kind == .file else { return nil }
+        let size = entry.sizeBytes.map {
+            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+        }
+        let parts = [size, FeatureFileKindLabel.kind(forPath: entry.name)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private var icon: String {
@@ -253,6 +404,7 @@ private struct FeatureFileRow: View {
             switch FeatureFilePreviewKind.infer(path: entry.path) {
             case .video: "film"
             case .browserDocument: "doc.richtext"
+            case .quickLook: "doc.fill"
             case .image: "photo"
             case .markdown: "doc.richtext"
             case .source: entry.name.hasSuffix(".swift") ? "swift" : "chevron.left.forwardslash.chevron.right"
@@ -279,8 +431,15 @@ private struct FeatureFilePreviewView: View {
     @State private var sourceLines: [FeatureSourceLine] = []
     @State private var image: UIImage?
     @State private var assetURL: URL?
+    /// A local copy of the file: what Quick Look shows and what Share sends,
+    /// so the recipient gets the file rather than an expiring link.
+    @State private var downloadedFile: URL?
+    /// Set when the file is not text and Quick Look cannot show it either.
+    @State private var hasNoPreview = false
     @State private var errorMessage: String?
     @State private var isLoading = true
+    /// A containing folder picked from the title menu.
+    @State private var revealedDirectory: FeatureFileEntry?
 
     private var previewKind: FeatureFilePreviewKind {
         FeatureFilePreviewKind.infer(path: entry.path, language: content?.language)
@@ -288,12 +447,20 @@ private struct FeatureFilePreviewView: View {
 
     private var isHTML: Bool { ["html", "htm"].contains(URL(fileURLWithPath: entry.path).pathExtension.lowercased()) }
     private var showDocument: Bool { previewKind == .browserDocument && (!isHTML || (renderHTML && (focusedLine == nil || revealDismissed))) }
+    private var hasPreview: Bool {
+        content != nil || image != nil || assetURL != nil || downloadedFile != nil || hasNoPreview
+    }
 
     var body: some View {
         Group {
-            if isLoading, content == nil, image == nil, assetURL == nil {
+            if isLoading, !hasPreview {
                 ProgressView("Loading file…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if hasNoPreview {
+                FeatureFileNoPreviewView(name: entry.name, fileURL: downloadedFile, sizeBytes: entry.sizeBytes)
+            } else if let downloadedFile, image == nil {
+                FeatureQuickLookView(fileURL: downloadedFile)
+                    .ignoresSafeArea(edges: .bottom)
             } else if let assetURL, previewKind == .video {
                 FeatureInlineVideoView(url: assetURL, title: entry.name)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black)
@@ -303,18 +470,14 @@ private struct FeatureFilePreviewView: View {
                     return WorkspaceMutationRevision.assetURL(try await resolver.workspaceAssetURL(threadID: threadID, path: entry.path), revision: mutationRevision)
                 })
             } else if let image {
-                FeatureZoomableImageView(image: image)
-                    .background(Color.black)
+                FeatureZoomableImageView(image: image, name: entry.name)
+                    .ignoresSafeArea(edges: .bottom)
             } else if let content {
                 VStack(spacing: 0) {
                     if content.isTruncated {
-                        Label("Partial preview", systemImage: "exclamationmark.triangle")
-                            .font(T3Typography.supportingStrong)
-                            .foregroundStyle(.orange)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        T3ToolBanner(tone: .warning, title: partialPreviewText(content))
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color.orange.opacity(0.09))
+                            .padding(.vertical, 6)
                     }
                     switch previewKind {
                     case .markdown:
@@ -326,79 +489,144 @@ private struct FeatureFilePreviewView: View {
                                 .padding(.horizontal, 18)
                                 .padding(.vertical, 16)
                         }
-                        .scrollDismissesKeyboard(.interactively)
-                    case .source, .plainText, .browserDocument:
+                    case .source, .plainText, .browserDocument, .quickLook:
                         FeatureSourceTextView(lines: sourceLines, focusedLine: focusedLine)
                     case .image, .video:
                         EmptyView()
                     }
                 }
             } else {
-                ContentUnavailableView(
-                    previewKind == .image ? "Image unavailable" : "File unavailable",
-                    systemImage: previewKind == .image ? "photo.badge.exclamationmark" : "doc.badge.ellipsis",
-                    description: Text(errorMessage ?? "The file could not be read.")
-                )
+                ContentUnavailableView {
+                    Label("Couldn't Open \(entry.name)", systemImage: previewKind == .image ? "photo.badge.exclamationmark" : "doc.badge.ellipsis")
+                } description: {
+                    Text(errorMessage ?? "The file could not be read.")
+                } actions: {
+                    Button("Try Again") { reloadAttempt += 1 }
+                        .t3SecondaryButtonStyle()
+                }
             }
         }
         .background(T3Colors.background)
         .navigationTitle(entry.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarTitleMenu { folderMenu }
         .toolbar {
-            if isHTML {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(showDocument ? "Show HTML source" : "Show rendered page", systemImage: showDocument ? "chevron.left.forwardslash.chevron.right" : "eye") {
-                        renderHTML = !showDocument
-                        revealDismissed = true
-                    }
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Reload file", systemImage: "arrow.clockwise") { reloadAttempt += 1 }.disabled(isLoading)
-            }
-            if !FeatureFilePreviewPath.isAbsolute(entry.path) {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    ForEach(FeatureFilesView.containingDirectories(path: entry.path)) { directory in
-                        NavigationLink {
-                            FeatureFileDirectoryView(client: client, threadID: threadID,
-                                path: directory.path.isEmpty ? nil : directory.path, title: directory.name)
-                        } label: {
-                            Label(directory.path.isEmpty ? "Workspace" : directory.path, systemImage: "folder")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "folder")
-                        .frame(minWidth: T3Metrics.minimumTapTarget, minHeight: T3Metrics.minimumTapTarget)
-                }
-                .accessibilityLabel("Browse containing folder")
-                .accessibilityIdentifier("file-preview-folders")
-            }
-            }
-
-            if let assetURL {
-                ToolbarItem(placement: .topBarTrailing) {
-                    ShareLink(item: assetURL) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .accessibilityLabel("Share file")
-                }
-            } else if let content {
-                ToolbarItem(placement: .topBarTrailing) {
-                    ShareLink(item: content.text) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .accessibilityLabel("Share file contents")
-                }
-            }
+            ToolbarItem(placement: .topBarTrailing) { shareButton }
+            ToolbarItem(placement: .topBarTrailing) { moreMenu }
+        }
+        .t3NavigationChrome()
+        .navigationDestination(item: $revealedDirectory) { directory in
+            FeatureFileDirectoryView(
+                client: client,
+                threadID: threadID,
+                path: directory.path.isEmpty ? nil : directory.path,
+                title: directory.name
+            )
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let errorMessage, content != nil || image != nil || assetURL != nil {
-                Text("Showing the previous preview. Couldn’t refresh: " + errorMessage)
-                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(12)
+            if let errorMessage, hasPreview {
+                T3ToolBanner(
+                    tone: .warning,
+                    title: "Couldn't Refresh",
+                    message: "Showing the previous preview. \(errorMessage)",
+                    actionTitle: "Retry",
+                    action: { reloadAttempt += 1 }
+                )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
             }
         }
         .task(id: FileRefreshIdentity(threadID: threadID, path: entry.path, mutation: mutationRevision, document: showDocument, attempt: reloadAttempt)) { await load() }
+        .onDisappear {
+            if let downloadedFile { FeatureFileDownload.discard(downloadedFile) }
+        }
+    }
+
+    /// The path back up, from the title: each containing folder opens in place.
+    @ViewBuilder
+    private var folderMenu: some View {
+        if !FeatureFilePreviewPath.isAbsolute(entry.path) {
+            Section("Show in Folder") {
+                ForEach(FeatureFilesView.containingDirectories(path: entry.path).reversed()) { directory in
+                    Button {
+                        revealedDirectory = directory
+                    } label: {
+                        Label(directory.path.isEmpty ? "Workspace" : directory.name, systemImage: "folder")
+                    }
+                }
+            }
+            .accessibilityIdentifier("file-preview-folders")
+        }
+    }
+
+    @ViewBuilder
+    private var shareButton: some View {
+        if let downloadedFile {
+            ShareLink(item: downloadedFile) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        } else if let assetURL {
+            ShareLink(item: assetURL) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        } else if let content {
+            ShareLink(item: content.text) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        }
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            if isHTML {
+                Button(
+                    showDocument ? "Show HTML Source" : "Show Rendered Page",
+                    systemImage: showDocument ? "chevron.left.forwardslash.chevron.right" : "eye"
+                ) {
+                    renderHTML = !showDocument
+                    revealDismissed = true
+                }
+            }
+            if let image {
+                Button("Save to Photos", systemImage: "square.and.arrow.down") {
+                    UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+                    T3HUD.show("Saved to Photos", systemImage: "photo")
+                }
+            }
+            Button("Reload", systemImage: "arrow.clockwise") { reloadAttempt += 1 }
+                .disabled(isLoading)
+        } label: {
+            Label("More", systemImage: "ellipsis")
+        }
+    }
+
+    /// "Showing the first 1 MB of 3.4 MB."
+    private func partialPreviewText(_ content: FeatureFileContent) -> String {
+        let shown = ByteCountFormatter.string(fromByteCount: Int64(content.text.utf8.count), countStyle: .file)
+        guard let total = content.totalBytes else { return "Showing the first \(shown) of this file." }
+        return "Showing the first \(shown) of \(ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file))."
+    }
+
+    private func resolvedAssetURL() async throws -> URL {
+        guard let resolver = client as? any FeatureWorkspaceAssetResolving else {
+            throw FeatureCapabilityUnavailable("File previews")
+        }
+        return try await resolver.workspaceAssetURL(threadID: threadID, path: entry.path)
+    }
+
+    /// Downloads the file for Quick Look, or for the no-preview tile's Share
+    /// when Quick Look cannot show it.
+    private func loadDownload(generation: UUID) async throws {
+        let url = try await resolvedAssetURL()
+        let file = try await FeatureFileDownload.download(from: url, name: entry.name)
+        guard !Task.isCancelled, loadGeneration == generation else {
+            FeatureFileDownload.discard(file)
+            return
+        }
+        if let previous = downloadedFile { FeatureFileDownload.discard(previous) }
+        downloadedFile = file
+        hasNoPreview = !FeatureQuickLookView.canPreview(file)
+        content = nil; image = nil; assetURL = nil; sourceLines = []
     }
 
     private func load() async {
@@ -407,19 +635,14 @@ private struct FeatureFilePreviewView: View {
         isLoading = true
         defer { if loadGeneration == generation { isLoading = false } }
         do {
-            if previewKind == .video || showDocument {
-                guard let resolver = client as? any FeatureWorkspaceAssetResolving else { throw FeatureCapabilityUnavailable("File previews") }
-                let url = try await resolver.workspaceAssetURL(threadID: threadID, path: entry.path)
+            if previewKind == .quickLook {
+                try await loadDownload(generation: generation)
+            } else if previewKind == .video || showDocument {
+                let url = try await resolvedAssetURL()
                 guard !Task.isCancelled, loadGeneration == generation else { return }
                 assetURL = WorkspaceMutationRevision.assetURL(url, revision: mutationRevision); content = nil; image = nil; sourceLines = []
             } else if previewKind == .image {
-                guard let resolver = client as? any FeatureWorkspaceAssetResolving else {
-                    throw FeatureCapabilityUnavailable("Signed image previews")
-                }
-                let resolvedURL = try await resolver.workspaceAssetURL(
-                    threadID: threadID,
-                    path: entry.path
-                )
+                let resolvedURL = try await resolvedAssetURL()
                 let request = URLRequest(url: resolvedURL, cachePolicy: .reloadIgnoringLocalCacheData)
                 let (data, response) = try await URLSession.shared.data(for: request)
                 if let response = response as? HTTPURLResponse,
@@ -429,18 +652,35 @@ private struct FeatureFilePreviewView: View {
                 guard data.count <= 64 * 1_024 * 1_024 else {
                     throw FeatureImagePreviewError.tooLarge
                 }
-                guard let decoded = await Task.detached(priority: .userInitiated, operation: {
-                    FeatureImageDecoder.downsample(data, maxPixelSize: 4_096)
-                }).value else {
+                let name = entry.name
+                let decoded = await Task.detached(priority: .userInitiated) {
+                    (
+                        image: FeatureImageDecoder.downsample(data, maxPixelSize: 4_096),
+                        file: try? FeatureFileDownload.write(data, name: name)
+                    )
+                }.value
+                guard let decodedImage = decoded.image else {
+                    if let file = decoded.file { FeatureFileDownload.discard(file) }
                     throw FeatureImagePreviewError.invalidImage
                 }
                 guard !Task.isCancelled, loadGeneration == generation else { return }
-                assetURL = resolvedURL
-                image = decoded
+                if let previous = downloadedFile { FeatureFileDownload.discard(previous) }
+                // The image itself is shared, not the signed link it came from.
+                downloadedFile = decoded.file
+                assetURL = nil
+                image = decodedImage
                 content = nil
                 sourceLines = []
             } else {
-                let loaded = try await client.readFile(threadID: threadID, path: entry.path)
+                let loaded: FeatureFileContent
+                do {
+                    loaded = try await client.readFile(threadID: threadID, path: entry.path)
+                } catch where Self.isBinaryReadError(error) {
+                    // Not text after all: show it the way Files.app would.
+                    try await loadDownload(generation: generation)
+                    errorMessage = nil
+                    return
+                }
                 let loadedKind = FeatureFilePreviewKind.infer(
                     path: entry.path,
                     language: loaded.language
@@ -454,7 +694,7 @@ private struct FeatureFilePreviewView: View {
                             language: loaded.language
                         )
                     }.value
-                case .plainText:
+                case .plainText, .quickLook:
                     lines = await Task.detached(priority: .userInitiated) {
                         FeatureSourceHighlighter.lines(text: loaded.text, language: "plain")
                     }.value
@@ -475,8 +715,20 @@ private struct FeatureFilePreviewView: View {
             errorMessage = nil
         } catch {
             guard !Task.isCancelled, loadGeneration == generation else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = Self.readableError(error)
         }
+    }
+
+    /// The server refuses to read binary files as text, with a message that
+    /// carries the absolute workspace path.
+    private static func isBinaryReadError(_ error: Error) -> Bool {
+        error.localizedDescription.localizedCaseInsensitiveContains("binary")
+    }
+
+    private static func readableError(_ error: Error) -> String {
+        isBinaryReadError(error)
+            ? "There's no preview for this kind of file."
+            : error.localizedDescription
     }
 }
 
@@ -485,6 +737,10 @@ private struct FeatureSourceTextView: View {
     /// 1-based, as a reader and a tool call both count lines.
     var focusedLine: Int?
 
+    /// One digit's width at the current text size; the gutter grows with the
+    /// number of digits instead of clipping past line 9,999.
+    @ScaledMetric(relativeTo: .callout) private var digitWidth: CGFloat = 9
+
     /// The identity of the focused row, which is the line's 0-based index.
     /// `nil` while the file is still loading, so the scroll waits for the lines
     /// rather than being spent on an empty stack.
@@ -492,6 +748,11 @@ private struct FeatureSourceTextView: View {
         guard let focusedLine, focusedLine > 0, !lines.isEmpty else { return nil }
         let id = focusedLine - 1
         return lines.contains { $0.id == id } ? id : nil
+    }
+
+    private var gutterWidth: CGFloat {
+        let digits = max(2, String(lines.last?.number ?? 0).count)
+        return digitWidth * CGFloat(digits) + 4
     }
 
     var body: some View {
@@ -503,7 +764,7 @@ private struct FeatureSourceTextView: View {
                             HStack(alignment: .top, spacing: 10) {
                                 Text("\(line.number)")
                                     .foregroundStyle(.tertiary)
-                                    .frame(width: 44, alignment: .trailing)
+                                    .frame(width: gutterWidth, alignment: .trailing)
                                     .accessibilityHidden(true)
                                 FeatureHighlightedSourceLine(line: line)
                             }
@@ -573,6 +834,8 @@ private struct FeatureHighlightedSourceLine: View {
 
 private struct FeatureZoomableImageView: UIViewRepresentable {
     let image: UIImage
+    /// Read by VoiceOver instead of a generic "image".
+    let name: String
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -580,7 +843,7 @@ private struct FeatureZoomableImageView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
-        scrollView.backgroundColor = .black
+        scrollView.backgroundColor = T3Colors.uiBackground
         scrollView.delegate = context.coordinator
         scrollView.minimumZoomScale = 1
         scrollView.maximumZoomScale = 6
@@ -591,7 +854,7 @@ private struct FeatureZoomableImageView: UIViewRepresentable {
         imageView.translatesAutoresizingMaskIntoConstraints = false
         imageView.contentMode = .scaleAspectFit
         imageView.isAccessibilityElement = true
-        imageView.accessibilityLabel = "Image preview"
+        imageView.accessibilityTraits = .image
         scrollView.addSubview(imageView)
         NSLayoutConstraint.activate([
             imageView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
@@ -613,6 +876,8 @@ private struct FeatureZoomableImageView: UIViewRepresentable {
     }
 
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
+        scrollView.backgroundColor = T3Colors.uiBackground
+        context.coordinator.imageView.accessibilityLabel = name
         if context.coordinator.imageView.image !== image {
             context.coordinator.imageView.image = image
             scrollView.setZoomScale(scrollView.minimumZoomScale, animated: false)
@@ -627,12 +892,27 @@ private struct FeatureZoomableImageView: UIViewRepresentable {
             imageView
         }
 
+        /// Zooms in on the point that was tapped, the way Photos does, and back
+        /// out on a second double tap.
         @objc func toggleZoom(_ recognizer: UITapGestureRecognizer) {
             guard let scrollView else { return }
-            let scale = scrollView.zoomScale > scrollView.minimumZoomScale
-                ? scrollView.minimumZoomScale
-                : min(2.5, scrollView.maximumZoomScale)
-            scrollView.setZoomScale(scale, animated: true)
+            if scrollView.zoomScale > scrollView.minimumZoomScale {
+                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+                return
+            }
+            let scale = min(2.5, scrollView.maximumZoomScale)
+            let point = recognizer.location(in: imageView)
+            let size = CGSize(
+                width: scrollView.bounds.width / scale,
+                height: scrollView.bounds.height / scale
+            )
+            let rect = CGRect(
+                x: point.x - size.width / 2,
+                y: point.y - size.height / 2,
+                width: size.width,
+                height: size.height
+            )
+            scrollView.zoom(to: rect, animated: true)
         }
     }
 }

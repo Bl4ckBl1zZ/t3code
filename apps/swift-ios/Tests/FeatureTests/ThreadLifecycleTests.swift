@@ -139,7 +139,7 @@ final class ThreadLifecycleTests: XCTestCase {
         guard case let .divider(divider)? = ThreadLifecycle.resolvePresentation(handoff) else {
             return XCTFail("expected a divider")
         }
-        XCTAssertEqual(divider.label, "Preparing context handoff")
+        XCTAssertEqual(divider.label, "Handing off…")
         XCTAssertTrue(divider.busy)
         XCTAssertEqual(divider.detail, "gpt-5.4")
     }
@@ -238,11 +238,11 @@ final class ThreadLifecycleTests: XCTestCase {
     func testIntentBadgeAnnotatesOnlyNonDefaultIntents() {
         XCTAssertNil(UserMessageIntentBadge.resolve(.turnStart))
         XCTAssertNil(UserMessageIntentBadge.resolve(nil))
-        XCTAssertEqual(UserMessageIntentBadge.resolve(.queuedTurn)?.label, "queued")
-        XCTAssertEqual(UserMessageIntentBadge.resolve(.steer)?.label, "steered the run")
+        XCTAssertEqual(UserMessageIntentBadge.resolve(.queuedTurn)?.label, "Queued")
+        XCTAssertEqual(UserMessageIntentBadge.resolve(.steer)?.label, "Steered the run")
         XCTAssertEqual(
             UserMessageIntentBadge.resolve(.promotedQueuedToSteer)?.label,
-            "queued → steered the run"
+            "Queued, then steered"
         )
     }
 }

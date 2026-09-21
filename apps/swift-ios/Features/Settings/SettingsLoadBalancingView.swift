@@ -1,45 +1,77 @@
 import SwiftUI
 
+/// Whether New Task picks a machine by available CPU and memory, and how much
+/// each machine is preferred. Stored on this device.
 struct SettingsLoadBalancingView: View {
     @Bindable var model: FeatureRootModel
+    let onAddServer: () -> Void
     @AppStorage(NativeLoadBalancingPreferences.enabledKey) private var enabled = false
     @AppStorage(NativeLoadBalancingPreferences.weightsKey) private var weightsJSON = "{}"
 
+    private var environments: [FeatureEnvironment] { model.snapshot.environments }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Choose a machine for new tasks using available CPU and memory. Only connected machines with the same repository and selected agent model are eligible. These preferences apply on this device.")
-                    .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                ThreadDetailsSection(title: "Automatic selection") {
-                    Toggle("Balance new tasks", isOn: $enabled).padding(14)
-                    Text("You can choose a machine manually in New Task. Branch choices and attachments keep work on the selected machine.")
-                        .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary).padding(14)
+        Group {
+            if environments.count < 2 {
+                ContentUnavailableView {
+                    Label(
+                        environments.isEmpty ? "No Machines Connected" : "One Machine Connected",
+                        systemImage: "scalemass"
+                    )
+                } description: {
+                    Text("Connect another machine to balance new tasks between them.")
+                } actions: {
+                    Button("Connect a Server", action: onAddServer)
+                        .t3ProminentButtonStyle()
                 }
-                if model.snapshot.environments.count < 2 {
-                    Text("Connect another machine to balance tasks between them.")
-                        .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                }
-                ThreadDetailsSection(title: "Machine preferences") {
-                    ForEach(model.snapshot.environments) { environment in
-                        Picker(selection: weightBinding(environment.id)) {
-                            Text("Prefer").tag(100.0)
-                            Text("Normal").tag(50.0)
-                            Text("Less often").tag(25.0)
-                            Text("Manual only").tag(0.0)
-                            let value = NativeLoadBalancingPreferences.weights(from: weightsJSON)[environment.id] ?? 50
-                            if ![0.0, 25, 50, 100].contains(value) {
-                                Text("Custom (\(value.formatted()))").tag(value)
-                            }
-                        } label: {
-                            Label(environment.name, systemImage: environment.machineSymbol)
-                        }.padding(14)
+                .background(T3Colors.background)
+            } else {
+                SettingsForm {
+                    Section {
+                        Toggle("Balance New Tasks", isOn: $enabled)
+                    } footer: {
+                        Text("Picks a machine for each new task by available CPU and memory. Only connected machines with the same repository and agent model are eligible. Applies on this device.")
                     }
-                }.disabled(!enabled)
-            }.padding(18)
+
+                    if enabled {
+                        Section {
+                            ForEach(environments) { environment in
+                                machinePicker(environment)
+                            }
+                        } header: {
+                            Text("Machines")
+                        } footer: {
+                            Text("You can still pick a machine in New Task. Branch choices and attachments keep work on the selected machine.")
+                        }
+                    }
+                }
+            }
         }
-        .background(T3Colors.background)
-        .navigationTitle("Load balancing")
+        .navigationTitle("Load Balancing")
         .navigationBarTitleDisplayMode(.inline)
+        .t3SensoryFeedback(.selection, trigger: enabled)
+    }
+
+    /// A labelled menu picker. Inside a Form the label renders, which is what
+    /// puts each machine's name beside its weight.
+    private func machinePicker(_ environment: FeatureEnvironment) -> some View {
+        let value = NativeLoadBalancingPreferences.weights(from: weightsJSON)[environment.id] ?? 50
+        return Picker(selection: weightBinding(environment.id)) {
+            Text("Prefer").tag(100.0)
+            Text("Normal").tag(50.0)
+            Text("Less Often").tag(25.0)
+            Text("Manual Only").tag(0.0)
+            if ![0.0, 25, 50, 100].contains(value) {
+                Text("Custom (\(value.formatted()))").tag(value)
+            }
+        } label: {
+            Label {
+                Text(environment.name)
+            } icon: {
+                T3SettingsTile(environment.machineSymbol, tint: environment.isActive ? .ink : .gray)
+            }
+        }
+        .pickerStyle(.menu)
     }
 
     private func weightBinding(_ id: String) -> Binding<Double> {

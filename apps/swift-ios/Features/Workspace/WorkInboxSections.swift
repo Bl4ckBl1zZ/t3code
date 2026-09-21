@@ -53,7 +53,7 @@ public enum WorkInboxSections {
         case .main:
             WorkInboxSectionHeader(section: .main, label: "Main", tone: .standard)
         case .needsYou:
-            WorkInboxSectionHeader(section: .needsYou, label: "Needs you", tone: .attention)
+            WorkInboxSectionHeader(section: .needsYou, label: "Needs You", tone: .attention)
         case .active:
             WorkInboxSectionHeader(section: .active, label: "Active", tone: .standard)
         }
@@ -106,28 +106,22 @@ public enum WorkInboxSections {
     }
 }
 
-/// The Work inbox divider. Sized and weighted like ``HomeShelfHeader`` so the
-/// two kinds of structure in the sidebar read as one system, but it is not a
-/// disclosure control: a Work section cannot be collapsed.
+/// The Work inbox section heading. Set like the list's other section titles
+/// (Pinned, Active) so the structure reads as one system; it is not a
+/// disclosure control, because a Work section cannot be collapsed.
 struct WorkInboxSectionDivider: View {
     let header: WorkInboxSectionHeader
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(header.label)
-                .lineLimit(1)
-            Rectangle()
-                .fill(ruleColor)
-                .frame(height: 1)
-        }
-        .font(T3Typography.homeMetadata.weight(.medium))
-        .foregroundStyle(labelColor)
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityLabel(header.label)
+        Text(header.label)
+            .lineLimit(1)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(labelColor)
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 
     /// `warning` is the theme's amber. The React Native divider names the same
@@ -136,14 +130,7 @@ struct WorkInboxSectionDivider: View {
     private var labelColor: Color {
         switch header.tone {
         case .attention: T3Colors.warning
-        case .standard: T3Colors.textTertiary
-        }
-    }
-
-    private var ruleColor: Color {
-        switch header.tone {
-        case .attention: T3Colors.warning.opacity(0.2)
-        case .standard: T3Colors.border
+        case .standard: T3Colors.textSecondary
         }
     }
 }

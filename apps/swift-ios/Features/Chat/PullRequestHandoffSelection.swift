@@ -1,7 +1,18 @@
 import Foundation
 
 struct PullRequestHandoffSelection: Equatable, Sendable {
-    enum Kind: String, Sendable { case code, comment, check }
+    enum Kind: String, Sendable {
+        case code, comment, check
+
+        /// The handoff sheet's heading for what was selected.
+        var title: String {
+            switch self {
+            case .code: "Selected Lines"
+            case .comment: "Selected Comment"
+            case .check: "Selected Check"
+            }
+        }
+    }
     let kind: Kind
     let label: String
     let body: String

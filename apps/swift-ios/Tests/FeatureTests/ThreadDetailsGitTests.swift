@@ -202,35 +202,26 @@ final class ThreadDetailsGitTests: XCTestCase {
 
     // MARK: - Row presentation
 
-    func testStatusSummaryReadsChangesDriftAndPullRequestInThatOrder() {
+    func testStatusSummaryReadsChangesThenDrift() {
         XCTAssertEqual(
             ThreadDetailsGit.statusSummary(
                 status(
                     hasWorkingTreeChanges: true,
-                    changedFileCount: 1,
+                    changedFileCount: 3,
                     aheadCount: 2,
-                    behindCount: 3,
+                    behindCount: 1,
                     pullRequest: openPullRequest(number: 42)
                 )
             ),
-            "1 file changed · 2 ahead · 3 behind · PR #42 open"
+            // The pull request has its own row, so the summary leaves it out.
+            "3 changed · 2 ahead · 1 behind"
         )
     }
 
-    func testStatusSummaryDistinguishesLoadingFromCleanFromNotARepository() {
-        XCTAssertEqual(ThreadDetailsGit.statusSummary(nil), "Loading branch status…")
+    func testStatusSummaryDistinguishesCleanFromNotARepository() {
         XCTAssertEqual(ThreadDetailsGit.statusSummary(status()), "Clean")
         XCTAssertEqual(
-            ThreadDetailsGit.statusSummary(status(isRepo: false)), "Not a git repository"
-        )
-    }
-
-    func testStatusSummaryPluralisesTheFileCount() {
-        XCTAssertEqual(
-            ThreadDetailsGit.statusSummary(
-                status(hasWorkingTreeChanges: true, changedFileCount: 2)
-            ),
-            "2 files changed"
+            ThreadDetailsGit.statusSummary(status(isRepo: false)), "Not a Git Repository"
         )
     }
 
@@ -258,7 +249,7 @@ final class ThreadDetailsGitTests: XCTestCase {
             ThreadDetailsGit.quickActionIcon(
                 ThreadDetailsGitQuickAction(label: "Pull", disabled: false, kind: .runPull)
             ),
-            "arrow.down.circle"
+            "arrow.down"
         )
         XCTAssertEqual(
             ThreadDetailsGit.quickActionIcon(
@@ -266,7 +257,7 @@ final class ThreadDetailsGitTests: XCTestCase {
                     label: "Commit", disabled: false, kind: .runAction, action: .commit
                 )
             ),
-            "checkmark.circle"
+            "checkmark"
         )
         XCTAssertEqual(
             ThreadDetailsGit.quickActionIcon(
@@ -274,37 +265,97 @@ final class ThreadDetailsGitTests: XCTestCase {
                     label: "Push", disabled: false, kind: .runAction, action: .push
                 )
             ),
-            "arrow.up.circle"
+            "arrow.up"
         )
         XCTAssertEqual(
             ThreadDetailsGit.quickActionIcon(
                 ThreadDetailsGitQuickAction(label: "View PR", disabled: false, kind: .openPullRequest)
             ),
-            "arrow.up.right.circle"
+            "arrow.up.right"
         )
     }
 
-    func testADisabledQuickActionAlwaysCarriesASentence() {
+    // MARK: - Quick action row
+
+    func testALoadingStatusDrawsAPlaceholderAndAFailedOneDrawsNothing() {
         XCTAssertEqual(
-            ThreadDetailsGit.quickActionSubtitle(
-                ThreadDetailsGitQuickAction(
-                    label: "Push", disabled: true, kind: .showHint, hint: "No local commits."
-                )
+            ThreadDetailsGit.quickActionRow(
+                for: nil, loadFailed: false, isRunning: false, runningLabel: nil
             ),
-            "No local commits."
+            .placeholder
+        )
+        // The failure is reported on the branch row, with Retry.
+        XCTAssertEqual(
+            ThreadDetailsGit.quickActionRow(
+                for: nil, loadFailed: true, isRunning: false, runningLabel: nil
+            ),
+            .hidden(footer: nil)
+        )
+    }
+
+    func testAnOfferedActionIsTitleCased() {
+        XCTAssertEqual(
+            ThreadDetailsGit.quickActionRow(
+                for: status(hasWorkingTreeChanges: true, changedFileCount: 1),
+                loadFailed: false,
+                isRunning: false,
+                runningLabel: nil
+            ),
+            .action(label: "Commit, Push & PR", isRunning: false)
+        )
+    }
+
+    func testARunningActionKeepsTheLabelOfWhatIsRunning() {
+        XCTAssertEqual(
+            ThreadDetailsGit.quickActionRow(
+                for: status(hasWorkingTreeChanges: true, changedFileCount: 1),
+                loadFailed: false,
+                isRunning: true,
+                runningLabel: "Commit & Push"
+            ),
+            .action(label: "Commit & Push", isRunning: true)
+        )
+    }
+
+    func testNothingToDoHidesTheRowWithoutAnExcuse() {
+        XCTAssertEqual(
+            ThreadDetailsGit.quickActionRow(
+                for: status(), loadFailed: false, isRunning: false, runningLabel: nil
+            ),
+            .hidden(footer: nil)
         )
         XCTAssertEqual(
-            ThreadDetailsGit.quickActionSubtitle(
-                ThreadDetailsGitQuickAction(label: "Push", disabled: true, kind: .showHint)
+            ThreadDetailsGit.quickActionRow(
+                for: status(hasUpstream: false),
+                loadFailed: false,
+                isRunning: false,
+                runningLabel: nil
             ),
-            "This action is unavailable."
+            .hidden(footer: nil)
         )
-        XCTAssertNil(
-            ThreadDetailsGit.quickActionSubtitle(
-                ThreadDetailsGitQuickAction(
-                    label: "Pull", disabled: false, kind: .runPull
-                )
-            )
+        XCTAssertEqual(
+            ThreadDetailsGit.quickActionRow(
+                for: status(isRepo: false), loadFailed: false, isRunning: false, runningLabel: nil
+            ),
+            .hidden(footer: nil)
+        )
+    }
+
+    func testSomethingInTheWayMovesItsReasonToTheFooter() {
+        XCTAssertEqual(
+            ThreadDetailsGit.quickActionRow(
+                for: status(aheadCount: 2, behindCount: 3),
+                loadFailed: false,
+                isRunning: false,
+                runningLabel: nil
+            ),
+            .hidden(footer: "Branch has diverged from upstream. Rebase/merge first.")
+        )
+        XCTAssertEqual(
+            ThreadDetailsGit.quickActionRow(
+                for: status(refName: nil), loadFailed: false, isRunning: false, runningLabel: nil
+            ),
+            .hidden(footer: "Create and checkout a branch before pushing or opening a PR.")
         )
     }
 

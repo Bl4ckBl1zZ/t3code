@@ -18,8 +18,8 @@ struct TranscriptStatusBar: View {
     let relationships: ThreadRelationshipsModel?
     let backgroundCommands: [ThreadDetailsBackgroundCommand]
     let onOpenThread: (_ threadID: String, _ isArchived: Bool) -> Void
-    let onMerge: () async -> Bool
-    let onDetach: () async -> Void
+    let onMerge: () async throws -> Void
+    let onDetach: () async throws -> Void
 
     var body: some View {
         if backgroundCommands.isEmpty {
@@ -60,12 +60,12 @@ struct TranscriptStatusBar: View {
                             onMerge: onMerge,
                             onDetach: onDetach
                         )
-                    } else {
-                        // A lone background capsule keeps the trailing edge it
-                        // holds when the agents capsule is there; sliding to the
-                        // left as agents finish would read as a different control.
-                        Spacer(minLength: 0)
                     }
+                    // Both capsules hug their content. A lone background
+                    // capsule keeps the trailing edge it holds beside the
+                    // agents capsule; sliding left as agents finish would read
+                    // as a different control.
+                    Spacer(minLength: 0)
 
                     if !summary.isEmpty {
                         ThreadBackgroundTasksCapsule(
@@ -77,6 +77,7 @@ struct TranscriptStatusBar: View {
                 }
             }
             .padding(.horizontal, 16)
+            .padding(.top, 8)
             .padding(.bottom, 8)
         }
     }

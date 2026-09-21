@@ -1,13 +1,13 @@
 import SwiftUI
 
-// Row primitives for the thread details sheet. Ported from
+// Card primitives for grouped content drawn inside a `ScrollView`: settings
+// screens and the background-tasks sheet. Ported from
 // apps/mobile/src/features/threads/details/detailsRows.tsx.
 //
-// The desktop panel stacks flat rows under small section headings; on a phone
-// the same grouping reads as a card per section, so the heading sits outside the
-// card and the rows are separated by inset hairlines. Kept as their own
-// primitives rather than a `List`, because a grouped list cannot express the
-// leading orb, the trailing copy button, or the inset divider this design needs.
+// The thread details sheet itself is an inset-grouped `List` now (see
+// ThreadSheetsChrome.swift for its row label); these remain for surfaces that
+// have not moved to one. The heading sits outside the card in Title Case, and
+// rows are separated by inset hairlines.
 
 struct ThreadDetailsSection<Content: View>: View {
     let title: String
@@ -16,11 +16,10 @@ struct ThreadDetailsSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(T3Typography.eyebrow)
-                .kerning(0.9)
-                .foregroundStyle(T3Colors.textTertiary)
-                .padding(.horizontal, 4)
+            Text(title)
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textSecondary)
+                .padding(.horizontal, 16)
                 .frame(minHeight: 24, alignment: .leading)
                 .accessibilityAddTraits(.isHeader)
 
@@ -29,16 +28,12 @@ struct ThreadDetailsSection<Content: View>: View {
             }
             .background(T3Colors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(T3Colors.border, lineWidth: 1)
-            )
 
             if let footer {
                 Text(footer)
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textTertiary)
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, 16)
                     .padding(.top, 2)
             }
         }
@@ -54,20 +49,6 @@ struct ThreadDetailsDivider: View {
             .fill(T3Colors.border)
             .frame(height: 1)
             .padding(.leading, 48)
-            .accessibilityHidden(true)
-    }
-}
-
-/// Small coloured dot used where a row's state matters more than its icon.
-struct ThreadDetailsStatusDot: View {
-    var color: Color = T3Colors.statusRunning
-    var dimmed = false
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
-            .opacity(dimmed ? 0.5 : 1)
             .accessibilityHidden(true)
     }
 }
@@ -301,74 +282,5 @@ struct ThreadDetailsRowBadge: View {
             .foregroundStyle(T3Colors.textTertiary)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
-    }
-}
-
-/// The warning card the desktop panel puts at the top of Workspace. Both
-/// conditions it reports — an unreachable environment, a client/server version
-/// skew — have to be acted on before anything else in the sheet will work.
-struct ThreadDetailsNotice<Actions: View>: View {
-    let title: String
-    let message: String
-    @ViewBuilder var actions: Actions
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(T3Colors.danger)
-                .padding(.top, 2)
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(T3Typography.supportingStrong)
-                    .foregroundStyle(T3Colors.textPrimary)
-                Text(message)
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if Actions.self != EmptyView.self {
-                    HStack(spacing: 8) { actions }
-                        .padding(.top, 4)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(12)
-        .background(T3Colors.danger.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(T3Colors.danger.opacity(0.28), lineWidth: 1)
-        )
-    }
-}
-
-struct ThreadDetailsNoticeButton: View {
-    enum Tone { case primary, plain }
-
-    let label: String
-    var tone: Tone = .plain
-    var isDisabled = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(label)
-                .font(T3Typography.supportingStrong)
-                .foregroundStyle(
-                    tone == .primary ? T3Colors.primaryActionForeground : T3Colors.textPrimary
-                )
-                .padding(.horizontal, 14)
-                .frame(minHeight: 32)
-                .background(
-                    tone == .primary ? T3Colors.primaryAction : T3Colors.subtle,
-                    in: Capsule()
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.45 : 1)
     }
 }

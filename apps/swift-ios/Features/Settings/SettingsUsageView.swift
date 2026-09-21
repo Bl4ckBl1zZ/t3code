@@ -10,6 +10,7 @@ public struct SettingsUsageView: View {
     private enum LoadState: Equatable {
         case loading
         case loaded(FeatureMergedUsage)
+        case unsupported
         case failed(String)
     }
 
@@ -28,258 +29,285 @@ public struct SettingsUsageView: View {
     @State private var selectedEnvironmentIDs: Set<String>?
     @State private var selectionRevision = UUID()
     @State private var scanningEnvironments: [String] = []
-
-    private var selectedIDs: Set<String> { selectedEnvironmentIDs ?? Set(model.snapshot.environments.map(\.id)) }
     /// Environments that answered nothing this refresh (offline, old server):
     /// their usage is absent, and the screen must say so rather than present
     /// the merged number as complete.
     @State private var unreachableEnvironments: [String] = []
+
+    private var selectedIDs: Set<String> { selectedEnvironmentIDs ?? Set(model.snapshot.environments.map(\.id)) }
 
     public init(model: FeatureRootModel) {
         self.model = model
     }
 
     public var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                Picker("Usage view", selection: $showsLimits) {
-                    Text("Usage").tag(false)
-                    Text("Limits").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, SettingsMetrics.cardInset)
-                if showsLimits { SettingsUsageLimitsView(model: model, refreshTrigger: limitsRefreshID) }
-                else {
-                NavigationLink {
-                    SettingsModelPricesView(model: model).onDisappear { Task { await reload() } }
-                } label: {
-                    Label("Model prices", systemImage: "dollarsign.circle")
-                        .font(T3Typography.threadBody).padding(.horizontal, SettingsMetrics.cardInset)
-                }
-                environmentSection
-                windowSection
-                if selectedIDs.isEmpty { SettingsFootnote("Select an environment to see usage.") }
-                if !scanningEnvironments.isEmpty { SettingsFootnote("Still scanning: \(scanningEnvironments.joined(separator: ", ")). Totals are partial.") }
-
-                switch state {
-                case .loading:
-                    ProgressView("Scanning transcripts…")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 48)
-                case let .failed(message):
-                    SettingsErrorBanner(message: message)
-                case let .loaded(merged):
-                    if merged.totalTokens == 0 {
-                        emptySection
-                    } else {
-                        totalsSection(merged)
-                        chartSection(merged)
-                        modelsSection(merged)
+        content
+            .navigationTitle(showsLimits ? "Limits" : "Usage")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("Usage view", selection: $showsLimits) {
+                        Text("Usage").tag(false)
+                        Text("Limits").tag(true)
                     }
-                    coverageSection(merged)
+                    .pickerStyle(.segmented)
+                    .fixedSize()
                 }
-                }
+                ToolbarItem(placement: .primaryAction) { filterMenu }
             }
-            .padding(.vertical, 18)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(T3Colors.background)
-        .navigationTitle("Usage")
-        .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(windowDays)-\(showsLimits)-\(selectionRevision)-\(model.snapshot.environments.map(\.id).joined(separator: ","))") { if !showsLimits { await reload() } }
-        .refreshable {
-            if showsLimits { limitsRefreshID = UUID() }
-            else { await reload(refreshPrices: true) }
-        }
-    }
-
-    // MARK: - Sections
-
-    private var environmentSection: some View {
-        SettingsSection(title: "Environments") {
-            Menu {
-                Button("All environments") { selectedEnvironmentIDs = nil; selectionRevision = UUID() }
-                ForEach(model.snapshot.environments) { environment in
-                    Button {
-                        var ids = selectedIDs
-                        if !ids.insert(environment.id).inserted { ids.remove(environment.id) }
-                        selectedEnvironmentIDs = ids
-                        selectionRevision = UUID()
-                    } label: {
-                        Label(environment.name, systemImage: selectedIDs.contains(environment.id) ? "checkmark.circle.fill" : "circle")
-                    }
-                }
-            } label: {
-                HStack { Text(selectedEnvironmentIDs == nil ? "All environments" : "\(selectedIDs.count) selected"); Spacer(); Image(systemName: "chevron.up.chevron.down") }
-                    .frame(minHeight: T3Metrics.minimumTapTarget).padding(.horizontal, SettingsMetrics.rowPadding)
+            .task(id: "\(windowDays)-\(showsLimits)-\(selectionRevision)-\(model.snapshot.environments.map(\.id).joined(separator: ","))") {
+                if !showsLimits { await reload() }
             }
-        }
     }
 
-    private var windowSection: some View {
-        Picker("Window", selection: $windowDays) {
-            Text("Past 24h").tag(1)
-            Text("7 days").tag(7)
-            Text("30 days").tag(30)
-            Text("90 days").tag(90)
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, SettingsMetrics.cardInset)
-    }
-
-    private var emptySection: some View {
-        SettingsSection(
-            title: "No usage",
-            footer: "No provider transcripts were found in this window on any connected server."
-        ) {
-            EmptyView()
-        }
-    }
-
-    private func totalsSection(_ merged: FeatureMergedUsage) -> some View {
-        let activePeriods = windowDays == 1 ? merged.hourly.count : merged.activeDays
-        return SettingsSection(
-            title: windowDays == 1 ? "Past 24 hours" : "Last \(windowDays) days",
-            footer: "Cost is the API-equivalent price of these tokens; subscription plans bill separately."
-        ) {
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    statCard(showsCost ? "Total cost" : "Total tokens", showsCost ? Self.cost(merged.costUsd) : Self.tokens(merged.totalTokens))
-                    statCard(
-                        windowDays == 1 ? "Hourly average" : "Daily average",
-                        activePeriods == 0 ? "—" : showsCost
-                            ? Self.cost(merged.costUsd / Double(activePeriods))
-                            : Self.tokens(merged.totalTokens / activePeriods)
-                    )
-                }
-                HStack(spacing: 10) {
-                    statCard(showsCost ? "Tokens" : "API cost", showsCost ? Self.tokens(merged.totalTokens) : Self.cost(merged.costUsd))
-                    statCard(
-                        "Cached input",
-                        merged.cachedInputShare
-                            .formatted(.percent.precision(.fractionLength(0)))
-                    )
-                }
-                HStack(spacing: 10) {
-                    statCard("Sessions", "\(merged.sessions)")
-                    statCard("Cache savings", Self.cost(merged.cacheSavingsUsd))
-                }
+    @ViewBuilder
+    private var content: some View {
+        if selectedIDs.isEmpty {
+            ContentUnavailableView {
+                Label("No Servers Selected", systemImage: "server.rack")
+            } description: {
+                Text("Choose at least one server in the filter menu.")
+            } actions: {
+                Button("Show All") { showAllServers() }
+                    .t3ProminentButtonStyle()
             }
-            .padding(.horizontal, SettingsMetrics.rowPadding)
-        }
-    }
-
-    private func chartSection(_ merged: FeatureMergedUsage) -> some View {
-        SettingsSection(title: "\(windowDays == 1 ? "Hourly" : "Daily") \(showsCost ? "cost" : "tokens")") {
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("Metric", selection: $showsCost) {
-                    Text("Cost").tag(true)
-                    Text("Tokens").tag(false)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 220)
-
-                Chart {
-                    ForEach(windowDays == 1 ? merged.hourly : merged.daily) { day in
-                        ForEach(orderedProviders(in: day), id: \.self) { provider in
-                            if let slice = day.byProvider[provider] {
-                                BarMark(
-                                    x: .value("Day", Self.chartDate(day.day)),
-                                    y: .value(
-                                        showsCost ? "Cost" : "Tokens",
-                                        showsCost ? slice.costUsd : Double(slice.totalTokens)
-                                    )
-                                )
-                                .foregroundStyle(by: .value("Provider", providerLabel(provider)))
-                            }
-                        }
-                    }
-                }
-                .chartForegroundStyleScale(providerScale(merged))
-                .chartLegend(position: .bottom, spacing: 8)
-                .frame(height: 180)
-
-                providerTotalsRows(merged)
-            }
-            .padding(.horizontal, SettingsMetrics.rowPadding)
-        }
-    }
-
-    private func providerTotalsRows(_ merged: FeatureMergedUsage) -> some View {
-        VStack(spacing: 6) {
-            ForEach(merged.providers) { provider in
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Self.providerColor(provider.provider))
-                        .frame(width: 8, height: 8)
-                    Text(providerLabel(provider.provider))
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textPrimary)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    // Cost leads and the volume behind it sits underneath:
-                    // three metrics on one line stop fitting at 320pt.
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text(Self.cost(provider.costUsd))
-                            .font(T3Typography.supporting.weight(.medium))
-                            .foregroundStyle(T3Colors.textSecondary)
-                            .monospacedDigit()
-                        Text(Self.providerVolume(provider))
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textTertiary)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                    }
-                }
-            }
-        }
-    }
-
-    private func modelsSection(_ merged: FeatureMergedUsage) -> some View {
-        SettingsSection(title: "By model") {
-            VStack(spacing: 8) {
-                ForEach(merged.models.sorted { showsCost ? $0.costUsd > $1.costUsd : $0.totalTokens > $1.totalTokens }) { model in
-                    HStack(spacing: 8) {
-                        Text(model.model)
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textPrimary)
-                            .lineLimit(1)
-                        Spacer(minLength: 8)
-                        Text(Self.tokens(model.totalTokens))
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textTertiary)
-                        Text(Self.cost(model.costUsd))
-                            .font(T3Typography.supporting.weight(.medium))
-                            .foregroundStyle(T3Colors.textSecondary)
-                            .monospacedDigit()
-                    }
-                }
-            }
-            .padding(.horizontal, SettingsMetrics.rowPadding)
+            .background(T3Colors.background)
+        } else if showsLimits {
+            SettingsUsageLimitsView(model: model, selectedEnvironmentIDs: selectedIDs, refreshTrigger: limitsRefreshID)
+                .refreshable { limitsRefreshID = UUID() }
+        } else {
+            usageContent
         }
     }
 
     @ViewBuilder
-    private func coverageSection(_ merged: FeatureMergedUsage) -> some View {
-        let notes = coverageNotes(merged)
-        if !notes.isEmpty {
-            SettingsFootnote(notes.joined(separator: "\n"))
+    private var usageContent: some View {
+        switch state {
+        case .unsupported:
+            ContentUnavailableView(
+                "Usage Unavailable",
+                systemImage: "chart.bar.xaxis",
+                description: Text("This connection does not support usage summaries.")
+            )
+            .background(T3Colors.background)
+        case let .failed(message):
+            ContentUnavailableView {
+                Label("Couldn't Load Usage", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(message)
+            } actions: {
+                Button("Try Again") { Task { await reload(refreshPrices: true) } }
+                    .t3ProminentButtonStyle()
+            }
+            .background(T3Colors.background)
+        case let .loaded(merged) where merged.totalTokens == 0 && scanningEnvironments.isEmpty:
+            ContentUnavailableView {
+                Label("No Usage", systemImage: "chart.bar.xaxis")
+            } description: {
+                Text("No provider transcripts were found \(windowPhrase) on the selected servers.")
+            }
+            .background(T3Colors.background)
+            .refreshable { await reload(refreshPrices: true) }
+        case .loading, .loaded:
+            SettingsForm {
+                chartSection(loadedUsage ?? FeatureMergedUsage())
+                    .redacted(reason: loadedUsage == nil ? .placeholder : [])
+                if let merged = loadedUsage {
+                    statsSection(merged)
+                    if !merged.models.isEmpty { modelsSection(merged) }
+                }
+                Section {
+                    NavigationLink {
+                        SettingsModelPricesView(model: model).onDisappear { Task { await reload() } }
+                    } label: {
+                        Text("Model Prices")
+                    }
+                }
+            }
+            .refreshable { await reload(refreshPrices: true) }
         }
     }
 
-    private func statCard(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textTertiary)
-            Text(value)
-                .font(T3Typography.threadBody.weight(.semibold))
-                .foregroundStyle(T3Colors.textPrimary)
-                .monospacedDigit()
+    private var loadedUsage: FeatureMergedUsage? {
+        if case let .loaded(merged) = state { return merged }
+        return nil
+    }
+
+    // MARK: - Toolbar
+
+    /// Window, servers and metric in one menu, so none of them costs a row.
+    private var filterMenu: some View {
+        Menu {
+            if !showsLimits {
+                Picker("Window", selection: $windowDays) {
+                    Text("Past 24 Hours").tag(1)
+                    Text("7 Days").tag(7)
+                    Text("30 Days").tag(30)
+                    Text("90 Days").tag(90)
+                }
+                Picker("Show", selection: $showsCost) {
+                    Text("Cost").tag(true)
+                    Text("Tokens").tag(false)
+                }
+            }
+            Section("Servers") {
+                Button("All Servers") { showAllServers() }
+                    .disabled(selectedEnvironmentIDs == nil)
+                ForEach(model.snapshot.environments) { environment in
+                    Toggle(environment.name, isOn: Binding(
+                        get: { selectedIDs.contains(environment.id) },
+                        set: { isOn in
+                            var ids = selectedIDs
+                            if isOn { ids.insert(environment.id) } else { ids.remove(environment.id) }
+                            selectedEnvironmentIDs = ids
+                            selectionRevision = UUID()
+                        }
+                    ))
+                }
+            }
+        } label: {
+            Label("Filter", systemImage: selectedEnvironmentIDs == nil
+                ? "line.3.horizontal.decrease.circle"
+                : "line.3.horizontal.decrease.circle.fill")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(T3Colors.surfaceRaised, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func showAllServers() {
+        selectedEnvironmentIDs = nil
+        selectionRevision = UUID()
+    }
+
+    // MARK: - Sections
+
+    private var windowPhrase: String {
+        windowDays == 1 ? "in the past 24 hours" : "in the last \(windowDays) days"
+    }
+
+    private var windowTitle: String {
+        windowDays == 1 ? "Past 24 Hours" : "Last \(windowDays) Days"
+    }
+
+    private var selectedServerNames: String {
+        model.snapshot.environments
+            .filter { selectedIDs.contains($0.id) }
+            .map(\.name)
+            .formatted(.list(type: .and))
+    }
+
+    /// The headline figure and the chart behind it, like Screen Time.
+    private func chartSection(_ merged: FeatureMergedUsage) -> some View {
+        Section {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(showsCost ? "Total Cost" : "Total Tokens") · \(windowTitle)")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+                Text(showsCost ? Self.cost(merged.costUsd) : Self.tokens(merged.totalTokens))
+                    .font(.largeTitle.weight(.bold))
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .monospacedDigit()
+                Text(scanningEnvironments.isEmpty
+                    ? selectedServerNames
+                    : "Still scanning \(scanningEnvironments.formatted(.list(type: .and)))…")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(scanningEnvironments.isEmpty ? T3Colors.textSecondary : T3Colors.warning)
+                    .unredacted()
+                chart(merged)
+                    .padding(.top, 10)
+            }
+            .padding(.vertical, 6)
+            ForEach(merged.providers) { provider in
+                providerRow(provider)
+            }
+        } footer: {
+            if case .loading = state {
+                Text("Scanning transcripts…")
+            }
+        }
+    }
+
+    private func chart(_ merged: FeatureMergedUsage) -> some View {
+        Chart {
+            ForEach(windowDays == 1 ? merged.hourly : merged.daily) { day in
+                ForEach(orderedProviders(in: day), id: \.self) { provider in
+                    if let slice = day.byProvider[provider] {
+                        BarMark(
+                            x: .value("Day", Self.chartDate(day.day)),
+                            y: .value(
+                                showsCost ? "Cost" : "Tokens",
+                                showsCost ? slice.costUsd : Double(slice.totalTokens)
+                            )
+                        )
+                        .foregroundStyle(by: .value("Provider", providerLabel(provider)))
+                    }
+                }
+            }
+        }
+        .chartForegroundStyleScale(providerScale(merged))
+        .chartLegend(.hidden)
+        .frame(height: 160)
+        .accessibilityLabel("\(windowDays == 1 ? "Hourly" : "Daily") \(showsCost ? "cost" : "tokens") by provider")
+    }
+
+    private func providerRow(_ provider: FeatureUsageProviderTotals) -> some View {
+        LabeledContent {
+            // Cost leads and the volume behind it sits underneath: three
+            // metrics on one line stop fitting at 320pt.
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(Self.cost(provider.costUsd))
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .monospacedDigit()
+                Text(Self.providerVolume(provider))
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Self.providerColor(provider.provider))
+                    .frame(width: 10, height: 10)
+                    .accessibilityHidden(true)
+                Text(providerLabel(provider.provider))
+            }
+        }
+    }
+
+    private func statsSection(_ merged: FeatureMergedUsage) -> some View {
+        let activePeriods = windowDays == 1 ? merged.hourly.count : merged.activeDays
+        let average = activePeriods == 0 ? "—" : showsCost
+            ? Self.cost(merged.costUsd / Double(activePeriods))
+            : Self.tokens(merged.totalTokens / activePeriods)
+        return Section {
+            LabeledContent(windowDays == 1 ? "Hourly Average" : "Daily Average", value: average)
+            LabeledContent(showsCost ? "Tokens" : "API Cost", value: showsCost ? Self.tokens(merged.totalTokens) : Self.cost(merged.costUsd))
+            LabeledContent("Cached Input", value: merged.cachedInputShare.formatted(.percent.precision(.fractionLength(0))))
+            LabeledContent("Sessions", value: merged.sessions.formatted())
+            LabeledContent("Cache Savings", value: Self.cost(merged.cacheSavingsUsd))
+        } footer: {
+            Text((["Cost is the API-equivalent price of these tokens; subscription plans bill separately."] + coverageNotes(merged))
+                .joined(separator: "\n"))
+        }
+        .monospacedDigit()
+    }
+
+    private func modelsSection(_ merged: FeatureMergedUsage) -> some View {
+        Section("By Model") {
+            ForEach(merged.models.sorted { showsCost ? $0.costUsd > $1.costUsd : $0.totalTokens > $1.totalTokens }) { model in
+                LabeledContent {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(showsCost ? Self.cost(model.costUsd) : Self.tokens(model.totalTokens))
+                            .foregroundStyle(T3Colors.textPrimary)
+                        Text(showsCost ? "\(Self.tokens(model.totalTokens)) tokens" : Self.cost(model.costUsd))
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textSecondary)
+                    }
+                    .monospacedDigit()
+                } label: {
+                    Text(model.model).lineLimit(1)
+                }
+            }
+        }
     }
 
     // MARK: - Loading
@@ -288,15 +316,18 @@ public struct SettingsUsageView: View {
         let generation = UUID()
         loadGeneration = generation
         guard let reader = model.client as? any FeatureUsageReading else {
-            state = .failed("This connection does not support usage summaries.")
+            state = .unsupported
             return
         }
+        let environments = model.snapshot.environments.filter { selectedIDs.contains($0.id) }
+        // Nothing selected is a filter state the view explains on its own;
+        // scanning nothing would settle as an empty result and contradict it.
+        guard !environments.isEmpty else { return }
         let selection = "\(windowDays):\(selectedIDs.sorted().joined(separator: ","))"
         if loadedSelection != selection { state = .loading }
         loadedSelection = selection
 
         let window = UsageSummaryInput.window(days: windowDays)
-        let environments = model.snapshot.environments.filter { selectedIDs.contains($0.id) }
         scanningEnvironments = environments.map(\.name)
         var usable: [FeatureEnvironmentUsage] = []
         var unreachable: [String] = []
@@ -329,8 +360,9 @@ public struct SettingsUsageView: View {
             if !usable.isEmpty { state = .loaded(FeatureUsageMerge.merge(usable)) }
         }
         guard !Task.isCancelled, loadGeneration == generation else { return }
+        scanningEnvironments = []
         unreachableEnvironments = unreachable
-        if usable.isEmpty && !environments.isEmpty {
+        if usable.isEmpty {
             state = .failed("No connected server answered the usage scan.")
             return
         }
@@ -415,7 +447,7 @@ public struct SettingsUsageView: View {
     }
 
     /// Compact token magnitude ("48.2M"): exact counts belong to tooling, and
-    /// eight-digit numbers wreck the card layout.
+    /// eight-digit numbers wreck the layout.
     private static func tokens(_ value: Int) -> String {
         Double(value).formatted(.number.notation(.compactName).precision(.significantDigits(3)))
     }

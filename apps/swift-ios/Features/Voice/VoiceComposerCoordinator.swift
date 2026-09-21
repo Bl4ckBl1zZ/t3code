@@ -85,6 +85,11 @@ public final class VoiceComposerCoordinator {
 
     @ObservationIgnored private var capability: (any FeatureVoiceTranscribing)?
     @ObservationIgnored private var identity = ""
+    /// Where the attached composer's stashed transcripts reappear, named for the
+    /// confirmation HUD. Captured with the anchor so the HUD names the composer
+    /// the recording started in, not the one that happens to be attached now.
+    @ObservationIgnored private var destinationName = "its conversation"
+    @ObservationIgnored private var anchorDestinationName = "its conversation"
     @ObservationIgnored private var readDraft: () -> String = { "" }
     @ObservationIgnored private var writeDraft: (String) -> Void = { _ in }
     @ObservationIgnored private var readRange: (String) -> VoiceTextRange = {
@@ -130,6 +135,7 @@ public final class VoiceComposerCoordinator {
     /// finished while the old identity was active is delivered here.
     public func attach(
         identity: String,
+        destinationName: String = "its conversation",
         capability: (any FeatureVoiceTranscribing)?,
         readDraft: @escaping () -> String,
         writeDraft: @escaping (String) -> Void,
@@ -143,6 +149,7 @@ public final class VoiceComposerCoordinator {
         self.moveCaret = moveCaret
         let identityChanged = self.identity != identity
         self.identity = identity
+        self.destinationName = destinationName
         if controller == nil, capability != nil { makeController() }
         if let capability { preflight.prime(using: capability) }
         // Runs after the composer has settled on the new identity, so this never
@@ -196,22 +203,16 @@ public final class VoiceComposerCoordinator {
                 range: readRange(draft)
             )
         )
+        // Neither outcome needs a decision, so neither is a modal alert: the
+        // HUD says where the words went and gets out of the way.
         switch delivery {
         case .discarded:
-            alert = VoiceComposerAlert(
-                title: "Voice transcript discarded",
-                message: "The composer changed during transcription.",
-                kind: .notice
-            )
+            T3HUD.show("Transcript discarded", systemImage: "exclamationmark.circle", haptic: .warning)
         case let .stashed(stashIdentity, text):
             stash.put(identity: stashIdentity, text: text)
-            alert = VoiceComposerAlert(
-                title: "Voice transcript saved",
-                message: "Switch back to that conversation to insert it.",
-                kind: .notice
-            )
+            T3HUD.show("Transcript saved to \(anchorDestinationName)", systemImage: "waveform")
         case let .inserted(result):
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            PlatformHapticEngine.shared.play(.success)
             apply(result)
         }
     }
@@ -242,6 +243,7 @@ public final class VoiceComposerCoordinator {
             draft: draft,
             range: readRange(draft)
         )
+        anchorDestinationName = destinationName
     }
 
     /// Start when idle, stop when recording. Captures the anchor on both,
@@ -251,7 +253,7 @@ public final class VoiceComposerCoordinator {
         guard let controller, let capability else {
             needsOpenRouter = false
             alert = VoiceComposerAlert(
-                title: "Voice Input unavailable",
+                title: "Voice Input Unavailable",
                 message: "Sign in to your T3 account to dictate messages.",
                 kind: .notice
             )
@@ -262,7 +264,7 @@ public final class VoiceComposerCoordinator {
         activeTask = Task { @MainActor [weak self] in
             guard let self else { return }
             if controller.state.isRecording {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                PlatformHapticEngine.shared.playImpact(.medium)
                 await controller.stop()
                 return
             }
@@ -290,7 +292,7 @@ public final class VoiceComposerCoordinator {
             } catch {
                 self.needsOpenRouter = false
                 self.alert = VoiceComposerAlert(
-                    title: "Sign in to use Voice Input",
+                    title: "Sign In to Use Voice Input",
                     message: VoiceInputError(code: .unauthenticated).displayMessage,
                     kind: .notice
                 )
@@ -300,7 +302,7 @@ public final class VoiceComposerCoordinator {
 
     private func beginRecording(cleanup: Bool) async {
         guard let controller else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        PlatformHapticEngine.shared.playImpact(.light)
         await controller.start(cleanup: cleanup)
         // The finger lifted while startup was still in flight (permission sheet,
         // preflight): honour the release now that there is something to stop.
@@ -424,7 +426,7 @@ public final class VoiceComposerCoordinator {
             stopOnRecording = false
             if reason == .swipe {
                 // The discard the swipe armed is now real; say so in the hand.
-                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                PlatformHapticEngine.shared.play(.warning)
             }
             if reason == .tooShort, !holdOwnsSession {
                 // The hold grabbed a session it did not start: a graze-length
@@ -434,12 +436,12 @@ public final class VoiceComposerCoordinator {
                 break
             }
             if reason == .tooShort {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                PlatformHapticEngine.shared.playImpact(.light)
             }
             cancelRecording()
 
         case .cancelArmedChanged:
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            PlatformHapticEngine.shared.playImpact(.light)
         }
     }
 
@@ -458,19 +460,19 @@ public final class VoiceComposerCoordinator {
         if stage == .permission {
             alert = error.permanent
                 ? VoiceComposerAlert(
-                    title: "Microphone permission required",
-                    message: "Enable microphone access in system settings to use Voice Input.",
+                    title: "Microphone Access Is Off",
+                    message: "Turn on microphone access for T3 Code in Settings to use Voice Input.",
                     kind: .permissionBlocked
                 )
                 : VoiceComposerAlert(
-                    title: "Microphone access needed",
+                    title: "Microphone Access Needed",
                     message: "Allow microphone access to use Voice Input.",
                     kind: .permissionRetry
                 )
             return
         }
         alert = VoiceComposerAlert(
-            title: "Voice input failed",
+            title: "Voice Input Failed",
             message: error.displayMessage,
             kind: canRetry ? .failureRetry : .notice
         )

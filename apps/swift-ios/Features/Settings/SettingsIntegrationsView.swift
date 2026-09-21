@@ -9,9 +9,8 @@ import SwiftUI
 public struct SettingsIntegrationsView: View {
     private let manager: any FeatureVoiceSettingsManaging
     private let serverSettings: any FeatureServerSettingsManaging
-    /// The server a write lands on. Nil while none is connected, which — along
-    /// with a nil `preferences` — is what leaves the Browser section out
-    /// entirely: a row that can be shown but not saved is worse than no row.
+    /// The server the browser row describes. Nil while none is connected,
+    /// which — along with a nil `preferences` — leaves that row out.
     private let environmentID: String?
     /// The server's own answer, republished whenever the config subscription
     /// reports it changing.
@@ -19,12 +18,6 @@ public struct SettingsIntegrationsView: View {
 
     @State private var status: OpenRouterIntegrationStatus?
     @State private var isLoaded = false
-    @State private var showingOpenRouter = false
-    /// What the row shows while the write is in flight, so the switch moves
-    /// under the thumb instead of after the round trip. Cleared once the
-    /// server's own answer arrives through `preferences`.
-    @State private var pendingBrowserAccess: Bool?
-    @State private var browserAccessError: String?
 
     public init(
         manager: any FeatureVoiceSettingsManaging,
@@ -38,103 +31,62 @@ public struct SettingsIntegrationsView: View {
         self.preferences = preferences
     }
 
-    /// The pending value while a write is in flight, and the server's own
-    /// answer otherwise.
-    private var browserAccessEnabled: Bool {
-        pendingBrowserAccess ?? preferences?.enableAgentBrowserAccess ?? true
-    }
-
-    private var browserAccessBinding: Binding<Bool> {
-        Binding(get: { browserAccessEnabled }, set: { setBrowserAccess($0) })
+    private var connectionLabel: String {
+        VoiceIntegrationLabels.connection(status, isLoaded: isLoaded)
     }
 
     public var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                if preferences != nil, environmentID != nil {
-                    SettingsSection(
-                        title: "Browser",
-                        footer: browserAccessError ?? (browserAccessEnabled
-                            ? "Agents can open and drive the preview browser. Your own browser is unaffected either way."
-                            : "Applies to sessions started from now on; a running agent keeps the tools it was given.")
-                    ) {
-                        SettingsToggleRow(
-                            title: "Agent browser access",
-                            systemImage: "globe",
-                            isOn: browserAccessBinding
-                        )
+        SettingsForm {
+            Section {
+                NavigationLink {
+                    SettingsOpenRouterView(manager: manager) { latest in
+                        // The detail owns the credential, so the index takes its
+                        // word for the status instead of re-fetching on return.
+                        status = latest
+                        isLoaded = true
+                    }
+                } label: {
+                    LabeledContent {
+                        Text(connectionLabel)
+                            .foregroundStyle(connectionLabel == "Error" ? T3Colors.danger : T3Colors.textSecondary)
+                            .redacted(reason: isLoaded ? [] : .placeholder)
+                    } label: {
+                        SettingsTileLabel(title: "OpenRouter", systemImage: "waveform", tint: .indigo)
                     }
                 }
-                SettingsSection(
-                    title: "Integrations",
-                    footer: "OpenRouter powers Voice Input transcription."
-                ) {
-                    Button {
-                        showingOpenRouter = true
-                    } label: {
-                        SettingsValueNavigationRow(
-                            title: "OpenRouter",
-                            systemImage: "point.3.connected.trianglepath.dotted",
-                            value: VoiceIntegrationLabels.connection(status, isLoaded: isLoaded)
-                        )
+            } footer: {
+                Text(isLoaded && status == nil
+                    ? "OpenRouter powers Voice Input transcription. Couldn't reach the server to check it."
+                    : "OpenRouter powers Voice Input transcription.")
+            }
+
+            if let preferences, environmentID != nil {
+                // Browser access is a server setting whose home is Project
+                // Defaults, where projects can also override it.
+                Section {
+                    NavigationLink(value: SettingsRoute.projectDefaults) {
+                        LabeledContent {
+                            Text(preferences.enableAgentBrowserAccess ? "On" : "Off")
+                        } label: {
+                            SettingsTileLabel(title: "Agent Browser Access", systemImage: "globe", tint: .blue)
+                        }
                     }
-                    .buttonStyle(.plain)
+                } footer: {
+                    Text("Set in Project Defaults, where each project can override it.")
                 }
             }
-            .padding(.vertical, 18)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(T3Colors.background)
         .navigationTitle("Integrations")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-        .sheet(isPresented: $showingOpenRouter) {
-            NavigationStack {
-                SettingsOpenRouterView(manager: manager) { latest in
-                    // The detail owns the credential, so the index takes its
-                    // word for the status instead of re-fetching on dismiss.
-                    status = latest
-                    isLoaded = true
-                }
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { showingOpenRouter = false }
-                    }
-                }
-            }
-            .presentationDragIndicator(.visible)
-        }
-    }
-
-    /// Writes the server's copy of the setting, not this device's.
-    ///
-    /// The switch moves first and the failure path puts it back, because the
-    /// alternative — a switch that sits still until the server answers — reads
-    /// as an unresponsive control on a slow link.
-    private func setBrowserAccess(_ enabled: Bool) {
-        guard let environmentID else { return }
-        pendingBrowserAccess = enabled
-        browserAccessError = nil
-        Task { @MainActor in
-            do {
-                try await serverSettings.updateServerSettings(
-                    environmentID: environmentID,
-                    patch: ServerSettingsPatchInput(enableAgentBrowserAccess: enabled)
-                )
-            } catch {
-                browserAccessError = "Could not save: \(error.localizedDescription)"
-            }
-            // Either way the row goes back to reading the snapshot, which now
-            // carries whatever the server actually settled on.
-            pendingBrowserAccess = nil
-        }
+        .refreshable { await load() }
     }
 
     @MainActor
     private func load() async {
         // A failed status request settles as "Unavailable" rather than as an
-        // error banner: the row is informational, and the detail screen is
-        // where a reader can actually act on the failure.
+        // error: the row is informational, and the detail screen is where a
+        // reader can act on the failure.
         status = try? await manager.openRouterIntegration()
         isLoaded = true
     }
@@ -143,12 +95,16 @@ public struct SettingsIntegrationsView: View {
 /// OpenRouter credential management: enter a key, revalidate it, or disconnect.
 /// Existing keys are never displayed, only hinted at.
 public struct SettingsOpenRouterView: View {
+    private enum Action: Equatable {
+        case load, connect, revalidate, disconnect
+    }
+
     private let manager: any FeatureVoiceSettingsManaging
     private let onStatusChange: (OpenRouterIntegrationStatus) -> Void
 
     @State private var status: OpenRouterIntegrationStatus?
     @State private var apiKey = ""
-    @State private var isBusy = false
+    @State private var busyAction: Action?
     @State private var isLoaded = false
     @State private var errorMessage: String?
     @State private var showingDisconnect = false
@@ -161,141 +117,150 @@ public struct SettingsOpenRouterView: View {
         self.onStatusChange = onStatusChange
     }
 
+    /// A client that cannot manage the credential at all. Every write would
+    /// throw, so the actions are off rather than offered and then refused.
+    private var isSupported: Bool {
+        !(manager is EmptyFeatureVoiceSettingsManager)
+    }
+
+    private var isBusy: Bool { busyAction != nil }
+
     public var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                connectionSection
-                apiKeySection
+        SettingsForm {
+            statusSection
+            if isLoaded {
+                keySection
                 if status?.configured == true {
-                    manageSection
+                    Section {
+                        Button {
+                            Task { await run(.revalidate) { try await manager.validateOpenRouterCredential() } }
+                        } label: {
+                            rowLabel("Revalidate Key", action: .revalidate)
+                        }
+                        .disabled(isBusy || !isSupported)
+                    }
                 }
-                externalLinkSection
+                Section {
+                    Link(destination: URL(string: "https://openrouter.ai/settings/keys")!) {
+                        HStack {
+                            Text("Manage Keys on OpenRouter")
+                            Spacer()
+                            Image(systemName: "arrow.up.forward.square")
+                                .foregroundStyle(T3Colors.textTertiary)
+                        }
+                    }
+                } footer: {
+                    Text("Audio and transcripts are processed by OpenRouter and the selected upstream providers.")
+                }
+                if status?.configured == true {
+                    Section {
+                        Button(role: .destructive) { showingDisconnect = true } label: {
+                            rowLabel("Disconnect", action: .disconnect)
+                        }
+                        .disabled(isBusy || !isSupported)
+                        .confirmationDialog(
+                            "Disconnect OpenRouter?",
+                            isPresented: $showingDisconnect,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Disconnect", role: .destructive) {
+                                Task { await run(.disconnect) { try await manager.deleteOpenRouterCredential() } }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Voice Input preferences will be preserved.")
+                        }
+                    }
+                }
             }
-            .padding(.vertical, 18)
         }
         .scrollDismissesKeyboard(.interactively)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(T3Colors.background)
         .navigationTitle("OpenRouter")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await run { try await manager.openRouterIntegration() } }
-        .confirmationDialog(
-            "Disconnect OpenRouter?",
-            isPresented: $showingDisconnect,
-            titleVisibility: .visible
-        ) {
-            Button("Disconnect", role: .destructive) {
-                Task { await run { try await manager.deleteOpenRouterCredential() } }
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                if busyAction == .connect {
+                    ProgressView()
+                } else if !trimmedKey.isEmpty {
+                    Button("Connect", action: connect)
+                        .fontWeight(.semibold)
+                        .disabled(isBusy || !isSupported)
+                }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Voice Input preferences will be preserved.")
         }
+        .task { await run(.load) { try await manager.openRouterIntegration() } }
+        .refreshable { await run(.load) { try await manager.openRouterIntegration() } }
     }
 
-    private var connectionSection: some View {
-        SettingsSection(title: "Connection") {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(VoiceIntegrationLabels.connection(status, isLoaded: isLoaded))
-                    .font(T3Typography.homeTitle)
-                    .foregroundStyle(T3Colors.textPrimary)
-
-                Text(credentialDescription)
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
-
+    @ViewBuilder
+    private var statusSection: some View {
+        Section {
+            if isLoaded {
+                LabeledContent("Status") {
+                    HStack(spacing: 8) {
+                        if status?.state == .validating { ProgressView() }
+                        Text(statusLabel).foregroundStyle(statusColor)
+                    }
+                }
+                if let hint = status?.credentialHint, !hint.isEmpty {
+                    LabeledContent("Key", value: hint)
+                }
                 if let validatedAt = VoiceIntegrationLabels.validatedAt(status?.lastValidatedAt) {
-                    Text("Last validated \(validatedAt).")
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textSecondary)
+                    LabeledContent("Last Validated", value: validatedAt)
                 }
+            } else {
+                SettingsPlaceholderRows(count: 2)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, SettingsMetrics.rowPadding)
-            .padding(.vertical, 12)
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    private var apiKeySection: some View {
-        SettingsSection(title: status?.configured == true ? "Replace API key" : "API key") {
-            VStack(alignment: .leading, spacing: 12) {
-                SecureField("sk-or-v1-…", text: $apiKey)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textContentType(.password)
-                    .submitLabel(.done)
-                    .disabled(isBusy)
-                    .settingsInputField()
-                    .accessibilityLabel("OpenRouter API key")
-                    .onSubmit(connect)
-
-                if let errorMessage {
-                    SettingsErrorBanner(message: errorMessage)
-                }
-
-                SettingsActionButton(
-                    title: "Validate and connect",
-                    systemImage: "key",
-                    tone: .primary,
-                    isBusy: isBusy,
-                    isDisabled: trimmedKey.isEmpty,
-                    action: connect
-                )
-                .padding(.horizontal, SettingsMetrics.rowPadding)
+        } footer: {
+            if isLoaded, !isSupported {
+                Text("This connection doesn't support Voice Input.")
+            } else if status?.state == .invalid {
+                Text("OpenRouter rejected this key. Enter a new one below.").foregroundStyle(T3Colors.danger)
             }
         }
     }
 
-    private var manageSection: some View {
-        SettingsSection(title: "Manage") {
-            VStack(spacing: 12) {
-                SettingsActionButton(
-                    title: "Revalidate",
-                    systemImage: "arrow.clockwise",
-                    isDisabled: isBusy
-                ) {
-                    Task { await run { try await manager.validateOpenRouterCredential() } }
-                }
-
-                SettingsActionButton(
-                    title: "Disconnect",
-                    systemImage: "trash",
-                    tone: .danger,
-                    isDisabled: isBusy
-                ) {
-                    showingDisconnect = true
-                }
-            }
-            .padding(.horizontal, SettingsMetrics.rowPadding)
-        }
-    }
-
-    private var externalLinkSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Link(destination: URL(string: "https://openrouter.ai/settings/keys")!) {
-                SettingsNavigationRow(
-                    title: "Manage keys on OpenRouter",
-                    systemImage: "key.horizontal",
-                    trailingSystemImage: "arrow.up.right"
-                )
-            }
-            .buttonStyle(.plain)
-
-            SettingsFootnote(
-                """
-                Audio and transcripts are processed by OpenRouter and the selected upstream \
-                providers.
-                """
+    private var keySection: some View {
+        Section {
+            SecureField("sk-or-v1-…", text: $apiKey)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textContentType(.password)
+                .submitLabel(.done)
+                .disabled(isBusy || !isSupported)
+                .accessibilityLabel("OpenRouter API key")
+                .onSubmit(connect)
+        } header: {
+            Text(status?.configured == true ? "Replace API Key" : "API Key")
+        } footer: {
+            SettingsFooter(
+                text: "The key applies to this whole server. Existing keys are never displayed.",
+                error: errorMessage
             )
         }
     }
 
-    private var credentialDescription: String {
-        guard let hint = status?.credentialHint, !hint.isEmpty else {
-            return "Connect an account-wide key for Voice Input."
+    private var statusLabel: String {
+        let label = VoiceIntegrationLabels.connection(status, isLoaded: isLoaded)
+        return label == "Error" ? "Invalid Key" : label
+    }
+
+    private var statusColor: Color {
+        switch status?.state {
+        case .connected: T3Colors.success
+        case .invalid: T3Colors.danger
+        default: T3Colors.textSecondary
         }
-        return "Configured key \(hint). Existing keys are never displayed."
+    }
+
+    private func rowLabel(_ title: String, action: Action) -> some View {
+        HStack {
+            Text(title)
+            if busyAction == action {
+                Spacer()
+                ProgressView()
+            }
+        }
     }
 
     private var trimmedKey: String {
@@ -303,30 +268,35 @@ public struct SettingsOpenRouterView: View {
     }
 
     private func connect() {
-        guard !trimmedKey.isEmpty else { return }
+        guard !trimmedKey.isEmpty, !isBusy, isSupported else { return }
         let key = apiKey
-        Task { await run { try await manager.putOpenRouterCredential(apiKey: key) } }
+        Task { await run(.connect) { try await manager.putOpenRouterCredential(apiKey: key) } }
     }
 
     /// Every OpenRouter mutation settles the same way: it replaces the status,
     /// clears the entered key so a validated secret never lingers in the field,
-    /// and surfaces the failure inline rather than as an alert.
+    /// and surfaces the failure under the key field rather than as an alert.
     @MainActor
     private func run(
+        _ action: Action,
         _ operation: @MainActor () async throws -> OpenRouterIntegrationStatus
     ) async {
-        isBusy = true
+        busyAction = action
         errorMessage = nil
         defer {
             isLoaded = true
-            isBusy = false
+            busyAction = nil
         }
         do {
             let latest = try await operation()
             status = latest
-            apiKey = ""
+            if action != .load {
+                apiKey = ""
+                PlatformHapticEngine.shared.play(latest.state == .invalid ? .warning : .success)
+            }
             onStatusChange(latest)
         } catch {
+            if action != .load { PlatformHapticEngine.shared.play(.error) }
             errorMessage = error.localizedDescription
         }
     }

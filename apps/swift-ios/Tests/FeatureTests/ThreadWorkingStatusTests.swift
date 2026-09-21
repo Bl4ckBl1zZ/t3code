@@ -139,15 +139,13 @@ struct ThreadWorkingStatusTests {
     }
 
     @Test
-    func theTimerWaitsOutShortTurnsAndThenReadsLikeAHomeRow() {
+    func theTimerWaitsOutShortTurns() {
         let status = ThreadWorkingStatus(
             headline: "Thinking",
-            symbolName: "circle.dotted",
+            symbolName: "sparkles",
             startedAt: startedAt
         )
-        #expect(status.durationLabel(at: startedAt.addingTimeInterval(6)) == nil)
-        #expect(status.durationLabel(at: startedAt.addingTimeInterval(45)) == "45s")
-        #expect(status.durationLabel(at: startedAt.addingTimeInterval(180)) == "3m")
+        #expect(status.timerAppearsAt == startedAt.addingTimeInterval(10))
     }
 
     /// A run the server has not stamped a start on gets no timer rather than one
@@ -156,9 +154,9 @@ struct ThreadWorkingStatusTests {
     func aRunWithNoReportedStartShowsNoTimer() {
         let status = ThreadWorkingStatus(
             headline: "Starting agent",
-            symbolName: "circle.dotted",
+            symbolName: "hourglass",
             startedAt: nil
         )
-        #expect(status.durationLabel(at: startedAt) == nil)
+        #expect(status.timerAppearsAt == nil)
     }
 }

@@ -87,46 +87,67 @@ struct CheckpointRestoreSheet: View {
     private static let visibleFileLimit = 6
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.bottom, 14)
-
-            facts
-
-            if case let .failed(message) = phase {
-                failureNotice(message)
-                    .padding(.top, 12)
+        NavigationStack {
+            List {
+                if isWorking {
+                    Section {
+                        // Parity with desktop: restoring under a running turn
+                        // races the agent's writes, so the turn goes first.
+                        ThreadSheetBanner(
+                            tone: .warning,
+                            title: "The agent is still working",
+                            message: "Stop the current turn before restoring."
+                        )
+                        .listRowBackground(ThreadSheetBannerTone.warning.fill)
+                    }
+                } else if case let .failed(message) = phase {
+                    Section {
+                        ThreadSheetBanner(tone: .error, title: "Couldn’t restore", message: message)
+                            .listRowBackground(ThreadSheetBannerTone.error.fill)
+                    }
+                }
+                facts
             }
-
-            Spacer(minLength: 16)
-
-            footer
+            .t3SheetList()
+            .navigationTitle(request.capturedAtLabel.map { "Restore to \($0)?" } ?? "Restore?")
+            .navigationBarTitleDisplayMode(.inline)
+            .t3NavigationChrome()
+            .toolbar { closeItem }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                footer
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+            }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 22)
-        .padding(.bottom, 12)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .t3GlassSheetBackground()
         .interactiveDismissDisabled(phase == .running)
+        .onChange(of: phase) { _, phase in
+            if case .failed = phase { PlatformHapticEngine.shared.play(.error) }
+        }
         .accessibilityIdentifier("checkpoint-restore-sheet")
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(
-                request.capturedAtLabel.map { "Restore to \($0)?" }
-                    ?? "Restore to this point?"
-            )
-            .font(T3Typography.threadHeading3)
-            .foregroundStyle(T3Colors.textPrimary)
-            Text("This cannot be undone.")
-                .font(T3Typography.supporting)
-                .foregroundStyle(T3Colors.textTertiary)
+    /// Always present, and visibly disabled while the restore runs, so the
+    /// lock on swiping away is not a mystery.
+    @ToolbarContentBuilder
+    private var closeItem: some ToolbarContent {
+        if #available(iOS 26, *) {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(role: .close) { dismiss() }
+                    .disabled(phase == .running)
+            }
+        } else {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+                    .disabled(phase == .running)
+            }
         }
     }
 
     private var facts: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        Section {
             factRow(systemImage: "folder", tint: T3Colors.textSecondary) {
                 if request.files.isEmpty {
                     Text("Workspace files return to their state at this point")
@@ -142,11 +163,11 @@ struct CheckpointRestoreSheet: View {
                     }
                     if request.files.count > Self.visibleFileLimit {
                         Text("…and \(request.files.count - Self.visibleFileLimit) more")
-                            .font(ChatTimelineStyle.small)
+                            .font(T3Typography.supporting)
                             .foregroundStyle(T3Colors.textTertiary)
-                            .padding(.leading, 30)
                     }
                 }
+                .padding(.leading, 30)
             }
 
             factRow(systemImage: "bubble.left.and.bubble.right", tint: T3Colors.textSecondary) {
@@ -163,7 +184,10 @@ struct CheckpointRestoreSheet: View {
                         .foregroundStyle(T3Colors.warning)
                 }
             }
+        } footer: {
+            Text("This can’t be undone.")
         }
+        .t3GroupedRow()
     }
 
     private func factRow(
@@ -173,11 +197,11 @@ struct CheckpointRestoreSheet: View {
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(tint)
                 .frame(width: 20)
+                .accessibilityHidden(true)
             content()
-                .font(T3Typography.control)
+                .font(T3Typography.threadBody)
                 .foregroundStyle(T3Colors.textPrimary)
         }
     }
@@ -185,100 +209,56 @@ struct CheckpointRestoreSheet: View {
     private func fileRow(_ file: OrchestrationV2CheckpointFileSummary) -> some View {
         HStack(spacing: 8) {
             Text(file.path)
-                .font(ChatTimelineStyle.smallMono)
+                .font(T3Typography.tool)
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.head)
             Spacer(minLength: 6)
             if file.additions > 0 {
                 Text("+\(file.additions)")
-                    .font(ChatTimelineStyle.smallMono)
+                    .font(T3Typography.tool)
                     .foregroundStyle(T3Colors.diffAddition)
             }
             if file.deletions > 0 {
                 Text("−\(file.deletions)")
-                    .font(ChatTimelineStyle.smallMono)
+                    .font(T3Typography.tool)
                     .foregroundStyle(T3Colors.diffDeletion)
             }
         }
-        .padding(.leading, 30)
+        .accessibilityElement(children: .combine)
     }
 
-    private func failureNotice(_ message: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 13, weight: .semibold))
-            Text(message)
-                .font(T3Typography.supporting)
-        }
-        .foregroundStyle(T3Colors.danger)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(T3Colors.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-    }
-
+    /// The sheet is itself the confirmation, so its one button commits. While
+    /// the agent works, that button is the interrupt instead.
     @ViewBuilder
     private var footer: some View {
         if isWorking {
-            // Parity with desktop: restoring under a running turn races the
-            // agent's writes, so the turn goes first.
-            VStack(spacing: 8) {
-                Text("The agent is still working. Interrupt the current turn before restoring.")
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button {
-                    onInterrupt()
-                } label: {
-                    Text("Interrupt turn")
-                        .font(T3Typography.control)
-                        .foregroundStyle(T3Colors.textPrimary)
-                        .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(T3Colors.inputBorder, lineWidth: 1)
-                        }
-                }
-                .buttonStyle(.plain)
+            Button(action: onInterrupt) {
+                Label("Interrupt Turn", systemImage: "stop.fill")
+                    .frame(maxWidth: .infinity)
             }
+            .t3ProminentButtonStyle()
+            .controlSize(.large)
         } else {
-            VStack(spacing: 8) {
-                Button {
-                    restore()
-                } label: {
-                    HStack(spacing: 8) {
-                        if phase == .running {
+            Button(action: restore) {
+                Group {
+                    if phase == .running {
+                        HStack(spacing: 8) {
                             ProgressView()
-                                .controlSize(.small)
-                                .tint(.white)
-                            Text("Restoring files…")
-                        } else if case .failed = phase {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 13, weight: .semibold))
-                            Text("Try again")
-                        } else {
-                            Text("Restore to this point")
+                            Text("Restoring Files…")
                         }
+                    } else if case .failed = phase {
+                        Label("Try Again", systemImage: "arrow.counterclockwise")
+                    } else {
+                        Text("Restore to This Point")
                     }
-                    .font(T3Typography.control.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
-                    .background(
-                        T3Colors.danger,
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    )
                 }
-                .buttonStyle(.plain)
-                .disabled(phase == .running)
-                .opacity(phase == .running ? 0.75 : 1)
-                .accessibilityIdentifier("checkpoint-restore-confirm")
-
-                Button("Cancel") { dismiss() }
-                    .font(T3Typography.control)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .frame(maxWidth: .infinity, minHeight: 40)
-                    .disabled(phase == .running)
+                .frame(maxWidth: .infinity)
             }
+            .checkpointRestoreButtonStyle()
+            .controlSize(.large)
+            .disabled(phase == .running)
+            .accessibilityIdentifier("checkpoint-restore-confirm")
         }
     }
 
@@ -288,10 +268,28 @@ struct CheckpointRestoreSheet: View {
         Task { @MainActor in
             do {
                 try await onRestore()
+                T3HUD.show(
+                    request.capturedAtLabel.map { "Restored to \($0)" } ?? "Restored",
+                    systemImage: "arrow.counterclockwise"
+                )
                 dismiss()
             } catch {
                 phase = .failed(error.localizedDescription)
             }
+        }
+    }
+}
+
+private extension View {
+    /// A system red prominent button. The palette's danger color is a light
+    /// pink in dark palettes, and white text on it is unreadable; the system
+    /// red keeps contrast in both appearances.
+    @ViewBuilder
+    func checkpointRestoreButtonStyle() -> some View {
+        if #available(iOS 26, *) {
+            buttonStyle(.glassProminent).tint(.red)
+        } else {
+            buttonStyle(.borderedProminent).tint(.red)
         }
     }
 }

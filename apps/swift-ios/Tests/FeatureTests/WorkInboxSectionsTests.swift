@@ -28,7 +28,7 @@ final class WorkInboxSectionsTests: XCTestCase {
         )
         XCTAssertEqual(
             WorkInboxSections.ordered.map(\.label),
-            ["Main", "Needs you", "Active"]
+            ["Main", "Needs You", "Active"]
         )
     }
 

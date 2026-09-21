@@ -45,6 +45,34 @@ final class PairingServiceTests: XCTestCase {
         // fails with scope_not_granted.
         XCTAssertFalse(form.contains("scope="))
     }
+
+    func testPairingReportsTheDeviceLabelAndTabletType() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-swift-pairing-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transport = PairingHTTPTransport()
+        let service = PairingService(
+            transport: transport,
+            environmentStore: EnvironmentStore(
+                fileURL: directory.appendingPathComponent("environments.json")
+            ),
+            credentialStore: InMemoryCredentialStore()
+        )
+
+        try await service.pair(
+            host: "https://studio.example",
+            code: "pair-once",
+            label: "iPad",
+            deviceType: PairingClientIdentity.DeviceType(idiom: .pad)
+        )
+
+        let requests = await transport.requests
+        let form = String(data: requests[1].httpBody!, encoding: .utf8)!
+        XCTAssertTrue(form.contains("client_device_type=tablet"))
+        XCTAssertTrue(form.contains("client_label=iPad"))
+        XCTAssertEqual(PairingClientIdentity.DeviceType(idiom: .phone), .mobile)
+    }
 }
 
 private actor PairingHTTPTransport: HTTPTransport {

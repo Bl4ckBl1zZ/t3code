@@ -16,34 +16,78 @@ import Foundation
 
 // MARK: - Connection notice
 
-/// The warning card the desktop panel puts above Workspace when the
-/// environment cannot answer. Nothing else in the sheet works until it does, so
-/// it is the one section that renders even when it has nothing good to report.
+/// The environment row and the banner the sheet puts above everything else
+/// when the environment cannot answer. Nothing else in the sheet works until it
+/// does, so it is the one problem that renders even with nothing to report.
 public enum ThreadDetailsConnection {
-    /// `nil` is a saved environment this client has not probed yet — no evidence
-    /// of a problem, so no warning. `connected` and `disconnected` split apart
-    /// here: the React Native client treats its own `available` (never probed,
-    /// or idle-but-reachable) as fine, and this is its native equivalent.
+    /// Only a lost connection is a problem. `nil` is a saved environment this
+    /// client has not probed yet, which is no evidence of one, and connecting
+    /// or reconnecting is ordinary progress: a red card on every reconnect
+    /// taught readers to ignore the one that mattered.
     public static func hasIssue(_ state: FeatureConnection.State?) -> Bool {
-        guard let state else { return false }
-        return state != .connected
+        state == .disconnected
     }
 
     public static func isReconnecting(_ state: FeatureConnection.State?) -> Bool {
         state == .connecting || state == .reconnecting
     }
 
+    /// The environment row's value.
     public static func label(_ state: FeatureConnection.State?) -> String {
-        guard let state else { return "available" }
-        return state.rawValue
+        switch state {
+        case nil: "Available"
+        case .connected: "Connected"
+        case .connecting, .reconnecting: "Connecting…"
+        case .disconnected: "Offline"
+        }
+    }
+
+    /// The banner's headline names the machine, because "unavailable" alone
+    /// does not say which of several environments went away.
+    public static func noticeTitle(environmentName: String?) -> String {
+        "\(environmentName ?? "This environment") is offline"
     }
 
     public static let fallbackNoticeBody =
         "Reconnect this environment before sending messages or running actions."
+}
 
-    public static func reconnectLabel(_ state: FeatureConnection.State?) -> String {
-        isReconnecting(state) ? "Reconnecting…" : "Reconnect"
+// MARK: - Header
+
+/// The line under the thread title at the top of the sheet: who is working
+/// on it, what it is doing, and how fresh that is. The title itself leaves the
+/// navigation bar, where a long one was cut off.
+public enum ThreadDetailsHeader {
+    public static func meta(
+        providerName: String?,
+        state: FeatureThreadState,
+        updatedAt: Date,
+        now: Date = .now
+    ) -> String {
+        var parts: [String] = []
+        if let providerName, !providerName.isEmpty { parts.append(providerName) }
+        parts.append(stateLabel(state))
+        parts.append("Updated \(relativeFormatter.localizedString(for: updatedAt, relativeTo: now))")
+        return parts.joined(separator: " · ")
     }
+
+    public static func stateLabel(_ state: FeatureThreadState) -> String {
+        switch state {
+        case .idle: "Idle"
+        case .queued: "Queued"
+        case .working: "Working"
+        case .waitingForApproval: "Needs Approval"
+        case .waitingForInput: "Needs Input"
+        case .failed: "Failed"
+        case .completed: "Done"
+        }
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
 }
 
 // MARK: - Version control
@@ -87,6 +131,59 @@ public enum ThreadLinkedPullRequestInput {
             return nil
         }
         return number
+    }
+}
+
+/// How a linked pull request reads as a list row: the state badge, the title,
+/// and one meta line. The host snapshot carries more than that; what the
+/// reader acts on is folded into the meta line instead of stacked beneath.
+public enum ThreadLinkedPullRequestPresentation {
+    /// "#413 · in stack", "#413 · 2 in stack" on a chain's base, or "#413".
+    public static func identityLine(_ line: FeaturePullRequestLine) -> String {
+        var parts = ["#\(line.link.number)"]
+        if line.chainSize > 1 {
+            let noun = line.isNativeStack ? "in stack" : "in branch chain"
+            parts.append(line.depth == 0 ? "\(line.chainSize) \(noun)" : noun)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Checks, review verdict, conflicts and size, in the order a reader
+    /// decides with them. Nil when the host has not answered yet.
+    public static func statusLine(_ snapshot: FeaturePullRequestSnapshot?) -> String? {
+        guard let snapshot else { return nil }
+        var parts: [String] = []
+        if let checks = checksLabel(snapshot.checksState) { parts.append(checks) }
+        if snapshot.state == "open" {
+            switch snapshot.reviewDecision {
+            case "approved": parts.append("Approved")
+            case "changes-requested": parts.append("Changes requested")
+            default: break
+            }
+            if snapshot.mergeability == "conflicting" { parts.append("Conflicts") }
+        }
+        if let additions = snapshot.additions, let deletions = snapshot.deletions {
+            parts.append("+\(additions) −\(deletions)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    public static func checksLabel(_ checksState: String?) -> String? {
+        switch checksState {
+        case "passing": "Checks passed"
+        case "failing": "Checks failing"
+        case "pending": "Checks pending"
+        default: nil
+        }
+    }
+
+    /// The Details row's value: "None", the one number, or how many.
+    public static func linkedValue(_ links: [FeatureLinkedPullRequest]) -> String {
+        switch links.count {
+        case 0: "None"
+        case 1: "#\(links[0].number)"
+        default: "\(links.count)"
+        }
     }
 }
 
@@ -246,22 +343,19 @@ public enum ThreadDetailsGit {
         return "#\(linked.number) · \(linked.repository)"
     }
 
-    public static func statusSummary(_ status: ThreadDetailsGitStatus?) -> String {
-        guard let status else { return "Loading branch status…" }
-        guard status.isRepo else { return "Not a git repository" }
+    /// The branch row's second line: what changed and how far the branch has
+    /// drifted. The pull request has its own row, so it is not repeated here.
+    public static func statusSummary(_ status: ThreadDetailsGitStatus) -> String {
+        guard status.isRepo else { return "Not a Git Repository" }
 
         var parts: [String] = []
         if status.hasWorkingTreeChanges {
-            let count = status.changedFileCount
-            parts.append("\(count) file\(count == 1 ? "" : "s") changed")
+            parts.append("\(status.changedFileCount) changed")
         } else {
             parts.append("Clean")
         }
         if status.aheadCount > 0 { parts.append("\(status.aheadCount) ahead") }
         if status.behindCount > 0 { parts.append("\(status.behindCount) behind") }
-        if let pullRequest = status.pullRequest, pullRequest.isOpen {
-            parts.append("PR #\(pullRequest.number) open")
-        }
         return parts.joined(separator: " · ")
     }
 
@@ -283,14 +377,15 @@ public enum ThreadDetailsGit {
         return "+\(insertions) −\(deletions)"
     }
 
+    /// The glyph inside the quick action's tile.
     public static func quickActionIcon(_ quickAction: ThreadDetailsGitQuickAction) -> String {
-        if quickAction.kind == .runPull { return "arrow.down.circle" }
-        if quickAction.kind == .openPullRequest { return "arrow.up.right.circle" }
-        if quickAction.action == .commit { return "checkmark.circle" }
+        if quickAction.kind == .runPull { return "arrow.down" }
+        if quickAction.kind == .openPullRequest { return "arrow.up.right" }
+        if quickAction.action == .commit { return "checkmark" }
         if quickAction.action == .push || quickAction.action == .commitAndPush {
-            return "arrow.up.circle"
+            return "arrow.up"
         }
-        return "arrow.up.right.circle"
+        return "arrow.up.right"
     }
 
     /// The sheet's whole decision: a workspace that is not a repository has no
@@ -403,7 +498,7 @@ public enum ThreadDetailsGit {
                     label: "Push",
                     disabled: true,
                     kind: .showHint,
-                    hint: "No local commits to push."
+                    hint: nothingToPushHint
                 )
             }
             if hasOpenPr || isDefaultBranch {
@@ -462,7 +557,7 @@ public enum ThreadDetailsGit {
             label: "Commit",
             disabled: true,
             kind: .showHint,
-            hint: "Branch is up to date. No action needed."
+            hint: upToDateHint
         )
     }
 
@@ -479,14 +574,68 @@ public enum ThreadDetailsGit {
         }
     }
 
-    /// Subtitle for a disabled quick action. A disabled row with no sentence
-    /// under it reads as a bug rather than as a state.
-    public static func quickActionSubtitle(
-        _ quickAction: ThreadDetailsGitQuickAction
-    ) -> String? {
-        guard quickAction.disabled else { return nil }
-        return quickAction.hint ?? "This action is unavailable."
+    /// Hints that mean "nothing to do" rather than "something is in the way".
+    /// Their row disappears without a footer: a clean branch needs no excuse.
+    static let upToDateHint = "Branch is up to date. No action needed."
+    static let nothingToPushHint = "No local commits to push."
+
+    /// What the Version Control section draws for the quick action.
+    ///
+    /// The action itself stays the desktop's decision; this only decides how a
+    /// phone shows it. A disabled action is never drawn as a dead row: its
+    /// reason becomes the section footer, and a branch with nothing to do
+    /// shows nothing at all. While an action runs, the row keeps the label of
+    /// what is running.
+    public static func quickActionRow(
+        for status: ThreadDetailsGitStatus?,
+        loadFailed: Bool,
+        isRunning: Bool,
+        runningLabel: String?
+    ) -> ThreadDetailsGitQuickActionRow {
+        guard let status else {
+            return loadFailed ? .hidden(footer: nil) : .placeholder
+        }
+        guard status.isRepo else { return .hidden(footer: nil) }
+        let resolved = quickAction(for: status, isBusy: false)
+        if isRunning {
+            return .action(label: runningLabel ?? titleCase(resolved.label), isRunning: true)
+        }
+        guard resolved.disabled else {
+            return .action(label: titleCase(resolved.label), isRunning: false)
+        }
+        switch resolved.hint {
+        case upToDateHint, nothingToPushHint, nil: return .hidden(footer: nil)
+        case let hint?: return .hidden(footer: hint)
+        }
     }
+
+    /// The alert title for a failed git action, naming what did not happen.
+    public static func failureTitle(for action: FeatureSourceControlAction) -> String {
+        switch action {
+        case .commit: "Couldn't Commit"
+        case .pull: "Couldn't Pull"
+        case .createPullRequest: "Couldn't Create Pull Request"
+        case .push, .commitAndPush, .commitPushAndCreatePullRequest: "Couldn't Push"
+        }
+    }
+
+    /// "Commit, push & PR" → "Commit, Push & PR". The labels are shared with
+    /// the other clients in sentence case; a row title here is Title Case.
+    public static func titleCase(_ label: String) -> String {
+        label.split(separator: " ", omittingEmptySubsequences: false)
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+}
+
+/// The quick action as the Version Control section draws it.
+public enum ThreadDetailsGitQuickActionRow: Equatable, Sendable {
+    /// Status still loading: a static redacted row, not a disabled "Commit".
+    case placeholder
+    /// Nothing to offer. `footer` says why when something is in the way.
+    case hidden(footer: String?)
+    /// The action to run, with a spinner in place while it runs.
+    case action(label: String, isRunning: Bool)
 }
 
 // MARK: - Workspace
@@ -525,7 +674,7 @@ public enum ThreadDetailsWorkspace {
     }
 
     public static func kindLabel(worktreePath: String?) -> String {
-        worktreePath == nil ? "Project folder" : "Worktree"
+        worktreePath == nil ? "Project Folder" : "Worktree"
     }
 
     public static func scriptLabel(_ script: ProjectScript) -> String {
@@ -1214,10 +1363,6 @@ public enum ThreadDetailsLineageSection {
 
     public static func isArchived(availability: String?) -> Bool {
         availability == "Archived"
-    }
-
-    public static func doneGroupLabel(count: Int) -> String {
-        "Done · \(count)"
     }
 
     public static func doneGroupAccessibilityLabel(count: Int) -> String {

@@ -127,15 +127,22 @@ final class EmptyFeatureDeviceManager: FeatureDeviceManaging {
 }
 
 enum DeviceManagementErrorCopy {
+    static let permissionDenied = "This connection does not have permission to manage devices."
+
     static func message(for error: Error) -> String {
         let value = error.localizedDescription.lowercased()
         if value.contains("scope") || value.contains("403") || value.contains("forbidden") {
-            return "This connection does not have permission to manage devices."
+            return permissionDenied
         }
         if value.contains("offline") || value.contains("network")
             || value.contains("not connected") || value.contains("timed out") {
             return "Device access could not be updated. Check your connection and try again."
         }
         return "Device access could not be updated. Try again in a moment."
+    }
+
+    /// A missing access scope can't be fixed by retrying.
+    static func isPermissionDenied(_ message: String) -> Bool {
+        message == permissionDenied
     }
 }

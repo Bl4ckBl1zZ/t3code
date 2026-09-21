@@ -10,6 +10,9 @@ struct MarkdownMessageView: View {
 
     private let source: String
     private let citationMessageID: String?
+    /// Titles the long-press menu, like Messages; nil where the text has no
+    /// single moment (a pull request body, a file).
+    private let timestamp: Date?
     @State private var isCiting = false
     @SwiftUI.Environment(\.assistantCitationContext) private var citationContext
     @SwiftUI.Environment(\.assistantCitationHighlight) private var citationHighlight
@@ -20,10 +23,12 @@ struct MarkdownMessageView: View {
     @State private var isSelectingText = false
     @State private var previewTarget: PullRequestLinkTarget?
     @SwiftUI.Environment(\.markdownPullRequestContext) private var pullRequestContext
+    @SwiftUI.Environment(\.openURL) private var openURL
 
-    init(_ source: String, isStreaming: Bool = false, citationMessageID: String? = nil) {
+    init(_ source: String, isStreaming: Bool = false, citationMessageID: String? = nil, timestamp: Date? = nil) {
         self.source = source
         self.citationMessageID = citationMessageID
+        self.timestamp = timestamp
         self.isStreaming = isStreaming
         let revision = MarkdownContentRevision(source)
         self.revision = revision
@@ -55,31 +60,41 @@ struct MarkdownMessageView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .modifier(MarkdownTextSelectionModifier(isEnabled: isSelectingText))
+        // A pull request link previews in place; every other link goes where
+        // the surrounding transcript sends it.
+        .environment(\.openURL, OpenURLAction { url in
+            if pullRequestContext != nil, let target = PullRequestLinkTarget(url) {
+                previewTarget = target
+                return .handled
+            }
+            openURL(url)
+            return .handled
+        })
         .contextMenu {
-            if citationMessageID != nil, citationContext != nil, !isStreaming {
-                Button("Cite text", systemImage: "quote.bubble") { isCiting = true }
+            Section {
+                Button("Copy", systemImage: "doc.on.doc", action: copySource)
+                Button("Select Text…", systemImage: "text.cursor") { isSelectingText = true }
+                ShareLink(item: source) {
+                    Label("Share…", systemImage: "square.and.arrow.up")
+                }
+                if citationMessageID != nil, citationContext != nil, !isStreaming {
+                    Button("Cite Text", systemImage: "quote.bubble") { isCiting = true }
+                }
+            } header: {
+                if let timestamp { Text(verbatim: Self.menuTitle(timestamp)) }
             }
             if pullRequestContext != nil {
-                ForEach(PullRequestLinkTarget.links(in: source)) { target in
-                    Button("Preview pull request #\(String(target.number))", systemImage: "arrow.triangle.pull") {
-                        previewTarget = target
+                Section {
+                    ForEach(PullRequestLinkTarget.links(in: source)) { target in
+                        Button("Preview Pull Request \(target.displayNumber)", systemImage: "arrow.triangle.pull") {
+                            previewTarget = target
+                        }
                     }
                 }
             }
-            Button {
-                isSelectingText.toggle()
-            } label: {
-                Label(
-                    isSelectingText ? "Done selecting" : "Select text",
-                    systemImage: isSelectingText ? "checkmark" : "text.cursor"
-                )
-            }
-            Button {
-                UIPasteboard.general.string = source
-            } label: {
-                Label("Copy message", systemImage: "doc.on.doc")
-            }
+        }
+        .sheet(isPresented: $isSelectingText) {
+            MarkdownSelectTextSheet(text: source)
         }
         .sheet(isPresented: $isCiting) {
             if let citationContext, let citationMessageID {
@@ -89,9 +104,7 @@ struct MarkdownMessageView: View {
         .sheet(item: $previewTarget) { target in
             if let pullRequestContext { PullRequestLinkPreview(target: target, context: pullRequestContext) }
         }
-        .accessibilityAction(named: "Copy message") {
-            UIPasteboard.general.string = source
-        }
+        .accessibilityAction(named: "Copy message", copySource)
         .task(id: RenderRequest(revision: revision, isStreaming: isStreaming)) {
             if !isStreaming {
                 streamingRenderer.cancel()
@@ -120,6 +133,20 @@ struct MarkdownMessageView: View {
         .onDisappear {
             streamingRenderer.cancel()
         }
+    }
+
+    private func copySource() {
+        UIPasteboard.general.string = source
+        T3HUD.show("Copied", systemImage: "doc.on.doc")
+    }
+
+    /// "Today at 9:41 AM", "Yesterday at 9:41 AM", or the date.
+    private static func menuTitle(_ date: Date) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today at \(time)" }
+        if calendar.isDateInYesterday(date) { return "Yesterday at \(time)" }
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 
     private var highlightedSourceText: Text {
@@ -222,16 +249,45 @@ private final class StreamingMarkdownRenderer {
     }
 }
 
-private struct MarkdownTextSelectionModifier: ViewModifier {
-    let isEnabled: Bool
+/// "Select Text…" from the long-press menu: the message as plain, selectable
+/// text. A sheet rather than a mode, because a selection mode on the row
+/// competes with the long-press that opened it.
+private struct MarkdownSelectTextSheet: View {
+    let text: String
 
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isEnabled {
-            content.textSelection(.enabled)
-        } else {
-            content
+    var body: some View {
+        NavigationStack {
+            MarkdownSelectableTextView(text: text)
+                .background(T3Colors.background)
+                .navigationTitle("Select Text")
+                .navigationBarTitleDisplayMode(.inline)
+                .t3NavigationChrome()
+                .t3SheetToolbar(.close)
         }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+/// UIKit text view, because SwiftUI's `textSelection` only offers the whole
+/// text on iOS; this allows a range.
+private struct MarkdownSelectableTextView: UIViewRepresentable {
+    let text: String
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = true
+        view.backgroundColor = .clear
+        view.adjustsFontForContentSizeCategory = true
+        view.font = UIFont.preferredFont(forTextStyle: .body)
+        view.textColor = T3Colors.uiTextPrimary
+        view.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 24, right: 12)
+        view.alwaysBounceVertical = true
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        if view.text != text { view.text = text }
     }
 }
 
@@ -370,7 +426,11 @@ private struct MarkdownGithubAlertView: View {
 private struct MarkdownTableView: View {
     let table: MarkdownRenderedTable
 
-    private var columnWidths: [CGFloat] { table.columnWidths }
+    /// The estimates are in points at the default text size; this keeps a
+    /// column fitting its text as Dynamic Type grows.
+    @ScaledMetric(relativeTo: .body) private var widthScale: CGFloat = 1
+
+    private var columnWidths: [CGFloat] { table.columnWidths.map { $0 * widthScale } }
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -385,10 +445,10 @@ private struct MarkdownTableView: View {
             // instead of compressing prose columns into unreadable slivers.
             .fixedSize(horizontal: true, vertical: true)
             .background(T3Colors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(T3Colors.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(T3Colors.border, lineWidth: 1)
             }
         }
         .scrollIndicators(.visible)
@@ -448,13 +508,15 @@ private struct MarkdownListView: View {
     let items: [MarkdownRenderedListItem]
     let start: Int?
 
+    @ScaledMetric(relativeTo: .body) private var markerSize: CGFloat = 24
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(items.indices, id: \.self) { offset in
                 let item = items[offset]
                 HStack(alignment: .top, spacing: 8) {
                     marker(for: item, offset: offset)
-                        .frame(width: 24, height: 24, alignment: .trailing)
+                        .frame(minWidth: markerSize, minHeight: markerSize, alignment: .trailing)
                     MarkdownBlocksView(blocks: item.blocks, spacing: 7)
                 }
                 .accessibilityElement(children: .contain)
@@ -490,56 +552,66 @@ private struct MarkdownCodeBlockView: View {
     let code: String
     let citationRange: NSRange?
     private var codeText: Text {
-        if let citationRange { Text(MarkdownCitationHighlight.mark(AttributedString(code), range: citationRange)) }
-        else { Text(verbatim: code) }
+        if let citationRange { return Text(MarkdownCitationHighlight.mark(AttributedString(code), range: citationRange)) }
+        // Coloured on the render task; plain until then, never on this thread.
+        if let highlighted = MarkdownRenderCache.shared.codeHighlight(language: language, code: code) {
+            return Text(highlighted)
+        }
+        return Text(verbatim: code)
     }
     @State private var wrapOverride: Bool?
+    @State private var copyCount = 0
+    @State private var showsCopied = false
 
     private var wrapsLines: Bool {
         wrapOverride ?? MarkdownCodeBlockWrapping.wrapsByDefault(language: language)
     }
 
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                if let language, !language.isEmpty {
-                    Text(language.uppercased())
-                        .font(T3Typography.supportingStrong)
-                        .foregroundStyle(T3Colors.textTertiary)
-                } else {
-                    Text("CODE")
-                        .font(T3Typography.supportingStrong)
-                        .foregroundStyle(T3Colors.textTertiary)
-                }
+            HStack(spacing: 4) {
+                Text(verbatim: (language?.isEmpty == false ? language! : "code").lowercased())
+                    .font(T3Typography.supporting.monospaced())
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .lineLimit(1)
                 Spacer(minLength: 8)
                 Button {
                     wrapOverride = !wrapsLines
                 } label: {
-                    Label("Wrap", systemImage: "arrow.turn.down.left")
+                    Label("Wrap Lines", systemImage: "arrow.turn.down.left")
+                        .labelStyle(.iconOnly)
                         .font(T3Typography.control)
                         .foregroundStyle(wrapsLines ? T3Colors.accent : T3Colors.textSecondary)
-                        .frame(minHeight: 32)
+                        .frame(width: 30, height: 30)
+                        .background {
+                            if wrapsLines { Circle().fill(T3Colors.accent.opacity(0.14)) }
+                        }
+                        .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Wrap lines")
                 .accessibilityValue(wrapsLines ? "On" : "Off")
-                .accessibilityHint("Toggles line wrapping for this code block")
-                Button {
-                    UIPasteboard.general.string = code
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
+                Button(action: copy) {
+                    Label(showsCopied ? "Copied" : "Copy", systemImage: showsCopied ? "checkmark" : "doc.on.doc")
+                        .labelStyle(.iconOnly)
                         .font(T3Typography.control)
-                        .foregroundStyle(T3Colors.textSecondary)
-                        .frame(minHeight: 32)
+                        .foregroundStyle(showsCopied ? T3Colors.success : T3Colors.textSecondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint("Copies this code block")
+                .accessibilityLabel(showsCopied ? "Copied" : "Copy code")
+                .t3SensoryFeedback(.success, trigger: copyCount)
             }
-            .padding(.horizontal, 13)
-            .frame(minHeight: 40)
-
-            Rectangle()
-                .fill(T3Colors.separator)
-                .frame(height: 1)
+            .padding(.leading, 13)
+            .padding(.trailing, 2)
+            .frame(minHeight: 36)
 
             if wrapsLines {
                 codeText
@@ -548,7 +620,9 @@ private struct MarkdownCodeBlockView: View {
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(13)
+                    .padding(.horizontal, 13)
+                    .padding(.top, 2)
+                    .padding(.bottom, 12)
             } else {
                 ScrollView(.horizontal) {
                     codeText
@@ -556,16 +630,27 @@ private struct MarkdownCodeBlockView: View {
                         .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
                         .lineSpacing(3)
                         .fixedSize(horizontal: true, vertical: true)
-                        .padding(13)
+                        .padding(.horizontal, 13)
+                        .padding(.top, 2)
+                        .padding(.bottom, 12)
                 }
                 .scrollIndicators(.hidden)
             }
         }
-        .background(T3Colors.surfaceRaised)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(T3Colors.border, lineWidth: 1)
+        .background(T3Colors.surfaceRaised, in: shape)
+        .clipShape(shape)
+    }
+
+    /// The icon turns into a checkmark for a moment; no alert and no HUD,
+    /// because the button itself is where the reader is looking.
+    private func copy() {
+        UIPasteboard.general.string = code
+        copyCount += 1
+        showsCopied = true
+        let count = copyCount
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            if copyCount == count { showsCopied = false }
         }
     }
 }
@@ -667,11 +752,15 @@ private struct NativeArtifactTemplateCard: View {
                 Text(template.label).font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
             }.frame(maxWidth: .infinity, alignment: .leading)
             if let useTemplate {
-                Button("Use template") { useTemplate(template) }.buttonStyle(.bordered).font(T3Typography.supporting)
+                Button("Use Template") { useTemplate(template) }
+                    .font(T3Typography.supportingStrong)
+                    .t3SecondaryButtonStyle()
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
             }
         }
-        .padding(12).background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(T3Colors.border, lineWidth: 1))
+        .padding(12)
+        .background(T3Colors.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .accessibilityElement(children: .contain)
     }
 }

@@ -1,11 +1,12 @@
 import SwiftUI
 
-// The composer's voice surface: a bare mic glyph beside the send button while
-// idle, and a recording strip that takes over the whole pill while capturing —
-// cancel on the left, live waveform in the middle, and the mic button turned
-// into the voice send circle on the right. A floating "Release to send /
-// Release to cancel" hint narrates a push-to-talk hold; sliding up arms the
-// cancel and turns the strip red.
+// The composer's voice surface: a bare mic glyph in the composer's trailing slot
+// while the draft is empty, and a recording strip that takes over the draft row
+// while capturing — cancel on the left, live waveform in the middle — with the
+// mic turned into an ink stop circle that finishes the recording. Releasing or
+// stopping transcribes into the draft; nothing is sent until the send button is
+// tapped. A floating "Release to transcribe / Release to cancel" hint narrates a
+// push-to-talk hold; sliding up arms the cancel and turns it red.
 
 enum VoiceMorph {
     /// Physical rather than timed: the surface is a thing being pushed, so it
@@ -29,15 +30,16 @@ enum VoiceMorph {
 /// The microphone control.
 ///
 /// Push-to-talk, not slide-to-cancel: a tap starts hands-free recording, a hold
-/// records for as long as the finger stays down, and release confirms. Sliding
-/// up only *arms* the discard — the release is what decides. While anything is
-/// being recorded the same control becomes the voice send circle, so the finger
+/// records for as long as the finger stays down, and release transcribes into
+/// the draft. Sliding up only *arms* the discard — the release is what decides.
+/// While recording the same control becomes an ink stop circle, so the finger
 /// that started a hold is already resting on the button that finishes it.
 struct VoiceMicButton: View {
     @Bindable var voice: VoiceComposerCoordinator
 
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPressed = false
+    @ScaledMetric(relativeTo: .body) private var circleSize: CGFloat = 34
 
     /// `canSend: false` on purpose: the mic never sends the text draft. A tap
     /// while idle starts recording, a tap while recording stops and
@@ -75,34 +77,38 @@ struct VoiceMicButton: View {
     /// recording would run on, and slide-to-cancel would never arm. That is
     /// also why `.disabled` is not used — flipping it resets gestures too, so
     /// the handlers guard instead.
+    ///
+    /// The ink circle appears only once audio is actually being captured:
+    /// while the system permission prompt is up nothing is recording yet, so
+    /// the slot keeps the mic instead of promising a stop.
     private var surface: some View {
         ZStack {
             Circle()
                 .fill(T3Colors.primaryAction)
-                .opacity(voice.state.isBusy ? (isTranscribing ? 0.5 : 1) : 0)
+                .opacity(showsInkCircle ? 1 : 0)
             ProgressView()
                 .controlSize(.small)
                 .tint(T3Colors.primaryActionForeground)
                 .opacity(isTranscribing ? 1 : 0)
-            Image(systemName: voice.state.isBusy ? "arrow.up" : "mic")
-                .font(
-                    voice.state.isBusy
-                        ? .system(size: 15, weight: .bold)
-                        : .system(size: 19, weight: .medium)
-                )
+            Image(systemName: voice.state.isRecording ? "stop.fill" : "mic")
+                .font(voice.state.isRecording ? .footnote.weight(.bold) : .title3)
                 .foregroundStyle(
-                    voice.state.isBusy ? T3Colors.primaryActionForeground : T3Colors.textPrimary
+                    voice.state.isRecording ? T3Colors.primaryActionForeground : T3Colors.textPrimary
                 )
                 .contentTransition(
                     reduceMotion ? ContentTransition.opacity : .symbolEffect(.replace)
                 )
                 .opacity(isTranscribing ? 0 : 1)
         }
-        .frame(width: 34, height: 34)
+        .frame(width: circleSize, height: circleSize)
         .scaleEffect(scale)
         .animation(reduceMotion ? VoiceMorph.reduced : VoiceMorph.control, value: isPressed)
-        .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: voice.state.isBusy)
+        .animation(VoiceMorph.appearance(reduceMotion: reduceMotion), value: showsInkCircle)
         .animation(reduceMotion ? VoiceMorph.reduced : VoiceMorph.control, value: isTranscribing)
+    }
+
+    private var showsInkCircle: Bool {
+        voice.state.isRecording || isTranscribing
     }
 
     private var scale: CGFloat {
@@ -144,20 +150,20 @@ struct VoiceMicButton: View {
 /// The floating hint above the composer while a push-to-talk hold is down. Both
 /// labels name what releasing right now does, because release is the only thing
 /// that decides: wandering into the cancel zone arms the discard, it does not
-/// perform it.
+/// perform it. Releasing never sends: the transcript lands in the draft.
 struct VoiceReleaseHint: View {
     let armed: Bool
 
     var body: some View {
-        Text(armed ? "Release to cancel" : "Release to send")
-            .font(.subheadline.weight(.medium))
+        Text(armed ? "Release to cancel" : "Release to transcribe")
+            .font(T3Typography.control)
             .foregroundStyle(armed ? T3Colors.danger : T3Colors.textSecondary)
             // A chip, not bare text: the hint floats over the transcript now
             // that the composer has no backdrop, so it brings its own.
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
             .t3GlassEffect(.regular, in: Capsule())
-            .overlay { Capsule().stroke(T3Colors.border, lineWidth: 1) }
+            .t3GlassRim(in: Capsule())
             .animation(VoiceMorph.armed, value: armed)
             .accessibilityIdentifier("voice-hold-hint")
     }
@@ -170,6 +176,7 @@ struct VoiceRecordingStrip: View {
     @Bindable var voice: VoiceComposerCoordinator
 
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .body) private var cancelSize: CGFloat = 30
 
     var body: some View {
         HStack(spacing: 8) {
@@ -194,7 +201,10 @@ struct VoiceRecordingStrip: View {
                 Spacer(minLength: 0)
             case .stopping, .transcribing:
                 cancelButton(armed: false)
-                VoiceTranscribingDots()
+                // Static on purpose: a waiting state never repaints on a loop.
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityHidden(true)
                 Text("Transcribing…")
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textSecondary)
@@ -213,18 +223,21 @@ struct VoiceRecordingStrip: View {
 
     /// Arming slide-to-cancel flips the neutral circle to the danger fill —
     /// the same red the released cancel would be, so "let go and this is gone"
-    /// is already painted on the control.
+    /// is already painted on the control. The glyph takes the ink foreground,
+    /// never white: the dark palettes' danger is a light pink white vanishes
+    /// on, and the ink foreground reads white in light mode and near-black in
+    /// dark.
     private func cancelButton(armed: Bool) -> some View {
         Button {
             voice.cancelRecording()
         } label: {
             Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(armed ? Color.white : T3Colors.textPrimary)
-                .frame(width: 30, height: 30)
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(armed ? T3Colors.primaryActionForeground : T3Colors.textPrimary)
+                .frame(width: cancelSize, height: cancelSize)
                 .background(armed ? T3Colors.danger : T3Colors.subtleStrong, in: Circle())
                 .scaleEffect(armed && !reduceMotion ? 1.12 : 1)
-                .frame(width: 36, height: T3Metrics.minimumTapTarget)
+                .frame(minWidth: T3Metrics.minimumTapTarget, minHeight: T3Metrics.minimumTapTarget)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -360,32 +373,5 @@ private struct VoiceRecordingClock: View {
 
     private func clock(_ seconds: Int) -> String {
         String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
-}
-
-private struct VoiceTranscribingDots: View {
-    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var active = false
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<3, id: \.self) { index in
-                Circle()
-                    .fill(T3Colors.textSecondary)
-                    .frame(width: 6, height: 6)
-                    .opacity(active ? 1 : 0.3)
-                    .animation(
-                        reduceMotion
-                            ? nil
-                            : .easeInOut(duration: 0.37)
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(index) * 0.14),
-                        value: active
-                    )
-            }
-        }
-        .frame(height: 16)
-        .accessibilityHidden(true)
-        .onAppear { active = true }
     }
 }

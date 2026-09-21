@@ -51,7 +51,7 @@ struct ThreadBackgroundTasksCapsule: View {
     private var collapsedLabel: some View {
         HStack(spacing: 7) {
             glyph
-            Text(ThreadDetailsBackgroundTasks.capsuleLabel(summary, nowMilliseconds: nowMilliseconds))
+            Text(label)
                 .font(T3Typography.supportingStrong)
                 .foregroundStyle(labelColor)
                 .monospacedDigit()
@@ -60,9 +60,18 @@ struct ThreadBackgroundTasksCapsule: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .frame(minHeight: 48)
-        .t3GlassEffect(.regular, in: collapsedShape)
-        .overlay { collapsedShape.stroke(T3Colors.border, lineWidth: 1) }
+        .t3GlassEffect(.regular, interactive: true, in: collapsedShape)
+        .t3GlassRim(in: collapsedShape)
         .contentShape(collapsedShape)
+    }
+
+    /// Several tasks get their noun: a bare "3" beside a glyph read as a
+    /// duration as easily as a count.
+    private var label: String {
+        if !summary.reportsOutcome, summary.solitary == nil, summary.count > 1 {
+            return "\(summary.count) tasks"
+        }
+        return ThreadDetailsBackgroundTasks.capsuleLabel(summary, nowMilliseconds: nowMilliseconds)
     }
 
     private var collapsedShape: Capsule {
@@ -85,9 +94,9 @@ struct ThreadBackgroundTasksCapsule: View {
 
     private func symbol(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.system(size: 13, weight: .medium))
+            .font(.footnote.weight(.medium))
             .foregroundStyle(tint)
-            .frame(width: 17, height: 17)
+            .frame(minWidth: 17, minHeight: 17)
     }
 
     private var tint: Color {
@@ -141,7 +150,7 @@ private struct DeadlineRing: View {
     let fraction: Double?
     let color: Color
 
-    private let diameter: CGFloat = 17
+    @ScaledMetric(relativeTo: .footnote) private var diameter: CGFloat = 17
     private let lineWidth: CGFloat = 2
 
     var body: some View {
@@ -170,28 +179,22 @@ private struct DeadlineRing: View {
 private struct ThreadBackgroundTasksSheet: View {
     let processes: [ThreadDetailsBackgroundProcess]
 
-    // Qualified: `Environment` is this app's own model type (Core/Models.swift).
-    @SwiftUI.Environment(\.dismiss) private var dismiss
-
     var body: some View {
         NavigationStack {
-            ScrollView {
-                ThreadDetailsSection(title: "Background Tasks") {
-                    ForEach(Array(processes.enumerated()), id: \.element.id) { index, process in
-                        if index > 0 { ThreadDetailsDivider() }
+            List {
+                Section {
+                    ForEach(processes, id: \.id) { process in
                         ThreadDetailsBackgroundTaskRow(process: process)
+                            .t3GroupedRow()
                     }
                 }
-                .padding(16)
             }
-            .background(T3Colors.background)
-            .navigationTitle("Background")
+            .listStyle(.insetGrouped)
+            .t3GroupedListBackground()
+            .navigationTitle("Background Tasks")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
+            .t3NavigationChrome()
+            .t3SheetToolbar(.close)
         }
     }
 }

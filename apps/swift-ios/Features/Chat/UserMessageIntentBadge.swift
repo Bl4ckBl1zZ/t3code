@@ -1,11 +1,12 @@
 import Foundation
 
 // Ported from apps/mobile/src/features/threads/userMessageIntentBadge.ts.
-// Input intent is metadata, so it reads as quiet text beside the timestamp
+// Input intent is metadata, so it reads as a quiet caption under the bubble
 // rather than a coloured badge.
 public struct UserMessageIntentBadge: Equatable, Sendable {
     public let label: String
     public let accessibilityLabel: String
+    public let systemImage: String
 
     /// Returns nil for a message that simply started its turn — the common case
     /// needs no annotation.
@@ -15,18 +16,21 @@ public struct UserMessageIntentBadge: Equatable, Sendable {
         switch intent {
         case .queuedTurn:
             UserMessageIntentBadge(
-                label: "queued",
-                accessibilityLabel: "Queued behind the active turn"
+                label: "Queued",
+                accessibilityLabel: "Queued behind the active turn",
+                systemImage: "hourglass"
             )
         case .steer:
             UserMessageIntentBadge(
-                label: "steered the run",
-                accessibilityLabel: "Steered the active turn"
+                label: "Steered the run",
+                accessibilityLabel: "Steered the active turn",
+                systemImage: "bolt"
             )
         case .promotedQueuedToSteer:
             UserMessageIntentBadge(
-                label: "queued → steered the run",
-                accessibilityLabel: "Originally queued, then promoted to steer the active turn"
+                label: "Queued, then steered",
+                accessibilityLabel: "Originally queued, then promoted to steer the active turn",
+                systemImage: "bolt"
             )
         case .turnStart, .unknown, nil:
             nil

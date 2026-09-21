@@ -1,41 +1,16 @@
 import Foundation
 
 // Ported from apps/mobile/src/features/home/HomeHeader.tsx (the T3 Work / T3
-// Code menu), HomeRouteScreen.tsx (what choosing one actually changes) and
-// apps/mobile/src/features/threads/sidebar-native-header-items.ts (the sidebar
-// column's copy of the same menu).
+// Code switcher), HomeRouteScreen.tsx (what choosing one actually changes) and
+// apps/mobile/src/features/threads/sidebar-native-header-items.ts. On iOS the
+// switcher is Home's tab bar.
 //
 // The switcher decides nothing about which threads belong where: that is
 // `MobileWorkspaceRouting`'s job and it is already ported. What lives here is
-// the menu the user sees, the filters the choice suppresses — Work threads all
+// what each tab is called, the filters the choice suppresses — Work threads all
 // sit on one hidden backing project, so a project filter there would only ever
 // read "All projects" — and where the compose affordance goes, which is a
 // different destination per workspace rather than a different argument.
-
-/// One row of the workspace menu. Modelled as data (like ``ThreadRowMenuAction``)
-/// so the ordering and check state are testable apart from `Menu`/`UIMenu`.
-public struct WorkspaceMenuItem: Identifiable, Equatable, Sendable {
-    /// Stable menu event id, matching the React Native client's `workspace:*`.
-    public let id: String
-    public let workspace: MobileWorkspace
-    public let title: String
-    public let subtitle: String
-    public let isOn: Bool
-
-    public init(
-        id: String,
-        workspace: MobileWorkspace,
-        title: String,
-        subtitle: String,
-        isOn: Bool
-    ) {
-        self.id = id
-        self.workspace = workspace
-        self.title = title
-        self.subtitle = subtitle
-        self.isOn = isOn
-    }
-}
 
 /// Where the compose affordance goes for the current workspace.
 ///
@@ -63,14 +38,9 @@ public enum WorkspaceSwitcher {
         rawValue.flatMap(MobileWorkspace.init(rawValue:)) ?? .code
     }
 
-    // MARK: - Menu
+    // MARK: - Labels
 
-    public static func title(_ workspace: MobileWorkspace) -> String {
-        "T3 \(shortTitle(workspace))"
-    }
-
-    /// The brand lockup renders "T3" itself and appends only this half, so the
-    /// two are kept separable rather than splitting ``title(_:)`` back apart.
+    /// The tab title: "Code", "Work", "Chat".
     public static func shortTitle(_ workspace: MobileWorkspace) -> String {
         switch workspace {
         case .work: "Work"
@@ -78,45 +48,6 @@ public enum WorkspaceSwitcher {
         case .chat: "Chat"
         }
     }
-
-    public static func subtitle(_ workspace: MobileWorkspace) -> String {
-        switch workspace {
-        case .work: "Create, learn, and explore"
-        case .code: "Build, debug, and ship"
-        case .chat: "Talk it through"
-        }
-    }
-
-    /// VoiceOver reads the control's purpose *and* the current value, because
-    /// the collapsed label alone ("Work") does not say it is a switcher.
-    public static func accessibilityLabel(current: MobileWorkspace) -> String {
-        "Switch workspace. Current workspace: \(title(current))"
-    }
-
-    public static func menuActionID(for workspace: MobileWorkspace) -> String {
-        "workspace:\(workspace.rawValue)"
-    }
-
-    public static func workspace(forMenuActionID id: String) -> MobileWorkspace? {
-        MobileWorkspace.allCases.first { menuActionID(for: $0) == id }
-    }
-
-    /// Work leads: it is the assistant surface, and the desktop sidebar orders
-    /// it first.
-    public static func menuItems(current: MobileWorkspace) -> [WorkspaceMenuItem] {
-        MobileWorkspace.allCases.map { workspace in
-            WorkspaceMenuItem(
-                id: menuActionID(for: workspace),
-                workspace: workspace,
-                title: title(workspace),
-                subtitle: subtitle(workspace),
-                isOn: workspace == current
-            )
-        }
-    }
-
-    /// SF Symbol for the switcher control itself.
-    public static let menuSymbol = "rectangle.2.swap"
 
     // MARK: - What the choice suppresses
 
@@ -133,21 +64,6 @@ public enum WorkspaceSwitcher {
         selectedProjectID: String?
     ) -> String? {
         showsProjectFilter(workspace) ? selectedProjectID : nil
-    }
-
-    /// Whether the filter control should read as customised. Thread grouping is
-    /// fixed, so only the two scope filters can make it non-default.
-    public static func hasCustomListOptions(
-        selectedEnvironmentID: String?,
-        selectedProjectID: String?
-    ) -> Bool {
-        selectedEnvironmentID != nil || selectedProjectID != nil
-    }
-
-    public static func filterSymbol(hasCustomListOptions: Bool) -> String {
-        hasCustomListOptions
-            ? "line.3.horizontal.decrease.circle.fill"
-            : "line.3.horizontal.decrease.circle"
     }
 
     // MARK: - Routing over the Home snapshot
@@ -242,6 +158,23 @@ public enum WorkspaceSwitcher {
             workspaceThread(thread, environmentID: environmentID),
             providerDrivers: providerDrivers
         )
+    }
+
+    /// The tab a thread lives in: Code for anything not on Hermes, then Chat or
+    /// Work by the conversation's inbox role. Unlike ``threads(_:in:providerDrivers:fallbackEnvironmentID:relationshipToParent:)``
+    /// this also answers for archived threads, so a link to one lands on the
+    /// tab whose Archived shelf holds it.
+    public static func workspace(
+        of thread: FeatureThread,
+        providerDrivers: MobileWorkspaceProviderDrivers,
+        fallbackEnvironmentID: String
+    ) -> MobileWorkspace {
+        guard isWorkThread(
+            thread,
+            environmentID: thread.environmentID ?? fallbackEnvironmentID,
+            providerDrivers: providerDrivers
+        ) else { return .code }
+        return thread.workInboxRole == "chat" ? .chat : .work
     }
 
     /// The rows one workspace shows, in the order they were handed in.

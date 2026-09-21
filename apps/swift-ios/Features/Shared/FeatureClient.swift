@@ -211,6 +211,14 @@ public protocol FeatureClient: AnyObject {
         action: FeatureSourceControlAction,
         message: String?
     ) async throws -> FeatureSourceControlStatus
+    /// The same action, reporting each step the server streams ("Committing…",
+    /// then "Pushing…") as it happens.
+    func performSourceControlAction(
+        threadID: String,
+        action: FeatureSourceControlAction,
+        message: String?,
+        onProgress: @escaping (FeatureSourceControlProgress) -> Void
+    ) async throws -> FeatureSourceControlStatus
 
     /// Returns the launched terminal; nil means an existing single-run action was interrupted.
     func performProjectScript(threadID: String, script: ProjectScript) async throws -> String?
@@ -523,6 +531,15 @@ public extension FeatureClient {
         message: String?
     ) async throws -> FeatureSourceControlStatus {
         throw FeatureCapabilityUnavailable("Source control actions")
+    }
+
+    func performSourceControlAction(
+        threadID: String,
+        action: FeatureSourceControlAction,
+        message: String?,
+        onProgress _: @escaping (FeatureSourceControlProgress) -> Void
+    ) async throws -> FeatureSourceControlStatus {
+        try await performSourceControlAction(threadID: threadID, action: action, message: message)
     }
 
     func terminalSnapshot(threadID: String, terminalID _: String) async throws -> FeatureTerminalSnapshot {

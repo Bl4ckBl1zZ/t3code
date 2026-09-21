@@ -1,14 +1,21 @@
 import SwiftUI
 
+/// The repository's labels, pushed from a pull request's Labels section.
+/// Each toggle applies at once and updates its own row in place: the list
+/// never reloads under the reader's finger.
 struct PullRequestLabelPickerSheet: View {
     let access: FeaturePullRequestAccess
     let number: Int
-    @SwiftUI.Environment(\.dismiss) private var dismiss
+    /// Reloads the pull request behind this screen once it closes, if a toggle
+    /// landed.
+    let changed: () async -> Void
     @State private var result: PullRequestLabelCandidateList?
     @State private var query = ""
     @State private var pending: String?
     @State private var loading = true
-    @State private var errorMessage: String?
+    @State private var loadError: String?
+    @State private var toggleError: String?
+    @State private var didChange = false
 
     private var candidates: [PullRequestLabelCandidate] {
         (result?.candidates ?? []).filter {
@@ -18,87 +25,142 @@ struct PullRequestLabelPickerSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let errorMessage {
-                        Text(errorMessage).font(T3Typography.supporting).foregroundStyle(T3Colors.danger)
-                        Button("Refresh labels") { Task { await load() } }.disabled(pending != nil)
+        List {
+            if loading, result == nil {
+                Section {
+                    ForEach(0..<5, id: \.self) { _ in
+                        Label("Label name", systemImage: "circle.fill")
+                            .redacted(reason: .placeholder)
                     }
-                    if loading {
-                        ProgressView().frame(maxWidth: .infinity)
-                    } else if candidates.isEmpty {
-                        Text(query.isEmpty ? "This repository has no labels." : "No matching labels.")
-                            .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
+                }
+                .t3GroupedRow()
+                .accessibilityHidden(true)
+            } else if let loadError, result == nil {
+                ContentUnavailableView {
+                    Label("Couldn’t Load Labels", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(loadError)
+                } actions: {
+                    Button("Try Again") { Task { await load() } }.buttonStyle(.bordered)
+                }
+                .listRowBackground(Color.clear)
+            } else if candidates.isEmpty {
+                Group {
+                    if query.isEmpty {
+                        ContentUnavailableView("No Labels", systemImage: "tag", description: Text("This repository has no labels."))
                     } else {
-                        ThreadDetailsSection(title: "Repository labels") {
-                            ForEach(candidates) { candidate in
-                                Button { toggle(candidate) } label: {
-                                    HStack(spacing: 10) {
-                                        Circle().fill(labelColor(candidate.color)).frame(width: 8, height: 8)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(candidate.name).font(T3Typography.threadBody)
-                                            if let description = candidate.description, !description.isEmpty {
-                                                Text(description).font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                                            }
-                                        }
-                                        Spacer(minLength: 8)
-                                        if pending == candidate.name { ProgressView() }
-                                        else if candidate.isApplied { Image(systemName: "checkmark").accessibilityLabel("Applied") }
-                                    }
-                                    .foregroundStyle(T3Colors.textPrimary).padding(12).contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(pending != nil || errorMessage != nil)
-                                .accessibilityValue(candidate.isApplied ? "Applied" : "Not applied")
-                            }
+                        ContentUnavailableView.search(text: query)
+                    }
+                }
+                .listRowBackground(Color.clear)
+            } else {
+                Section {
+                    ForEach(candidates) { candidate in
+                        row(candidate)
+                    }
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let toggleError {
+                            Text(toggleError).foregroundStyle(T3Colors.danger)
+                        }
+                        if result?.truncated == true {
+                            Text("This repository has more labels than are listed here. Apply the rest on the host.")
                         }
                     }
-                    if result?.truncated == true {
-                        Text("This repository has more labels than are listed here. Apply the rest on the host.")
-                            .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                    }
-                }.padding(16)
+                }
+                .t3GroupedRow()
             }
-            .background(T3Colors.background)
-            .navigationTitle("Change labels")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, prompt: "Search labels")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(pending != nil) } }
-            .t3NavigationChrome()
-            .task { await load() }
         }
-        .interactiveDismissDisabled(pending != nil)
+        .t3SheetList()
+        .t3GroupedListBackground()
+        .navigationTitle("Labels")
+        .navigationBarTitleDisplayMode(.inline)
+        .t3NavigationChrome()
+        .searchable(text: $query, prompt: "Search Labels")
+        .task { await load() }
+        .onDisappear {
+            if didChange { Task { await changed() } }
+        }
     }
 
-    private func labelColor(_ value: String?) -> Color {
-        guard let value, value.count == 6, let hex = UInt32(value, radix: 16) else { return T3Colors.textSecondary }
-        return Color(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
+    private func row(_ candidate: PullRequestLabelCandidate) -> some View {
+        Button { toggle(candidate) } label: {
+            HStack(spacing: 12) {
+                PullRequestLabelSwatch(hex: candidate.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(candidate.name)
+                        .font(T3Typography.threadBody)
+                        .foregroundStyle(T3Colors.textPrimary)
+                    if let description = candidate.description, !description.isEmpty {
+                        Text(description)
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textSecondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if pending == candidate.name {
+                    ProgressView()
+                } else if candidate.isApplied {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(T3Colors.accent)
+                }
+            }
+        }
+        .disabled(pending != nil)
+        .accessibilityValue(candidate.isApplied ? "Applied" : "Not applied")
     }
 
     private func load() async {
         loading = true
-        errorMessage = nil
+        defer { loading = false }
         do {
             let loaded = try await access.labels(number)
             guard !Task.isCancelled else { return }
             result = loaded
+            loadError = nil
         } catch {
             guard !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            loadError = error.localizedDescription
         }
-        loading = false
     }
 
+    /// Applies one label and flips its row in place when the host agrees. A
+    /// failure is reported under the list and leaves every row usable.
     private func toggle(_ candidate: PullRequestLabelCandidate) {
-        guard pending == nil, errorMessage == nil else { return }
+        guard pending == nil else { return }
         pending = candidate.name
+        toggleError = nil
+        PlatformHapticEngine.shared.playSelection()
         Task { @MainActor in
+            defer { pending = nil }
             do {
                 try await access.setLabels(number, [candidate.name], !candidate.isApplied)
-                await load()
-            } catch { errorMessage = error.localizedDescription }
-            pending = nil
+                result = PullRequestLabelPicking.toggling(result, name: candidate.name)
+                didChange = true
+            } catch {
+                toggleError = "Couldn’t update “\(candidate.name)”: \(error.localizedDescription)"
+                PlatformHapticEngine.shared.play(.error)
+            }
         }
+    }
+}
+
+/// The label list after one toggle lands, without asking the host again.
+enum PullRequestLabelPicking {
+    static func toggling(_ list: PullRequestLabelCandidateList?, name: String) -> PullRequestLabelCandidateList? {
+        guard let list else { return nil }
+        return PullRequestLabelCandidateList(
+            candidates: list.candidates.map { candidate in
+                guard candidate.name == name else { return candidate }
+                return PullRequestLabelCandidate(
+                    name: candidate.name,
+                    color: candidate.color,
+                    description: candidate.description,
+                    isApplied: !candidate.isApplied
+                )
+            },
+            truncated: list.truncated
+        )
     }
 }

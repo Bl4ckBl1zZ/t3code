@@ -12,6 +12,15 @@ struct FeatureDetailRenderUpdate: Equatable {
     let change: FeatureDetailRenderChange
 }
 
+/// Where a submission in this device's outbox stands.
+public enum FeatureOutboxDelivery: Equatable, Sendable {
+    /// Held until its environment is reachable.
+    case waiting
+    case sending
+    /// Refused; stays until the reader retries it.
+    case failed
+}
+
 @MainActor
 @Observable
 public final class FeatureRootModel {
@@ -55,7 +64,14 @@ public final class FeatureRootModel {
     public private(set) var isLoading = true
     public private(set) var isPerformingAction = false
     public private(set) var isManagingConnections = false
-    public var errorMessage: String?
+    /// The failure the root alert shows. Setting it clears `errorTitle`, so a
+    /// caller that names what failed sets the message first, then the title.
+    public var errorMessage: String? {
+        didSet { errorTitle = nil }
+    }
+    /// What failed, as the alert's title ("Couldn't Archive Thread"). Nil
+    /// falls back to a generic title.
+    public private(set) var errorTitle: String?
     /// What each thread's review is pointed at. Lives here rather than in the
     /// review screen because the thread feed arms it and the review — presented
     /// later, from a sheet that does not exist yet — spends it.
@@ -72,6 +88,14 @@ public final class FeatureRootModel {
         if failedOutboxIDs.contains(submission.id) { return "Send failed · Retry" }
         if sendingOutboxIDs.contains(submission.id) { return submission.attachments.isEmpty ? "Sending" : "Uploading and sending" }
         return "Queued"
+    }
+
+    /// The same three states as `outboxStatus`, typed for surfaces that
+    /// caption a queued message rather than print a status line.
+    public func outboxDelivery(_ submission: FeatureQueuedSubmission) -> FeatureOutboxDelivery {
+        if failedOutboxIDs.contains(submission.id) { return .failed }
+        if sendingOutboxIDs.contains(submission.id) { return .sending }
+        return .waiting
     }
 
     public func retryOutbox() { failedOutboxIDs.removeAll(); scheduleOutboxDrain() }
@@ -104,7 +128,7 @@ public final class FeatureRootModel {
             install(try await client.initialSnapshot())
         } catch {
             if !Self.isBenignCancellation(error) {
-                errorMessage = error.localizedDescription
+                reportFailure(error.localizedDescription, title: "Couldn't Load Your Servers")
             }
         }
         await restoreOutbox()
@@ -158,7 +182,7 @@ public final class FeatureRootModel {
             install(try await client.initialSnapshot())
         } catch {
             if !Self.isBenignCancellation(error) {
-                errorMessage = error.localizedDescription
+                reportFailure(error.localizedDescription, title: "Couldn't Refresh")
             }
         }
     }
@@ -194,7 +218,10 @@ public final class FeatureRootModel {
                 removePendingSubmissions(environmentID: id)
             } catch {
                 markPendingSubmissionsForDiscard(environmentID: id)
-                errorMessage = "Environment removed, but its queued messages could not be cleared: \(error.localizedDescription)"
+                reportFailure(
+                    "Environment removed, but its queued messages could not be cleared: \(error.localizedDescription)",
+                    title: "Couldn't Clear Queued Messages"
+                )
             }
             install(try await client.initialSnapshot())
             clearDetails()
@@ -224,7 +251,7 @@ public final class FeatureRootModel {
     }
 
     public func addProject(path: String) async -> Bool {
-        await perform {
+        await perform(failureTitle: "Couldn't Add Project") {
             try await client.addProject(path: path)
             install(try await client.initialSnapshot())
         }
@@ -237,7 +264,7 @@ public final class FeatureRootModel {
     ) async -> FeatureThread? {
         let environment = currentEnvironmentIdentity
         var created: FeatureThread?
-        let succeeded = await perform {
+        let succeeded = await perform(failureTitle: "Couldn't Create Thread") {
             let thread = try await client.createThread(
                 projectID: projectID,
                 title: title,
@@ -258,7 +285,7 @@ public final class FeatureRootModel {
         guard request.workspaceMode != .worktree || request.branch != nil else { return nil }
 
         guard let project = snapshot.projects.first(where: { $0.id == request.projectID }) else {
-            errorMessage = "That project is no longer available."
+            reportFailure("That project is no longer available.", title: "Couldn't Start Task")
             return nil
         }
         let identity = FeatureSubmissionIdentity()
@@ -303,25 +330,27 @@ public final class FeatureRootModel {
 
     public func renameThread(_ id: String, title: String) async {
         let environment = currentEnvironmentIdentity
-        await perform {
+        await perform(failureTitle: "Couldn't Rename Thread") {
             try await client.renameThread(id: id, title: title)
             guard currentEnvironmentIdentity == environment else { return }
             mutateThread(id: id) { $0.title = title }
         }
     }
 
-    public func setArchived(_ id: String, archived: Bool) async {
+    @discardableResult
+    public func setArchived(_ id: String, archived: Bool) async -> Bool {
         let environment = currentEnvironmentIdentity
-        await perform {
+        return await perform(failureTitle: archived ? "Couldn't Archive Thread" : "Couldn't Restore Thread") {
             try await client.setThreadArchived(id: id, archived: archived)
             guard currentEnvironmentIdentity == environment else { return }
             mutateThread(id: id) { $0.isArchived = archived }
         }
     }
 
-    public func setSettled(_ id: String, settled: Bool) async {
+    @discardableResult
+    public func setSettled(_ id: String, settled: Bool) async -> Bool {
         let environment = currentEnvironmentIdentity
-        await perform {
+        return await perform(failureTitle: settled ? "Couldn't Settle Thread" : "Couldn't Reopen Thread") {
             try await client.setThreadSettled(id: id, settled: settled)
             guard currentEnvironmentIdentity == environment else { return }
             let now = Date.now
@@ -346,7 +375,7 @@ public final class FeatureRootModel {
     @discardableResult
     public func setSnoozed(_ id: String, until: Date?) async -> Bool {
         let environment = currentEnvironmentIdentity
-        return await perform {
+        return await perform(failureTitle: until == nil ? "Couldn't Unsnooze Thread" : "Couldn't Snooze Thread") {
             try await client.setThreadSnoozed(id: id, until: until)
             guard currentEnvironmentIdentity == environment else { return }
             let snoozedAt = until.map { _ in Date.now }
@@ -360,7 +389,7 @@ public final class FeatureRootModel {
     @discardableResult
     public func setPinned(_ id: String, pinned: Bool) async -> Bool {
         let environment = currentEnvironmentIdentity
-        return await perform {
+        return await perform(failureTitle: pinned ? "Couldn't Pin Thread" : "Couldn't Unpin Thread") {
             try await client.setThreadPinned(id: id, pinned: pinned)
             guard currentEnvironmentIdentity == environment else { return }
             mutateThread(id: id) {
@@ -375,7 +404,7 @@ public final class FeatureRootModel {
 
     public func setActiveOrder(_ id: String, key: String?) async -> Bool {
         let environment = currentEnvironmentIdentity
-        return await perform {
+        return await perform(failureTitle: "Couldn't Reorder Threads") {
             try await client.setActiveOrder(id: id, key: key)
             guard currentEnvironmentIdentity == environment else { return }
             mutateThread(id: id) { $0.activeOrderKey = key }
@@ -421,7 +450,7 @@ public final class FeatureRootModel {
     @discardableResult
     public func deleteThread(_ id: String) async -> Bool {
         let environment = currentEnvironmentIdentity
-        return await perform {
+        return await perform(failureTitle: "Couldn't Delete Thread") {
             try await client.deleteThread(id: id)
             guard currentEnvironmentIdentity == environment else { return }
             pendingThreadFileDrops[id] = nil
@@ -462,7 +491,7 @@ public final class FeatureRootModel {
             return detail
         } catch {
             if !Self.isBenignCancellation(error) {
-                errorMessage = error.localizedDescription
+                reportFailure(error.localizedDescription, title: "Couldn't Open Thread")
             }
             return details[id]
         }
@@ -478,7 +507,7 @@ public final class FeatureRootModel {
             store(detail)
         } catch {
             if !Self.isBenignCancellation(error) {
-                errorMessage = error.localizedDescription
+                reportFailure(error.localizedDescription, title: "Couldn't Load Earlier Messages")
             }
         }
     }
@@ -572,7 +601,7 @@ public final class FeatureRootModel {
                 scheduleOutboxRetry()
             }
             if discarded, !Self.isBenignCancellation(error) {
-                errorMessage = error.localizedDescription
+                reportFailure(error.localizedDescription, title: "Couldn't Send Message")
             }
             return false
         }
@@ -639,6 +668,7 @@ public final class FeatureRootModel {
     @discardableResult
     private func perform(
         reportError: Bool = true,
+        failureTitle: String? = nil,
         _ operation: () async throws -> Void
     ) async -> Bool {
         isPerformingAction = true
@@ -648,10 +678,16 @@ public final class FeatureRootModel {
             return true
         } catch {
             if reportError, !Self.isBenignCancellation(error) {
-                errorMessage = error.localizedDescription
+                reportFailure(error.localizedDescription, title: failureTitle)
             }
             return false
         }
+    }
+
+    /// Raises the root alert, titled by what failed.
+    public func reportFailure(_ message: String, title: String?) {
+        errorMessage = message
+        errorTitle = title
     }
 
     private static func isBenignCancellation(_ error: any Error) -> Bool {
@@ -892,7 +928,10 @@ public final class FeatureRootModel {
         do {
             submissions = try await outboxStore.submissions()
         } catch {
-            errorMessage = "Could not restore queued messages: \(error.localizedDescription)"
+            reportFailure(
+                "Could not restore queued messages: \(error.localizedDescription)",
+                title: "Couldn't Restore Queued Messages"
+            )
             return
         }
 
@@ -945,7 +984,10 @@ public final class FeatureRootModel {
             pendingSubmissionsByID[submission.id] = submission
             return true
         } catch {
-            errorMessage = "Could not safely queue this message: \(error.localizedDescription)"
+            reportFailure(
+                "Could not safely queue this message: \(error.localizedDescription)",
+                title: "Couldn't Queue Message"
+            )
             return false
         }
     }
@@ -1107,7 +1149,10 @@ public final class FeatureRootModel {
         do {
             try await outboxStore.remove(id: submission.id)
         } catch {
-            errorMessage = "The message was delivered, but its queued copy could not be cleared: \(error.localizedDescription)"
+            reportFailure(
+                "The message was delivered, but its queued copy could not be cleared: \(error.localizedDescription)",
+                title: "Couldn't Clear Queued Message"
+            )
             return false
         }
         pendingCompletionSubmissionIDs.remove(submission.id)
@@ -1137,7 +1182,10 @@ public final class FeatureRootModel {
         do {
             try await outboxStore.remove(id: submission.id)
         } catch {
-            errorMessage = "Could not remove the queued message: \(error.localizedDescription)"
+            reportFailure(
+                "Could not remove the queued message: \(error.localizedDescription)",
+                title: "Couldn't Remove Queued Message"
+            )
             return false
         }
         pendingDiscardSubmissionIDs.remove(submission.id)
@@ -1317,7 +1365,7 @@ public final class FeatureRootModel {
                         needsRetry = true
                     } else {
                         failedOutboxIDs.insert(submission.id)
-                        errorMessage = error.localizedDescription
+                        reportFailure(error.localizedDescription, title: "Couldn't Send Message")
                     }
                 }
             }

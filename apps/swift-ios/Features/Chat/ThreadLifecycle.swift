@@ -89,6 +89,11 @@ public enum ThreadLifecycle {
         }
     }
 
+    /// "128K" rather than "128000": the magnitude is the information.
+    static func compactTokenCount(_ count: Int) -> String {
+        count.formatted(.number.notation(.compactName))
+    }
+
     static func rollbackDetail(rolledBackRunCount: Int, restoredFileCount: Int) -> String? {
         var parts: [String] = []
         if rolledBackRunCount > 0 {
@@ -141,13 +146,16 @@ public enum ThreadLifecycle {
         runs: [LifecycleTimelineRun] = []
     ) -> LifecyclePresentation? {
         switch item.payload {
+        // Stopping is what the reader asked for, so it reads neutral. The
+        // request only shows until its result lands; the feed drops a request
+        // whose run already has one, so one Stop leaves one "Stopped".
         case let .runInterruptRequest(message):
             return .divider(
                 .init(
-                    label: "Interrupt requested",
+                    label: item.status.isTerminal ? "Stop requested" : "Stopping…",
                     detail: message.isEmpty ? nil : message,
-                    tone: .danger,
-                    symbol: "stop.fill",
+                    tone: .neutral,
+                    symbol: "stop",
                     layout: .inline,
                     busy: false,
                     actionLabel: nil,
@@ -156,12 +164,13 @@ public enum ThreadLifecycle {
             )
 
         case let .runInterruptResult(message):
+            let failed = item.status == .failed
             return .divider(
                 .init(
-                    label: "Run interrupted",
+                    label: failed ? "Couldn't stop" : "Stopped",
                     detail: message.isEmpty ? nil : message,
-                    tone: .danger,
-                    symbol: "xmark",
+                    tone: failed ? .danger : .neutral,
+                    symbol: failed ? "exclamationmark.circle" : "stop",
                     layout: .inline,
                     busy: false,
                     actionLabel: nil,
@@ -190,7 +199,7 @@ public enum ThreadLifecycle {
             let tokenDetail: String? =
                 (beforeTokenCount == nil && afterTokenCount == nil)
                 ? nil
-                : "\(beforeTokenCount.map(String.init) ?? "?") → \(afterTokenCount.map(String.init) ?? "?") tokens"
+                : "\(beforeTokenCount.map(compactTokenCount) ?? "?") → \(afterTokenCount.map(compactTokenCount) ?? "?") tokens"
             return .divider(
                 .init(
                     label: "Chat compacted",
@@ -232,7 +241,7 @@ public enum ThreadLifecycle {
             let preparing = isHandoffInFlight(item.status)
             let label =
                 preparing
-                ? "Preparing context handoff"
+                ? "Handing off…"
                 : (item.status == .failed ? "Context handoff failed" : "Context handoff")
             return .divider(
                 .init(

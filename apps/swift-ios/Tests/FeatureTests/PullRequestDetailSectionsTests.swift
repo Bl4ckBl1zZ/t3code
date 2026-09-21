@@ -124,7 +124,7 @@ struct PullRequestDetailSectionsTests {
         #expect(PullRequestDetailSections.stateLabel(state: .merged, isDraft: false) == "Merged")
         #expect(PullRequestDetailSections.stateTone(state: .open, isDraft: false) == .success)
         #expect(PullRequestDetailSections.stateTone(state: .open, isDraft: true) == .neutral)
-        #expect(PullRequestDetailSections.stateTone(state: .merged, isDraft: false) == .accent)
+        #expect(PullRequestDetailSections.stateTone(state: .merged, isDraft: false) == .merged)
         #expect(PullRequestDetailSections.stateTone(state: .closed, isDraft: false) == .danger)
     }
 
@@ -163,7 +163,7 @@ struct PullRequestDetailSectionsTests {
             reviewState: "COMMENTED"
         )
         #expect(PullRequestDetailSections.reviewOutcome(commented) == nil)
-        #expect(PullRequestDetailSections.reviewStateLabel(commented) == "commented")
+        #expect(PullRequestDetailSections.reviewStateLabel(commented) == "Commented")
 
         // A review comment's state describes the review it belongs to.
         let reviewComment = comment(
@@ -320,6 +320,63 @@ struct PullRequestDetailSectionsTests {
         // Asked and silent is an answer the reader needs, so the row stays.
         #expect(rows[1].entry == nil)
         #expect(rows[2].entry?.outcome == .changesRequested)
+    }
+
+    // MARK: - Checks summary
+
+    private func check(_ name: String, _ status: PullRequestCheckStatus) -> PullRequestCheck {
+        PullRequestCheck(name: name, status: status, description: nil, url: nil)
+    }
+
+    @Test
+    func checksSummaryPutsFailuresFirstAndCollapsesTheSettled() {
+        let summary = PullRequestDetailSections.checksSummary([
+            check("lint", .success),
+            check("e2e", .pending),
+            check("deploy", .actionRequired),
+            check("test", .failure),
+            check("docs", .skipped),
+        ])
+        #expect(summary.attention.map(\.check.name) == ["test", "deploy"])
+        #expect(summary.running.map(\.check.name) == ["e2e"])
+        #expect(summary.settled.map(\.check.name) == ["lint", "docs"])
+        #expect(summary.headline == "1 failing · 1 needs action · 1 in progress")
+        #expect(summary.total == 5)
+        #expect(!summary.isAllPassing)
+        #expect(summary.segments.map(\.count) == [1, 2, 1, 1])
+    }
+
+    @Test
+    func checksSummaryReadsAllPassingAsOneLine() {
+        let summary = PullRequestDetailSections.checksSummary([
+            check("lint", .success), check("docs", .neutral),
+        ])
+        #expect(summary.isAllPassing)
+        #expect(summary.headline == "All checks passed")
+    }
+
+    @Test
+    func checksWithTheSameNameKeepDistinctIdentities() {
+        let summary = PullRequestDetailSections.checksSummary([
+            check("test", .failure), check("test", .failure),
+        ])
+        // Matrix jobs repeat a name; the host position keeps them apart.
+        #expect(Set(summary.attention.map(\.id)).count == 2)
+    }
+
+    // MARK: - Header lines
+
+    @Test
+    func stateSymbolsMatchTheSharedBadge() {
+        #expect(PullRequestDetailSections.stateSymbol(state: .open, isDraft: true) == "circle.dashed")
+        #expect(PullRequestDetailSections.stateSymbol(state: .merged, isDraft: false) == "arrow.triangle.merge")
+        #expect(PullRequestDetailSections.stateSymbol(state: .closed, isDraft: false) == "xmark.circle")
+    }
+
+    @Test
+    func reviewStatesThatAreNotVerdictsReadCapitalized() {
+        let commented = comment(id: "c", createdAt: "2026-08-01T10:00:00Z", kind: .review, reviewState: "COMMENTED")
+        #expect(PullRequestDetailSections.reviewStateLabel(commented) == "Commented")
     }
 
     @Test

@@ -9,61 +9,104 @@ struct NativeStackAction: Identifiable {
     var layers: [PullRequestStack.Layer] { stack.affectedLayers(number: number, action: action) }
 }
 
+/// How a stack layer's revision reads in the confirmation.
+enum PullRequestStackRevision {
+    /// The first twelve characters of the SHA the action is pinned to; the
+    /// fallback text is never shortened.
+    static func label(_ headSha: String?) -> String {
+        headSha.map { String($0.prefix(12)) } ?? "Revision unavailable"
+    }
+}
+
 /// Holds the exact stack the reader reviewed; a refresh must never alter an armed operation.
 struct PullRequestStackActionSheet: View {
     let request: NativeStackAction
     let access: FeaturePullRequestAccess
+    /// Closes the sheet; the detail screen reloads the stack when it does.
     let onFinished: () -> Void
     @State private var method = ""
     @State private var isBusy = false
     @State private var errorMessage: String?
 
     private var isMerge: Bool { request.action == "merge" }
-    private var ready: Bool {
+    private var hasEveryRevision: Bool {
         !request.layers.isEmpty && request.layers.allSatisfy { $0.state == .open && $0.headSha != nil }
-            && (!isMerge || request.mergeMethods.contains(method))
+    }
+    private var ready: Bool {
+        hasEveryRevision && (!isMerge || request.mergeMethods.contains(method))
     }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(isMerge ? "Merge through #\(request.number)" : "Rebase stack")
-                        .font(T3Typography.threadHeading2)
-                    Text("These layers will be updated on GitHub. Your local checkout stays unchanged.")
-                        .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                    ThreadDetailsSection(title: "Affected layers") {
-                        ForEach(request.layers) { layer in
-                            ThreadDetailsRow(systemImage: "arrow.triangle.pull", title: "#\(layer.number) \(layer.title ?? layer.headBranch)",
-                                subtitle: String((layer.headSha ?? "Revision unavailable").prefix(12)), showsChevron: false)
+            Form {
+                if !hasEveryRevision {
+                    Section {
+                        ThreadSheetBanner(
+                            tone: .warning,
+                            title: "A layer has no revision",
+                            message: "Refresh the stack to load every open layer’s revision before continuing."
+                        ) {
+                            Button("Refresh Stack", action: onFinished)
+                        }
+                        .listRowBackground(ThreadSheetBannerTone.warning.fill)
+                    }
+                }
+                if let errorMessage {
+                    Section {
+                        ThreadSheetBanner(
+                            tone: .error,
+                            title: errorMessage,
+                            message: "Earlier completed updates remain on GitHub. Close this sheet to refresh before another attempt."
+                        )
+                        .listRowBackground(ThreadSheetBannerTone.error.fill)
+                    }
+                }
+                Section {
+                    ForEach(request.layers) { layer in
+                        LabeledContent {
+                            Text(PullRequestStackRevision.label(layer.headSha))
+                                .font(T3Typography.tool)
+                                .foregroundStyle(layer.headSha == nil ? T3Colors.warning : T3Colors.textSecondary)
+                        } label: {
+                            Text("#\(layer.number) \(layer.title ?? layer.headBranch)")
+                                .lineLimit(2)
                         }
                     }
-                    if isMerge {
-                        Picker("Merge strategy", selection: $method) {
-                            ForEach(request.mergeMethods, id: \.self) { Text($0.capitalized).tag($0) }
+                } header: {
+                    Text("Affected Layers")
+                } footer: {
+                    Text("Layers update on GitHub from base to top. Your local checkout stays unchanged.")
+                }
+                .t3GroupedRow()
+                if isMerge {
+                    Section {
+                        Picker("Method", selection: $method) {
+                            ForEach(request.mergeMethods, id: \.self) { Text(PullRequestActionLogic.methodLabel($0)).tag($0) }
                         }
+                        .pickerStyle(.menu)
+                        .disabled(isBusy)
                     }
-                    if let errorMessage {
-                        Text(errorMessage).foregroundStyle(T3Colors.danger)
-                        Text("Earlier completed updates remain on GitHub. Close this sheet to refresh before another attempt.")
-                            .font(T3Typography.supporting).foregroundStyle(T3Colors.textSecondary)
-                    }
-                    if !ready {
-                        Text("Refresh the stack to load every open layer’s revision before continuing.")
-                            .font(T3Typography.supporting).foregroundStyle(T3Colors.warning)
-                    }
-                    SettingsActionButton(title: isMerge ? "Merge reviewed layers" : "Rebase reviewed layers",
-                        systemImage: "arrow.triangle.merge", tone: .primary, isBusy: isBusy,
-                        isDisabled: !ready || errorMessage != nil, action: perform)
-                }.padding(16)
+                    .t3GroupedRow()
+                }
             }
-            .background(T3Colors.background)
-            .navigationTitle("Confirm stack action")
+            .t3GroupedListBackground()
+            .navigationTitle(isMerge ? "Merge Through #\(request.number)" : "Rebase Stack")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", action: onFinished).disabled(isBusy) } }
             .t3NavigationChrome()
+            .t3SheetToolbar(
+                .cancel,
+                confirm: T3SheetConfirmation(
+                    title: isMerge ? "Merge" : "Rebase",
+                    isEnabled: ready && errorMessage == nil,
+                    isBusy: isBusy,
+                    action: perform
+                ),
+                onDismiss: onFinished
+            )
+            .interactiveDismissDisabled(isBusy)
         }
-        .interactiveDismissDisabled(isBusy)
+        .presentationDetents([.medium, .large])
+        .t3GlassSheetBackground()
         .onAppear { method = request.mergeMethods.first ?? "" }
     }
 
@@ -73,8 +116,12 @@ struct PullRequestStackActionSheet: View {
         Task { @MainActor in
             do {
                 try await access.runStackAction(request.number, request.stack, request.action, isMerge ? method : nil)
+                PlatformHapticEngine.shared.play(.success)
                 onFinished()
-            } catch { errorMessage = error.localizedDescription }
+            } catch {
+                errorMessage = error.localizedDescription
+                PlatformHapticEngine.shared.play(.error)
+            }
             isBusy = false
         }
     }

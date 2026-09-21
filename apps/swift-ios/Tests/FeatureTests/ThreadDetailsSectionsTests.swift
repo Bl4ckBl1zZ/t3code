@@ -10,17 +10,32 @@ import XCTest
 final class ThreadDetailsSectionsTests: XCTestCase {
     // MARK: - Connection notice
 
-    func testAnUnprobedEnvironmentIsNotReportedAsBroken() {
+    func testOnlyALostConnectionIsReportedAsBroken() {
         XCTAssertFalse(ThreadDetailsConnection.hasIssue(nil))
         XCTAssertFalse(ThreadDetailsConnection.hasIssue(.connected))
         XCTAssertTrue(ThreadDetailsConnection.hasIssue(.disconnected))
-        XCTAssertTrue(ThreadDetailsConnection.hasIssue(.reconnecting))
+        // An ordinary connect or reconnect is progress, not an error.
+        XCTAssertFalse(ThreadDetailsConnection.hasIssue(.connecting))
+        XCTAssertFalse(ThreadDetailsConnection.hasIssue(.reconnecting))
     }
 
-    func testAReconnectButtonNamesTheAttemptWhileOneIsInFlight() {
-        XCTAssertEqual(ThreadDetailsConnection.reconnectLabel(.connecting), "Reconnecting…")
-        XCTAssertEqual(ThreadDetailsConnection.reconnectLabel(.reconnecting), "Reconnecting…")
-        XCTAssertEqual(ThreadDetailsConnection.reconnectLabel(.disconnected), "Reconnect")
+    func testTheEnvironmentRowReadsAsWordsRatherThanTheRawState() {
+        XCTAssertEqual(ThreadDetailsConnection.label(nil), "Available")
+        XCTAssertEqual(ThreadDetailsConnection.label(.connected), "Connected")
+        XCTAssertEqual(ThreadDetailsConnection.label(.connecting), "Connecting…")
+        XCTAssertEqual(ThreadDetailsConnection.label(.reconnecting), "Connecting…")
+        XCTAssertEqual(ThreadDetailsConnection.label(.disconnected), "Offline")
+    }
+
+    func testTheOfflineBannerNamesTheMachine() {
+        XCTAssertEqual(
+            ThreadDetailsConnection.noticeTitle(environmentName: "MacBook Pro"),
+            "MacBook Pro is offline"
+        )
+        XCTAssertEqual(
+            ThreadDetailsConnection.noticeTitle(environmentName: nil),
+            "This environment is offline"
+        )
     }
 
     // MARK: - Workspace
@@ -69,7 +84,7 @@ final class ThreadDetailsSectionsTests: XCTestCase {
         XCTAssertEqual(ThreadDetailsWorkspace.icon(worktreePath: "/w/x"), "arrow.triangle.branch")
         XCTAssertEqual(ThreadDetailsWorkspace.kindLabel(worktreePath: "/w/x"), "Worktree")
         XCTAssertEqual(ThreadDetailsWorkspace.icon(worktreePath: nil), "folder")
-        XCTAssertEqual(ThreadDetailsWorkspace.kindLabel(worktreePath: nil), "Project folder")
+        XCTAssertEqual(ThreadDetailsWorkspace.kindLabel(worktreePath: nil), "Project Folder")
     }
 
     func testASetupScriptSaysSoAndEveryIconKindMaps() {
@@ -568,7 +583,6 @@ final class ThreadDetailsSectionsTests: XCTestCase {
     }
 
     func testTheDoneGroupPluralisesItsCount() {
-        XCTAssertEqual(ThreadDetailsLineageSection.doneGroupLabel(count: 3), "Done · 3")
         XCTAssertEqual(
             ThreadDetailsLineageSection.doneGroupAccessibilityLabel(count: 1),
             "1 finished subagent"
@@ -577,6 +591,110 @@ final class ThreadDetailsSectionsTests: XCTestCase {
             ThreadDetailsLineageSection.doneGroupAccessibilityLabel(count: 4),
             "4 finished subagents"
         )
+    }
+
+    // MARK: - Header
+
+    func testTheHeaderNamesTheProviderStateAndFreshness() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let meta = ThreadDetailsHeader.meta(
+            providerName: "Codex",
+            state: .idle,
+            updatedAt: now.addingTimeInterval(-120),
+            now: now
+        )
+        XCTAssertTrue(meta.hasPrefix("Codex · Idle · Updated "), meta)
+        XCTAssertEqual(ThreadDetailsHeader.stateLabel(.waitingForApproval), "Needs Approval")
+    }
+
+    // MARK: - Git failures
+
+    func testAFailedGitActionIsTitledByWhatDidNotHappen() {
+        XCTAssertEqual(ThreadDetailsGit.failureTitle(for: .commitAndPush), "Couldn't Push")
+        XCTAssertEqual(ThreadDetailsGit.failureTitle(for: .pull), "Couldn't Pull")
+        XCTAssertEqual(ThreadDetailsGit.failureTitle(for: .commit), "Couldn't Commit")
+        XCTAssertEqual(ThreadDetailsGit.titleCase("Push & create PR"), "Push & Create PR")
+    }
+
+    // MARK: - Linked pull requests
+
+    private func snapshot(
+        state: String = "open",
+        checksState: String? = nil,
+        reviewDecision: String? = nil,
+        mergeability: String? = nil,
+        additions: Int? = nil,
+        deletions: Int? = nil
+    ) -> FeaturePullRequestSnapshot {
+        FeaturePullRequestSnapshot(
+            state: state, title: "Fix it", headBranch: "feat/a", baseBranch: "main", isDraft: false,
+            additions: additions, deletions: deletions,
+            checksState: checksState, reviewDecision: reviewDecision, mergeability: mergeability
+        )
+    }
+
+    func testALinkedRowFoldsWhatTheReaderDecidesWithIntoOneLine() {
+        XCTAssertEqual(
+            ThreadLinkedPullRequestPresentation.statusLine(snapshot(
+                checksState: "passing", reviewDecision: "approved", additions: 48, deletions: 12
+            )),
+            "Checks passed · Approved · +48 −12"
+        )
+        XCTAssertEqual(
+            ThreadLinkedPullRequestPresentation.statusLine(snapshot(mergeability: "conflicting")),
+            "Conflicts"
+        )
+        // A settled request's verdict and conflicts no longer matter.
+        XCTAssertNil(ThreadLinkedPullRequestPresentation.statusLine(snapshot(
+            state: "merged", reviewDecision: "approved", mergeability: "conflicting"
+        )))
+        XCTAssertNil(ThreadLinkedPullRequestPresentation.statusLine(nil))
+    }
+
+    func testALinkedRowSaysWhereItSitsInAStack() {
+        let link = FeatureLinkedPullRequest(projectID: "p", repository: "o/r", number: 413, url: "https://h/o/r/pull/413")
+        XCTAssertEqual(
+            ThreadLinkedPullRequestPresentation.identityLine(
+                FeaturePullRequestLine(link: link, depth: 0, chainSize: 2, isNativeStack: true)
+            ),
+            "#413 · 2 in stack"
+        )
+        XCTAssertEqual(
+            ThreadLinkedPullRequestPresentation.identityLine(
+                FeaturePullRequestLine(link: link, depth: 1, chainSize: 2, isNativeStack: false)
+            ),
+            "#413 · in branch chain"
+        )
+        XCTAssertEqual(
+            ThreadLinkedPullRequestPresentation.identityLine(
+                FeaturePullRequestLine(link: link, depth: 0, chainSize: 1, isNativeStack: false)
+            ),
+            "#413"
+        )
+        XCTAssertEqual(ThreadLinkedPullRequestPresentation.linkedValue([]), "None")
+        XCTAssertEqual(ThreadLinkedPullRequestPresentation.linkedValue([link]), "#413")
+        XCTAssertEqual(ThreadLinkedPullRequestPresentation.linkedValue([link, link]), "2")
+    }
+
+    // MARK: - Pull request pickers
+
+    func testALabelToggleFlipsOnlyItsOwnRowInPlace() {
+        let list = PullRequestLabelCandidateList(
+            candidates: [
+                PullRequestLabelCandidate(name: "bug", color: "d73a4a", description: nil, isApplied: false),
+                PullRequestLabelCandidate(name: "auth", color: nil, description: nil, isApplied: true),
+            ],
+            truncated: true
+        )
+        let toggled = PullRequestLabelPicking.toggling(list, name: "bug")
+        XCTAssertEqual(toggled?.candidates.map(\.isApplied), [true, true])
+        XCTAssertEqual(toggled?.truncated, true)
+        XCTAssertNil(PullRequestLabelPicking.toggling(nil, name: "bug"))
+    }
+
+    func testAMissingRevisionIsNeverShortened() {
+        XCTAssertEqual(PullRequestStackRevision.label(nil), "Revision unavailable")
+        XCTAssertEqual(PullRequestStackRevision.label("a1b2c3d4e5f6a7b8"), "a1b2c3d4e5f6")
     }
 
     // MARK: - Fixtures

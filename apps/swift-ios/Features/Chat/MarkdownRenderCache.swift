@@ -114,8 +114,9 @@ struct MarkdownRenderedTable: Equatable, @unchecked Sendable {
                 .max() ?? 0
 
             // Deliberately an estimate rather than text measurement. Exact
-            // widths would require laying every cell out twice.
-            return min(300, max(140, CGFloat(longestLine) * 8.25))
+            // widths would require laying every cell out twice. The floor is
+            // low so a column of "Yes"/"No" doesn't push the table off screen.
+            return min(300, max(72, CGFloat(longestLine) * 8.25))
         }
     }
 }
@@ -154,6 +155,68 @@ final class MarkdownRenderedDocument: @unchecked Sendable {
     }
 }
 
+private final class MarkdownCodeHighlightBox: NSObject {
+    let value: AttributedString
+
+    init(_ value: AttributedString) {
+        self.value = value
+    }
+}
+
+/// Syntax colours for fenced code in messages, from the same lexer as file
+/// previews. Only languages the lexer knows are coloured: a guess at an
+/// unknown one reads worse than plain text.
+enum MarkdownCodeHighlighting {
+    /// Past this a block stays plain, so one pasted log can't stall the
+    /// render task or crowd the cache.
+    static let maximumUTF8Count = 32 * 1_024
+
+    static func lexerLanguage(for fence: String?) -> String? {
+        switch fence?.lowercased() {
+        case "swift": "swift"
+        case "ts", "tsx", "typescript", "js", "jsx", "mjs", "cjs", "javascript": "typescript"
+        case "py", "python": "python"
+        case "sh", "bash", "zsh", "shell", "console": "shell"
+        case "rs", "rust": "rust"
+        case "go", "golang": "go"
+        case "rb", "ruby": "ruby"
+        case "yml", "yaml": "yaml"
+        case "toml": "toml"
+        case "sql": "sql"
+        case "css", "scss": "css"
+        case "html", "xml": "html"
+        case "json", "c", "cpp", "c++", "h", "java", "kotlin", "kt", "cs", "csharp", "php", "m", "objc": "c"
+        default: nil
+        }
+    }
+
+    static func highlight(_ code: String, language: String) -> AttributedString {
+        var output = AttributedString()
+        let lines = FeatureSourceHighlighter.lines(text: code, language: language)
+        for (index, line) in lines.enumerated() {
+            if index > 0 { output.append(AttributedString("\n")) }
+            for span in line.spans {
+                var run = AttributedString(span.text)
+                // Plain runs inherit the block's text colour.
+                if let color = color(for: span.kind) { run.foregroundColor = color }
+                output.append(run)
+            }
+        }
+        return output
+    }
+
+    private static func color(for kind: FeatureSourceTokenKind) -> Color? {
+        switch kind {
+        case .plain: nil
+        case .comment: .secondary
+        case .keyword: T3Colors.syntaxKeyword
+        case .literal: T3Colors.syntaxLiteral
+        case .number: T3Colors.syntaxNumber
+        case .property: T3Colors.syntaxProperty
+        }
+    }
+}
+
 private final class MarkdownRenderedInlineBox: NSObject {
     let value: MarkdownRenderedInline
 
@@ -182,6 +245,7 @@ final class MarkdownRenderCache: @unchecked Sendable {
 
     private let documents = NSCache<NSString, MarkdownRenderedDocument>()
     private let inlineRuns = NSCache<NSString, MarkdownRenderedInlineBox>()
+    private let codeHighlights = NSCache<NSString, MarkdownCodeHighlightBox>()
     private let inFlightQueue = DispatchQueue(label: "codes.t3.native.markdown-render-cache")
     private struct InFlightRender {
         let task: Task<MarkdownRenderedDocument?, Never>
@@ -199,6 +263,33 @@ final class MarkdownRenderCache: @unchecked Sendable {
         documents.totalCostLimit = documentCostLimit
         inlineRuns.countLimit = inlineCountLimit
         inlineRuns.totalCostLimit = inlineCostLimit
+        codeHighlights.countLimit = 256
+        codeHighlights.totalCostLimit = 4 * 1_024 * 1_024
+    }
+
+    /// The colours for a fenced block, prepared alongside its document on the
+    /// render task. Nil (plain text) for prose, unknown languages, oversized
+    /// blocks, or before the render lands; the view never lexes.
+    func codeHighlight(language: String?, code: String) -> AttributedString? {
+        guard let lexer = MarkdownCodeHighlighting.lexerLanguage(for: language),
+              code.utf8.count <= MarkdownCodeHighlighting.maximumUTF8Count else { return nil }
+        return codeHighlights.object(forKey: codeHighlightKey(lexer, code))?.value
+    }
+
+    private func prepareCodeHighlight(language: String?, code: String) {
+        guard let lexer = MarkdownCodeHighlighting.lexerLanguage(for: language),
+              code.utf8.count <= MarkdownCodeHighlighting.maximumUTF8Count else { return }
+        let key = codeHighlightKey(lexer, code)
+        guard codeHighlights.object(forKey: key) == nil else { return }
+        codeHighlights.setObject(
+            MarkdownCodeHighlightBox(MarkdownCodeHighlighting.highlight(code, language: lexer)),
+            forKey: key,
+            cost: max(64, code.utf8.count * 4)
+        )
+    }
+
+    private func codeHighlightKey(_ language: String, _ code: String) -> NSString {
+        "\(language)\u{0}\(code)" as NSString
     }
 
     /// Keys use the precomputed fingerprint instead of the full source so each
@@ -279,6 +370,7 @@ final class MarkdownRenderCache: @unchecked Sendable {
     func removeAll() {
         documents.removeAllObjects()
         inlineRuns.removeAllObjects()
+        codeHighlights.removeAllObjects()
         let tasks = inFlightQueue.sync {
             let tasks = inFlight.values.map(\.task)
             inFlight.removeAll(keepingCapacity: true)
@@ -380,6 +472,7 @@ final class MarkdownRenderCache: @unchecked Sendable {
                 rendered = .image(image)
 
             case let .codeBlock(language, code):
+                prepareCodeHighlight(language: language, code: code)
                 rendered = .codeBlock(language: language, code: code)
 
             case let .htmlEmbed(html, terminated):

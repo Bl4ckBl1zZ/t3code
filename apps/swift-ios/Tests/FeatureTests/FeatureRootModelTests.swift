@@ -761,6 +761,25 @@ struct FeatureRootModelTests {
         #expect(model.snapshot.threads.isEmpty)
     }
 
+    /// The root alert is titled by what failed, and dismissing it clears the
+    /// title with the message so the next failure cannot inherit it.
+    @Test
+    func failedActionsTitleTheAlertByWhatFailed() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
+        client.createdThread = thread
+        client.deleteError = URLError(.notConnectedToInternet)
+        let model = testRootModel(client: client)
+        _ = await model.createThread(projectID: thread.projectID, title: nil, selection: nil)
+
+        #expect(await model.deleteThread(thread.id) == false)
+        #expect(model.errorTitle == "Couldn't Delete Thread")
+        #expect(model.errorMessage != nil)
+
+        model.errorMessage = nil
+        #expect(model.errorTitle == nil)
+    }
+
     @Test
     func testCancelledDetailRefreshKeepsCachedContentWithoutAlert() async {
         let client = FeatureClientStub()

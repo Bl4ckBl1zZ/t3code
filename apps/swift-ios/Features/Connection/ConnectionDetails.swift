@@ -67,6 +67,13 @@ enum ConnectionDetailsParser {
         )
     }
 
+    /// A scanned QR code is a T3 pairing code only when it carries both an
+    /// address and a pairing code. Anything else keeps the scanner running.
+    static func scannedPairingCode(_ value: String) -> ConnectionDetails? {
+        guard let details = try? parse(value), details.pairingCode != nil else { return nil }
+        return details
+    }
+
     static func normalizedEndpoint(_ input: String) throws -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ConnectionDetailsError.empty }
@@ -281,7 +288,7 @@ enum ConnectionErrorCopy {
         }
         if message.contains("offline") || message.contains("network")
             || message.contains("could not connect") || message.contains("not connected") {
-            return "This iPhone could not reach the server. Check the address and network, then try again."
+            return "This device could not reach the server. Check the address and network, then try again."
         }
         return "T3 Code could not complete pairing. Check the server address and use a fresh pairing code."
     }
