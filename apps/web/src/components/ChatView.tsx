@@ -5,6 +5,7 @@ import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { latestWorkspaceMutationId } from "../hooks/useWorkspaceMutationRefresh";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { resolveRestingComposerInset } from "./chat/composerRestingState";
+import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
   observeProactivePanelUserChoice,
   shouldOpenProactivePullRequest,
@@ -1867,6 +1868,14 @@ function ChatViewContent(props: ChatViewProps) {
   )
     ? threadError
     : null;
+  // The composer's recovery banner already presents a usage-limit stop.
+  const timelineThreadError =
+    serverRuntime?.status === "failed" &&
+    serverRuntime.lastErrorClass === "usage_limit" &&
+    serverThread?.latestRun &&
+    visibleThreadError === serverRuntime.lastError
+      ? null
+      : visibleThreadError;
   // Dismissing only mutates the session-scoped mask set, which does not
   // trigger a render on its own; setThreadError(null) can also bail when the
   // local shadow is already empty and the banner is driven purely by
@@ -3263,7 +3272,7 @@ function ChatViewContent(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
+  const hasTimelineTopBanner = Boolean(timelineThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = exposeWorkspaceArtifacts
@@ -5913,12 +5922,36 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void handleSwitchCheckoutToThread();
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
+  // A usage-limit stop is offered recovery above the composer instead of an error banner.
+  const limitRecoveryBanner = useMemo(
+    () =>
+      serverRuntime?.status === "failed" &&
+      serverRuntime.lastErrorClass === "usage_limit" &&
+      activeThreadShell?.latestRun
+        ? usageLimitRecoveryBannerItem({
+            runId: activeThreadShell.latestRun.runId,
+            resetAt: serverRuntime.usageLimitResetAt ?? null,
+            stoppedAt: activeThreadShell.latestRun.completedAt ?? activeThreadShell.updatedAt,
+            recovery: activeThreadShell.limitRecovery ?? null,
+            onChange: async (limitRecovery) => {
+              const result = await updateThreadMetadata({
+                environmentId,
+                input: { threadId: activeThreadShell.id, limitRecovery },
+              });
+              if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+            },
+          })
+        : null,
+    [activeThreadShell, environmentId, serverRuntime, updateThreadMetadata],
+  );
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
+    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [...systemComposerBannerItems, ...parkedThreadItems];
+      return [...limitRecoveryItems, ...systemComposerBannerItems, ...parkedThreadItems];
     }
     return [
+      ...limitRecoveryItems,
       ...systemComposerBannerItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -5963,6 +5996,7 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
+    limitRecoveryBanner,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
@@ -8368,7 +8402,7 @@ function ChatViewContent(props: ChatViewProps) {
 
         <LinkPullRequestDialogHost />
         <ThreadErrorBanner
-          error={visibleThreadError}
+          error={timelineThreadError}
           errorClass={
             localServerError === null && visibleThreadError === serverRuntime?.lastError
               ? (serverRuntime?.lastErrorClass ?? null)

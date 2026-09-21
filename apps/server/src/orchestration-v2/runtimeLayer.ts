@@ -2,6 +2,7 @@ import { ProviderAuthServiceLive } from "../provider/Layers/ProviderAuthService.
 import { agentBrowserAccessEnabled } from "./AgentBrowserAccessPolicy.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
+import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -310,5 +311,8 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLaunchProvided,
   threadLifecycleProvided,
   scheduledTaskProvided,
+  UsageLimitRecoveryWorker.workerLive.pipe(
+    Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),
+  ),
   providerContinuationWorkerProvided,
 );

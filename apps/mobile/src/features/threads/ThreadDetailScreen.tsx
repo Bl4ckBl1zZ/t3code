@@ -1,3 +1,4 @@
+import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
@@ -774,6 +775,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               <ThreadQueueControl
                 environmentId={props.environmentId}
                 threadId={props.selectedThread.id}
+              />
+              <UsageLimitRecoveryCard
+                key={props.selectedThread.latestRun?.runId}
+                thread={props.selectedThread}
+                environmentId={props.environmentId}
               />
 
               {props.activePendingApproval || props.activePendingUserInput ? (

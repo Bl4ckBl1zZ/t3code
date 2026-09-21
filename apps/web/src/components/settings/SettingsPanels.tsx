@@ -2480,6 +2480,33 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          {...searchableSetting("auto-resume-limited-threads")}
+          description="Resume usage-limit stops at the reported reset time. Each thread can cancel its scheduled continuation."
+          resetAction={
+            settings.autoResumeLimitedThreads !==
+            DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads ? (
+              <SettingResetButton
+                label="auto-resume limited threads"
+                onClick={() =>
+                  updateSettings({
+                    autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.autoResumeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
+              }
+              aria-label="Auto-resume limited threads"
+            />
+          }
+        />
+
+        <SettingsRow
           {...searchableSetting("auto-settle-merged-threads")}
           description="Settle a thread when its pull request merges. Closed pull requests still settle automatically."
           resetAction={

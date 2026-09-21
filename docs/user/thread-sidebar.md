@@ -45,6 +45,12 @@ thread stops working.
 **Limited** means the provider stopped on a usage or rate limit. The conversation keeps the
 provider's explanation. Retry after the limit resets, or switch to another provider instance.
 
+When the provider reports a reset time, choose **Resume at reset** to schedule a continuation. You
+can cancel it from the thread. Enable **Auto-resume limited threads** in **Settings → General** on
+web and desktop to schedule limit stops by default. The environment must be running when the reset
+arrives; it resumes overdue continuations after a restart. Sending a new message, archiving, or
+settling the thread prevents a pending continuation from starting.
+
 ## Delete threads on web and desktop
 
 Choose **Delete** from a thread's menu, or select several threads and choose **Delete (N)**. With
