@@ -14,7 +14,6 @@ import {
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -45,8 +44,9 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
-import { FileCredentialStore } from "@cursor/sdk";
 import { makeCursorAuth } from "../CursorAuth.ts";
+import * as CursorCredentialStore from "../CursorCredentialStore.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as CursorAgentSdk from "../../orchestration-v2/Adapters/CursorAgentSdk.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 const isSdkRunnerError = Schema.is(CursorAgentSdk.CursorAgentSdkRunnerError);
@@ -60,9 +60,9 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
 export type CursorDriverEnv =
   | CursorAdapterV2DriverEnv
   | Crypto.Crypto
-  | Path.Path
   | BackgroundPolicy.BackgroundPolicy
   | ServerConfig
+  | ServerSecretStore.ServerSecretStore
   | ServerSettingsService;
 
 const withInstanceIdentity =
@@ -92,8 +92,6 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsService;
-      const path = yield* Path.Path;
-      const serverConfig = yield* ServerConfig;
       const sdkRunner = yield* CursorAgentSdk.CursorAgentSdkRunner;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
@@ -107,19 +105,23 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies CursorSettings;
+      const credentials = yield* CursorCredentialStore.makeCursorCredentialStore(instanceId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Could not open the Cursor credential store.",
+              cause,
+            }),
+        ),
+      );
       const auth = yield* makeCursorAuth({
         instanceId,
         displayName: displayName ?? "Cursor",
         enabled,
         ...(processEnv.CURSOR_API_KEY ? { apiKey: processEnv.CURSOR_API_KEY } : {}),
-        store: new FileCredentialStore(
-          path.join(
-            serverConfig.stateDir,
-            "provider-auth",
-            encodeURIComponent(instanceId),
-            "cursor.json",
-          ),
-        ),
+        store: credentials.store,
         onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
           snapshot.refresh.pipe(
             Effect.flatMap((provider) =>

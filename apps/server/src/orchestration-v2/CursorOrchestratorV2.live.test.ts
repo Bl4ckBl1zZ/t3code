@@ -1,3 +1,4 @@
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -61,6 +62,10 @@ const providerInstanceRegistryLayer = ProviderInstanceRegistryHydrationLive.pipe
     Layer.mergeAll(
       serverConfigLayer.pipe(Layer.provide(NodeServices.layer)),
       serverSettingsLayer,
+      ServerSecretStore.layer.pipe(
+        Layer.provide(serverConfigLayer),
+        Layer.provide(NodeServices.layer),
+      ),
       NodeServices.layer,
       FetchHttpClient.layer,
       OpenCodeRuntimeLive.pipe(Layer.provide(NodeServices.layer)),
