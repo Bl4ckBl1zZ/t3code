@@ -250,6 +250,17 @@ public struct WorkspaceView: View {
             detail(tab)
         }
         .navigationSplitViewStyle(.balanced)
+        // The tab owns the bar: its columns both stay alive, so neither the
+        // list nor the thread can answer for it. See `HomeTabBar.visibility`.
+        .toolbar(tabBarVisibility(for: tab), for: .tabBar)
+    }
+
+    private func tabBarVisibility(for tab: MobileWorkspace) -> Visibility {
+        HomeTabBar.visibility(
+            isCompact: horizontalSizeClass == .compact,
+            showsThread: compactColumns[tab] == .detail && selectedThreadIDs[tab] != nil,
+            isSelecting: tab == workspace && isSelecting
+        )
     }
 
     private func compactColumnBinding(for tab: MobileWorkspace) -> Binding<NavigationSplitViewColumn> {
@@ -362,12 +373,6 @@ public struct WorkspaceView: View {
                 listToolbar(tab, canArrange: canArrange)
             }
         }
-        // A thread hides the bar on iPhone, and `.automatic` leaves it hidden
-        // after popping back, so the compact list asks for it by name.
-        .toolbar(
-            isSelectingHere ? .hidden : horizontalSizeClass == .compact ? .visible : .automatic,
-            for: .tabBar
-        )
         .t3Searchable(
             text: $searchText,
             isPresented: searchPresentedBinding(for: tab),
@@ -762,8 +767,6 @@ public struct WorkspaceView: View {
                 }
             )
             .id(id)
-            // The composer owns the bottom of a thread on iPhone.
-            .toolbar(horizontalSizeClass == .compact ? .hidden : .automatic, for: .tabBar)
         } else {
             ContentUnavailableView {
                 Label(

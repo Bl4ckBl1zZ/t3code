@@ -43,6 +43,26 @@ extension MobileWorkspace {
     }
 }
 
+// MARK: - Tab bar
+
+/// Whether a Home tab draws the tab bar.
+///
+/// A collapsed split view keeps both of its columns alive, so a list and a
+/// thread each answering on their own raced: the thread's hidden bar outlived
+/// the pop back, and answering that with a list that always asked for the bar
+/// left it sitting over the composer. One answer per tab settles it.
+enum HomeTabBar {
+    /// `showsThread` is the tab's own detail column standing in front of its
+    /// list, which only happens at compact width.
+    static func visibility(isCompact: Bool, showsThread: Bool, isSelecting: Bool) -> Visibility {
+        // Batch selection puts its own actions along the bottom, and the
+        // composer owns the bottom of a thread on iPhone.
+        if isSelecting || (isCompact && showsThread) { return .hidden }
+        // Named rather than `.automatic`, which leaves a hidden bar hidden.
+        return isCompact ? .visible : .automatic
+    }
+}
+
 // MARK: - Connection banner
 
 /// The connection problem a Home list leads with.
