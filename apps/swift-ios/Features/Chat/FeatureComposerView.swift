@@ -30,9 +30,10 @@ struct FeatureComposerSendBlocker {
 ///
 /// One r=26 glass rect in two rows: the draft owns the first, and the second
 /// holds the plus menu, the model chip (with Plan/Build inside its menu), the
-/// context ring and a single trailing slot that is the mic while the draft is
-/// empty, the ink send arrow once there is something to send, and the ink
-/// stop circle while a turn runs.
+/// context ring and a single trailing slot that is the mic while there is no
+/// text, the ink send arrow once there is something to send (beside the mic
+/// while only attachments are waiting), and the ink stop circle while a turn
+/// runs.
 struct FeatureComposerView: View {
     /// True while the file importer is on screen. Presenting it resigns the
     /// keyboard, and the composer needs to know a presentation it just opened
@@ -712,20 +713,30 @@ struct FeatureComposerView: View {
             }
 
             sendButton
-                .frame(width: showsMic ? 0 : T3Metrics.minimumTapTarget)
-                .opacity(showsMic ? 0 : 1)
-                .allowsHitTesting(!showsMic)
+                .frame(width: showsSend ? T3Metrics.minimumTapTarget : 0)
+                .opacity(showsSend ? 1 : 0)
+                .allowsHitTesting(showsSend && !voice.state.isBusy)
                 .clipped()
+                .opacity(voice.state.isBusy ? 0.4 : 1)
         }
         .animation(reduceMotion ? VoiceMorph.reduced : .snappy(duration: 0.22), value: showsMic)
+        .animation(reduceMotion ? VoiceMorph.reduced : .snappy(duration: 0.22), value: showsSend)
     }
 
-    /// The mic owns the slot while there is nothing to send and no turn to
-    /// stop, and for the whole of a recording or transcription.
+    /// The mic owns the slot while there is no text and no turn to stop, and
+    /// for the whole of a recording or transcription. Attachments don't take
+    /// its place, so a photo can still be captioned by voice.
     private var showsMic: Bool {
         guard voice.isAvailable else { return false }
         if voice.state.isBusy { return true }
-        return !hasDraftContent && !isWorking && !isSending
+        return textIsEmpty && !showsStop && !isSending
+    }
+
+    /// Send or stop shows wherever the mic doesn't, and beside it while only
+    /// attachments are waiting. A recording dims it in place rather than
+    /// collapsing it, so the mic doesn't slide under the finger holding it.
+    private var showsSend: Bool {
+        !showsMic || !attachments.isEmpty
     }
 
     /// Send and stop share one ink circle; only the glyph changes. Stop is
