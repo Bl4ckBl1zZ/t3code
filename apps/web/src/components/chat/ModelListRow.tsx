@@ -94,9 +94,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
-        {props.jumpLabel ? (
-          <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">{props.jumpLabel}</Kbd>
-        ) : null}
+        {props.jumpLabel ? <Kbd>{props.jumpLabel}</Kbd> : null}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -141,7 +139,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
   return (
     <Tooltip>
       <TooltipTrigger render={row} />
-      <TooltipPopup side="left" align="center" className="max-w-64 text-balance leading-snug">
+      <TooltipPopup side="left" align="center">
         {props.disabledReason}
       </TooltipPopup>
     </Tooltip>

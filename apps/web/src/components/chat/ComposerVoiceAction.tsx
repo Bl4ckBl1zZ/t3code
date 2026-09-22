@@ -521,7 +521,7 @@ export function ComposerVoiceAction(props: {
               />
             }
           >
-            {requestingPermission ? <Spinner className="size-4" /> : <MicIcon className="size-4" />}
+            {requestingPermission ? <Spinner size="md" /> : <MicIcon className="size-4" />}
           </TooltipTrigger>
           <TooltipPopup side="top">
             {requestingPermission

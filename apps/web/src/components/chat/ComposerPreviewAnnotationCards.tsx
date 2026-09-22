@@ -170,7 +170,7 @@ export function ComposerPreviewAnnotationCards({
               size="icon-micro"
               variant="ghost-muted"
               aria-label="Remove preview annotation"
-              className="absolute right-1.5 top-1.5 [--control-icon-color:currentColor] rounded text-icon-muted hover:bg-muted"
+              className="absolute right-1.5 top-1.5 rounded text-icon-muted hover:bg-muted"
               onClick={() => onRemove(annotation.id)}
             >
               <X className="size-3" />

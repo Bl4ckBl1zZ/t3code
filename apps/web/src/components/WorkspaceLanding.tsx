@@ -186,11 +186,11 @@ export function HermesUnavailableHero({
   const environment = useWorkEnvironment();
   const [connectionId] = useHermesConnection(environment?.environmentId ?? null);
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
-          <EmptyTitle className="text-foreground text-xl">Set up Hermes</EmptyTitle>
-          <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
+          <EmptyTitle>Set up Hermes</EmptyTitle>
+          <EmptyDescription>
             {workspaceName} uses Hermes for each thread. Set it up once to start conversations.
           </EmptyDescription>
           <div className="mt-5 grid justify-center gap-3">
@@ -214,11 +214,11 @@ export function HermesUnavailableHero({
 
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
-          <EmptyTitle className="text-foreground text-xl">Couldn’t start a new thread</EmptyTitle>
-          <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
+          <EmptyTitle>Couldn’t start a new thread</EmptyTitle>
+          <EmptyDescription>
             The project is still available. Try opening the draft again.
           </EmptyDescription>
           <div className="mt-5 flex justify-center">
@@ -237,17 +237,13 @@ function NoProjectsHero() {
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
-        <Empty className="flex-1">
+        <Empty size="hero" className="flex-1">
           <div className="w-full max-w-lg px-8 py-12">
             <EmptyHeader className="max-w-none">
-              <EmptyTitle className="text-foreground text-2xl sm:text-3xl">
-                What should we work on?
-              </EmptyTitle>
-              <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
-                Add a project to start your first thread.
-              </EmptyDescription>
+              <EmptyTitle>What should we work on?</EmptyTitle>
+              <EmptyDescription>Add a project to start your first thread.</EmptyDescription>
               <div className="mt-6 flex justify-center">
                 <Button size="sm" onClick={openAddProject}>
                   <PlusIcon className="size-4" />

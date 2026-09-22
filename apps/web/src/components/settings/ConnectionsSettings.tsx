@@ -784,7 +784,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                     : "Clipboard copy is unavailable here. Manually copy this code into another client."}
                 </DialogDescription>
               </DialogHeader>
-              <DialogPanel className="space-y-4">
+              <DialogPanel>
                 <Textarea
                   readOnly
                   value={revealValue}
@@ -881,9 +881,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                     </code>
                   }
                 />
-                <TooltipPopup side="top" className="max-w-80 break-all">
-                  {qrPairingUrl}
-                </TooltipPopup>
+                <TooltipPopup side="top">{qrPairingUrl}</TooltipPopup>
               </Tooltip>
               <Button
                 size="xs"
@@ -1085,7 +1083,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
               authorized client.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-5">
+          <DialogPanel>
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
                 Client label (optional)
@@ -1281,9 +1279,7 @@ const AdvertisedEndpointListRow = memo(function AdvertisedEndpointListRow({
                   </p>
                 }
               />
-              <TooltipPopup side="top" className="max-w-80">
-                {endpoint.httpBaseUrl}
-              </TooltipPopup>
+              <TooltipPopup side="top">{endpoint.httpBaseUrl}</TooltipPopup>
             </Tooltip>
           ) : null}
           {!isAvailable ? (
@@ -1543,7 +1539,7 @@ function SavedBackendListRow({
                   </Button>
                 }
               />
-              <TooltipPopup side="top" className="max-w-80 whitespace-pre-wrap leading-tight">
+              <TooltipPopup side="top" className="whitespace-pre-wrap">
                 The WSL backend is managed by the WSL setting above — turn it on or off there.
               </TooltipPopup>
             </Tooltip>
@@ -3234,7 +3230,7 @@ export function ConnectionsSettings() {
                     pendingDesktopServerExposureMode === null || isUpdatingDesktopServerExposure
                   }
                 >
-                  {isUpdatingDesktopServerExposure && <Spinner className="size-3.5" />}
+                  {isUpdatingDesktopServerExposure && <Spinner size="sm" />}
                   <span className="[text-box:trim-both_cap_alphabetic]">
                     {isUpdatingDesktopServerExposure
                       ? "Restarting…"
@@ -3298,7 +3294,7 @@ export function ConnectionsSettings() {
                     >
                       {isUpdatingWslBackend ? (
                         <>
-                          <Spinner className="size-3.5" />
+                          <Spinner size="sm" />
                           Applying…
                         </>
                       ) : (
@@ -3312,7 +3308,7 @@ export function ConnectionsSettings() {
                     >
                       {isUpdatingWslBackend ? (
                         <>
-                          <Spinner className="size-3.5" />
+                          <Spinner size="sm" />
                           Applying…
                         </>
                       ) : (
@@ -3333,7 +3329,7 @@ export function ConnectionsSettings() {
                   >
                     {isUpdatingWslBackend ? (
                       <>
-                        <Spinner className="size-3.5" />
+                        <Spinner size="sm" />
                         Applying…
                       </>
                     ) : pendingWslChange?.kind === "disable" ? (
@@ -3382,7 +3378,7 @@ export function ConnectionsSettings() {
                 >
                   {isUpdatingTailscaleServe ? (
                     <>
-                      <Spinner className="size-3.5" />
+                      <Spinner size="sm" />
                       Restarting…
                     </>
                   ) : (
@@ -3407,7 +3403,7 @@ export function ConnectionsSettings() {
                   Tailscale to proxy HTTPS traffic to this backend.
                 </DialogDescription>
               </DialogHeader>
-              <DialogPanel className="space-y-4">
+              <DialogPanel>
                 <label className="block">
                   <span className="text-sm font-medium text-foreground">HTTPS port</span>
                   <Input
@@ -3436,9 +3432,7 @@ export function ConnectionsSettings() {
                       }
                     />
                     {pendingTailscaleServeBaseUrl ? (
-                      <TooltipPopup side="top" className="max-w-80">
-                        {pendingTailscaleServeBaseUrl}
-                      </TooltipPopup>
+                      <TooltipPopup side="top">{pendingTailscaleServeBaseUrl}</TooltipPopup>
                     ) : null}
                   </Tooltip>
                 </div>
@@ -3456,7 +3450,7 @@ export function ConnectionsSettings() {
                 >
                   {isUpdatingTailscaleServe ? (
                     <>
-                      <Spinner className="size-3.5" />
+                      <Spinner size="sm" />
                       Restarting…
                     </>
                   ) : (

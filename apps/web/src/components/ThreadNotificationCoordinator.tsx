@@ -1,4 +1,10 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
+import {
+  CircleAlertIcon,
+  CircleCheckIcon,
+  MessageCircleQuestionIcon,
+  ShieldQuestionIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 
 import { getClientSettings, useClientSettings } from "../hooks/useSettings";
@@ -86,7 +92,7 @@ function ThreadNotifications() {
     }
     if (pendingChanged) setNotificationBadge(pending.current.size);
 
-    for (const { thread, kind, tone, title } of events) {
+    for (const { thread, kind, tone, title, icon } of events) {
       const openThread = () =>
         navigate({
           to: "/$environmentId/$threadId",
@@ -109,7 +115,28 @@ function ThreadNotifications() {
           type: tone,
           title,
           description: thread.title,
-          data: { hideCopyButton: true },
+          data: {
+            hideCopyButton: true,
+            leadingIcon:
+              icon === "done" ? (
+                <CircleCheckIcon
+                  aria-hidden
+                  className="size-4 text-emerald-700 dark:text-emerald-300"
+                />
+              ) : icon === "approval" ? (
+                <ShieldQuestionIcon
+                  aria-hidden
+                  className="size-4 text-amber-700 dark:text-amber-300"
+                />
+              ) : icon === "failed" ? (
+                <CircleAlertIcon aria-hidden className="size-4 text-red-700 dark:text-red-300" />
+              ) : (
+                <MessageCircleQuestionIcon
+                  aria-hidden
+                  className="size-4 text-indigo-600 dark:text-indigo-300"
+                />
+              ),
+          },
           actionProps: {
             children: "Open thread",
             onClick: () => {

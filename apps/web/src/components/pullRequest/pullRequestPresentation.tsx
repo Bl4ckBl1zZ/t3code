@@ -314,7 +314,7 @@ export function PullRequestReviewOutcomeBadge({
 }) {
   const presentation = REVIEW_OUTCOME_PRESENTATION[outcome];
   return (
-    <Badge size="sm" variant={presentation.badgeVariant} className={cn("gap-1", className)}>
+    <Badge size="sm" variant={presentation.badgeVariant} className={className}>
       <presentation.Icon aria-hidden className="size-3" />
       {presentation.label}
     </Badge>

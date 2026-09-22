@@ -52,9 +52,16 @@ let overlay: Box;
 let animations: ReturnType<typeof createAnimation>[];
 let renderer: ReactTestRenderer;
 const publish = vi.fn();
-function Harness({ collapsed = false, enabled = true }) {
+function Harness({ collapsed = false, enabled = true, durationMs = 280 }) {
   const controls = useRef(null);
-  const ref = useComposerRestingTransition(collapsed, collapsed, controls, publish, enabled);
+  const ref = useComposerRestingTransition(
+    collapsed,
+    collapsed,
+    controls,
+    publish,
+    enabled,
+    durationMs,
+  );
   return <div ref={ref} />;
 }
 beforeEach(async () => {
@@ -115,4 +122,12 @@ it("honors disabled motion while still publishing the destination height", async
   expect(node.animate).not.toHaveBeenCalled();
   expect(publish).toHaveBeenCalled();
   expect(overlay.style).not.toHaveProperty("height");
+});
+it("tweens for the configured panel animation duration", async () => {
+  node.height = 60;
+  await act(() => renderer.update(<Harness collapsed durationMs={420} />));
+  expect(node.animate).toHaveBeenCalledWith(
+    [{ height: "140px" }, { height: "60px" }],
+    expect.objectContaining({ duration: 420 }),
+  );
 });

@@ -426,7 +426,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
               const mode = option.mode;
               const OptionIcon = option.icon;
               return (
-                <SelectItem key={mode} value={mode} hideIndicator className="min-w-64 py-2">
+                <SelectItem key={mode} value={mode} hideIndicator className="min-w-64">
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="grid min-w-0 flex-1 gap-0.5">
                       <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
@@ -3225,6 +3225,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     restingControlsHostRef,
     publishOverlayHeight,
     panelMotion.active,
+    panelMotion.durationMs,
   );
   const expandRestingComposer = resting.expand;
   useEffect(() => {
@@ -3454,7 +3455,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           className="shrink-0 gap-2 px-2 text-muted-foreground/70 sm:px-3"
         >
           {providerCatalogAvailability === "loading" ? (
-            <Spinner className="size-4" />
+            <Spinner size="md" />
           ) : (
             <CircleAlertIcon className="size-4" />
           )}

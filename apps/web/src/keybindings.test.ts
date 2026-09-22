@@ -1,5 +1,6 @@
 import { assert, describe, it } from "vite-plus/test";
 
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import {
   type KeybindingCommand,
   type KeybindingShortcut,
@@ -206,6 +207,33 @@ describe("settle thread shortcut", () => {
   it("does not intercept the terminal", () => {
     assert.isNull(
       resolveShortcutCommand(event({ key: "s", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "Win32",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+});
+
+describe("thread undo shortcut", () => {
+  it("resolves mod+z with nothing editable focused", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "z", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, editableFocus: false },
+      }),
+      "thread.undo",
+    );
+  });
+
+  it("leaves native undo alone inside text fields and terminals", () => {
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "z", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Win32",
+        context: { editableFocus: true },
+      }),
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "z", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
         platform: "Win32",
         context: { terminalFocus: true },
       }),

@@ -3,7 +3,6 @@ import { BookmarkIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 
 import { formatRelativeTimeLabel } from "../../timestampFormat";
-import { cn } from "~/lib/utils";
 import { type PromptStashEntry } from "../../promptStashStore";
 import { Command, CommandGroup, CommandGroupLabel, CommandItem, CommandList } from "../ui/command";
 import { Button } from "../ui/button";
@@ -108,10 +107,8 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
                 <CommandItem
                   key={entry.id}
                   value={entry.id}
-                  className={cn(
-                    "group/stash cursor-pointer select-none gap-2 hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit",
-                    highlightedId === entry.id && "bg-accent! text-accent-foreground!",
-                  )}
+                  active={highlightedId === entry.id}
+                  className="group/stash gap-2"
                   onMouseMove={() => {
                     if (highlightedId !== entry.id) setHighlightedId(entry.id);
                   }}

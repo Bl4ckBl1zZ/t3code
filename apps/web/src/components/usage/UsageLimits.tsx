@@ -210,7 +210,7 @@ export function UsageLimits({
     if (refreshableEnvironments) autoRefresh();
   }, [refreshableEnvironments]);
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden">
       <WorkspacePageHeader electron={isElectron}>
         <div className="flex w-full min-w-0 items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onShowUsage}>
@@ -230,7 +230,7 @@ export function UsageLimits({
             }
             onClick={() => void refresh()}
           >
-            <RefreshIcon className="size-3.5" refreshing={pending} />
+            <RefreshIcon size="sm" refreshing={pending} />
             {pending ? "Refreshing…" : "Refresh limits"}
           </Button>
         </div>

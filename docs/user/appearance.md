@@ -17,5 +17,6 @@ from 0 to 400 milliseconds. Zero is the default and shows changes immediately. S
 small preview to replay it. Reset restores the default.
 
 This controls the web and desktop sidebar, terminal drawer, and right panel, including the
-pull request workspace. Panels restored by navigation appear immediately; resizing stays
+pull request workspace, and the composer as it rests, expands, or docks after a new thread's
+first message. Panels restored by navigation appear immediately; resizing stays
 under your pointer. Your system's reduced-motion preference disables these transitions.

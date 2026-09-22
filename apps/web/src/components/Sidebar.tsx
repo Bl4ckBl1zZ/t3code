@@ -225,12 +225,7 @@ import {
   type TerminalStatusIndicator,
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
-import {
-  resolveSnoozePresets,
-  snoozeWakeDescription,
-  snoozeWakeLabel,
-  type SnoozePreset,
-} from "./Sidebar.snooze";
+import { resolveSnoozePresets, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
@@ -242,9 +237,14 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
-import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarInput,
+  SidebarMenuButton,
+  useSidebar,
+} from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -326,7 +326,7 @@ function SidebarWorkspaceSelector(props: {
           className="size-3.5 shrink-0 text-sidebar-muted-foreground in-data-[on-backdrop]:text-white/70"
         />
       </MenuTrigger>
-      <MenuPopup align="start" className="w-64">
+      <MenuPopup align="start">
         <MenuRadioGroup
           value={props.workspace}
           onValueChange={(value) => {
@@ -449,7 +449,7 @@ function SidebarThreadTooltip({
       align="start"
       sideOffset={4}
       variant="glass"
-      className="max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0"
+      className="[&_[data-slot=tooltip-viewport]]:p-0"
     >
       <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
         <div className="min-w-0 truncate text-xs leading-tight font-medium text-foreground">
@@ -583,7 +583,7 @@ function SnoozePopoverButton(props: {
         </TooltipTrigger>
         <TooltipPopup>Snooze thread</TooltipPopup>
       </Tooltip>
-      <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
+      <PopoverPopup side="bottom" align="end" width="sm" viewportClassName="p-1">
         {presets.map((preset) => (
           <button
             key={preset.id}
@@ -1978,6 +1978,9 @@ function SortableSidebarThreadRow(
   const { sortableId, ...rowProps } = props;
   const { isDragging, listeners, setNodeRef, transform, transition } = useSortable({
     id: sortableId,
+    // Drag listeners on the row would swallow the pointer gestures that select
+    // text in the rename field.
+    disabled: rowProps.isRenaming,
     animateLayoutChanges: animatePinnedLayoutChanges,
   });
   const sortable = useMemo<SidebarThreadRowSortable>(
@@ -3512,19 +3515,6 @@ export default function Sidebar() {
             }
             return;
           }
-          // Snooze hides the row, so the toast is the only confirmation —
-          // and the Undo is the escape hatch for a mis-click.
-          toastManager.add(
-            stackedThreadToast({
-              type: "success",
-              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date(), timestampFormat)}`,
-              timeout: 5_000,
-              actionProps: {
-                children: "Undo",
-                onClick: () => attemptUnsnooze(threadRef),
-              },
-            }),
-          );
           // Only move forward if the user is still on the snoozed thread —
           // a navigation made during the await wins over ours.
           if (routeThreadKeyRef.current === threadKey) {
@@ -3535,7 +3525,7 @@ export default function Sidebar() {
         }
       })();
     },
-    [attemptUnsnooze, planForwardNavigation, snoozeThread],
+    [planForwardNavigation, snoozeThread],
   );
 
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
@@ -4294,16 +4284,14 @@ export default function Sidebar() {
         }
       />
       <SidebarContent
-        className="gap-0"
         fixedHeader={
-          <SidebarGroup className="gap-1 p-[var(--sidebar-content-inset)]">
+          <SidebarGroup className="gap-1">
             <div className="flex items-center gap-1">
               <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
                 <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
-                <Input
+                <SidebarInput
                   ref={threadSearchInputRef}
                   nativeInput
-                  unstyled
                   type="search"
                   value={threadSearchQuery}
                   onChange={(event) => {
@@ -4326,7 +4314,7 @@ export default function Sidebar() {
                       ? `sidebar-thread-search-result-${activeSearchResultIndex}`
                       : undefined
                   }
-                  className="min-w-0 flex-1 [&_[data-slot=input]]:h-auto [&_[data-slot=input]]:p-0 [&_[data-slot=input]]:leading-normal [&_[data-slot=input]]:text-sm [&_[data-slot=input]]:font-medium [&_[data-slot=input]]:text-sidebar-foreground [&_[data-slot=input]]:placeholder:text-sidebar-muted-foreground"
+                  className="min-w-0 flex-1"
                 />
                 {isSearchingThreads ? (
                   <Button
@@ -4493,7 +4481,7 @@ export default function Sidebar() {
                             key={item.value}
                             hideIndicator
                             value={item}
-                            className="h-8 min-h-8 py-0 font-medium"
+                            className="font-medium"
                             contentClassName="flex min-w-0 items-center gap-2"
                             onContextMenu={(event) => {
                               if (project) handleProjectSettings(event, project);
@@ -4524,7 +4512,7 @@ export default function Sidebar() {
                                 tabIndex={-1}
                                 aria-hidden="true"
                                 title={`Project settings for ${project.displayName}`}
-                                className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
+                                className="ml-auto focus-visible:bg-accent focus-visible:text-foreground"
                                 onPointerDown={(event) => event.stopPropagation()}
                                 onClick={(event) => {
                                   void handleProjectSettings(event, project);
@@ -4612,7 +4600,7 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
-        <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0">
+        <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)]">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider

@@ -498,7 +498,7 @@ export function ScheduledTasksSettings() {
             </DialogDescription>
           </DialogHeader>
 
-          <DialogPanel className="space-y-5">
+          <DialogPanel>
             <Field label="Name" htmlFor="scheduled-task-title">
               <Input
                 id="scheduled-task-title"

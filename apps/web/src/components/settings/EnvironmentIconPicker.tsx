@@ -154,9 +154,7 @@ export function EnvironmentIconPicker({
       >
         <span className="flex w-full items-center sm:w-auto">{select}</span>
       </TooltipTrigger>
-      <TooltipPopup side="top" className="max-w-72">
-        {lock}
-      </TooltipPopup>
+      <TooltipPopup side="top">{lock}</TooltipPopup>
     </Tooltip>
   );
 }

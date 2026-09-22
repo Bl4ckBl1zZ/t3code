@@ -221,7 +221,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
             >
               <SelectValue>{viewportSelectLabel(viewport)}</SelectValue>
             </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false} className="min-w-64">
+            <SelectPopup align="end" alignItemWithTrigger={false}>
               <SelectItem value={FILL_VALUE}>Fill panel</SelectItem>
               <SelectItem value={RESPONSIVE_VALUE}>Responsive</SelectItem>
               <SelectGroup>

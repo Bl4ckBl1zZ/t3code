@@ -9,7 +9,6 @@ import { memo, useLayoutEffect, useMemo, useRef } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { formatProviderSkillInstallSource } from "@t3tools/client-runtime/providerSkills";
-import { cn } from "~/lib/utils";
 import {
   Command,
   CommandGroup,
@@ -219,10 +218,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     <CommandItem
       value={props.item.id}
       data-composer-item-id={props.item.id}
-      className={cn(
-        "cursor-pointer select-none gap-2 hover:bg-transparent hover:text-inherit data-highlighted:bg-transparent data-highlighted:text-inherit",
-        props.isActive && "bg-accent! text-accent-foreground!",
-      )}
+      active={props.isActive}
+      className="gap-2"
       onMouseMove={() => {
         if (!props.isActive) props.onHighlight(props.item.id);
       }}

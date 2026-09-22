@@ -91,7 +91,11 @@ lists the current (non-legacy) model slugs per driver kind. The `ModelManifest` 
 raw.githubusercontent.com, so moving a model in or out of the legacy section is a commit, not a
 release. Preference order is remote fetch, then the on-disk copy of the last successful fetch (in
 the state directory), then the bundled copy. Fetches are TTL-gated, run concurrently with provider
-probes, respect the `enableProviderUpdateChecks` setting, and never fail a provider check. The
+probes, respect the `enableProviderUpdateChecks` setting, and never fail a provider check. An
+explicit refresh (`server.refreshProviders` with `refreshModels: true`) bypasses the TTL and retry
+backoff, and also drops T3's other owned caches for the targeted instances: the Claude capability
+probe, the resolved update capabilities, and the npm latest-version entry. Background refreshes
+keep every cache. The
 Codex and Claude drivers apply the classification to every snapshot with `applyModelManifest`;
 driver kinds absent from the manifest have no legacy concept.
 

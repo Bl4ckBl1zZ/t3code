@@ -85,7 +85,7 @@ export function ResetCredits({
         disabled={busy || !canOperate || credits.availableCount === 0}
         onClick={() => setConfirming(true)}
       >
-        {busy && <Spinner className="size-3" />} {busy ? "Using…" : "Use reset"}
+        {busy && <Spinner size="xs" />} {busy ? "Using…" : "Use reset"}
       </Button>
       {status && (
         <span role="status" className="basis-full text-foreground">

@@ -373,7 +373,7 @@ export function BrowserProfilesSetting({ disabled }: { readonly disabled: boolea
             <PlusIcon />
             Add profile
           </MenuTrigger>
-          <MenuPopup align="end" className="min-w-56">
+          <MenuPopup align="end">
             <MenuItem
               disabled={!settingsHydrated || atProfileLimit}
               onClick={() => createProfile("New profile")}
@@ -491,7 +491,7 @@ export function BrowserProfilesSetting({ disabled }: { readonly disabled: boolea
                 >
                   <MoreVertical />
                 </MenuTrigger>
-                <MenuPopup align="end" className="min-w-44">
+                <MenuPopup align="end">
                   <MenuItem
                     disabled={!settingsHydrated || isDefault}
                     onClick={() => {

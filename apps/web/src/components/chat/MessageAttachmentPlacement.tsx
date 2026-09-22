@@ -47,9 +47,7 @@ export function MessageAttachmentPlacement(props: {
             </span>
           }
         />
-        <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-tight">
-          {reason}
-        </TooltipPopup>
+        <TooltipPopup side="top">{reason}</TooltipPopup>
       </Tooltip>
     );
   }

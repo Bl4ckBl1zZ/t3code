@@ -305,8 +305,8 @@ describe("getComposerProviderState", () => {
       model: "opus",
       models: [
         {
-          slug: "claude-opus-5",
-          name: "Claude Opus 5",
+          slug: "claude-opus-5-5",
+          name: "Claude Opus 5.5",
           isCustom: false,
           capabilities: {
             optionDescriptors: [

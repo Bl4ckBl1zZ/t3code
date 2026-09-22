@@ -86,7 +86,7 @@ export function ProjectIconPickerDialog({
           <DialogTitle>Choose project icon</DialogTitle>
           <DialogDescription>Pick any Lucide icon and color, or use an emoji.</DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex min-h-0 flex-col gap-4">
+        <DialogPanel className="flex min-h-0 flex-col">
           <ToggleGroup
             aria-label="Icon type"
             variant="segmented"

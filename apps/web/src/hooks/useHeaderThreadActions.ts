@@ -16,7 +16,7 @@ import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
-import { resolveSnoozePresets, snoozeWakeDescription } from "../components/Sidebar.snooze";
+import { resolveSnoozePresets } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
   type ThreadActionMenuId,
@@ -197,29 +197,9 @@ export function useHeaderThreadActions(input: {
               : snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
           if (!preset) return;
           const result = await snoozeThread(threadRef, preset.snoozedUntil);
-          if (result._tag === "Failure") {
-            if (!isAtomCommandInterrupted(result)) {
-              failureToast("Failed to snooze thread", squashAtomCommandFailure(result));
-            }
-            return;
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            failureToast("Failed to snooze thread", squashAtomCommandFailure(result));
           }
-          toastManager.add(
-            stackedThreadToast({
-              type: "success",
-              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date(), timestampFormat)}`,
-              timeout: 5_000,
-              actionProps: {
-                children: "Undo",
-                onClick: () => {
-                  void unsnoozeThread(threadRef).then((undone) => {
-                    if (undone._tag === "Failure" && !isAtomCommandInterrupted(undone)) {
-                      failureToast("Failed to wake thread", squashAtomCommandFailure(undone));
-                    }
-                  });
-                },
-              },
-            }),
-          );
           return;
         }
         const reportFailure = async (

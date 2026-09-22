@@ -9,6 +9,7 @@ import {
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import type { EnvironmentUsageStatus } from "../../state/usage";
+import { InlineButton } from "../ui/button";
 import {
   Menu,
   MenuCheckboxItem,
@@ -94,7 +95,10 @@ export function UsageEnvironmentFilter({
   return (
     <>
       <Menu>
-        <MenuTrigger className="group/usage-environment inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
+        <MenuTrigger
+          render={<InlineButton />}
+          className="group/usage-environment min-w-0 max-w-full gap-1"
+        >
           <span className="min-w-0 truncate">{label}</span>
           <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
             {showUsageStatus && pendingCount > 0 ? (
@@ -119,7 +123,7 @@ export function UsageEnvironmentFilter({
             )}
           </span>
         </MenuTrigger>
-        <MenuPopup align="start" className="w-80 max-w-[calc(100vw-2rem)]">
+        <MenuPopup align="start">
           <MenuCheckboxItem
             checked={allSelected}
             closeOnClick={false}
@@ -151,7 +155,6 @@ export function UsageEnvironmentFilter({
                 key={environment.environmentId}
                 checked={checked}
                 closeOnClick={false}
-                className="grid-cols-[1rem_minmax(0,1fr)]"
                 onCheckedChange={(nextChecked) => {
                   const next = new Set(selectedEnvironments.map((entry) => entry.environmentId));
                   if (nextChecked) next.add(environment.environmentId);

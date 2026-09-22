@@ -169,7 +169,7 @@ export default function ProjectScriptsControl({
           >
             <ScriptIcon icon={fileScript.icon ?? "play"} className="size-4" />
             <span className="truncate">{fileScript.name}</span>
-            <MenuShortcut className="ms-auto">
+            <MenuShortcut>
               <DownloadIcon className="size-3.5" aria-label="Import" />
             </MenuShortcut>
           </MenuItem>

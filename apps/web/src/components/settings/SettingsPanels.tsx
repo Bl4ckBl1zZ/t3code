@@ -330,9 +330,7 @@ function PolicyTooltip({ children }: { readonly children: string }) {
           </button>
         }
       />
-      <TooltipPopup side="top" className="max-w-72">
-        {children}
-      </TooltipPopup>
+      <TooltipPopup side="top">{children}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -1037,7 +1035,7 @@ function BackgroundActivityAdvancedDialog({
             Tune the shared power policy and the background intervals that feed it.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-0 px-6 pb-5">
+        <DialogPanel>
           <div className="overflow-hidden rounded-xl border bg-card text-card-foreground">
             <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 space-y-1">
@@ -3809,7 +3807,7 @@ function EnvironmentProviderSettings(
                     onClick={() => void refreshProviders()}
                     aria-label="Refresh provider status"
                   >
-                    <RefreshIcon className="size-3" refreshing={isRefreshingProviders} />
+                    <RefreshIcon size="xs" refreshing={isRefreshingProviders} />
                   </Button>
                 }
               />
@@ -4052,7 +4050,7 @@ export function ArchivedThreadsPanel() {
             title={
               <span className="inline-flex items-center gap-2">
                 {isLoadingArchive ? (
-                  <Spinner className="size-3.5 text-muted-foreground" />
+                  <Spinner size="sm" tone="muted" />
                 ) : (
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}

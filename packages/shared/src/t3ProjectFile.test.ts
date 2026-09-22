@@ -48,6 +48,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "iconPath",
       "previewUrl",
       "scripts",
+      "worktreeSubmodules",
     ]);
     expect(schema.required).toBeUndefined();
     expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");

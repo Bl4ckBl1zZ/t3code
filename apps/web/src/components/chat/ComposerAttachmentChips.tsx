@@ -309,9 +309,7 @@ function ChipBadge(props: { readonly label: string; readonly children: React.Rea
           </span>
         }
       />
-      <TooltipPopup side="top" className="max-w-64 whitespace-normal leading-tight">
-        {props.children}
-      </TooltipPopup>
+      <TooltipPopup side="top">{props.children}</TooltipPopup>
     </Tooltip>
   );
 }

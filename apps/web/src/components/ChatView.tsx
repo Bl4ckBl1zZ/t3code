@@ -226,6 +226,7 @@ import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { countActiveAgents } from "./agentsPanel.logic";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import { isEditableFocused } from "../lib/editableFocus";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
@@ -375,7 +376,6 @@ import {
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
-  DRAFT_HERO_TRANSITION_DURATION_MS,
   DRAFT_HERO_TRANSITION_EASING,
   MOBILE_COMPOSER_VIEW_TRANSITION_NAME,
   MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME,
@@ -480,7 +480,11 @@ const EMPTY_ATTACHMENT_IDS: string[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const EMPTY_TURN_DIFF_SUMMARIES: ReadonlyArray<TurnDiffSummary> = [];
 
-function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
+function useDraftHeroLayoutTransition(
+  isDraftHeroState: boolean,
+  animationsActive: boolean,
+  animationDurationMs: number,
+) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
   const previousStateRef = useRef(isDraftHeroState);
@@ -501,9 +505,6 @@ function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
     const transitionGroup = transitionGroupRef.current;
     const nextComposerRect = composerAnchorRef.current?.getBoundingClientRect() ?? null;
     const stateChanged = previousStateRef.current !== isDraftHeroState;
-    const prefersReducedMotion =
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     const mobileComposerTransitionActive =
       typeof document !== "undefined" &&
       document.documentElement.dataset.mobileComposerRouteTransition === "true";
@@ -513,7 +514,7 @@ function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
     const previousComposerRect = previousComposerRectRef.current;
     if (
       stateChanged &&
-      !prefersReducedMotion &&
+      animationsActive &&
       !mobileComposerTransitionActive &&
       transitionGroup &&
       previousComposerRect &&
@@ -529,7 +530,7 @@ function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
             { transform: "translate3d(0, 0, 0)" },
           ],
           {
-            duration: DRAFT_HERO_TRANSITION_DURATION_MS,
+            duration: animationDurationMs,
             easing: DRAFT_HERO_TRANSITION_EASING,
           },
         );
@@ -544,7 +545,7 @@ function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
     }
     previousStateRef.current = isDraftHeroState;
     previousComposerRectRef.current = nextComposerRect;
-  }, [isDraftHeroState]);
+  }, [animationDurationMs, animationsActive, isDraftHeroState]);
 
   return {
     transitionGroupRef: attachTransitionGroupRef,
@@ -3135,7 +3136,11 @@ function ChatViewContent(props: ChatViewProps) {
     draftHeroDockRequested,
     backgroundSubmissionPending,
   });
-  const draftHeroTransition = useDraftHeroLayoutTransition(isDraftHeroState);
+  const draftHeroTransition = useDraftHeroLayoutTransition(
+    isDraftHeroState,
+    panelAnimationsActive,
+    panelAnimationDurationMs,
+  );
   const captureDraftHeroComposerRect = draftHeroTransition.captureComposerRect;
   const { turnDiffSummaries } = useTurnDiffSummaries(serverProjection);
   const exposeWorkspaceArtifacts = shouldExposeWorkspaceArtifacts({
@@ -5917,7 +5922,7 @@ function ChatViewContent(props: ChatViewProps) {
                   </code>
                 }
               />
-              <TooltipPopup side="top" className="max-w-80">
+              <TooltipPopup side="top">
                 This thread last ran on {localCheckoutBranchMismatch.threadBranch}. Sending will
                 continue on {localCheckoutBranchMismatch.currentBranch}.
               </TooltipPopup>
@@ -6055,6 +6060,7 @@ function ChatViewContent(props: ChatViewProps) {
         previewFocus: isPreviewFocused(),
         previewOpen: previewPanelOpen,
         terminalOpen: Boolean(terminalUiState.terminalOpen),
+        editableFocus: isEditableFocused(event.target),
         modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
       };
 
@@ -6913,13 +6919,19 @@ function ChatViewContent(props: ChatViewProps) {
       const dockStarted = new Promise<void>((resolve) => {
         resolveDockStarted = resolve;
       });
-      const dockTransition = runMobileComposerTransition(() => {
-        flushSync(() => {
-          captureDraftHeroComposerRect();
-          setDockedDraftHeroThreadKey(activeThreadKey);
-        });
-        resolveDockStarted?.();
-      });
+      const dockTransition = runMobileComposerTransition(
+        () => {
+          flushSync(() => {
+            captureDraftHeroComposerRect();
+            setDockedDraftHeroThreadKey(activeThreadKey);
+          });
+          resolveDockStarted?.();
+        },
+        {
+          active: panelAnimationsActive,
+          durationMs: panelAnimationDurationMs,
+        },
+      );
       void dockTransition.catch(() => resolveDockStarted?.());
       await dockStarted;
     }

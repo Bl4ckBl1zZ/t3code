@@ -600,10 +600,11 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
       data-expanded={expanded ? "true" : "false"}
     >
       <ScrollArea
+        radius="none"
         chainVerticalScroll
         scrollFade
         hideScrollbars
-        className="w-full max-w-full rounded-none"
+        className="w-full max-w-full"
       >
         <table ref={tableRef} {...props}>
           {children}
@@ -676,32 +677,33 @@ function MarkdownDetails({
   const content = childNodes.filter((_, index) => index !== summaryIndex);
 
   return (
-    <Collapsible
-      defaultOpen={open}
-      onOpenChange={setIsOpen}
-      className="chat-markdown-details my-2 border-y border-border/60"
-      data-markdown-details=""
-      data-markdown-details-open={isOpen ? "true" : "false"}
-    >
-      <CollapsibleTrigger
-        className="flex w-full items-center gap-2 py-2 text-left text-sm font-medium text-foreground data-panel-open:[&_svg]:rotate-90"
-        data-markdown-details-summary=""
+    <div className="my-2 border-y border-border/60">
+      <Collapsible
+        defaultOpen={open}
+        onOpenChange={setIsOpen}
+        data-markdown-details=""
+        data-markdown-details-open={isOpen ? "true" : "false"}
       >
-        <ChevronRightIcon
-          className="size-4 shrink-0 text-muted-foreground transition-transform"
-          aria-hidden
-        />
-        <span>{summary}</span>
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div
-          className="pb-3 ps-6 text-foreground/[calc(80%+var(--appearance-contrast-boost)/5)]"
-          data-markdown-details-content=""
+        <CollapsibleTrigger
+          className="flex w-full items-center gap-2 py-2 text-left text-sm font-medium text-foreground data-panel-open:[&_svg]:rotate-90"
+          data-markdown-details-summary=""
         >
-          {content}
-        </div>
-      </CollapsiblePanel>
-    </Collapsible>
+          <ChevronRightIcon
+            className="size-4 shrink-0 text-muted-foreground transition-transform"
+            aria-hidden
+          />
+          <span>{summary}</span>
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <div
+            className="pb-3 ps-6 text-foreground/[calc(80%+var(--appearance-contrast-boost)/5)]"
+            data-markdown-details-content=""
+          >
+            {content}
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -1616,10 +1618,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           )
         }
       />
-      <TooltipPopup
-        side="top"
-        className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
-      >
+      <TooltipPopup side="top" variant="code">
         {/* The full path: the chip already shows the shortened form, and a link
             to the workspace root collapses to a bare label that repeats it. */}
         <div className="overflow-x-auto whitespace-nowrap [scrollbar-color:color-mix(in_srgb,var(--contrast-border)_78%,transparent)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[color-mix(in_srgb,var(--contrast-border)_78%,transparent)] [&::-webkit-scrollbar-track]:bg-transparent">
@@ -2089,12 +2088,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
         return (
           <Tooltip>
             <TooltipTrigger render={link} />
-            <TooltipPopup
-              side="top"
-              className="max-w-[min(36rem,calc(100vw-2rem))] whitespace-normal leading-tight wrap-anywhere"
-            >
-              {unresolvedPathHref ?? href}
-            </TooltipPopup>
+            <TooltipPopup side="top">{unresolvedPathHref ?? href}</TooltipPopup>
           </Tooltip>
         );
       }
