@@ -15,7 +15,7 @@ struct NativeToolLogo: View {
         Group {
             if let image {
                 Image(uiImage: image).resizable().scaledToFit()
-            } else { Image(systemName: fallback) }
+            } else { Image(symbol: fallback) }
         }
         .frame(width: 16, height: 16)
         .accessibilityHidden(true)

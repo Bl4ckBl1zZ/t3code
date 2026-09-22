@@ -60,7 +60,8 @@ public protocol FeatureClient: AnyObject {
     func setThreadSettled(id: String, settled: Bool) async throws
     func setThreadSnoozed(id: String, until: Date?) async throws
     func setActiveOrder(id: String, key: String?) async throws
-    func setThreadPinned(id: String, pinned: Bool) async throws
+    /// `orderKey` re-pins a thread at the slot it held before, as undo does.
+    func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws
     /// Pins a pull request to the thread by number, replacing the
     /// branch-derived one, or clears the pin with `nil`.
     ///
@@ -271,7 +272,7 @@ public extension FeatureClient {
     }
     func setThreadSettled(id: String, settled: Bool) async throws {}
     func setThreadSnoozed(id: String, until: Date?) async throws {}
-    func setThreadPinned(id: String, pinned: Bool) async throws {}
+    func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws {}
     @discardableResult
     func setThreadLinkedPullRequest(
         threadID _: String,

@@ -98,7 +98,7 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
             case .warning: "xmark"
             case .wrench: "wrench"
             case .zap: "bolt"
-            case .pullRequest: "arrow.triangle.pull"
+            case .pullRequest: T3Symbol.pullRequest
             case .computer: "desktopcomputer"
             }
         }
@@ -1588,6 +1588,6 @@ private struct ThreadToolActivityIcon: View {
             NativeAppToolIcon(app: app, fallback: fallback)
         } else if let url = icon?.imageURL(dark: colorScheme == .dark) {
             NativeToolLogo(url: url, fallback: fallback)
-        } else { Image(systemName: fallback).accessibilityHidden(true) }
+        } else { Image(symbol: fallback).accessibilityHidden(true) }
     }
 }

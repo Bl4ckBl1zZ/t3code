@@ -103,13 +103,11 @@ struct ProjectIconPickerView: View {
             }
             .t3GroupedListBackground()
             .disabled(pending)
-            .searchable(
+            .t3Searchable(
                 text: $query,
                 placement: .navigationBarDrawer(displayMode: .always),
-                prompt: "Search Icons"
+                prompt: Text("Search Icons")
             )
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
             .navigationTitle("Project Icon")
             .navigationBarTitleDisplayMode(.inline)
             .t3NavigationChrome()

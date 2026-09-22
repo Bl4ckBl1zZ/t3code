@@ -67,7 +67,7 @@ struct PullRequestReviewerPicker: View {
         .navigationTitle("Reviewers")
         .navigationBarTitleDisplayMode(.inline)
         .t3NavigationChrome()
-        .searchable(text: $search, prompt: "Search People")
+        .t3Searchable(text: $search, prompt: Text("Search People"))
         .task { await model.load(read: access.load) }
     }
 

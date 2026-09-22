@@ -171,6 +171,47 @@ final class PullRequestWorkspaceTests: XCTestCase {
         XCTAssertEqual(manager.statCalls.flatMap { $0.map(\.number) }, [3])
     }
 
+    func testOverridesClearOnlyWhenAReadAgreesOrOutranksThem() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let ready = try XCTUnwrap(NativePullRequestWorkspaceLogic.override(after: .ready, entry: entry(1, draft: true), now: now, token: 1))
+        XCTAssertEqual(ready.state, .open)
+        XCTAssertEqual(ready.isDraft, false)
+        XCTAssertNil(NativePullRequestWorkspaceLogic.override(after: .updateBranch, entry: entry(1), now: now, token: 2))
+        let overrides = [entry(1).id: ready]
+        // A stale read that still says draft is kept for a minute, then the host's word wins.
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.settle(overrides, answered: [entry(1, draft: true)], now: now + 30), overrides)
+        XCTAssertTrue(NativePullRequestWorkspaceLogic.settle(overrides, answered: [entry(1, draft: true)], now: now + 61).isEmpty)
+        // A missing row confirms nothing; an agreeing one settles it.
+        XCTAssertEqual(NativePullRequestWorkspaceLogic.settle(overrides, answered: [entry(2)], now: now + 61), overrides)
+        XCTAssertTrue(NativePullRequestWorkspaceLogic.settle(overrides, answered: [entry(1)], now: now).isEmpty)
+        // A drafts-only list no longer holds a pull request marked ready.
+        var drafts = NativePullRequestPreferences(); drafts.draft = "only"
+        XCTAssertNil(NativePullRequestWorkspaceLogic.applying(ready, to: entry(1, draft: true), preferences: drafts))
+    }
+
+    func testActionsAnswerOnTheRowAtOnceAndARefusalTakesItBack() async {
+        let manager = PullRequestWorkspaceTestManager()
+        let open = page([entry(1), entry(2)])
+        manager.list = { _, _ in open }
+        let feed = NativePullRequestWorkspaceModel()
+        var preferences = NativePullRequestPreferences(); preferences.involvement = "authored"
+        await feed.reload(manager: manager, environments: [environments[0]], projects: [project("one")], preferences: preferences)
+        let acted = entry(1).id
+
+        feed.noteAction("close", phase: .sent, rowID: acted)
+        XCTAssertEqual(feed.rows(preferences: preferences).map(\.entry.number), [2])
+        var all = preferences; all.state = "all"
+        XCTAssertEqual(feed.rows(preferences: all).first { $0.id == acted }?.entry.state, .closed)
+        feed.noteAction("close", phase: .failed, rowID: acted)
+        XCTAssertEqual(Set(feed.rows(preferences: preferences).map(\.entry.number)), [1, 2])
+
+        // A host may only queue a merge, so the row moves once it confirms.
+        feed.noteAction("merge", phase: .sent, rowID: acted)
+        XCTAssertEqual(Set(feed.rows(preferences: preferences).map(\.entry.number)), [1, 2])
+        feed.noteAction("merge", phase: .done, rowID: acted)
+        XCTAssertEqual(feed.rows(preferences: preferences).map(\.entry.number), [2])
+    }
+
     func testOldSearchCannotReplaceNewerResults() async {
         let manager = PullRequestWorkspaceTestManager()
         let started = AsyncStream<Void>.makeStream()

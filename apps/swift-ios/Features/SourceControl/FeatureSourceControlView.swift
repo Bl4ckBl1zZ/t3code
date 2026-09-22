@@ -260,7 +260,7 @@ public struct FeatureSourceControlView: View {
                 Spacer(minLength: 0)
             }
         } icon: {
-            Image(systemName: "arrow.triangle.pull")
+            Image(T3Symbol.pullRequest)
                 .foregroundStyle(T3Colors.textSecondary)
         }
         NavigationLink {
@@ -290,7 +290,7 @@ public struct FeatureSourceControlView: View {
                 if isRunning {
                     ProgressView()
                 } else {
-                    Image(systemName: action.icon)
+                    Image(symbol: action.icon)
                         .foregroundStyle(T3Colors.accent)
                 }
             }
@@ -560,7 +560,7 @@ private extension FeatureSourceControlAction {
         switch self {
         case .commit: "checkmark.circle"
         case .commitAndPush: "arrow.up.circle"
-        case .commitPushAndCreatePullRequest, .createPullRequest: "arrow.triangle.pull"
+        case .commitPushAndCreatePullRequest, .createPullRequest: T3Symbol.pullRequest
         case .push: "arrow.up"
         case .pull: "arrow.down"
         }

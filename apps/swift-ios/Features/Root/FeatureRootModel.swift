@@ -76,6 +76,9 @@ public final class FeatureRootModel {
     /// review screen because the thread feed arms it and the review — presented
     /// later, from a sheet that does not exist yet — spends it.
     public let reviewSelection = ReviewSelectionStore()
+    /// The Undo notice for archive, settle, snooze and unpin. Every entry
+    /// point goes through the setters below, so each one gets it.
+    let threadUndo = ThreadUndoCenter()
 
     let client: any FeatureClient
     private let outboxStore: FeatureOutboxStore
@@ -340,17 +343,37 @@ public final class FeatureRootModel {
     @discardableResult
     public func setArchived(_ id: String, archived: Bool) async -> Bool {
         let environment = currentEnvironmentIdentity
-        return await perform(failureTitle: archived ? "Couldn't Archive Thread" : "Couldn't Restore Thread") {
+        let claim = archived ? threadUndo.begin(.archive, threadID: id) : nil
+        if !archived { threadUndo.invalidate(.archive, threadID: id) }
+        let succeeded = await perform(failureTitle: archived ? "Couldn't Archive Thread" : "Couldn't Restore Thread") {
             try await client.setThreadArchived(id: id, archived: archived)
             guard currentEnvironmentIdentity == environment else { return }
             mutateThread(id: id) { $0.isArchived = archived }
         }
+        offerUndo(claim, succeeded: succeeded, action: .archived) { model in
+            await model.setArchived(id, archived: false)
+        }
+        return succeeded
     }
 
+    /// A settle clears the pin but keeps its slot and any snooze, so undoing
+    /// it reopens the thread and re-pins it in place; it never re-snoozes.
     @discardableResult
     public func setSettled(_ id: String, settled: Bool) async -> Bool {
         let environment = currentEnvironmentIdentity
-        return await perform(failureTitle: settled ? "Couldn't Settle Thread" : "Couldn't Reopen Thread") {
+        let pin = pinnedSlot(id)
+        let claim: ThreadUndoCenter.Claim?
+        if settled {
+            // A pending unpin or snooze undo would re-pin a settled thread,
+            // which the server refuses.
+            threadUndo.invalidate(.pin, threadID: id)
+            threadUndo.invalidate(.snooze, threadID: id)
+            claim = threadUndo.begin(.settle, threadID: id)
+        } else {
+            threadUndo.invalidate(.settle, threadID: id)
+            claim = nil
+        }
+        let succeeded = await perform(failureTitle: settled ? "Couldn't Settle Thread" : "Couldn't Reopen Thread") {
             try await client.setThreadSettled(id: id, settled: settled)
             guard currentEnvironmentIdentity == environment else { return }
             let now = Date.now
@@ -370,12 +393,29 @@ public final class FeatureRootModel {
                 }
             }
         }
+        offerUndo(claim, succeeded: succeeded, action: .settled) { model in
+            guard await model.setSettled(id, settled: false), let pin else { return }
+            await model.setPinned(id, pinned: true, orderKey: pin.orderKey)
+        }
+        return succeeded
     }
 
+    /// A snooze clears the pin too, so undoing it wakes the thread and
+    /// re-pins it in place.
     @discardableResult
     public func setSnoozed(_ id: String, until: Date?) async -> Bool {
         let environment = currentEnvironmentIdentity
-        return await perform(failureTitle: until == nil ? "Couldn't Unsnooze Thread" : "Couldn't Snooze Thread") {
+        let pin = pinnedSlot(id)
+        let claim: ThreadUndoCenter.Claim?
+        if until != nil {
+            // The server refuses to pin a snoozed thread.
+            threadUndo.invalidate(.pin, threadID: id)
+            claim = threadUndo.begin(.snooze, threadID: id)
+        } else {
+            threadUndo.invalidate(.snooze, threadID: id)
+            claim = nil
+        }
+        let succeeded = await perform(failureTitle: until == nil ? "Couldn't Unsnooze Thread" : "Couldn't Snooze Thread") {
             try await client.setThreadSnoozed(id: id, until: until)
             guard currentEnvironmentIdentity == environment else { return }
             let snoozedAt = until.map { _ in Date.now }
@@ -384,21 +424,67 @@ public final class FeatureRootModel {
                 $0.snoozedAt = snoozedAt
             }
         }
+        offerUndo(claim, succeeded: succeeded, action: .snoozed) { model in
+            guard await model.setSnoozed(id, until: nil), let pin else { return }
+            await model.setPinned(id, pinned: true, orderKey: pin.orderKey)
+        }
+        return succeeded
     }
 
+    /// `orderKey` re-pins at a known slot; undoing an unpin passes the one the
+    /// thread held.
     @discardableResult
-    public func setPinned(_ id: String, pinned: Bool) async -> Bool {
+    public func setPinned(_ id: String, pinned: Bool, orderKey: String? = nil) async -> Bool {
         let environment = currentEnvironmentIdentity
-        return await perform(failureTitle: pinned ? "Couldn't Pin Thread" : "Couldn't Unpin Thread") {
-            try await client.setThreadPinned(id: id, pinned: pinned)
+        let previousOrderKey = pinned ? nil : snapshot.threads.first(where: { $0.id == id })?.pinOrderKey
+        let claim = pinned ? nil : threadUndo.begin(.pin, threadID: id)
+        if pinned { threadUndo.invalidate(.pin, threadID: id) }
+        let succeeded = await perform(failureTitle: pinned ? "Couldn't Pin Thread" : "Couldn't Unpin Thread") {
+            try await client.setThreadPinned(id: id, pinned: pinned, orderKey: orderKey)
             guard currentEnvironmentIdentity == environment else { return }
             mutateThread(id: id) {
                 $0.pinnedAt = pinned ? Date.now : nil
                 if pinned {
                     $0.snoozedUntil = nil
                     $0.snoozedAt = nil
+                    if let orderKey { $0.pinOrderKey = orderKey }
+                } else {
+                    $0.pinOrderKey = nil
                 }
             }
+        }
+        offerUndo(claim, succeeded: succeeded, action: .unpinned) { model in
+            await model.setPinned(id, pinned: true, orderKey: previousOrderKey)
+        }
+        return succeeded
+    }
+
+    private struct PinnedSlot {
+        let orderKey: String?
+    }
+
+    /// The pin a settle or snooze is about to clear, so its undo can restore it.
+    private func pinnedSlot(_ id: String) -> PinnedSlot? {
+        guard let thread = snapshot.threads.first(where: { $0.id == id }), thread.pinnedAt != nil else { return nil }
+        return PinnedSlot(orderKey: thread.pinOrderKey)
+    }
+
+    /// Shows the Undo notice once a claimed action lands, or releases the
+    /// claim when it failed.
+    private func offerUndo(
+        _ claim: ThreadUndoCenter.Claim?,
+        succeeded: Bool,
+        action: ThreadUndoCenter.Action,
+        undo: @escaping @MainActor (FeatureRootModel) async -> Void
+    ) {
+        guard let claim else { return }
+        guard succeeded else {
+            threadUndo.finish(claim)
+            return
+        }
+        threadUndo.offer(claim, action: action) { [weak self] in
+            guard let self else { return }
+            await undo(self)
         }
     }
 

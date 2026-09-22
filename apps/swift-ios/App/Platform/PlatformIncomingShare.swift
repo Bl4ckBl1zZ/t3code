@@ -458,7 +458,7 @@ struct PlatformIncomingShareDestinationSheet: View {
                     ContentUnavailableView.search(text: query)
                 }
             }
-            .searchable(text: $query, prompt: "Projects")
+            .t3Searchable(text: $query, prompt: Text("Projects"))
             .navigationTitle("Start a Task")
             .navigationBarTitleDisplayMode(.inline)
             .t3NavigationChrome()

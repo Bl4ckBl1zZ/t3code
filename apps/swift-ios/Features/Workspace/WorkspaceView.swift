@@ -347,6 +347,11 @@ public struct WorkspaceView: View {
         // Rows run under the glass bars; UIKit insets the content to match.
         .ignoresSafeArea(.container, edges: .vertical)
         .background(sidebarIsGlass ? Color.clear : T3Colors.background)
+        // Where the web sidebar keeps its Undo notice. Only the showing tab
+        // hosts it, so one pill owns the undo manager registration.
+        .overlay(alignment: .bottom) {
+            if isCurrent { ThreadUndoPill(center: model.threadUndo) }
+        }
         .navigationTitle(isSelectingHere ? selectionTitle : WorkspaceSwitcher.shortTitle(tab))
         .navigationBarTitleDisplayMode(.large)
         .homeNavigationSubtitle(subtitle ?? "")
@@ -363,7 +368,7 @@ public struct WorkspaceView: View {
             isSelectingHere ? .hidden : horizontalSizeClass == .compact ? .visible : .automatic,
             for: .tabBar
         )
-        .searchable(
+        .t3Searchable(
             text: $searchText,
             isPresented: searchPresentedBinding(for: tab),
             placement: .navigationBarDrawer(displayMode: .automatic),
@@ -474,8 +479,10 @@ public struct WorkspaceView: View {
             }
             Section {
                 if supportsPullRequests {
-                    Button("Pull Requests", systemImage: "arrow.triangle.pull") {
+                    Button {
                         showingPullRequests = true
+                    } label: {
+                        Label("Pull Requests", symbol: T3Symbol.pullRequest)
                     }
                 }
                 Button(action: openDrafts) {
@@ -2053,9 +2060,9 @@ struct FeatureThreadRow: View, Equatable {
             if let pullRequest = context.pullRequest {
                 let stackSize = FeaturePullRequestLines.stackSize(thread.allLinkedPullRequests)
                 let draft = pullRequest.state == "open" && pullRequest.isDraft == true
-                let icon = stackSize != nil ? "square.3.layers.3d" : pullRequest.state == "merged" ? "arrow.triangle.merge" : pullRequest.state == "closed" ? "xmark.circle" : draft ? "pencil.circle" : "arrow.triangle.pull"
+                let icon = stackSize != nil ? "square.3.layers.3d" : pullRequest.state == "merged" ? "arrow.triangle.merge" : pullRequest.state == "closed" ? "xmark.circle" : draft ? "pencil.circle" : T3Symbol.pullRequest
                 let color = draft ? T3Colors.textSecondary : Self.pullRequestColor(pullRequest.state)
-                Image(systemName: icon)
+                Image(symbol: icon)
                     .imageScale(.small)
                     .foregroundStyle(color)
                 Text(stackSize.map { "\($0)" } ?? "#\(pullRequest.number)")

@@ -86,8 +86,10 @@ struct MarkdownMessageView: View {
             if pullRequestContext != nil {
                 Section {
                     ForEach(PullRequestLinkTarget.links(in: source)) { target in
-                        Button("Preview Pull Request \(target.displayNumber)", systemImage: "arrow.triangle.pull") {
+                        Button {
                             previewTarget = target
+                        } label: {
+                            Label("Preview Pull Request \(target.displayNumber)", symbol: T3Symbol.pullRequest)
                         }
                     }
                 }

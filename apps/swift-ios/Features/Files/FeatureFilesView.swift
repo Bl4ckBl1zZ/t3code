@@ -151,7 +151,7 @@ private struct FeatureFileDirectoryView: View {
             .background(T3Colors.background)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, prompt: searchScope == .folder ? "Search \(title)" : "Search Workspace")
+            .t3Searchable(text: $searchText, prompt: Text(searchScope == .folder ? "Search \(title)" : "Search Workspace"))
             .searchScopes($searchScope) {
                 Text("This Folder").tag(FileSearchScope.folder)
                 Text("Workspace").tag(FileSearchScope.workspace)

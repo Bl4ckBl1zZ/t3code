@@ -276,7 +276,7 @@ struct ModelPickerList: View {
         }
         .navigationTitle("Model")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, prompt: "Search models")
+        .t3Searchable(text: $query, prompt: Text("Search models"))
         .onAppear(perform: revealSelectedLegacyModel)
         .onChange(of: selection) { revealSelectedLegacyModel() }
         .onChange(of: providers) { revealSelectedLegacyModel() }

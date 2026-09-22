@@ -845,8 +845,8 @@ public actor T3Client {
     }
 
     @discardableResult
-    public func pin(threadID: String, pinned: Bool) async throws -> DispatchResult {
-        try await dispatch(OrchestrationCommands.pin(threadID: threadID, pinned: pinned))
+    public func pin(threadID: String, pinned: Bool, orderKey: String? = nil) async throws -> DispatchResult {
+        try await dispatch(OrchestrationCommands.pin(threadID: threadID, pinned: pinned, orderKey: orderKey))
     }
 
     /// Pins a pull request to the thread, or clears the pin with `nil`.
@@ -2999,17 +2999,18 @@ public enum OrchestrationCommands {
         ])
     }
 
-    /// Pinning is a thread metadata field, not a command of its own.
+    /// Pinning is a thread metadata field, not a command of its own. An
+    /// `orderKey` places a fresh pin at a known slot in the pinned run; it is
+    /// only sent with `pinned: true`, since unpinning clears the slot anyway.
     public static func pin(
         threadID: String,
         pinned: Bool,
+        orderKey: String? = nil,
         commandID: String = UUID().uuidString
     ) -> JSONValue {
-        updateMetadata(
-            threadID: threadID,
-            commandID: commandID,
-            fields: ["pinned": .bool(pinned)]
-        )
+        var fields: [String: JSONValue] = ["pinned": .bool(pinned)]
+        if pinned, let orderKey { fields["pinOrderKey"] = .string(orderKey) }
+        return updateMetadata(threadID: threadID, commandID: commandID, fields: fields)
     }
 
     /// The Work-inbox role is a thread metadata field too. `"chat"` marks a

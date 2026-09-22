@@ -159,3 +159,67 @@ enum NativePullRequestWorkspaceLogic {
         return terms.contains(where: { title.contains($0) }) ? 30 : 10
     }
 }
+
+/// What a row says the moment an action is sent, before the host answers. The
+/// host is the record and a later read replaces this, but a pull request closed
+/// from an "open" list should leave it on the tap, not after the reads that
+/// follow.
+struct NativePullRequestOverride: Equatable, Sendable {
+    let state: PullRequestState
+    var isDraft: Bool?
+    let updatedAt: String
+    /// Which action wrote it, so a failure takes back its own note and not a
+    /// later one's.
+    let token: Int
+    let at: Date
+}
+
+extension NativePullRequestWorkspaceLogic {
+    /// How long a read that disagrees is taken for a stale one rather than for news.
+    static let overrideTrust: TimeInterval = 60
+
+    static func override(after action: NativePullRequestAction, entry: PullRequestListEntry, now: Date, token: Int) -> NativePullRequestOverride? {
+        let updatedAt = now.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        func note(_ state: PullRequestState, isDraft: Bool? = nil) -> NativePullRequestOverride {
+            NativePullRequestOverride(state: state, isDraft: isDraft, updatedAt: updatedAt, token: token, at: now)
+        }
+        switch action {
+        case .close: return note(.closed)
+        case .reopen: return note(.open)
+        case .merge: return note(.merged)
+        case .draft: return note(entry.state, isDraft: true)
+        case .ready: return note(entry.state, isDraft: false)
+        default: return nil
+        }
+    }
+
+    /// The entry with its pending answer written over it, or nil when the
+    /// list's state or draft filter no longer holds it.
+    static func applying(_ override: NativePullRequestOverride, to entry: PullRequestListEntry, preferences: NativePullRequestPreferences) -> PullRequestListEntry? {
+        if preferences.state != "all", override.state.rawValue != preferences.state { return nil }
+        var entry = entry
+        entry.state = override.state
+        if let isDraft = override.isDraft { entry.isDraft = isDraft }
+        entry.updatedAt = override.updatedAt
+        if preferences.draft == "only", !entry.isDraft { return nil }
+        if preferences.draft == "hide", entry.isDraft { return nil }
+        return entry
+    }
+
+    /// The overrides an answer confirmed, dropped; the rest kept. A read that
+    /// started before the action can land after it and still say the old
+    /// thing, so an override clears when the answer agrees, not when one
+    /// arrives. A missing row says nothing, since a page is only a page. A row
+    /// in another state is taken for a stale read for a minute and for the
+    /// host's news after that, which is how a pull request reopened elsewhere
+    /// comes back.
+    static func settle(_ overrides: [String: NativePullRequestOverride], answered: [PullRequestListEntry], now: Date) -> [String: NativePullRequestOverride] {
+        guard !overrides.isEmpty else { return overrides }
+        let byID = Dictionary(answered.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return overrides.filter { id, override in
+            guard let row = byID[id] else { return true }
+            let agrees = row.state == override.state && (override.isDraft == nil || row.isDraft == override.isDraft)
+            return !agrees && now.timeIntervalSince(override.at) <= overrideTrust
+        }
+    }
+}

@@ -1389,9 +1389,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             threadID: route.wireID, fields: ["activeOrderKey": key.map(JSONValue.string) ?? .null]))
     }
 
-    func setThreadPinned(id: String, pinned: Bool) async throws {
+    func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws {
         let route = try threadRoute(for: id)
-        _ = try await route.client.pin(threadID: route.wireID, pinned: pinned)
+        _ = try await route.client.pin(threadID: route.wireID, pinned: pinned, orderKey: orderKey)
         try? await refresh(client: route.client)
     }
 
@@ -5085,6 +5085,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
+            pinOrderKey: thread.pinOrderKey,
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
             activeOrderKey: thread.activeOrderKey,
             supportsActiveOrder: environment.descriptor?.capabilities.threadActiveOrderV2,
@@ -5249,6 +5250,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
+            pinOrderKey: thread.pinOrderKey,
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
             activeOrderKey: thread.activeOrderKey,
             supportsActiveOrder: environment.descriptor?.capabilities.threadActiveOrderV2,

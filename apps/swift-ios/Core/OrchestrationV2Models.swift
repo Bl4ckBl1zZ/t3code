@@ -928,6 +928,7 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public let unsettledAt: OrchestrationV2Timestamp?
     public var activeOrderKey: String? = nil
     public let pinnedAt: OrchestrationV2Timestamp?
+    public var pinOrderKey: String? = nil
     public let workInboxRole: String?
     public let timelineClearedAt: OrchestrationV2Timestamp?
     public let snoozedUntil: OrchestrationV2Timestamp?
@@ -1390,6 +1391,9 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     public var unsettledAt: OrchestrationV2Timestamp?
     public var activeOrderKey: String? = nil
     public var pinnedAt: OrchestrationV2Timestamp?
+    /// Where the thread sits in the user-arranged pinned run. Captured so
+    /// undoing an unpin can put the thread back in the same place.
+    public var pinOrderKey: String? = nil
     public var workInboxRole: String?
     public var timelineClearedAt: OrchestrationV2Timestamp?
     public var snoozedUntil: OrchestrationV2Timestamp?

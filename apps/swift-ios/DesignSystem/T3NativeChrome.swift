@@ -191,6 +191,33 @@ private struct T3ProminentFallbackButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Search
+
+extension View {
+    /// `.searchable` whose field leaves autocorrect and auto-capitalization
+    /// off. Searches match names, paths, branches and labels, where a
+    /// "corrected" query finds nothing. The searched content keeps the system
+    /// defaults, so a comment composer inside it still corrects prose.
+    @ViewBuilder
+    func t3Searchable(
+        text: Binding<String>,
+        isPresented: Binding<Bool>? = nil,
+        placement: SearchFieldPlacement = .automatic,
+        prompt: Text? = nil
+    ) -> some View {
+        let content = autocorrectionDisabled(false).textInputAutocapitalization(nil)
+        Group {
+            if let isPresented {
+                content.searchable(text: text, isPresented: isPresented, placement: placement, prompt: prompt)
+            } else {
+                content.searchable(text: text, placement: placement, prompt: prompt)
+            }
+        }
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(.never)
+    }
+}
+
 // MARK: - Grouped lists
 
 extension View {
@@ -245,7 +272,7 @@ struct T3SettingsTile: View {
     }
 
     var body: some View {
-        Image(systemName: systemName)
+        Image(symbol: systemName)
             .font(.system(size: size * 0.52, weight: .semibold))
             .foregroundStyle(tint.glyph)
             .frame(width: size, height: size)

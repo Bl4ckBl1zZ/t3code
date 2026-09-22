@@ -441,8 +441,10 @@ public struct ThreadDetailView: View {
             if pullRequestContext != nil, !linkedPullRequestTargets.isEmpty {
                 Section {
                     ForEach(linkedPullRequestTargets) { target in
-                        Button("Pull Request #\(String(target.number))", systemImage: "arrow.triangle.pull") {
+                        Button {
                             pullRequestPreview = target
+                        } label: {
+                            Label("Pull Request #\(String(target.number))", symbol: T3Symbol.pullRequest)
                         }
                     }
                 }
