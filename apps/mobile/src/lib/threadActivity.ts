@@ -4,6 +4,7 @@ import type {
   ThreadUserInputQuestion,
 } from "@t3tools/client-runtime/state/thread-requests";
 import {
+  resolveT3McpToolDefinition,
   resolveT3McpToolPresentation,
   type T3McpToolLogo,
   type T3McpToolPresentation,
@@ -36,6 +37,7 @@ import {
 } from "@t3tools/shared/backgroundProcess";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
 import {
   formatOrchestrationV2RollbackDetail,
   orchestrationV2TimelineDayKey,
@@ -582,8 +584,37 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
   let openGroupAttemptId: string | null = null;
   let openGroupStandsAlone = false;
 
+  // A successful delegation is already represented by its durable child card.
+  // Pending, failed and unmatched calls remain visible, even with identical prompts.
+  const childrenByRun = new Map<RunId, Set<string>>();
+  for (const entry of entries) {
+    if (entry.type !== "lifecycle") continue;
+    const item = entry.row.item;
+    if (item.type !== "subagent" || item.origin !== "app_owned" || item.runId === null) continue;
+    const children = childrenByRun.get(item.runId) ?? new Set<string>();
+    children.add(item.subagentId);
+    childrenByRun.set(item.runId, children);
+  }
+
   for (const entry of entries) {
     if (isEmptyMessage(entry)) continue;
+    if (entry.type === "activity" && entry.activity.status !== "failure") {
+      const item = entry.activity.projectedItem.item;
+      if (
+        item.type === "dynamic_tool" &&
+        item.runId !== null &&
+        (item.status === "running" || item.status === "completed") &&
+        resolveT3McpToolDefinition(item.toolName)?.summaryAction === "delegate"
+      ) {
+        const output = compactDynamicToolOutput(item.output);
+        if (
+          !output?.isError &&
+          output?.taskId !== undefined &&
+          childrenByRun.get(item.runId)?.has(output.taskId)
+        )
+          continue;
+      }
+    }
     if (entry.type !== "activity") {
       grouped.push(entry);
       openGroupActivities = null;

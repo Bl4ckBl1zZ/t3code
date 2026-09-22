@@ -247,6 +247,31 @@ function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
 }
 
 describe("buildThreadFeed", () => {
+  it("hides a delegation call once its returned task id names a child card", () => {
+    const delegation = (id: string, taskId: string, ordinal: number, failed = false) =>
+      ({
+        ...base(`item-${id}`, "2026-06-20T00:00:03.000Z", ordinal),
+        status: failed ? ("failed" as const) : ("completed" as const),
+        type: "dynamic_tool" as const,
+        toolName: "t3-code.delegate_task",
+        input: { task: taskId },
+        output: { content: JSON.stringify({ taskId }), structuredContent: { taskId } },
+      }) as OrchestrationV2TurnItem;
+    const feed = buildThreadFeed([
+      projected(subagent("a", 0), 0),
+      projected(delegation("delegate-a", "node-a", 1), 1),
+      projected(delegation("unmatched", "node-other", 2), 2),
+      projected(delegation("failed", "node-a", 3, true), 3),
+    ]);
+    const tools = feed.flatMap((entry) =>
+      entry.type === "activity-group"
+        ? entry.activities.map((activity) => activity.projectedItem.item.id)
+        : [],
+    );
+    expect(feed.some((entry) => entry.type === "lifecycle")).toBe(true);
+    expect(tools).toEqual(["item-unmatched", "item-failed"]);
+  });
+
   it("counts the files a multi-file change touched instead of naming only the first", () => {
     const summaryOf = (item: OrchestrationV2TurnItem) =>
       buildThreadFeed([projected(item, 0)]).find((entry) => entry.type === "activity-group")
