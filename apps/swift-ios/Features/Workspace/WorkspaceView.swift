@@ -357,7 +357,12 @@ public struct WorkspaceView: View {
                 listToolbar(tab, canArrange: canArrange)
             }
         }
-        .toolbar(isSelectingHere ? .hidden : .automatic, for: .tabBar)
+        // A thread hides the bar on iPhone, and `.automatic` leaves it hidden
+        // after popping back, so the compact list asks for it by name.
+        .toolbar(
+            isSelectingHere ? .hidden : horizontalSizeClass == .compact ? .visible : .automatic,
+            for: .tabBar
+        )
         .searchable(
             text: $searchText,
             isPresented: searchPresentedBinding(for: tab),
