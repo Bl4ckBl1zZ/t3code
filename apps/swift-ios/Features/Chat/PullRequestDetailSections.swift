@@ -186,7 +186,7 @@ enum PullRequestDetailSections {
     static func stateSymbol(state: PullRequestState, isDraft: Bool) -> String {
         if isDraft, state == .open { return "circle.dashed" }
         switch state {
-        case .open: return "arrow.triangle.pull"
+        case .open: return T3Symbol.pullRequest
         case .closed: return "xmark.circle"
         case .merged: return "arrow.triangle.merge"
         }

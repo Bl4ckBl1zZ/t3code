@@ -742,7 +742,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                 }
             }
         } icon: {
-            T3SettingsTile("arrow.triangle.pull", tint: pullRequestTileTint(state: state, isDraft: isDraft))
+            T3SettingsTile(T3Symbol.pullRequest, tint: pullRequestTileTint(state: state, isDraft: isDraft))
         }
     }
 

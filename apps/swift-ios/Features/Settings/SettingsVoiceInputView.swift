@@ -256,7 +256,7 @@ private struct VoiceLanguageList: View {
         }
         .navigationTitle("Spoken Language")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Languages")
+        .t3Searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: Text("Search Languages"))
     }
 
     private func row(title: String, code: String?) -> some View {

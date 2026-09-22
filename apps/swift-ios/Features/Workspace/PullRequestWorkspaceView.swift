@@ -26,7 +26,7 @@ struct PullRequestWorkspaceView: View {
                 .background(T3Colors.background)
                 .navigationBarTitleDisplayMode(.inline)
                 .pullRequestTitle("Pull Requests", subtitle: preferences.summary(environments: model.snapshot.environments, projects: model.snapshot.projects))
-                .searchable(text: $preferences.query, prompt: "Search Pull Requests")
+                .t3Searchable(text: $preferences.query, prompt: Text("Search Pull Requests"))
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showingFilters = true } label: {
@@ -38,6 +38,14 @@ struct PullRequestWorkspaceView: View {
                 }
                 .t3SheetToolbar(.close)
                 .t3NavigationChrome()
+                .navigationDestination(for: PullRequestWorkspaceDestination.self) { destination in
+                    PullRequestDetailSheet(
+                        access: FeaturePullRequestAccess(manager: manager, scope: destination.scope) { action, phase in
+                            feed.noteAction(action, phase: phase, rowID: destination.rowID)
+                        },
+                        number: destination.number
+                    )
+                }
                 .sheet(isPresented: $showingFilters) {
                     PullRequestWorkspaceFilters(preferences: $preferences, environments: supportedEnvironments,
                         projects: model.snapshot.projects, hosts: feed.hosts)
@@ -62,8 +70,11 @@ struct PullRequestWorkspaceView: View {
 
     @ViewBuilder private var content: some View {
         if supportedEnvironments.isEmpty {
-            ContentUnavailableView("Pull Requests Unavailable", systemImage: "arrow.triangle.pull",
-                description: Text("Connect to an environment that supports pull requests."))
+            ContentUnavailableView {
+                Label("Pull Requests Unavailable", symbol: T3Symbol.pullRequest)
+            } description: {
+                Text("Connect to an environment that supports pull requests.")
+            }
         } else if let reason = preferences.unavailableScopeDescription(environments: model.snapshot.environments, projects: model.snapshot.projects) {
             ContentUnavailableView {
                 Label("Saved Scope Unavailable", systemImage: "server.rack")
@@ -144,9 +155,11 @@ struct PullRequestWorkspaceView: View {
     }
 
     private func link(for row: NativePullRequestRow) -> some View {
-        NavigationLink {
-            PullRequestDetailSheet(access: FeaturePullRequestAccess(manager: manager, scope: .init(projectID: row.projectID, host: row.entry.host, repository: row.entry.repository)), number: row.entry.number)
-        } label: {
+        NavigationLink(value: PullRequestWorkspaceDestination(
+            rowID: row.id,
+            scope: .init(projectID: row.projectID, host: row.entry.host, repository: row.entry.repository),
+            number: row.entry.number
+        )) {
             PullRequestWorkspaceRow(row: row, environmentName: model.snapshot.environments.first { $0.id == row.environmentID }?.name,
                 project: model.snapshot.projects.first { $0.id == row.projectID }, searchText: preferences.query)
         }
@@ -172,7 +185,7 @@ struct PullRequestWorkspaceView: View {
             ContentUnavailableView.search(text: preferences.query)
         } else {
             ContentUnavailableView {
-                Label("No Matching Pull Requests", systemImage: "arrow.triangle.pull")
+                Label("No Matching Pull Requests", symbol: T3Symbol.pullRequest)
             } description: {
                 Text("Change the filters or refresh your environments.")
             } actions: {
@@ -251,6 +264,15 @@ struct PullRequestWorkspaceView: View {
     }
 }
 
+/// A row's link target. A value rather than a view, so the detail outlives
+/// its row: closing a pull request from an "open" list drops the row at once
+/// and must not pop the screen that closed it.
+private struct PullRequestWorkspaceDestination: Hashable {
+    let rowID: String
+    let scope: FeaturePullRequestProjectScope
+    let number: Int
+}
+
 private struct PullRequestWorkspaceRow: View {
     let row: NativePullRequestRow
     let environmentName: String?
@@ -264,13 +286,13 @@ private struct PullRequestWorkspaceRow: View {
         switch row.entry.state {
         case .merged: "arrow.triangle.merge"
         case .closed: "xmark.circle"
-        case .open: isDraft ? "pencil.circle" : "arrow.triangle.pull"
+        case .open: isDraft ? "pencil.circle" : T3Symbol.pullRequest
         }
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.body).foregroundStyle(color).frame(width: 22).padding(.top, 1)
                 .accessibilityLabel(isDraft ? "Draft" : row.entry.state.rawValue.capitalized)
             VStack(alignment: .leading, spacing: 6) {

@@ -644,7 +644,7 @@ struct PullRequestDetailSheet: View {
                     .foregroundStyle(PullRequestDetailSections.stateTone(state: layer.state, isDraft: layer.isDraft ?? false).color)
             }
         } icon: {
-            Image(systemName: isCurrent ? "checkmark.circle.fill" : "arrow.triangle.pull")
+            Image(symbol: isCurrent ? "checkmark.circle.fill" : T3Symbol.pullRequest)
                 .foregroundStyle(isCurrent ? T3Colors.accent : T3Colors.textSecondary)
         }
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
@@ -1047,7 +1047,7 @@ private struct PullRequestCodeSearch: ViewModifier {
 
     func body(content: Content) -> some View {
         if isActive {
-            content.searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Filter Changed Files")
+            content.t3Searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always), prompt: Text("Filter Changed Files"))
         } else {
             content
         }

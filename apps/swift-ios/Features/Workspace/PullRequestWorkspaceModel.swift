@@ -23,6 +23,12 @@ final class NativePullRequestWorkspaceModel {
     private var pages: [String: Page] = [:]
     private var failures: [String: String] = [:]
     private var stats: [String: PullRequestDiffStat] = [:]
+    /// Actions written onto their rows ahead of the host, keyed by row id.
+    private var overrides: [String: NativePullRequestOverride] = [:]
+    private var overrideToken = 0
+    /// The override each in-flight action wrote, so its failure takes back
+    /// only its own note.
+    private var pendingOverrideTokens: [String: Int] = [:]
     private var generation = UUID()
     private var statsGeneration = UUID()
     var listingRevision: UUID { generation }
@@ -50,7 +56,11 @@ final class NativePullRequestWorkspaceModel {
         var rows: [String: NativePullRequestRow] = [:]
         for lane in lanes {
             guard let page = pages[lane.id] else { continue }
-            for entry in page.entries.values where rows[entry.id] == nil {
+            for var entry in page.entries.values where rows[entry.id] == nil {
+                if let override = overrides[entry.id] {
+                    guard let overridden = NativePullRequestWorkspaceLogic.applying(override, to: entry, preferences: preferences) else { continue }
+                    entry = overridden
+                }
                 var row = NativePullRequestRow(environmentID: lane.environmentID, entry: entry,
                     sizeKnown: entry.provider != "github" || entry.additions + entry.deletions > 0,
                     viewer: page.result.viewers[entry.host])
@@ -65,6 +75,38 @@ final class NativePullRequestWorkspaceModel {
             }
         }
         return NativePullRequestWorkspaceLogic.sort(Array(rows.values), preferences: preferences)
+    }
+
+    /// Writes a state action onto its row as it is sent, and takes it back if
+    /// the host refuses. A merge lands once the host confirms, since a host
+    /// that only queues one leaves the pull request open.
+    func noteAction(_ name: String, phase: FeaturePullRequestActionPhase, rowID: String) {
+        guard let action = NativePullRequestAction(rawValue: name) else { return }
+        switch (phase, action) {
+        case (.sent, .merge), (.failed, .merge):
+            return
+        case (.sent, _):
+            if let token = writeOverride(after: action, rowID: rowID) { pendingOverrideTokens[rowID] = token }
+        case (.failed, _):
+            guard let token = pendingOverrideTokens.removeValue(forKey: rowID) else { return }
+            if overrides[rowID]?.token == token { overrides[rowID] = nil }
+        case (.done, _):
+            pendingOverrideTokens[rowID] = nil
+            if action == .merge { writeOverride(after: action, rowID: rowID) }
+        }
+    }
+
+    @discardableResult
+    private func writeOverride(after action: NativePullRequestAction, rowID: String) -> Int? {
+        guard var entry = lanes.lazy.compactMap({ self.pages[$0.id]?.entries[rowID] }).first else { return nil }
+        if let current = overrides[rowID] {
+            entry.state = current.state
+            if let isDraft = current.isDraft { entry.isDraft = isDraft }
+        }
+        overrideToken += 1
+        guard let override = NativePullRequestWorkspaceLogic.override(after: action, entry: entry, now: .now, token: overrideToken) else { return nil }
+        overrides[rowID] = override
+        return overrideToken
     }
 
     func reload(manager: any FeatureProjectPullRequestManaging, environments: [FeatureEnvironment], projects: [FeatureProject], preferences: NativePullRequestPreferences) async {
@@ -124,6 +166,7 @@ final class NativePullRequestWorkspaceModel {
                         var entries = append ? pages[lane.id]?.entries ?? [:] : [:]
                         for entry in result.entries { entries[entry.id] = entry }
                         pages[lane.id] = Page(entries: entries, result: result, limit: lane.input.limit)
+                        overrides = NativePullRequestWorkspaceLogic.settle(overrides, answered: result.entries, now: .now)
                         failures[lane.id] = nil
                     case let .failure(lane, message): failures[lane.id] = "\(lane.environmentName): \(message)"
                     }

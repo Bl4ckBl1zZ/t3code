@@ -85,7 +85,7 @@ public struct FeatureReviewView: View {
         }
         .background(T3Colors.background)
         .t3ToolTitle("Review", subtitle: review == nil ? nil : scopeSubtitle)
-        .searchable(text: $filterText, prompt: "Filter files")
+        .t3Searchable(text: $filterText, prompt: Text("Filter files"))
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
