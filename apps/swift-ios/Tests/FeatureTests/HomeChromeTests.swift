@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import XCTest
 
 @testable import T3Code
@@ -37,6 +38,40 @@ final class HomeChromeTests: XCTestCase {
             supportsSnooze: supportsSnooze,
             workInboxRole: workInboxRole,
             archiveBlockedByLiveRun: archiveBlockedByLiveRun
+        )
+    }
+
+    // MARK: - Tab bar
+
+    func testAThreadHidesTheTabBarOnIPhone() {
+        XCTAssertEqual(
+            HomeTabBar.visibility(isCompact: true, showsThread: true, isSelecting: false),
+            .hidden
+        )
+    }
+
+    func testLeavingAThreadAsksForTheTabBarBack() {
+        XCTAssertEqual(
+            HomeTabBar.visibility(isCompact: true, showsThread: false, isSelecting: false),
+            .visible
+        )
+    }
+
+    func testAThreadKeepsTheTabBarOnIPad() {
+        XCTAssertEqual(
+            HomeTabBar.visibility(isCompact: false, showsThread: true, isSelecting: false),
+            .automatic
+        )
+    }
+
+    func testSelectingHidesTheTabBarAtEveryWidth() {
+        XCTAssertEqual(
+            HomeTabBar.visibility(isCompact: true, showsThread: false, isSelecting: true),
+            .hidden
+        )
+        XCTAssertEqual(
+            HomeTabBar.visibility(isCompact: false, showsThread: false, isSelecting: true),
+            .hidden
         )
     }
 
