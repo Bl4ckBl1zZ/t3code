@@ -96,6 +96,11 @@ On iOS, swipe a Home row from the left to pin or snooze it, or from the right to
 it. Delete asks for confirmation. A thread that is still running can't be archived; its menu says
 why.
 
+On iOS, unpinning, settling, snoozing, and archiving a thread show a notice at the bottom of Home
+with **Undo** for five seconds. Several of the same action in a row, such as a batch settle, undo
+together. Undo restores the thread's previous state, including its pinned position. Shaking the
+device, or pressing ⌘Z on an iPad keyboard, triggers the same Undo.
+
 Tap the magnifying glass on Home to search. Choose **Code**, **Work** or **Chat** under the search
 field to change what you search; it starts on the tab you are in. Home search also matches message
 content on connected environments. Title, project and pull request matches come first; message

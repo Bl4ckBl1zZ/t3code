@@ -70,6 +70,7 @@ function buildClaudeAutoCompactDescriptor() {
 // These models have a native 1M window; retain their bare SDK identifiers.
 const NATIVE_1M_MODELS = new Set([
   "claude-fable-5",
+  "claude-opus-5-5",
   "claude-opus-5",
   "claude-opus-4-8",
   "claude-opus-4-7",

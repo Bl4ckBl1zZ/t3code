@@ -45,10 +45,10 @@ public struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
-            .searchable(
+            .t3Searchable(
                 text: $query,
                 placement: .navigationBarDrawer(displayMode: .always),
-                prompt: "Search"
+                prompt: Text("Search")
             )
             .t3SheetToolbar(.close)
             .navigationDestination(for: SettingsRoute.self) { route in

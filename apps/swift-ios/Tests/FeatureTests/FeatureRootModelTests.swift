@@ -102,6 +102,65 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func undoingASettleReopensAndRepinsInPlace() async {
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(threads: [
+            FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread", pinnedAt: .now, pinOrderKey: "a0"),
+        ])
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        await model.setSettled("thread-1", settled: true)
+        #expect(model.threadUndo.notice == .init(action: .settled, count: 1))
+
+        #expect(await model.threadUndo.undoLatest())
+        // V2 keeps a settled thread's snooze, so undo never re-snoozes.
+        #expect(client.lifecycleCalls == ["settle:true", "settle:false", "pin:true:a0"])
+        #expect(model.threadUndo.notice == nil)
+        #expect(await model.threadUndo.undoLatest() == false)
+    }
+
+    @Test
+    func undoingAnUnpinRestoresTheSlotAndSnoozingExpiresIt() async {
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(threads: [
+            FeatureThread(id: "thread-1", projectID: "project-1", title: "One", pinnedAt: .now, pinOrderKey: "a0"),
+            FeatureThread(id: "thread-2", projectID: "project-1", title: "Two", pinnedAt: .now, pinOrderKey: "a1"),
+        ])
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        await model.setPinned("thread-1", pinned: false)
+        await model.setPinned("thread-2", pinned: false)
+        #expect(model.threadUndo.notice == .init(action: .unpinned, count: 2))
+
+        // The server refuses to pin a snoozed thread, so its unpin undo goes.
+        await model.setSnoozed("thread-2", until: .now.addingTimeInterval(3600))
+        #expect(model.threadUndo.notice == .init(action: .snoozed, count: 1))
+
+        await model.threadUndo.undoLatest()
+        #expect(model.threadUndo.notice == .init(action: .unpinned, count: 1))
+        await model.threadUndo.undoLatest()
+        #expect(client.lifecycleCalls == [
+            "pin:false:-", "pin:false:-", "snooze:true", "snooze:false", "pin:true:a0",
+        ])
+    }
+
+    @Test
+    func aFailedActionOffersNoUndo() async {
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(threads: [
+            FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread"),
+        ])
+        client.lifecycleError = FeatureCapabilityUnavailable("Archiving")
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        #expect(await model.setArchived("thread-1", archived: true) == false)
+        #expect(model.threadUndo.notice == nil)
+    }
+
+    @Test
     func disconnectEndsConnectionManagement() async {
         let client = FeatureClientStub()
         client.snapshot = FeatureSnapshot(
@@ -1566,7 +1625,25 @@ private final class FeatureClientStub: FeatureClient {
     }
 
     func renameThread(id: String, title: String) async throws {}
-    func setThreadArchived(id: String, archived: Bool) async throws {}
+    /// Lifecycle commands in the order they were sent, e.g. `pin:true:a0`.
+    var lifecycleCalls: [String] = []
+    var lifecycleError: (any Error)?
+    func setThreadArchived(id: String, archived: Bool) async throws {
+        if let lifecycleError { throw lifecycleError }
+        lifecycleCalls.append("archive:\(archived)")
+    }
+    func setThreadSettled(id: String, settled: Bool) async throws {
+        if let lifecycleError { throw lifecycleError }
+        lifecycleCalls.append("settle:\(settled)")
+    }
+    func setThreadSnoozed(id: String, until: Date?) async throws {
+        if let lifecycleError { throw lifecycleError }
+        lifecycleCalls.append("snooze:\(until != nil)")
+    }
+    func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws {
+        if let lifecycleError { throw lifecycleError }
+        lifecycleCalls.append("pin:\(pinned):\(orderKey ?? "-")")
+    }
     var deleteError: (any Error)?
     func deleteThread(id: String) async throws { if let deleteError { throw deleteError } }
 

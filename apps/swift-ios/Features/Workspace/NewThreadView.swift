@@ -1205,7 +1205,7 @@ private struct NewTaskBranchPicker: View {
             }
             .navigationTitle("Base Branch")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, prompt: "Search branches")
+            .t3Searchable(text: $query, prompt: Text("Search branches"))
             .t3SheetToolbar(.close)
             .t3NavigationChrome()
         }

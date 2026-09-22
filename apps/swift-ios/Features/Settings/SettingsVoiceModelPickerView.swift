@@ -46,13 +46,11 @@ public struct SettingsVoiceModelPickerView: View {
         content
             .navigationTitle("Model")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(
+            .t3Searchable(
                 text: $query,
                 placement: .navigationBarDrawer(displayMode: .always),
-                prompt: "Search Models"
+                prompt: Text("Search Models")
             )
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
             .task { await load() }
     }
 

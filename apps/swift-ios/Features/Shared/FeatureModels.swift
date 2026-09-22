@@ -254,6 +254,9 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
     public var pinnedAt: Date?
+    /// Where the thread sits in the user-arranged pinned run, as the web
+    /// client orders it. Kept so undoing an unpin restores the same slot.
+    public var pinOrderKey: String?
     public var supportsPinning: Bool?
     public var activeOrderKey: String?
     public var supportsActiveOrder: Bool?
@@ -342,6 +345,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         snoozedUntil: Date? = nil,
         snoozedAt: Date? = nil,
         pinnedAt: Date? = nil,
+        pinOrderKey: String? = nil,
         supportsPinning: Bool? = nil,
         activeOrderKey: String? = nil,
         supportsActiveOrder: Bool? = nil,
@@ -395,6 +399,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.snoozedUntil = snoozedUntil
         self.snoozedAt = snoozedAt
         self.pinnedAt = pinnedAt
+        self.pinOrderKey = pinOrderKey
         self.supportsPinning = supportsPinning
         self.activeOrderKey = activeOrderKey
         self.supportsActiveOrder = supportsActiveOrder

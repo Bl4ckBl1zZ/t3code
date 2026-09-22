@@ -244,9 +244,16 @@ final class CoreContractTests: XCTestCase {
         XCTAssertEqual(pin["pinned"], .bool(true))
         XCTAssertNil(pin["title"])
 
-        let unpin = OrchestrationCommands.pin(threadID: "thread-1", pinned: false)
+        XCTAssertNil(pin["pinOrderKey"])
+
+        let repin = OrchestrationCommands.pin(threadID: "thread-1", pinned: true, orderKey: "a0")
+        XCTAssertEqual(repin["pinned"], .bool(true))
+        XCTAssertEqual(repin["pinOrderKey"]?.stringValue, "a0")
+
+        let unpin = OrchestrationCommands.pin(threadID: "thread-1", pinned: false, orderKey: "a0")
         XCTAssertEqual(unpin["type"]?.stringValue, "thread.metadata.update")
         XCTAssertEqual(unpin["pinned"], .bool(false))
+        XCTAssertNil(unpin["pinOrderKey"])
     }
 
     func testSendTurnDispatchesAMessageWithCreationProvenance() throws {

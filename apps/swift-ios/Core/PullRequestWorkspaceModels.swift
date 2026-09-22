@@ -33,13 +33,14 @@ public struct PullRequestListEntry: Codable, Equatable, Sendable, Identifiable {
     public let author: PullRequestActor?
     public let headBranch: String
     public let baseBranch: String
-    public let state: PullRequestState
-    public let isDraft: Bool
+    // Mutable so the list can write an action's answer onto its row.
+    public var state: PullRequestState
+    public var isDraft: Bool
     public let mergeability: PullRequestMergeability
     public var additions: Int
     public var deletions: Int
     public let createdAt: String
-    public let updatedAt: String
+    public var updatedAt: String
     public let viewerReviewRequested: Bool
     public let labels: [PullRequestLabel]
     public let reviewDecision: String?

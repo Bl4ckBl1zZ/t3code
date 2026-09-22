@@ -17,7 +17,8 @@ sheets use the system glass material.
 - **Settings.** The **T3** button at the top left opens Settings.
   - A red dot means an environment is unreachable, and an amber dot means one is reconnecting.
   - While a dot shows, the button opens **Settings → Servers**.
-- **Search.** Tap the magnifying glass, or press `Cmd+F`.
+- **Search.** Tap the magnifying glass, or press `Cmd+F`. Search fields throughout the app don't
+  autocorrect or capitalize, so names, branches and paths stay as you type them.
 - **More.** The **⋯** menu holds:
   - the project filter and **Change Project Icon…**;
   - **Select Threads** and **Arrange Threads**;

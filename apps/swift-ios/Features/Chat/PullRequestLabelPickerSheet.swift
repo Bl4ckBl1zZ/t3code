@@ -76,7 +76,7 @@ struct PullRequestLabelPickerSheet: View {
         .navigationTitle("Labels")
         .navigationBarTitleDisplayMode(.inline)
         .t3NavigationChrome()
-        .searchable(text: $query, prompt: "Search Labels")
+        .t3Searchable(text: $query, prompt: Text("Search Labels"))
         .task { await load() }
         .onDisappear {
             if didChange { Task { await changed() } }

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Lucide git-pull-request (ISC, see Resources/Lucide-LICENSE.txt), outlined as a custom SF Symbol. -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3300" height="2200">
+ <!--glyph: "", point size: 100.0, font version: "", template writer version: "138.0.0"-->
+ <g id="Guides">
+  <line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696" y2="696"/>
+  <line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+  <line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126" y2="1126"/>
+  <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+  <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556" y2="1556"/>
+  <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+  <line id="left-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1500" x2="1500" y1="1030.79" y2="1150.12"/>
+  <line id="right-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1588" x2="1588" y1="1030.79" y2="1150.12"/>
+ </g>
+ <g id="Symbols">
+  <g id="Regular-M" transform="matrix(1 0 0 1 0 0)">
+   <path d="M1568 1098.77 C1576.837 1098.77 1584 1105.933 1584 1114.77 C1584 1123.607 1576.837 1130.77 1568 1130.77 C1559.163 1130.77 1552 1123.607 1552 1114.77 C1552 1105.933 1559.163 1098.77 1568 1098.77 Z M1568 1106.77 C1563.582 1106.77 1560 1110.352 1560 1114.77 C1560 1119.188 1563.582 1122.77 1568 1122.77 C1572.418 1122.77 1576 1119.188 1576 1114.77 C1576 1110.352 1572.418 1106.77 1568 1106.77 Z M1520 1050.77 C1528.837 1050.77 1536 1057.933 1536 1066.77 C1536 1075.607 1528.837 1082.77 1520 1082.77 C1511.163 1082.77 1504 1075.607 1504 1066.77 C1504 1057.933 1511.163 1050.77 1520 1050.77 Z M1520 1058.77 C1515.582 1058.77 1512 1062.352 1512 1066.77 C1512 1071.188 1515.582 1074.77 1520 1074.77 C1524.418 1074.77 1528 1071.188 1528 1066.77 C1528 1062.352 1524.418 1058.77 1520 1058.77 Z M1516 1078.77 L1524 1078.77 L1524 1126.77 C1524 1128.979 1522.209 1130.77 1520 1130.77 C1517.791 1130.77 1516 1128.979 1516 1126.77 Z M1548 1062.77 L1560 1062.77 C1566.627 1062.77 1572 1068.143 1572 1074.77 L1572 1102.77 C1572 1104.979 1570.209 1106.77 1568 1106.77 C1565.791 1106.77 1564 1104.979 1564 1102.77 L1564 1074.77 C1564 1072.561 1562.209 1070.77 1560 1070.77 L1548 1070.77 C1545.791 1070.77 1544 1068.979 1544 1066.77 C1544 1064.561 1545.791 1062.77 1548 1062.77 Z"/>
+  </g>
+ </g>
+</svg>

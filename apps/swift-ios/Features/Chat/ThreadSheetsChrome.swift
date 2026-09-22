@@ -73,7 +73,7 @@ struct PullRequestStateBadge: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .imageScale(.small)
             Text(label)
                 .lineLimit(1)

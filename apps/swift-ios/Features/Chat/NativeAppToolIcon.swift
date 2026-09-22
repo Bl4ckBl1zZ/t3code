@@ -53,9 +53,9 @@ struct NativeAppToolIcon: View {
             if resolved?.key == requestKey, let url = resolved?.url {
                 AsyncImage(url: url) { phase in
                     if let image = phase.image { image.resizable().scaledToFit() }
-                    else { Image(systemName: fallback) }
+                    else { Image(symbol: fallback) }
                 }
-            } else { Image(systemName: fallback) }
+            } else { Image(symbol: fallback) }
         }
         .frame(width: 16, height: 16)
         .accessibilityHidden(true)

@@ -1,6 +1,6 @@
 import Foundation
 
-struct FeaturePullRequestProjectScope: Equatable, Sendable {
+struct FeaturePullRequestProjectScope: Hashable, Sendable {
     let projectID: String
     let host: String
     let repository: String
@@ -16,6 +16,10 @@ protocol FeatureProjectPullRequestManaging: AnyObject, Sendable {
     func setProjectPullRequestLabels(scope: FeaturePullRequestProjectScope, number: Int, labels: [String], applied: Bool) async throws
     func projectPullRequestStack(scope: FeaturePullRequestProjectScope, number: Int) async throws -> PullRequestStack?
     func runProjectPullRequestStackAction(scope: FeaturePullRequestProjectScope, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws
+}
+
+enum FeaturePullRequestActionPhase {
+    case sent, done, failed
 }
 
 /// The same detail, label and reviewed-stack screens work from a thread or a
@@ -64,7 +68,13 @@ struct FeaturePullRequestAccess {
         runStackAction = { try await client.runPullRequestStackAction(threadID: threadID, number: $0, stack: $1, action: $2, mergeMethod: $3) }
     }
 
-    init(manager: any FeatureProjectPullRequestManaging, scope: FeaturePullRequestProjectScope) {
+    /// `onAction` hears each action as it is sent and once the host answers,
+    /// so the pull request list can write the answer onto its row at once.
+    init(
+        manager: any FeatureProjectPullRequestManaging,
+        scope: FeaturePullRequestProjectScope,
+        onAction: (@MainActor (String, FeaturePullRequestActionPhase) -> Void)? = nil
+    ) {
         self.scope = .project(scope)
         if let cache = manager as? any FeaturePullRequestCacheInvalidating {
             invalidate = { try await cache.invalidatePullRequest(scope: .project(scope), number: $0) }
@@ -74,7 +84,16 @@ struct FeaturePullRequestAccess {
             reviewers = { FeaturePullRequestReviewerAccess(writer: reviewer, scope: .project(scope), number: $0, expectedURL: $1) }
             react = { try await reviewer.setPullRequestReaction(scope: .project(scope), number: $0, expectedURL: $1, request: $2) }
             editing = { FeaturePullRequestEditingAccess(writer: reviewer, scope: .project(scope), number: $0, expectedURL: $1) }
-            runAction = { try await reviewer.runPullRequestAction(scope: .project(scope), number: $0, expectedURL: $1, request: $2) }
+            runAction = { number, url, request in
+                await onAction?(request.action, .sent)
+                do {
+                    try await reviewer.runPullRequestAction(scope: .project(scope), number: number, expectedURL: url, request: request)
+                } catch {
+                    await onAction?(request.action, .failed)
+                    throw error
+                }
+                await onAction?(request.action, .done)
+            }
             threads = { FeaturePullRequestThreadAccess(writer: reviewer, scope: .project(scope), number: $0, expectedURL: $1) }
             submitReview = { try await reviewer.submitPullRequestReview(scope: .project(scope), number: $0, expectedURL: $1, submission: $2) }
         } else { submitReview = nil; threads = nil; runAction = nil; editing = nil; react = nil; reviewers = nil }
