@@ -2974,6 +2974,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(subagentEvents().at(-1)?.subagent.result, FIRST_SUMMARY);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
 
+        const firstStartedAt = subagentEvents().at(-1)?.subagent.startedAt;
+        yield* TestClock.adjust("30 seconds");
+
         // A user turn nudges the completed subagent via SendMessage; the
         // resume task_started re-opens the row across turn contexts (the new
         // turn's maps are empty, so this exercises the session registry).
@@ -3043,6 +3046,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         const reopened = subagentEvents().at(-1)?.subagent;
         assert.isNull(reopened?.result);
+        assert.isNull(reopened?.completedAt);
+        assert.equal(
+          DateTime.toEpochMillis(reopened!.startedAt!) - DateTime.toEpochMillis(firstStartedAt!),
+          30_000,
+        );
         // The reopen re-attributes the subagent to the resuming run:
         // RunExecutionService routes parent-thread events by runId, and the
         // launch run's ingestion fiber stops once its child subagents

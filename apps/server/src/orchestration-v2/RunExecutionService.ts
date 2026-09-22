@@ -1,5 +1,6 @@
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import {
+  isOrchestrationV2WorkActive,
   CommandId,
   type EventId,
   type ModelSelection,
@@ -75,13 +76,8 @@ function isTerminalProviderTurnStatus(status: OrchestrationV2ProviderTurn["statu
   );
 }
 
-function isTerminalSubagentStatus(status: OrchestrationV2Subagent["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "interrupted" ||
-    status === "failed" ||
-    status === "cancelled"
-  );
+function isSettledSubagentStatus(status: OrchestrationV2Subagent["status"]): boolean {
+  return !isOrchestrationV2WorkActive(status);
 }
 
 // Turn item types whose lifecycle can outlive the root turn (background
@@ -94,13 +90,8 @@ const backgroundCapableTurnItemTypes: ReadonlySet<OrchestrationV2TurnItem["type"
   "subagent",
 ]);
 
-function isTerminalTurnItemStatus(status: OrchestrationV2TurnItem["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "interrupted" ||
-    status === "failed" ||
-    status === "cancelled"
-  );
+function isSettledTurnItemStatus(status: OrchestrationV2TurnItem["status"]): boolean {
+  return !isOrchestrationV2WorkActive(status);
 }
 
 type SubagentTurnItem = Extract<OrchestrationV2TurnItem, { readonly type: "subagent" }>;
@@ -179,7 +170,7 @@ export function cascadeTerminalizeRunOwnedSubagents(input: {
     ]);
     for (const key of keys) {
       const subagent = input.open.subagents.get(key);
-      if (subagent !== undefined && !isTerminalSubagentStatus(subagent.status)) {
+      if (subagent !== undefined && !isSettledSubagentStatus(subagent.status)) {
         events.push({
           id: yield* input.allocateEventId(),
           type: "subagent.updated",
@@ -223,7 +214,7 @@ export function cascadeTerminalizeRunOwnedSubagents(input: {
       if (
         turnItem !== undefined &&
         turnItem.runId === input.run.id &&
-        !isTerminalTurnItemStatus(turnItem.status)
+        !isSettledTurnItemStatus(turnItem.status)
       ) {
         events.push({
           id: yield* input.allocateEventId(),
@@ -243,7 +234,7 @@ export function cascadeTerminalizeRunOwnedSubagents(input: {
       }
     }
     for (const turnItem of input.open.childTurnItems.values()) {
-      if (!childThreadIds.has(turnItem.threadId) || isTerminalTurnItemStatus(turnItem.status)) {
+      if (!childThreadIds.has(turnItem.threadId) || isSettledTurnItemStatus(turnItem.status)) {
         continue;
       }
       events.push({
@@ -899,7 +890,7 @@ export const layer: Layer.Layer<
                 if (belongsToRootRun || belongsToOwnedChildThread) {
                   yield* Ref.update(activeChildSubagents, (current) => {
                     const next = new Set(current);
-                    if (isTerminalSubagentStatus(event.subagent.status)) {
+                    if (isSettledSubagentStatus(event.subagent.status)) {
                       next.delete(event.subagent.id);
                     } else {
                       next.add(event.subagent.id);
@@ -915,7 +906,7 @@ export const layer: Layer.Layer<
                   yield* Ref.update(openRunOwnedSubagents, (current) => {
                     const withLink = withLinkedChildThreadId(current, event.subagent.childThreadId);
                     const subagents = new Map(withLink.subagents);
-                    if (isTerminalSubagentStatus(event.subagent.status)) {
+                    if (isSettledSubagentStatus(event.subagent.status)) {
                       subagents.delete(event.subagent.id);
                     } else {
                       subagents.set(event.subagent.id, event.subagent);
@@ -954,7 +945,7 @@ export const layer: Layer.Layer<
                 ) {
                   yield* Ref.update(activeBackgroundTurnItems, (current) => {
                     const next = new Set(current);
-                    if (isTerminalTurnItemStatus(event.turnItem.status)) {
+                    if (isSettledTurnItemStatus(event.turnItem.status)) {
                       next.delete(event.turnItem.id);
                     } else {
                       next.add(event.turnItem.id);
@@ -965,7 +956,7 @@ export const layer: Layer.Layer<
                 if (belongsToOwnedChildThread && deliverable) {
                   yield* Ref.update(openRunOwnedSubagents, (current) => {
                     const childTurnItems = new Map(current.childTurnItems);
-                    if (isTerminalTurnItemStatus(event.turnItem.status)) {
+                    if (isSettledTurnItemStatus(event.turnItem.status)) {
                       childTurnItems.delete(event.turnItem.id);
                     } else {
                       childTurnItems.set(event.turnItem.id, event.turnItem);
@@ -978,7 +969,7 @@ export const layer: Layer.Layer<
                   yield* Ref.update(openRunOwnedSubagents, (current) => {
                     const withLink = withLinkedChildThreadId(current, subagentItem.childThreadId);
                     const turnItems = new Map(withLink.turnItems);
-                    if (isTerminalTurnItemStatus(subagentItem.status)) {
+                    if (isSettledTurnItemStatus(subagentItem.status)) {
                       turnItems.delete(subagentItem.subagentId);
                     } else {
                       turnItems.set(subagentItem.subagentId, subagentItem);

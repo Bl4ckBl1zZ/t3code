@@ -3380,7 +3380,8 @@ export function makeClaudeAdapterV2(
                     usageReportingForDriver(CLAUDE_PROVIDER),
                   ),
                 }),
-            completedAt: input.status === "running" ? null : now,
+            ...(isReopen ? { startedAt: now } : {}),
+            completedAt: input.status === "running" ? null : (priorTask?.completedAt ?? now),
             updatedAt: now,
           } satisfies OrchestrationV2Subagent;
           const subagent = {
@@ -3474,7 +3475,7 @@ export function makeClaudeAdapterV2(
                 runtimeRequestId: null,
                 checkpointScopeId: null,
                 startedAt: task.startedAt,
-                completedAt: input.status === "running" ? null : now,
+                completedAt: task.completedAt,
               },
             });
             yield* emitProviderEvent({
@@ -3495,7 +3496,7 @@ export function makeClaudeAdapterV2(
                 runtimeRequestId: null,
                 checkpointScopeId: null,
                 startedAt: task.startedAt,
-                completedAt: input.status === "running" ? null : now,
+                completedAt: task.completedAt,
               },
             });
           }
@@ -4145,6 +4146,7 @@ export function makeClaudeAdapterV2(
                   ...priorTask,
                   status: "running",
                   result: null,
+                  startedAt: now,
                   completedAt: null,
                   updatedAt: now,
                 },

@@ -2105,7 +2105,7 @@ function childThreadCreatedEvent(ids: BackgroundScenarioIds): ProviderAdapterV2E
 
 function childBackgroundTurnItemEvent(
   ids: BackgroundScenarioIds,
-  status: "running" | "completed",
+  status: "running" | "completed" | "idle",
   ordinal: number,
 ): ProviderAdapterV2Event {
   return {
@@ -2126,7 +2126,7 @@ function childBackgroundTurnItemEvent(
 function backgroundTurnItemEvent(
   ids: BackgroundScenarioIds,
   type: "command_execution" | "dynamic_tool" | "subagent",
-  status: "running" | "completed",
+  status: "running" | "completed" | "idle",
   ordinal: number,
   itemId?: TurnItemId,
 ): ProviderAdapterV2Event {
@@ -2147,7 +2147,7 @@ function backgroundTurnItemEvent(
 
 function subagentEvent(
   ids: BackgroundScenarioIds,
-  status: "running" | "completed",
+  status: "running" | "completed" | "idle",
 ): ProviderAdapterV2Event {
   return {
     type: "subagent.updated",
@@ -2351,6 +2351,7 @@ function rootTerminalEvent(
 function runBackgroundItemScenario(
   key: string,
   makeEvents: (ids: BackgroundScenarioIds) => ReadonlyArray<ProviderAdapterV2Event>,
+  options?: { readonly keepEventStreamOpen?: boolean },
 ) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(key);
@@ -2409,9 +2410,15 @@ function runBackgroundItemScenario(
         providerSessionId: ProviderSessionId.make(`session:${key}`),
         session: {
           events: Stream.empty,
-          subscribeEvents: Effect.succeed({
-            events: Stream.fromIterable(makeEvents(ids)),
-            close: Deferred.succeed(ingestionDone, undefined),
+          subscribeEvents: Effect.sync(() => {
+            const events = Stream.fromIterable(makeEvents(ids));
+            return {
+              events:
+                options?.keepEventStreamOpen === true
+                  ? events.pipe(Stream.concat(Stream.never))
+                  : events,
+              close: Deferred.succeed(ingestionDone, undefined),
+            };
           }),
           startTurn: () => Effect.void,
         } as unknown as ProviderAdapterV2SessionRuntime,
@@ -2462,3 +2469,26 @@ function runBackgroundItemScenario(
     return yield* Ref.get(observed);
   });
 }
+
+it.effect("releases ingestion after idle subagent rows and items settle", () =>
+  Effect.gen(function* () {
+    const observed = yield* runBackgroundItemScenario(
+      "subagent-idle",
+      (ids) => [
+        subagentEvent(ids, "running"),
+        backgroundTurnItemEvent(ids, "subagent", "running", 1),
+        subagentEvent(ids, "idle"),
+        backgroundTurnItemEvent(ids, "subagent", "idle", 2),
+        rootTerminalEvent(ids, "completed"),
+      ],
+      { keepEventStreamOpen: true },
+    );
+    assert.deepEqual(observed, [
+      "subagent:running",
+      "turn_item:running",
+      "subagent:idle",
+      "turn_item:idle",
+      "root-finalized",
+    ]);
+  }),
+);

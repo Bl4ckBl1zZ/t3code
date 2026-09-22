@@ -167,6 +167,7 @@ it("reports a finished delegated turn as still working while it owns live childr
   assert.equal(progressOf({}), "result_available");
   assert.equal(progressOf({ subagents: [{ status: "running" }] }), "waiting_for_children");
   assert.equal(progressOf({ subagents: [{ status: "completed" }] }), "result_available");
+  assert.equal(progressOf({ subagents: [{ status: "idle" }] }), "result_available");
 
   // A published child result still owes the parent a wake until it is consumed.
   for (const state of ["pending", "claimed"] as const) {
