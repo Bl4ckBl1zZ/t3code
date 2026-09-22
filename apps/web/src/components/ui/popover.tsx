@@ -16,11 +16,21 @@ function PopoverTrigger({ className, children, ...props }: PopoverPrimitive.Trig
   );
 }
 
+// Popovers hold prose and forms, so a width is fixed rather than a minimum,
+// and every width is capped to the viewport.
+const popoverPopupWidthClassName = {
+  auto: "",
+  sm: "w-64",
+  md: "w-80",
+  lg: "w-96",
+} as const;
+
 function PopoverPopup({
   children,
   className,
   positionerClassName,
   viewportClassName,
+  width = "auto",
   side = "bottom",
   align = "center",
   sideOffset = 4,
@@ -47,6 +57,7 @@ function PopoverPopup({
    */
   bare?: boolean;
   anchor?: PopoverPrimitive.Positioner.Props["anchor"];
+  width?: keyof typeof popoverPopupWidthClassName;
 }) {
   return (
     <PopoverPrimitive.Portal>
@@ -73,6 +84,7 @@ function PopoverPopup({
             !tooltipStyle &&
               !bare &&
               "shadow-[0_16px_40px_-18px_rgb(0_0_0/55%)] dark:shadow-[0_18px_44px_-18px_rgb(0_0_0/80%)]",
+            width !== "auto" && ["max-w-[calc(100vw-2rem)]", popoverPopupWidthClassName[width]],
             className,
           )}
           data-slot="popover-popup"
@@ -103,7 +115,7 @@ function PopoverClose({ ...props }: PopoverPrimitive.Close.Props) {
 function PopoverTitle({ className, ...props }: PopoverPrimitive.Title.Props) {
   return (
     <PopoverPrimitive.Title
-      className={cn("font-semibold text-lg leading-none", className)}
+      className={cn("font-semibold text-sm leading-none", className)}
       data-slot="popover-title"
       {...props}
     />

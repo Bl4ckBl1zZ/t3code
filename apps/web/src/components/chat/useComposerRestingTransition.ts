@@ -1,7 +1,6 @@
 import { useRef, useCallback, useLayoutEffect, useEffect, type RefObject } from "react";
 import { shouldAnimateComposerRestingTransition } from "../composerFooterLayout";
 
-const COMPOSER_RESTING_TRANSITION_DURATION_MS = 280;
 const COMPOSER_RESTING_TRANSITION_CLEANUP_BUFFER_MS = 50;
 const COMPOSER_RESTING_TRANSITION_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 const COMPOSER_RESTING_CONTROLS_ARRIVAL_DRIFT_PX = 4;
@@ -12,9 +11,12 @@ export function useComposerRestingTransition(
   restingControlsRef: RefObject<HTMLDivElement | null>,
   onOverlayHeightChange: (height: number) => void,
   animationEnabled: boolean,
+  animationDurationMs: number,
 ) {
   const enabledRef = useRef(animationEnabled);
   enabledRef.current = animationEnabled;
+  const durationMsRef = useRef(animationDurationMs);
+  durationMsRef.current = animationDurationMs;
   const elementRef = useRef<HTMLDivElement>(null);
   const isCollapsedRef = useRef(isCollapsed);
   const previousCollapsedRef = useRef(isCollapsed);
@@ -134,7 +136,6 @@ export function useComposerRestingTransition(
       const previousHeight = interruptedHeight ?? previousHeightRef.current;
       const targetChanged =
         interruptedTargetHeight === null || Math.abs(interruptedTargetHeight - nextHeight) >= 0.5;
-      const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       const shouldAnimate = shouldAnimateComposerRestingTransition({
         hasCompletedInitialLayout: hasCompletedInitialLayoutRef.current,
         stateChanged,
@@ -145,18 +146,15 @@ export function useComposerRestingTransition(
         shouldAnimate &&
         enabledRef.current &&
         document.visibilityState !== "hidden" &&
-        !prefersReducedMotion &&
         previousHeight !== null &&
         Math.abs(previousHeight - nextHeight) >= 0.5
       ) {
         const remainingDuration =
           typeof interruptedDuration === "number" && interruptedCurrentTime !== null
             ? Math.max(1, interruptedDuration - interruptedCurrentTime)
-            : COMPOSER_RESTING_TRANSITION_DURATION_MS;
+            : durationMsRef.current;
         const duration =
-          interruptedHeight !== null && !targetChanged
-            ? remainingDuration
-            : COMPOSER_RESTING_TRANSITION_DURATION_MS;
+          interruptedHeight !== null && !targetChanged ? remainingDuration : durationMsRef.current;
         styledElementRef.current = element;
         element.style.overflow = "clip";
         surface.style.height = "100%";

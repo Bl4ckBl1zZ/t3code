@@ -143,7 +143,7 @@ export function PullRequestStackControl({
           <LayersIcon className="size-3.5" />
           Stack
         </MenuTrigger>
-        <MenuPopup align="end" className="w-80 max-w-[calc(100vw-2rem)]">
+        <MenuPopup align="end">
           {stack ? (
             <>
               <PullRequestStackHeader

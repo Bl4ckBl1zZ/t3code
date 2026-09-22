@@ -501,10 +501,7 @@ function ProcessTreeName({
         <TooltipTrigger
           render={<span className="min-w-0 truncate font-medium text-foreground">{name}</span>}
         />
-        <TooltipPopup
-          side="top"
-          className="max-w-[min(520px,calc(100vw-2rem))] whitespace-normal break-words text-left font-mono text-[11px]"
-        >
+        <TooltipPopup side="top" variant="code">
           {process.command || process.name}
         </TooltipPopup>
       </Tooltip>
@@ -736,10 +733,7 @@ function HistoryProcessTable({
                       </span>
                     }
                   />
-                  <TooltipPopup
-                    side="top"
-                    className="max-w-[min(520px,calc(100vw-2rem))] whitespace-normal break-words text-left font-mono text-[11px]"
-                  >
+                  <TooltipPopup side="top" variant="code">
                     {process.command || process.name}
                   </TooltipPopup>
                 </Tooltip>
@@ -980,7 +974,7 @@ export function ResourceTelemetryDiagnostics() {
                     onClick={telemetry.refresh}
                     aria-label="Refresh resource telemetry"
                   >
-                    <RefreshIcon className="size-3" refreshing={telemetry.isPending} />
+                    <RefreshIcon size="xs" refreshing={telemetry.isPending} />
                   </Button>
                 }
               />
@@ -1091,7 +1085,7 @@ export function ResourceTelemetryDiagnostics() {
         headerAction={
           collectorNeedsRetry ? (
             <Button size="xs" variant="outline" disabled={isRetrying} onClick={retryCollector}>
-              <RefreshIcon className="size-3" refreshing={isRetrying} />
+              <RefreshIcon size="xs" refreshing={isRetrying} />
               Retry monitor
             </Button>
           ) : null
@@ -1229,7 +1223,7 @@ export function ResourceTelemetryDiagnostics() {
               onClick={history.refresh}
               aria-label="Refresh resource history"
             >
-              <RefreshIcon className="size-3" refreshing={history.isPending} />
+              <RefreshIcon size="xs" refreshing={history.isPending} />
             </Button>
           </div>
         }

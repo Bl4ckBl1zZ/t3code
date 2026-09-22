@@ -46,7 +46,7 @@ function HostedStaticOnboardingState() {
   const cloudEnabled = hasCloudPublicConfig();
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
         <WorkspacePageHeader className="border-b border-border">
           <div className="flex items-center gap-2">
@@ -62,14 +62,12 @@ function HostedStaticOnboardingState() {
               <div className="mx-auto mb-5 flex size-11 items-center justify-center rounded-xl border border-border/70 bg-background/70 text-muted-foreground">
                 <LinkIcon className="size-5" />
               </div>
-              <EmptyTitle className="text-foreground text-xl">
-                Connect to a computer running T3 Code
-              </EmptyTitle>
-              <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground/78">
+              <EmptyTitle>Connect to a computer running T3 Code</EmptyTitle>
+              <EmptyDescription>
                 This browser connects to T3 Code running on your computer or a server. Start the T3
                 Code desktop app or command-line server on that machine and keep it running.
               </EmptyDescription>
-              <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground/78">
+              <EmptyDescription>
                 {cloudEnabled
                   ? "Enable T3 Connect on that machine, then open Connections here to sign in with the same account. You can also add the machine using a pairing link."
                   : "Open Connections and add that machine using its pairing link. This browser must be able to reach it."}

@@ -45,7 +45,7 @@ export const SubagentsStatusBadge = memo(function SubagentsStatusBadge(props: {
         </span>
         <span className="tabular-nums">{label}</span>
       </TooltipTrigger>
-      <TooltipPopup side="top" className="max-w-72">
+      <TooltipPopup side="top">
         <ul className="m-0 list-none space-y-1 p-0">
           {subagents.map((item) => (
             <li key={item.id} className="flex min-w-0 items-center gap-1.5">

@@ -39,7 +39,7 @@ export function TerminalContextInlineChip(props: TerminalContextInlineChipProps)
           </span>
         }
       />
-      <TooltipPopup side="top" className="max-w-80 whitespace-pre-wrap leading-tight">
+      <TooltipPopup side="top" className="whitespace-pre-wrap">
         {tooltipText}
       </TooltipPopup>
     </Tooltip>

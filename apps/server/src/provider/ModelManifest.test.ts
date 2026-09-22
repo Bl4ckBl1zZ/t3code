@@ -28,17 +28,15 @@ describe("isLegacyModel (bundled manifest)", () => {
   it("keeps current Codex models out of legacy models", () => {
     assert.deepStrictEqual(
       [
-        "gpt-5.6-luna",
-        "gpt-5.6-terra",
-        "gpt-5.6-sol",
+        "gpt-6-luna",
+        "gpt-6-sol",
         "gpt-daybreak-blue-latest",
         "gpt-daybreak-red-latest",
         "gpt-5.4",
       ].map((model) => [model, isLegacyModel(BUNDLED_MODEL_MANIFEST, CODEX, model)]),
       [
-        ["gpt-5.6-luna", false],
-        ["gpt-5.6-terra", false],
-        ["gpt-5.6-sol", false],
+        ["gpt-6-luna", false],
+        ["gpt-6-sol", false],
         ["gpt-daybreak-blue-latest", false],
         ["gpt-daybreak-red-latest", false],
         ["gpt-5.4", true],
@@ -96,23 +94,24 @@ describe("classifyModels", () => {
     );
   });
   it("flags non-current models, clears stale flags, and skips custom models", () => {
+    const manifest: ModelManifestData = {
+      version: 1,
+      currentModels: { codex: ["current-a", "current-b"] },
+    };
     const models = [
-      model({ slug: "gpt-5.6-sol" }),
+      model({ slug: "current-a" }),
       // Stale flag from a previous classification pass must be cleared.
-      model({ slug: "gpt-5.6-luna", isLegacy: true }),
-      model({ slug: "gpt-5.4" }),
+      model({ slug: "current-b", isLegacy: true }),
+      model({ slug: "old-model" }),
       // Custom models are user-defined and never reclassified.
       model({ slug: "my-own-model", isCustom: true }),
     ];
     assert.deepStrictEqual(
-      classifyModels(models, BUNDLED_MODEL_MANIFEST, CODEX).map((entry) => [
-        entry.slug,
-        entry.isLegacy ?? false,
-      ]),
+      classifyModels(models, manifest, CODEX).map((entry) => [entry.slug, entry.isLegacy ?? false]),
       [
-        ["gpt-5.6-sol", false],
-        ["gpt-5.6-luna", false],
-        ["gpt-5.4", true],
+        ["current-a", false],
+        ["current-b", false],
+        ["old-model", true],
         ["my-own-model", false],
       ],
     );
@@ -259,6 +258,84 @@ describe("applyManifestDefault", () => {
 });
 
 describe("ModelManifest service", () => {
+  it.live("explicit refresh bypasses fresh memory and disk caches", () => {
+    let fetchCount = 0;
+    const updated: ModelManifestData = {
+      ...REMOTE_MANIFEST,
+      currentModels: { codex: ["gpt-reloaded"] },
+    };
+    return Effect.gen(function* () {
+      const service = yield* make;
+      assert.deepStrictEqual(yield* service.refresh, REMOTE_MANIFEST);
+      assert.deepStrictEqual(yield* service.refresh, REMOTE_MANIFEST);
+      assert.strictEqual(fetchCount, 1);
+
+      const rebooted = yield* make;
+      assert.deepStrictEqual(yield* rebooted.refresh, REMOTE_MANIFEST);
+      assert.strictEqual(fetchCount, 1);
+      assert.deepStrictEqual(yield* rebooted.forceRefresh, updated);
+      assert.strictEqual(fetchCount, 2);
+      assert.deepStrictEqual(yield* rebooted.current, updated);
+      assert.deepStrictEqual(yield* (yield* make).current, updated);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        serviceLayers({
+          prefix: "model-manifest-force-refresh-test",
+          response: () => Response.json(fetchCount++ === 0 ? REMOTE_MANIFEST : updated),
+        }),
+      ),
+    );
+  });
+
+  it.live("explicit refresh retries immediately after failure and preserves last-good data", () => {
+    let fetchCount = 0;
+    return Effect.gen(function* () {
+      const service = yield* make;
+      assert.deepStrictEqual(yield* service.refresh, REMOTE_MANIFEST);
+      assert.deepStrictEqual(yield* service.forceRefresh, REMOTE_MANIFEST);
+      assert.deepStrictEqual(yield* service.current, REMOTE_MANIFEST);
+      assert.deepStrictEqual(yield* (yield* make).current, REMOTE_MANIFEST);
+      assert.strictEqual(fetchCount, 2);
+      assert.deepStrictEqual(yield* service.forceRefresh, REMOTE_MANIFEST);
+      assert.strictEqual(fetchCount, 3);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        serviceLayers({
+          prefix: "model-manifest-force-retry-test",
+          response: () =>
+            fetchCount++ === 1
+              ? new Response(null, { status: 503 })
+              : Response.json(REMOTE_MANIFEST),
+        }),
+      ),
+    );
+  });
+
+  it.live("explicit refresh bypasses the retry delay after an initial failure", () => {
+    let fetchCount = 0;
+    return Effect.gen(function* () {
+      const service = yield* make;
+      assert.deepStrictEqual(yield* service.refresh, BUNDLED_MODEL_MANIFEST);
+      assert.deepStrictEqual(yield* service.refresh, BUNDLED_MODEL_MANIFEST);
+      assert.strictEqual(fetchCount, 1);
+      assert.deepStrictEqual(yield* service.forceRefresh, REMOTE_MANIFEST);
+      assert.strictEqual(fetchCount, 2);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        serviceLayers({
+          prefix: "model-manifest-force-initial-retry-test",
+          response: () =>
+            fetchCount++ === 0
+              ? new Response(null, { status: 503 })
+              : Response.json(REMOTE_MANIFEST),
+        }),
+      ),
+    );
+  });
+
   it.effect("preserves the last-good remote cache when later payloads are invalid", () => {
     let responseIndex = 0;
     const responses = [REMOTE_CLAUDE_MANIFEST, ...INVALID_REMOTE_MANIFESTS];
@@ -376,6 +453,7 @@ describe("ModelManifest service", () => {
         ),
       );
       assert.deepStrictEqual(yield* service.refresh, BUNDLED_MODEL_MANIFEST);
+      assert.deepStrictEqual(yield* service.forceRefresh, BUNDLED_MODEL_MANIFEST);
       assert.strictEqual(fetchCount, 0);
     }).pipe(
       Effect.scoped,

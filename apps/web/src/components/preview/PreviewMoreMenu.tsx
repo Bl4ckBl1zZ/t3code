@@ -101,7 +101,7 @@ export function PreviewMoreMenu({
         </TooltipTrigger>
         <TooltipPopup>More</TooltipPopup>
       </Tooltip>
-      <MenuPopup align="end" sideOffset={6} className="min-w-56">
+      <MenuPopup align="end" sideOffset={6}>
         <MenuItem disabled>
           Profile:{" "}
           {profiles.find((profile) => profile.id === (profileId ?? "default"))?.name ??
@@ -134,7 +134,7 @@ export function PreviewMoreMenu({
         </MenuItem>
         <MenuSub>
           <MenuSubTrigger disabled={tabDisabled}>Appearance</MenuSubTrigger>
-          <MenuSubPopup className="min-w-32">
+          <MenuSubPopup>
             <MenuRadioGroup
               value={colorScheme}
               onValueChange={(value) => {

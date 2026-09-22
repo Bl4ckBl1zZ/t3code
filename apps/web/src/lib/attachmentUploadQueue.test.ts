@@ -1,9 +1,11 @@
 import { EnvironmentId } from "@t3tools/contracts";
+import { Atom, AsyncResult } from "effect/unstable/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { ComposerImageAttachment, ComposerAttachment } from "../composerDraftStore";
 
 const mocks = vi.hoisted(() => ({
+  connectionStateAtom: vi.fn(),
   createUploadUrl: Symbol("create-upload-url"),
   removeUpload: Symbol("remove-upload"),
   runAtomCommand: vi.fn(),
@@ -14,7 +16,14 @@ vi.mock("@t3tools/client-runtime/state/runtime", () => ({
   runAtomCommand: mocks.runAtomCommand,
 }));
 
-vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
+vi.mock("../rpc/atomRegistry", async () => {
+  const { AtomRegistry } = await import("effect/unstable/reactivity");
+  return { appAtomRegistry: AtomRegistry.make() };
+});
+
+vi.mock("../connection/catalog", () => ({
+  environmentCatalog: { stateAtom: mocks.connectionStateAtom },
+}));
 
 vi.mock("../state/attachments", () => ({
   attachmentEnvironment: {
@@ -37,6 +46,7 @@ import {
   startAttachmentUpload,
   useAttachmentUploadStore,
 } from "./attachmentUploadQueue";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 
 type ProgressListener = (event: {
   readonly lengthComputable: boolean;
@@ -110,8 +120,28 @@ function makeImage(id: string): ComposerImageAttachment {
   };
 }
 
+const connectionStates = Atom.family((_environmentId: EnvironmentId) =>
+  Atom.make(AsyncResult.success({ phase: "connected" })),
+);
+
+function setConnected(environmentId: EnvironmentId, connected: boolean) {
+  appAtomRegistry.set(
+    connectionStates(environmentId),
+    AsyncResult.success({ phase: connected ? "connected" : "backoff" }),
+  );
+}
+
+async function flushMicrotasks() {
+  for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("attachmentUploadQueue", () => {
   beforeEach(() => {
+    mocks.connectionStateAtom.mockImplementation(connectionStates);
+    setConnected(firstEnvironment, true);
+    setConnected(secondEnvironment, true);
     TestXmlHttpRequest.requests = [];
     mocks.runAtomCommand.mockReset();
     mocks.readPreparedConnection.mockReset();
@@ -147,6 +177,63 @@ describe("attachmentUploadQueue", () => {
       releaseAttachmentUpload(imageId);
     }
     vi.unstubAllGlobals();
+  });
+
+  it.each([false, true])(
+    "retries a failed file once after reconnect, including a late HTTP failure: %s",
+    async (lateFailure) => {
+      const image = makeImage("reconnect");
+      startAttachmentUpload({ environmentId: firstEnvironment, image });
+      await Promise.resolve();
+      const firstSettled = awaitAttachmentUploads([image.id]);
+      setConnected(firstEnvironment, false);
+      if (lateFailure) setConnected(firstEnvironment, true);
+      TestXmlHttpRequest.requests[0]!.complete(503);
+      await firstSettled;
+      if (!lateFailure) setConnected(firstEnvironment, true);
+      await flushMicrotasks();
+      expect(TestXmlHttpRequest.requests).toHaveLength(2);
+      const retrySettled = awaitAttachmentUploads([image.id]);
+      TestXmlHttpRequest.requests[1]!.complete(503);
+      await retrySettled;
+      setConnected(firstEnvironment, true);
+      await flushMicrotasks();
+      expect(TestXmlHttpRequest.requests).toHaveLength(2);
+      expect(readAttachmentUpload(image.id)?.status).toBe("failed");
+
+      setConnected(firstEnvironment, false);
+      setConnected(firstEnvironment, true);
+      await flushMicrotasks();
+      const finalSettled = awaitAttachmentUploads([image.id]);
+      TestXmlHttpRequest.requests[2]!.complete();
+      await finalSettled;
+      expect(
+        getUploadedAttachments({ environmentId: firstEnvironment, images: [image] }),
+      ).not.toBeNull();
+      setConnected(firstEnvironment, false);
+      setConnected(firstEnvironment, true);
+      await flushMicrotasks();
+      expect(TestXmlHttpRequest.requests).toHaveLength(3);
+    },
+  );
+
+  it("does not retry for another environment or after the attachment is removed", async () => {
+    const image = makeImage("removed");
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    await Promise.resolve();
+    const settled = awaitAttachmentUploads([image.id]);
+    TestXmlHttpRequest.requests[0]!.complete(503);
+    await settled;
+    setConnected(secondEnvironment, false);
+    setConnected(secondEnvironment, true);
+    await flushMicrotasks();
+    expect(TestXmlHttpRequest.requests).toHaveLength(1);
+    setConnected(firstEnvironment, false);
+    setConnected(firstEnvironment, true);
+    releaseAttachmentUpload(image.id);
+    await flushMicrotasks();
+    expect(TestXmlHttpRequest.requests).toHaveLength(1);
+    expect(readAttachmentUpload(image.id)).toBeUndefined();
   });
 
   it("uploads images immediately and sends attachment references", async () => {

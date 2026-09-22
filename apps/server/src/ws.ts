@@ -32,6 +32,7 @@ import {
   type AuthEnvironmentScope,
   AuthSessionId,
   ProviderSetupError,
+  type ProviderInstanceId,
   ClientConnectionMethod,
   ClientDeviceType,
   ClientOs,
@@ -149,8 +150,10 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderMaintenance from "./provider/providerMaintenance.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -239,6 +242,41 @@ export const resolveAvailableEditorsForConfig = <A, E, R>(
 export const resolveFileManagerRevealKindForConfig = <E, R>(
   discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => undefined);
+
+/**
+ * Runs first in `server.refreshProviders`. Only an explicit catalog refresh
+ * (`refreshModels`) bypasses T3-owned caches: the remote model manifest, each
+ * targeted instance's discovery caches and maintenance resolution, and the
+ * npm latest-version cache. Workspace discovery and background status checks
+ * keep their timers.
+ */
+export const bypassOwnedProviderCachesForRefresh = Effect.fn(
+  "ws.bypassOwnedProviderCachesForRefresh",
+)(function* (input: {
+  readonly instanceId?: ProviderInstanceId | undefined;
+  readonly refreshModels?: boolean | undefined;
+}) {
+  if (!input.refreshModels) return;
+  const modelManifest = yield* ModelManifest.ModelManifest;
+  const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const providerVersionCache = yield* ProviderMaintenance.ProviderVersionCache;
+  yield* modelManifest.forceRefresh;
+  const instances = yield* providerInstances.listInstances;
+  yield* Effect.forEach(
+    instances.filter(
+      (instance) => input.instanceId === undefined || input.instanceId === instance.instanceId,
+    ),
+    (instance) =>
+      Effect.gen(function* () {
+        yield* instance.invalidateCaches ?? Effect.void;
+        const maintenance = instance.snapshot.resolveMaintenance
+          ? yield* instance.snapshot.resolveMaintenance({ fresh: true })
+          : instance.snapshot.maintenanceCapabilities;
+        if (maintenance.packageName) providerVersionCache.delete(maintenance.packageName);
+      }),
+    { concurrency: "unbounded", discard: true },
+  );
+});
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -1900,6 +1938,7 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
             Effect.gen(function* () {
+              yield* bypassOwnedProviderCachesForRefresh(input);
               const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
               const candidates = (yield* instances.listInstances).filter(
                 (instance) =>

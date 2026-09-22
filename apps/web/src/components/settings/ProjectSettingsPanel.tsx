@@ -182,7 +182,7 @@ export function ProjectSettingsPage({ projectKey }: { projectKey: string }) {
   }, [navigateBackWithinApp]);
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <WorkspacePageHeader electron={isElectron}>
           <ProjectSettingsBreadcrumb projectKey={projectKey} />
@@ -1072,7 +1072,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                     Import scripts
                     <ChevronDownIcon className="size-3.5" />
                   </MenuTrigger>
-                  <MenuPopup align="end" className="w-72">
+                  <MenuPopup align="end">
                     <MenuGroup>
                       <MenuGroupLabel>Import from t3.json</MenuGroupLabel>
                       <p className="px-2 pb-2 text-pretty text-sm text-muted-foreground">
