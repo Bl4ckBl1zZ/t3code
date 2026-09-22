@@ -1089,6 +1089,37 @@ function useMarkdownStyles(
   ]);
 }
 
+/** Names an agent-sent prompt's origin, linking to the sending thread when it is known. */
+function AgentMessageAttribution(props: {
+  readonly environmentId: EnvironmentId;
+  readonly senderThreadId?: ThreadId | undefined;
+}) {
+  const navigation = useNavigation();
+  const senderThreadId = props.senderThreadId;
+  const label = (
+    <Text className="mb-1 pl-1 text-2xs text-foreground-muted opacity-70">
+      Sent by another agent
+    </Text>
+  );
+  return senderThreadId ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Open sending thread"
+      hitSlop={4}
+      onPress={() =>
+        navigation.navigate("Thread", {
+          environmentId: props.environmentId,
+          threadId: senderThreadId,
+        })
+      }
+    >
+      {label}
+    </Pressable>
+  ) : (
+    label
+  );
+}
+
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
   props: Pick<ThreadFeedProps, "environmentId" | "skills" | "threadId" | "workspaceRoot"> & {
@@ -1247,9 +1278,10 @@ function renderFeedEntry(
           className="mb-5 items-start"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
-          <Text className="mb-1 pl-1 text-2xs text-foreground-muted opacity-70">
-            Sent by another agent
-          </Text>
+          <AgentMessageAttribution
+            environmentId={props.environmentId}
+            senderThreadId={message.senderThreadId}
+          />
           <View
             className="min-w-0 gap-2 rounded-[20px] rounded-tl-md border border-neutral-300/50 bg-card px-3.5 py-2.5 dark:border-white/[0.08]"
             style={{

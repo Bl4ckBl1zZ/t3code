@@ -2180,6 +2180,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             });
             const promptNativeItemId = `${nativeTaskId}:prompt`;
             const promptArtifacts = makeSubagentConversationArtifacts({
+              senderThreadId: context.input.threadId,
               messageId: idAllocator.derive.messageFromProviderItem({
                 driver,
                 nativeItemId: promptNativeItemId,

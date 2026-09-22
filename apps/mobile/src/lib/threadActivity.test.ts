@@ -247,6 +247,23 @@ function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
 }
 
 describe("buildThreadFeed", () => {
+  it("keeps the sender of an agent message distinct from its timeline source", () => {
+    const feed = buildThreadFeed([
+      projected(
+        {
+          ...userMessage(),
+          createdBy: "agent",
+          creationSource: "mcp",
+          senderThreadId: sourceThreadId,
+        },
+        0,
+      ),
+    ]);
+    const messageEntry = feed.find((entry) => entry.type === "message");
+    expect(messageEntry?.message.senderThreadId).toBe(sourceThreadId);
+    expect(messageEntry?.message.sourceThreadId).toBe(threadId);
+  });
+
   it("hides a delegation call once its returned task id names a child card", () => {
     const delegation = (id: string, taskId: string, ordinal: number, failed = false) =>
       ({

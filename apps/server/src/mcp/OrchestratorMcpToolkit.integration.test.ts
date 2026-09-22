@@ -733,6 +733,17 @@ describe("orchestrator MCP toolkit", () => {
             const delegated = yield* decodeDelegateTaskResult(delegatedCall.structuredContent).pipe(
               Effect.orDie,
             );
+            const delegatedSource = yield* orchestrator.getThreadProjection(
+              delegated.childThreadId,
+            );
+            expect(delegatedSource.messages[0]).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
+            expect(
+              delegatedSource.turnItems.find((item) => item.type === "user_message"),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
             expect(delegated.status).toBe("completed");
             expect(delegated.summary).toBe(delegatedResult);
             expect(delegated.providerInstanceId).toBe(claudeInstanceId);
@@ -1062,6 +1073,15 @@ describe("orchestrator MCP toolkit", () => {
               providerInstanceId: claudeInstanceId,
               model: claudeModel,
             });
+            const createdSource = yield* orchestrator.getThreadProjection(promptedThread.threadId);
+            expect(createdSource.messages[0]).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
+            expect(
+              createdSource.turnItems.find((item) => item.type === "user_message"),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
             const emptyProjection = yield* orchestrator.getThreadProjection(emptyThread.threadId);
             expect(emptyProjection.thread.lineage).toEqual({
               parentThreadId: null,
@@ -1207,6 +1227,19 @@ describe("orchestrator MCP toolkit", () => {
             const sent = yield* decodeThreadSendResult(sendCall.structuredContent).pipe(
               Effect.orDie,
             );
+            const sentSource = yield* orchestrator.getThreadProjection(emptyThread.threadId);
+            expect(
+              sentSource.messages.find((message) => message.id === sent.messageId),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
+            expect(
+              sentSource.turnItems.find(
+                (item) => item.type === "user_message" && item.messageId === sent.messageId,
+              ),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
             expect(sent.delivery).toBe("started");
             const waitCall = yield* invoke("t3_thread_wait", {
               threadId: emptyThread.threadId,
@@ -1290,6 +1323,19 @@ describe("orchestrator MCP toolkit", () => {
             expect(steered).toMatchObject({
               runId: activeRun.id,
               delivery: "steered",
+            });
+            const steeredSource = yield* orchestrator.getThreadProjection(activeThread.threadId);
+            expect(
+              steeredSource.messages.find((message) => message.id === steered.messageId),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
+            });
+            expect(
+              steeredSource.turnItems.find(
+                (item) => item.type === "user_message" && item.messageId === steered.messageId,
+              ),
+            ).toMatchObject({
+              senderThreadId: parentThreadId,
             });
             const interruptCall = yield* invoke("t3_thread_interrupt", {
               threadId: activeThread.threadId,

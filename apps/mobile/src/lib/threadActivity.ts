@@ -97,6 +97,7 @@ export interface ThreadFeedMessage {
   readonly creationSource?: OrchestrationV2CreationSource;
   /** Names the schedule that sent this message, when one did. */
   readonly scheduledTaskId?: ScheduledTaskId;
+  readonly senderThreadId?: ThreadId;
   readonly visibility: OrchestrationV2ProjectedTurnItem["visibility"];
   readonly sourceThreadId: ThreadId;
   readonly createdAt: string;
@@ -1292,6 +1293,9 @@ export function buildThreadFeed(
                 ...(item.scheduledTaskId === undefined
                   ? {}
                   : { scheduledTaskId: item.scheduledTaskId }),
+                ...(item.senderThreadId === undefined
+                  ? {}
+                  : { senderThreadId: item.senderThreadId }),
               }
             : {}),
           visibility: row.visibility,

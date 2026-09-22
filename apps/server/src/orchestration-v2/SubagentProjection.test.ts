@@ -11,10 +11,15 @@ import {
   RunAttemptId,
   RunId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { delegatedTaskProgress, makeSubagentChildThread } from "./SubagentProjection.ts";
+import {
+  delegatedTaskProgress,
+  makeSubagentChildThread,
+  makeSubagentConversationArtifacts,
+} from "./SubagentProjection.ts";
 
 const parentThreadId = ThreadId.make("thread:subagent-snoozed-parent");
 const childThreadId = ThreadId.make("thread:subagent-awake-child");
@@ -103,6 +108,30 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
     type: "node",
     nodeId: parentNodeId,
   });
+});
+
+it("attributes native subagent prompts to their parent thread", () => {
+  for (const role of ["user", "assistant"] as const) {
+    const artifacts = makeSubagentConversationArtifacts({
+      messageId: MessageId.make(`native-${role}`),
+      turnItemId: TurnItemId.make(`native-${role}`),
+      threadId: childThreadId,
+      senderThreadId: parentThreadId,
+      rootNodeId: NodeId.make("child-root"),
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      role,
+      text: role === "user" ? "Review the changes" : "Review complete",
+      ordinal: 100,
+      now: childCreatedAt,
+    });
+    assert.equal(artifacts.message.threadId, childThreadId);
+    assert.equal(artifacts.message.senderThreadId, role === "user" ? parentThreadId : undefined);
+    if (artifacts.turnItem.type === "user_message") {
+      assert.equal(artifacts.turnItem.senderThreadId, parentThreadId);
+    }
+  }
 });
 
 const delegatedRun: OrchestrationV2Run = {

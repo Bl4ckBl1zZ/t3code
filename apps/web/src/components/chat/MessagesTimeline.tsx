@@ -110,7 +110,7 @@ import {
   XIcon,
   ZapIcon,
 } from "lucide-react";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { MessageAttachmentPlacement } from "./MessageAttachmentPlacement";
 import { MessageFileAttachmentTile } from "./MessageFileAttachmentTile";
@@ -1363,7 +1363,18 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           className="ms-1 text-[11px] text-muted-foreground/70"
           data-user-message-attribution="agent"
         >
-          Sent by another agent
+          {row.message.senderThreadId ? (
+            <InlineButton
+              onClick={() => {
+                if (row.message.senderThreadId) ctx.onOpenThread(row.message.senderThreadId);
+              }}
+              aria-label="Open sending thread"
+            >
+              Sent by another agent
+            </InlineButton>
+          ) : (
+            "Sent by another agent"
+          )}
         </p>
       ) : null}
       <div

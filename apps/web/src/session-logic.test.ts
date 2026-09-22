@@ -6,6 +6,7 @@ import {
   ProviderThreadId,
   RunAttemptId,
   RunId,
+  ScheduledTaskId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2ConversationMessage,
@@ -874,8 +875,10 @@ describe("V2 session presentation", () => {
       inputIntent: "turn_start" as const,
       text: "Queued input",
       attachments: [],
-      createdBy: "user" as const,
-      creationSource: "web" as const,
+      createdBy: "agent" as const,
+      creationSource: "mcp" as const,
+      scheduledTaskId: ScheduledTaskId.make("task-queued"),
+      senderThreadId: ThreadId.make("thread-agent-sender"),
     } satisfies OrchestrationV2TurnItem;
     const promotedEntries = deriveTimelineEntriesFromVisibleTurnItems({
       visibleTurnItems: [
@@ -893,6 +896,8 @@ describe("V2 session presentation", () => {
     expect(promotedEntries[0]?.kind).toBe("message");
     if (promotedEntries[0]?.kind === "message") {
       expect(promotedEntries[0].message.inputIntent).toBe("turn_start");
+      expect(promotedEntries[0].message.scheduledTaskId).toBe("task-queued");
+      expect(promotedEntries[0].message.senderThreadId).toBe("thread-agent-sender");
     }
   });
 
