@@ -226,6 +226,7 @@ import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { countActiveAgents } from "./agentsPanel.logic";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import { isEditableFocused } from "../lib/editableFocus";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
@@ -6055,6 +6056,7 @@ function ChatViewContent(props: ChatViewProps) {
         previewFocus: isPreviewFocused(),
         previewOpen: previewPanelOpen,
         terminalOpen: Boolean(terminalUiState.terminalOpen),
+        editableFocus: isEditableFocused(event.target),
         modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
       };
 

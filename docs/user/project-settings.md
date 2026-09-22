@@ -56,6 +56,11 @@ model or **Local** / **New worktree** workspace. **Use automatic model selection
 clears the machine's model preference. Your project default and explicit draft
 choices take priority; changing defaults does not change running threads.
 
+New worktrees initialize git submodules recursively. If that step is slow because the repository
+declares many nested submodules, set `"worktreeSubmodules"` in `t3.json` to `"top-level"` to stop
+at the ones the repository declares itself, or `"none"` to leave them for a setup action. The
+value is read from the `t3.json` of the branch being checked out.
+
 ## Shared actions
 
 Edits to a checkout's `t3.json`, including edits made by an agent, are picked up

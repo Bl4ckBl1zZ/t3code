@@ -92,7 +92,8 @@ but the new thread does not reuse the worktree created for the thread that just 
 
 A `when` expression is evaluated against context keys describing the current UI state. The keys
 the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`,
-`modelPickerOpen`, `isWeb`, and `isDesktop`. The default `mod+1`…`mod+9` thread and model jumps
+`modelPickerOpen`, `editableFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
+field, the composer, or another editor has the keyboard. The default `mod+1`…`mod+9` thread and model jumps
 are limited to `isDesktop`, so a browser keeps those keys for switching tabs. The set is open and grows over time, so treat that as the current list rather
 than a fixed one. Any key the running app does not supply evaluates to `false`.
 
@@ -113,3 +114,9 @@ Examples:
 
 `thread.stop` interrupts the running turn in the focused thread. It has no default
 shortcut; assign one in **Settings → Keybindings**.
+
+`thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
+bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive
+actions of the same kind undo together. The notice remains available for five
+seconds after the latest action. The default shortcut skips text fields and
+terminals so native undo keeps working there.

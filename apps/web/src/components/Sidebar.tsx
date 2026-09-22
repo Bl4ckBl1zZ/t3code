@@ -225,12 +225,7 @@ import {
   type TerminalStatusIndicator,
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
-import {
-  resolveSnoozePresets,
-  snoozeWakeDescription,
-  snoozeWakeLabel,
-  type SnoozePreset,
-} from "./Sidebar.snooze";
+import { resolveSnoozePresets, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
@@ -1978,6 +1973,9 @@ function SortableSidebarThreadRow(
   const { sortableId, ...rowProps } = props;
   const { isDragging, listeners, setNodeRef, transform, transition } = useSortable({
     id: sortableId,
+    // Drag listeners on the row would swallow the pointer gestures that select
+    // text in the rename field.
+    disabled: rowProps.isRenaming,
     animateLayoutChanges: animatePinnedLayoutChanges,
   });
   const sortable = useMemo<SidebarThreadRowSortable>(
@@ -3512,19 +3510,6 @@ export default function Sidebar() {
             }
             return;
           }
-          // Snooze hides the row, so the toast is the only confirmation —
-          // and the Undo is the escape hatch for a mis-click.
-          toastManager.add(
-            stackedThreadToast({
-              type: "success",
-              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date(), timestampFormat)}`,
-              timeout: 5_000,
-              actionProps: {
-                children: "Undo",
-                onClick: () => attemptUnsnooze(threadRef),
-              },
-            }),
-          );
           // Only move forward if the user is still on the snoozed thread —
           // a navigation made during the await wins over ours.
           if (routeThreadKeyRef.current === threadKey) {
@@ -3535,7 +3520,7 @@ export default function Sidebar() {
         }
       })();
     },
-    [attemptUnsnooze, planForwardNavigation, snoozeThread],
+    [planForwardNavigation, snoozeThread],
   );
 
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);

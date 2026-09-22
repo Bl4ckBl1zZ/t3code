@@ -30,6 +30,8 @@ export interface ThreadNotificationEvent {
   readonly kind: "completion" | "input";
   readonly tone: "success" | "warning" | "error";
   readonly title: string;
+  /** The sidebar status icon the row shows for the same state, so a toast matches it. */
+  readonly icon: "done" | "approval" | "input" | "failed";
 }
 
 export function threadNotificationKey(
@@ -73,6 +75,7 @@ export function resolveThreadNotificationEvents(
         thread,
         kind: "input",
         tone: status === "failed" ? "error" : "warning",
+        icon: status === "approval" || status === "failed" ? status : "input",
         title:
           status === "approval"
             ? "Approval needed"
@@ -81,7 +84,13 @@ export function resolveThreadNotificationEvents(
               : "Input needed",
       });
     } else if (completion !== null && completion !== prior.completion) {
-      events.push({ thread, kind: "completion", tone: "success", title: "Thread completed" });
+      events.push({
+        thread,
+        kind: "completion",
+        tone: "success",
+        title: "Thread completed",
+        icon: "done",
+      });
     }
   }
 
