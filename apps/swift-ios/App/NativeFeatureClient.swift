@@ -468,9 +468,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ = try await route.client.refreshProviderSnapshots(instanceID: instanceID, cwd: root)
     }
 
-    func refreshSetupProviders(environmentID: String) async throws -> [ServerProviderSnapshot] {
+    func refreshSetupProviders(environmentID: String, refreshModels: Bool) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
-        return try await client.refreshProviderSnapshots(refreshModels: true)
+        return try await client.refreshProviderSnapshots(refreshModels: refreshModels)
     }
 
     func makeAgentSetupTerminal(environmentID: String, providerInstanceID: String) async throws -> any FeatureAgentSetupTerminal {
@@ -586,7 +586,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func usageLimits(environmentID: String, refresh: Bool) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
-        if refresh { return try await client.refreshProviderSnapshots(refreshModels: true) }
+        // A status refresh re-reads every usage window. Model rediscovery, which
+        // also bypasses the server's manifest and probe caches, stays behind
+        // the explicit provider refresh in Settings.
+        if refresh { return try await client.refreshProviderSnapshots() }
         return try await client.serverConfig().providers
     }
 

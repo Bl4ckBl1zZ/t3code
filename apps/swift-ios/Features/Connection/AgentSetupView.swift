@@ -502,7 +502,12 @@ struct AgentSetupView: View {
         for environment in targets {
             providerErrors[environment.id] = nil
             loadingProviders.insert(environment.id)
-            do { providers[environment.id] = try await service.refreshSetupProviders(environmentID: environment.id) }
+            do {
+                providers[environment.id] = try await service.refreshSetupProviders(
+                    environmentID: environment.id,
+                    refreshModels: false
+                )
+            }
             catch { if !Task.isCancelled { providerErrors[environment.id] = error.localizedDescription } }
             loadingProviders.remove(environment.id)
         }
