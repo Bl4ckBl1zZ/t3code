@@ -85,14 +85,14 @@ struct FeaturePullRequestAccess {
             react = { try await reviewer.setPullRequestReaction(scope: .project(scope), number: $0, expectedURL: $1, request: $2) }
             editing = { FeaturePullRequestEditingAccess(writer: reviewer, scope: .project(scope), number: $0, expectedURL: $1) }
             runAction = { number, url, request in
-                await onAction?(request.action, .sent)
+                onAction?(request.action, .sent)
                 do {
                     try await reviewer.runPullRequestAction(scope: .project(scope), number: number, expectedURL: url, request: request)
                 } catch {
-                    await onAction?(request.action, .failed)
+                    onAction?(request.action, .failed)
                     throw error
                 }
-                await onAction?(request.action, .done)
+                onAction?(request.action, .done)
             }
             threads = { FeaturePullRequestThreadAccess(writer: reviewer, scope: .project(scope), number: $0, expectedURL: $1) }
             submitReview = { try await reviewer.submitPullRequestReview(scope: .project(scope), number: $0, expectedURL: $1, submission: $2) }

@@ -111,13 +111,15 @@ public final class VoiceComposerCoordinator {
     @ObservationIgnored private var activeTask: Task<Void, Never>?
 
     public init(
-        stash: VoiceTranscriptStash = .shared,
-        preflight: VoicePreflightCache = .shared,
+        stash: VoiceTranscriptStash? = nil,
+        preflight: VoicePreflightCache? = nil,
         gestureConfig: VoiceGestureConfig = .default,
         makeCapture: @escaping @MainActor () -> any VoiceCapturing = { VoiceMicrophoneCapture() }
     ) {
-        self.stash = stash
-        self.preflight = preflight
+        // Main-actor singletons resolve here, not as default arguments: those
+        // are evaluated in the caller's nonisolated context.
+        self.stash = stash ?? .shared
+        self.preflight = preflight ?? .shared
         self.gestureConfig = gestureConfig
         self.makeCapture = makeCapture
     }

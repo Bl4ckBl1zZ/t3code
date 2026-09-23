@@ -61,9 +61,9 @@ final class LegacyReactNativeImportTests: XCTestCase {
 
         // Without the token the server would appear in the list but fail to
         // connect, which is worse than not importing it at all.
-        let credential = try await credentials.credential(for: "env-studio")
+        let credential = await credentials.credential(for: "env-studio")
         XCTAssertEqual(credential?.accessToken, "studio-token")
-        let laptop = try await credentials.credential(for: "env-laptop")
+        let laptop = await credentials.credential(for: "env-laptop")
         XCTAssertEqual(laptop?.accessToken, "laptop-token")
     }
 
