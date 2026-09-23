@@ -463,6 +463,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/source-control",
   },
   {
+    id: "worktree-branch-naming",
+    title: "Worktree branch naming",
+    to: "/settings/source-control",
+    searchTerms: ["static semantic prefix custom prompt instructions feat fix refactor chore"],
+  },
+  {
     id: "remote-environments",
     title: "Remote environments",
     to: "/settings/connections",

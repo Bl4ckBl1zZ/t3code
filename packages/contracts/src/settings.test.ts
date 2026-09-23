@@ -811,3 +811,22 @@ describe("ClientSettings chat width", () => {
     expect(() => decodeClientSettingsPatch({ chatWidth: "huge" })).toThrow();
   });
 });
+
+describe("branch naming settings", () => {
+  it("defaults existing settings to the t3code static prefix", () => {
+    expect(decodeServerSettings({})).toMatchObject({
+      branchNamingMode: "static",
+      branchNamePrefix: "t3code",
+      branchNameInstructions: "",
+    });
+  });
+  it.each(["static", "semantic", "custom"])("round-trips %s", (branchNamingMode) => {
+    const input = {
+      branchNamingMode,
+      branchNamePrefix: "team/",
+      branchNameInstructions: "Include the issue ID.",
+    };
+    expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
+    expect(decodeServerSettingsPatch(input)).toEqual(input);
+  });
+});

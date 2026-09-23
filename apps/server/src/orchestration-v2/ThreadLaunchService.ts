@@ -250,12 +250,22 @@ export const make = Effect.gen(function* () {
               );
         return yield* textGeneration
           .generateBranchName({
+            naming: {
+              mode: settings.branchNamingMode,
+              prefix: settings.branchNamePrefix,
+              instructions: settings.branchNameInstructions,
+            },
             cwd,
             message: message.text,
             attachments: message.attachments,
             modelSelection,
           })
-          .pipe(Effect.map((result) => result.branch));
+          .pipe(
+            Effect.map((result) => ({
+              branch: result.branch,
+              exactName: settings.branchNamingMode === "custom",
+            })),
+          );
       });
 
     // The server owns worktree naming: without an explicit branch, provision
@@ -350,7 +360,14 @@ export const make = Effect.gen(function* () {
       const oldBranch = branch;
       const worktreeCwd = worktreePath;
       yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
-        Effect.flatMap((newBranch) => git.renameBranch({ cwd: worktreeCwd, oldBranch, newBranch })),
+        Effect.flatMap(({ branch: newBranch, exactName }) =>
+          git.renameBranch({
+            cwd: worktreeCwd,
+            oldBranch,
+            newBranch,
+            ...(exactName ? { exactName: true } : {}),
+          }),
+        ),
         Effect.flatMap((renamed) =>
           threads.dispatch({
             type: "thread.metadata.update",

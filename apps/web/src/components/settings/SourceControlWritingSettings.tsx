@@ -21,6 +21,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
+import { BranchNamingSettings } from "./BranchNamingSettings";
 
 const MODE_OPTIONS: Record<SourceControlWritingStyleMode, { label: string; description: string }> =
   {
@@ -72,6 +73,7 @@ export function SourceControlWritingSettingsSection() {
 
   return (
     <SettingsSection title="Text generation">
+      <BranchNamingSettings />
       <SettingsRow
         serverScoped
         title="Source control writing style"
