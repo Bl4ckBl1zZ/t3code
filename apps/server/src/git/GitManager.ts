@@ -1,3 +1,4 @@
+import * as LookupResultCache from "./LookupResultCache.ts";
 import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
@@ -1061,7 +1062,7 @@ export const make = Effect.gen(function* () {
     prLookupFailureStreakByKey.set(key, streak);
     return prLookupFailureTtl(streak);
   };
-  const prLookupCache = yield* Cache.makeWith(
+  const prLookupCache = yield* LookupResultCache.make(
     (key: string) => {
       const [
         cwd = "",
@@ -1208,14 +1209,14 @@ export const make = Effect.gen(function* () {
     const branchKey = `${cwd}\u0000${details.branch}`;
     const cacheKey = prLookupCacheKey(cwd, details);
     if (refreshMissingPullRequest) {
-      const cached = yield* Cache.getOption(prLookupCache, cacheKey).pipe(
-        Effect.orElseSucceed(() => Option.none()),
-      );
+      const cached = yield* prLookupCache
+        .getOption(cacheKey)
+        .pipe(Effect.orElseSucceed(() => Option.none()));
       if (Option.isSome(cached) && cached.value.latest === null) {
-        yield* Cache.invalidate(prLookupCache, cacheKey);
+        yield* prLookupCache.invalidate(cacheKey);
       }
     }
-    return yield* Cache.get(prLookupCache, cacheKey).pipe(
+    return yield* prLookupCache.get(cacheKey).pipe(
       Effect.map(({ latest, headContext }) => {
         if (!latest) return { pr: null, headContext };
         // On the default branch, only surface open PRs.
@@ -2206,12 +2207,12 @@ export const make = Effect.gen(function* () {
     if (options?.refresh) {
       // A completed turn can create a PR or reuse a merged PR's branch.
       // Refresh successful answers, but keep failed lookups' retry backoff.
-      const cached = yield* Cache.getOption(prLookupCache, cacheKey).pipe(
-        Effect.orElseSucceed(() => Option.none()),
-      );
-      if (Option.isSome(cached)) yield* Cache.invalidate(prLookupCache, cacheKey);
+      const cached = yield* prLookupCache
+        .getOption(cacheKey)
+        .pipe(Effect.orElseSucceed(() => Option.none()));
+      if (Option.isSome(cached)) yield* prLookupCache.invalidate(cacheKey);
     }
-    let cached = yield* Cache.get(prLookupCache, cacheKey);
+    let cached = yield* prLookupCache.get(cacheKey);
     // The cached head context may have resolved on a different remote than
     // the saved upstream: a branch tracking origin/main but pushed to a fork
     // is looked up on the fork. Verify against the remote the lookup used.
@@ -2238,8 +2239,8 @@ export const make = Effect.gen(function* () {
       });
     }
     if (!hasSameIdentity(cached.headContext, currentIdentity)) {
-      yield* Cache.invalidate(prLookupCache, cacheKey);
-      cached = yield* Cache.get(prLookupCache, cacheKey);
+      yield* prLookupCache.invalidate(cacheKey);
+      cached = yield* prLookupCache.get(cacheKey);
       const refreshedIdentity = yield* resolvePrLookupRepositoryIdentity(
         cacheCwd,
         branch,
