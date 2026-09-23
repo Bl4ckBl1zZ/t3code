@@ -4,6 +4,7 @@ import {
   recordComposerReadingGesture,
   suppressComposerReadingGesture,
 } from "./composerRestingState";
+import { isTimelineScrollTarget } from "./timelineScrollTarget";
 
 export interface ComposerReadingTimeline {
   getElement: () => HTMLElement | null;
@@ -63,7 +64,11 @@ export function useComposerRestingState(
         recordComposerReadingGesture(gesture.current, {
           now: performance.now(),
           delta,
-          eligible: eligible.current && current!.overflows(),
+          // Nested tool results and code blocks scroll themselves, not the timeline.
+          eligible:
+            eligible.current &&
+            current!.overflows() &&
+            isTimelineScrollTarget(event.target, node, event.deltaY),
           canScroll:
             delta < 0
               ? node.scrollTop > 0
@@ -83,6 +88,8 @@ export function useComposerRestingState(
         return;
       const upward = event.key === "PageUp" || event.key === "Home";
       const downward = event.key === "PageDown" || event.key === "End";
+      if ((upward || downward) && !isTimelineScrollTarget(event.target, node, upward ? -1 : 1))
+        return;
       if (
         (upward && node.scrollTop > 1) ||
         (downward &&

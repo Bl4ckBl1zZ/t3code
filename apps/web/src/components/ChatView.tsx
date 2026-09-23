@@ -334,6 +334,7 @@ import {
 import { environmentShell } from "../state/shell";
 import { HERMES_DRIVER_KIND, isT3WorkBackingProject } from "../t3WorkProject";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { isTimelineScrollTarget } from "./chat/timelineScrollTarget";
 import {
   CheckpointRestoreDialog,
   type CheckpointRestoreFacts,
@@ -5150,6 +5151,14 @@ function ChatViewContent(props: ChatViewProps) {
       const handleManualNavigation = () => {
         cancelTimelineLiveFollowForUserNavigationRef.current();
       };
+      // A wheel that a nested tool result or code block consumes scrolls that
+      // element, not the timeline, so it must not break live-follow.
+      const handleWheel = (event: WheelEvent) => {
+        if (event.ctrlKey || !isTimelineScrollTarget(event.target, scrollNode, event.deltaY)) {
+          return;
+        }
+        handleManualNavigation();
+      };
       const handleScrollSample = () => {
         const next: TimelineScrollSample = {
           scrollTop: scrollNode.scrollTop,
@@ -5171,7 +5180,7 @@ function ChatViewContent(props: ChatViewProps) {
           cancelTimelineLiveFollowForUserNavigationRef.current();
         }
       };
-      scrollNode.addEventListener("wheel", handleManualNavigation, {
+      scrollNode.addEventListener("wheel", handleWheel, {
         passive: true,
       });
       scrollNode.addEventListener("touchmove", handleManualNavigation, {
@@ -5184,7 +5193,7 @@ function ChatViewContent(props: ChatViewProps) {
         passive: true,
       });
       removeListeners = () => {
-        scrollNode.removeEventListener("wheel", handleManualNavigation);
+        scrollNode.removeEventListener("wheel", handleWheel);
         scrollNode.removeEventListener("touchmove", handleManualNavigation);
         scrollNode.removeEventListener("pointerdown", handleManualNavigation);
         scrollNode.removeEventListener("scroll", handleScrollSample);
