@@ -1123,6 +1123,9 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     /// composer hides the toggle rather than sending a setting nothing honors.
     public var supportsPlanMode: Bool
     public var models: [FeatureModel]
+    /// Set when the installed version is known to be unsupported or broken on
+    /// this server. The provider can still run, so it stays available.
+    public var incompatibleVersionWarning: String? = nil
     public var workspaceSnapshots: [FeatureProviderWorkspace]? = nil
     public var slashCommands: [FeatureProviderSlashCommand]?
     public var skills: [FeatureProviderSkill]?

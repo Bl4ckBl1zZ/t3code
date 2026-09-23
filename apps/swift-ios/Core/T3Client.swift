@@ -187,10 +187,13 @@ public actor T3Client {
         await rpc.subscribe("provider.install.subscribe", payload: .object(["instanceId": .string(instanceID)]), as: NativeProviderInstallState.self)
     }
 
-    public func updateProvider(driver: String, instanceID: String) async throws -> [ServerProviderSnapshot] {
+    /// `targetVersion` pins a policy's recommended version; only send it when
+    /// the provider's version advisory reports `canInstallVersion`.
+    public func updateProvider(driver: String, instanceID: String, targetVersion: String? = nil) async throws -> [ServerProviderSnapshot] {
         struct Payload: Decodable { let providers: [ServerProviderSnapshot] }
-        let result = try await rpc.request("server.updateProvider",
-            payload: .object(["provider": .string(driver), "instanceId": .string(instanceID)]), as: Payload.self)
+        var input: [String: JSONValue] = ["provider": .string(driver), "instanceId": .string(instanceID)]
+        if let targetVersion { input["targetVersion"] = .string(targetVersion) }
+        let result = try await rpc.request("server.updateProvider", payload: .object(input), as: Payload.self)
         return result.providers
     }
 

@@ -72,12 +72,15 @@ struct ComposerModelChip: View {
                     .lineLimit(1)
                     .fixedSize()
             }
-            if resolved.isUnavailable {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .imageScale(.small)
-                    .foregroundStyle(T3Colors.warning)
-                    .accessibilityHidden(true)
-            }
+            // Collapsed by width rather than inserted: the chip sits beside the
+            // push-to-talk mic, and provider snapshots can change mid-hold.
+            Image(systemName: "exclamationmark.triangle.fill")
+                .imageScale(.small)
+                .foregroundStyle(T3Colors.warning)
+                .frame(width: resolved.showsWarning ? nil : 0)
+                .opacity(resolved.showsWarning ? 1 : 0)
+                .padding(.trailing, resolved.showsWarning ? 0 : -5)
+                .accessibilityHidden(true)
             Image(systemName: "chevron.down")
                 .font(.caption2.weight(.bold))
                 .accessibilityHidden(true)
@@ -96,7 +99,8 @@ struct ComposerModelChip: View {
             selections: resolved.active?.options ?? []
         )
         let described = isPlanMode ? "\(summary), Plan mode" : summary
-        return resolved.isUnavailable ? "\(described), unavailable" : described
+        if resolved.isUnavailable { return "\(described), unavailable" }
+        return resolved.compatibilityWarning == nil ? described : "\(described), unsupported provider version"
     }
 
     private var isPlanMode: Bool {
@@ -118,6 +122,8 @@ struct ComposerModelChip: View {
         } else {
             if resolved.isUnavailable, let provider = resolved.provider {
                 Text("\(provider.name) isn’t available right now. Pick another model.")
+            } else if let warning = resolved.compatibilityWarning {
+                Text(warning)
             }
             if resolved.isLocked {
                 Text("This provider fixes the model when a task starts.")
@@ -287,4 +293,12 @@ private struct ResolvedModel {
     var isUnavailable: Bool {
         active != nil && (provider?.isAvailable != true || model == nil)
     }
+
+    /// The chosen provider runs, but its installed version is known to be
+    /// unsupported or broken on this server.
+    var compatibilityWarning: String? {
+        active == nil ? nil : provider?.incompatibleVersionWarning
+    }
+
+    var showsWarning: Bool { isUnavailable || compatibilityWarning != nil }
 }

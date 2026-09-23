@@ -256,18 +256,47 @@ struct SettingsProviderAccountView: View {
     private func providerUpdateSection(isDirty: Bool) -> some View {
         Section {
             if let provider = installedProvider {
+                if provider.enabled, let compatibility = provider.compatibilityAdvisory,
+                   let title = compatibility.title {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(title, systemImage: "exclamationmark.triangle.fill")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(compatibility.isIncompatible ? T3Colors.warning : T3Colors.textSecondary)
+                        Text(compatibility.detail)
+                            .font(.footnote)
+                            .foregroundStyle(T3Colors.textSecondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
                 LabeledContent("Version", value: provider.version ?? "Unknown")
                     .contextMenu {
-                        if let command = provider.versionAdvisory?.updateCommand {
+                        if let command = provider.versionAdvisory?.updateCommand,
+                           provider.compatibilityAdvisory?.latestIsIncompatible != true {
                             Button("Copy Update Command", systemImage: "doc.on.doc") {
                                 UIPasteboard.general.string = command
                             }
                         }
                     }
                 if let latest = provider.versionAdvisory?.latestVersion, latest != provider.version {
-                    LabeledContent("Latest", value: latest)
+                    LabeledContent(
+                        "Latest",
+                        value: provider.compatibilityAdvisory?.latestIsIncompatible == true ? "\(latest) · Unsupported" : latest
+                    )
                 }
-                if provider.versionAdvisory?.offersUpdate == true, provider.enabled {
+                if let version = provider.installableRecommendedVersion {
+                    Button { Task { await performProviderUpdate(targetVersion: version) } } label: {
+                        HStack {
+                            Text("Install \(version)")
+                            if updatingProvider || provider.updateState?.isActive == true {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(updatingProvider || checkingUpdate || provider.updateState?.isActive == true || isDirty)
+                    .accessibilityIdentifier("provider-install-recommended")
+                }
+                if provider.offersLatestUpdate, provider.installableRecommendedVersion == nil {
                     Button { Task { await performProviderUpdate() } } label: {
                         HStack {
                             Text(provider.versionAdvisory?.latestVersion.map { "Update to \($0)" } ?? "Update")
@@ -307,6 +336,10 @@ struct SettingsProviderAccountView: View {
 
     private func updateFooter(isDirty: Bool) -> String {
         if isDirty { return "Save your changes before updating." }
+        if installedProvider?.compatibilityAdvisory?.latestIsIncompatible == true,
+           installedProvider?.versionAdvisory?.status == "behind_latest" {
+            return "The latest version isn’t supported by this server’s T3 Code release, so it isn’t offered."
+        }
         if installedProvider?.versionAdvisory?.status == "behind_latest",
            installedProvider?.versionAdvisory?.offersUpdate != true {
             return "Update this provider using its original installer on the paired server. The command is in the Version row's menu."
@@ -475,15 +508,22 @@ struct SettingsProviderAccountView: View {
         }
     }
 
-    private func performProviderUpdate() async {
-        guard let instanceID, let driver, !updatingProvider, !checkingUpdate,
-              installedProvider?.enabled == true, installedProvider?.versionAdvisory?.offersUpdate == true,
-              installedProvider?.updateState?.isActive != true, draft?.envelope == draft?.original else { return }
+    /// Updates to the latest version, or installs the policy's recommended
+    /// version when `targetVersion` is set.
+    private func performProviderUpdate(targetVersion: String? = nil) async {
+        guard let instanceID, let driver, let provider = installedProvider, !updatingProvider, !checkingUpdate,
+              targetVersion.map({ $0 == provider.installableRecommendedVersion }) ?? provider.offersLatestUpdate,
+              provider.updateState?.isActive != true, draft?.envelope == draft?.original else { return }
         updatingProvider = true
         updateError = nil
         defer { updatingProvider = false }
         do {
-            let providers = try await manager.updateProvider(environmentID: environmentID, driver: driver, instanceID: instanceID)
+            let providers = try await manager.updateProvider(
+                environmentID: environmentID,
+                driver: driver,
+                instanceID: instanceID,
+                targetVersion: targetVersion
+            )
             guard !Task.isCancelled else { return }
             installedProvider = providers.first { $0.instanceId == instanceID }
             PlatformHapticEngine.shared.play(.success)
