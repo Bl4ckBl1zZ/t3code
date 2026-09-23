@@ -146,6 +146,45 @@ it.effect("unknown explicit link snapshots keep quiet work active without re-rea
   }).pipe(Effect.scoped),
 );
 
+it.effect("skips the branch recheck when a terminal link would settle nothing", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("12 days");
+    // Work resumed after the merge and is too recent for inactivity, so the
+    // merged link cannot settle the thread.
+    const thread = fixture({
+      branch: "feature",
+      latestUserMessageAt: DateTime.makeUnsafe(10 * 86_400_000),
+      linkedPullRequest: {
+        projectId: ProjectId.make("project"),
+        repository: "org/repo",
+        number: 1,
+        url: "https://github.com/org/repo/pull/1",
+      },
+    });
+    const project = {
+      id: thread.projectId,
+      workspaceRoot: "/repo",
+      updatedAt: "1970-01-01T00:00:00Z",
+    } as unknown as Project;
+    const h = harness(thread);
+    h.summary.mockImplementation(() =>
+      Effect.succeed({ state: "merged", mergedAt: "1970-01-02T00:00:00.000Z", closedAt: null }),
+    );
+    const layer = Layer.merge(
+      h.layer,
+      Layer.mock(ProjectService)({
+        snapshot: Effect.succeed({ projects: [project], updatedAt: project.updatedAt }),
+      }),
+    );
+    const reactor = yield* make.pipe(Effect.provide(layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(h.summary).toHaveBeenCalledTimes(1);
+    expect(h.branch).not.toHaveBeenCalled();
+    expect(h.dispatch).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped),
+);
+
 it.effect("a confirmed merge invalidates the matching checkout before scheduling settlement", () =>
   Effect.gen(function* () {
     const notified = yield* Deferred.make<PullRequestMergeEvent>();

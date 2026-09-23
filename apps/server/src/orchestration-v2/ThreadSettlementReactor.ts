@@ -50,6 +50,22 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
 
+  const wouldSettle = Effect.fn("ThreadSettlementReactor.wouldSettle")(function* (
+    thread: OrchestrationV2ThreadShell,
+    pullRequest: SettlementPullRequest,
+  ) {
+    const current = yield* settingsService.getSettings;
+    return (
+      resolveAutoSettlementAt({
+        thread,
+        pullRequest,
+        now: yield* DateTime.now,
+        autoSettleAfterDays: current.sidebarAutoSettleAfterDays,
+        autoSettleOnMerge: current.sidebarAutoSettleOnMerge,
+      }) !== null
+    );
+  });
+
   const lookup = Effect.fn("ThreadSettlementReactor.lookup")(function* (
     thread: OrchestrationV2ThreadShell,
     project: Project | undefined,
@@ -64,13 +80,21 @@ export const make = Effect.gen(function* () {
           : project.workspaceRoot;
     if (reference != null) {
       const summary = yield* pullRequests.summary(reference);
+      const terminal = {
+        state: summary.state,
+        mergedAt: summary.mergedAt ?? null,
+        closedAt: summary.closedAt ?? null,
+      } satisfies SettlementPullRequest;
       if (
         summary.state !== "open" &&
         thread.branch !== null &&
         cwd !== null &&
-        project !== undefined
+        project !== undefined &&
+        (yield* wouldSettle(thread, terminal))
       ) {
-        // Branch reuse must win over an older terminal branch candidate.
+        // Branch reuse must win over an older terminal branch candidate. Only
+        // recheck when this sweep would settle; later eligibility waits for the
+        // next sweep.
         const current = yield* git.branchPullRequest(
           { cwd, branch: thread.branch },
           { refresh: true },
@@ -78,11 +102,7 @@ export const make = Effect.gen(function* () {
         if (current?.state === "open" && pullRequestMatchesProject(current, project))
           return current;
       }
-      return {
-        state: summary.state,
-        mergedAt: summary.mergedAt ?? null,
-        closedAt: summary.closedAt ?? null,
-      } satisfies SettlementPullRequest;
+      return terminal;
     }
     if (thread.branch === null || cwd === null || project === undefined) return null;
     const candidate = yield* git.branchPullRequest({ cwd, branch: thread.branch });
