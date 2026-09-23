@@ -12,6 +12,7 @@ import {
 } from "@t3tools/shared/model";
 
 import {
+  AlertTriangleIcon,
   ArrowUpCircleIcon,
   ChevronDownIcon,
   CopyIcon,
@@ -22,7 +23,7 @@ import {
 } from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import { useState, type ReactNode } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
   resolveProviderInstanceEnabled,
@@ -63,6 +64,22 @@ import {
 } from "./providerStatus";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+function ProviderStatusDiagnostic({
+  detail,
+  children,
+}: {
+  detail: string | null;
+  children: ReactElement;
+}) {
+  if (!detail) return children;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={children} />
+      <TooltipPopup side="top">{detail}</TooltipPopup>
+    </Tooltip>
+  );
+}
 
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
@@ -192,7 +209,7 @@ function ProviderAuthEmail(props: {
   if (!trimmed) return null;
 
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
+    <span className="inline-flex min-w-0 items-baseline gap-1.5">
       {props.separator ? <span aria-hidden>·</span> : null}
       {props.prefix ? <span className="text-muted-foreground/80">{props.prefix}</span> : null}
       <RedactedSensitiveText
@@ -456,6 +473,7 @@ interface ProviderInstanceCardProps {
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
   readonly onRunUpdate?: (() => void) | undefined;
+  readonly onInstallRecommended?: (() => void) | undefined;
   readonly isUpdating?: boolean | undefined;
 }
 
@@ -506,6 +524,7 @@ export function ProviderInstanceCard({
   onFavoriteModelsChange,
   onModelOrderChange,
   onRunUpdate,
+  onInstallRecommended,
   isUpdating = false,
 }: ProviderInstanceCardProps) {
   const [showAdvancedHermes, setShowAdvancedHermes] = useState(false);
@@ -525,8 +544,29 @@ export function ProviderInstanceCard({
     : null;
   const summary = rawSummary;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
-  const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
+  const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
+  const versionAdvisory = getProviderVersionAdvisoryPresentation(
+    liveProvider?.versionAdvisory,
+    liveProvider?.compatibilityAdvisory,
+    enabled,
+  );
   const updateCommand = versionAdvisory?.updateCommand ?? null;
+  const hasCompatibilityWarning =
+    compatibility !== undefined &&
+    compatibility.status !== "supported" &&
+    compatibility.status !== "unknown";
+  const VersionAdvisoryIcon = hasCompatibilityWarning ? AlertTriangleIcon : ArrowUpCircleIcon;
+  const onRunVersionAction = versionAdvisory?.targetVersion ? onInstallRecommended : onRunUpdate;
+  const needsAttention = statusKey === "warning" || statusKey === "error";
+  const statusDiagnostic = hasCompatibilityWarning && needsAttention ? summary.detail : null;
+  // Keep compatibility copy compact; the version popover carries the explanation.
+  const inlineStatusDetail = hasCompatibilityWarning
+    ? compatibility?.status === "broken"
+      ? "Incompatible"
+      : compatibility?.status === "unsupported"
+        ? "Unsupported"
+        : "Limited support"
+    : summary.detail;
   const FallbackIconComponent = driverOption?.icon;
   const displayName =
     instance.displayName?.trim() || driverOption?.label || String(instance.driver);
@@ -719,7 +759,10 @@ export function ProviderInstanceCard({
   );
 
   const authRowNode = (
-    <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-[13px] leading-[1.45] text-muted-foreground/80">
+    <p
+      tabIndex={statusDiagnostic ? 0 : undefined}
+      className="flex min-w-0 flex-wrap items-baseline gap-x-1 text-[13px] leading-[1.45] text-muted-foreground/80"
+    >
       {hasAuthenticatedEmail ? (
         <>
           <span>Authenticated as</span>
@@ -732,7 +775,7 @@ export function ProviderInstanceCard({
           <ProviderAuthEmail email={authEmail} separator prefix="Email" />
         </>
       )}
-      {summary.detail ? <span>- {summary.detail}</span> : null}
+      {inlineStatusDetail ? <span>- {inlineStatusDetail}</span> : null}
     </p>
   );
 
@@ -764,15 +807,15 @@ export function ProviderInstanceCard({
               <span className="truncate text-sm font-medium">{displayName}</span>
               {versionCodeNode}
               {versionAdvisory ? (
-                <ArrowUpCircleIcon
+                <VersionAdvisoryIcon
                   className="size-3 shrink-0 text-warning"
-                  aria-label="Update available"
+                  aria-label={versionAdvisory.title}
                 />
               ) : null}
             </span>
             <span className="block truncate text-xs text-muted-foreground">
               {summary.headline}
-              {summary.detail ? ` · ${summary.detail}` : ""}
+              {inlineStatusDetail ? ` · ${inlineStatusDetail}` : ""}
             </span>
             {String(instanceId) !== String(instance.driver) ? (
               <code className="block truncate text-[10px] text-muted-foreground">{instanceId}</code>
@@ -809,29 +852,36 @@ export function ProviderInstanceCard({
               {versionCodeNode}
               {versionAdvisory ? (
                 <Popover>
-                  <PopoverTrigger
-                    render={
-                      <Button
-                        type="button"
-                        size="icon-xs"
-                        variant="ghost"
-                        className={cn(
-                          "size-5 rounded-sm p-0",
-                          versionAdvisory.emphasis === "strong"
-                            ? "text-warning hover:text-warning"
-                            : "text-update-foreground hover:text-update-foreground",
-                        )}
-                        aria-label="Update available — view details"
-                      >
-                        <ArrowUpCircleIcon className="size-3.5" />
-                      </Button>
-                    }
-                  />
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <PopoverTrigger
+                          render={
+                            <Button
+                              type="button"
+                              size="icon-xs"
+                              variant="ghost"
+                              className={cn(
+                                "size-5 rounded-sm p-0",
+                                versionAdvisory.emphasis === "strong" || hasCompatibilityWarning
+                                  ? "text-warning hover:text-warning"
+                                  : "text-update-foreground hover:text-update-foreground",
+                              )}
+                              aria-label={`${versionAdvisory.title} — view details`}
+                            >
+                              <VersionAdvisoryIcon className="size-3.5" />
+                            </Button>
+                          }
+                        />
+                      }
+                    />
+                    <TooltipPopup side="top">{versionAdvisory.title}</TooltipPopup>
+                  </Tooltip>
                   <PopoverPopup side="bottom" align="start" width="md">
                     <div className="grid min-w-0 gap-3">
                       <div className="grid gap-0.5">
                         <p className="text-[13px] font-semibold leading-tight text-foreground">
-                          Update available
+                          {versionAdvisory.title}
                         </p>
                         <p
                           className={cn(
@@ -844,20 +894,24 @@ export function ProviderInstanceCard({
                           {versionAdvisory.detail}
                         </p>
                       </div>
-                      {onRunUpdate ? (
+                      {onRunVersionAction ? (
                         <Button
                           type="button"
                           size="xs"
                           variant="default"
                           className="w-full"
                           disabled={isUpdating}
-                          onClick={onRunUpdate}
+                          onClick={onRunVersionAction}
                         >
                           {isUpdating ? <Spinner /> : <DownloadIcon />}
-                          {isUpdating ? "Updating" : "Update now"}
+                          {isUpdating
+                            ? "Updating"
+                            : versionAdvisory.targetVersion
+                              ? `Install ${getProviderVersionLabel(versionAdvisory.targetVersion)}`
+                              : "Update now"}
                         </Button>
                       ) : null}
-                      {onRunUpdate && updateCommand ? (
+                      {onRunVersionAction && updateCommand ? (
                         <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                           <span aria-hidden className="h-px flex-1 bg-border" />
                           or, update manually using
@@ -900,7 +954,9 @@ export function ProviderInstanceCard({
               ) : null}
               {titleTailNode}
             </div>
-            {authRowNode}
+            <ProviderStatusDiagnostic detail={statusDiagnostic}>
+              {authRowNode}
+            </ProviderStatusDiagnostic>
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
             {mode !== "editor" ? (

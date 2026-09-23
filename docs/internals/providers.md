@@ -99,6 +99,17 @@ keep every cache. The
 Codex and Claude drivers apply the classification to every snapshot with `applyModelManifest`;
 driver kinds absent from the manifest have no legacy concept.
 
+The manifest's optional `compatibility` list holds per-driver version policies
+(`apps/server/src/provider/providerCompatibility.ts`). A policy applies only when its
+`t3CodeRange` matches the version in `apps/server/package.json`. A remote policy replaces the
+bundled one for the same driver, and omitting it keeps the bundled one. `ProviderRegistry` attaches
+the result to each snapshot as `compatibilityAdvisory`. The maintenance runner refuses to update to
+a broken or unsupported latest version, and can pin a policy's `recommendedVersion` for global npm,
+bun, pnpm and Vite+ installs. This fork keeps `apps/server` at 0.0.38 and does not take upstream's
+release version bumps. Upstream's policies target upstream releases, so they do not match fork
+builds. To activate a policy on the fork, add one with a matching `t3CodeRange` to the bundled
+manifest.
+
 ## Attachment access
 
 The server stores uploaded attachments in its attachment directory, outside the project workspace.

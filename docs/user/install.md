@@ -130,4 +130,10 @@ For multi-account setups, see [Codex](./providers-codex.md) and [Claude](./provi
 
 Provider updates use the installer that owns the executable on the selected machine. npm updates target the original global prefix; Homebrew compares against the version available from Homebrew. Unknown installations and mise-managed provider packages require updating with their original installer.
 
+On web and desktop, T3 Code warns when a provider version has known compatibility problems
+with your release. Check **Settings → Providers** on that environment for the recommended version
+or range. When its package manager supports installing a specific version, you can install the
+recommendation there. Otherwise use the provider's installer on the environment's machine. An
+unlisted version is unverified.
+
 In iOS Settings → Agents, open an account’s configuration to see installed/latest versions, refresh the check, or update a supported installation. Save account changes first. The result and command output stay visible, and a copy action provides the update command for use on the paired server.

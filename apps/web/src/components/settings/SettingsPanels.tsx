@@ -3418,7 +3418,10 @@ function EnvironmentProviderSettings(
   }, [targetEnvironment, refreshServerProviders, readOnly]);
 
   const runProviderUpdate = useCallback(
-    async (candidate: ProviderSettingsUpdateCandidate) => {
+    async (
+      candidate: Pick<ProviderSettingsUpdateCandidate, "driver" | "instanceId">,
+      targetVersion?: string,
+    ) => {
       if (readOnly || !targetEnvironment) return;
       if (updatingInstanceIdsRef.current.has(candidate.instanceId)) return;
       updatingInstanceIdsRef.current.add(candidate.instanceId);
@@ -3429,6 +3432,7 @@ function EnvironmentProviderSettings(
         input: {
           provider: candidate.driver,
           instanceId: candidate.instanceId,
+          ...(targetVersion ? { targetVersion } : {}),
         },
       });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -3680,9 +3684,8 @@ function EnvironmentProviderSettings(
       ? providerUpdateCandidateByInstanceId.get(liveProvider.instanceId)
       : undefined;
     const isDriverUpdateRunning =
-      updateCandidate !== undefined &&
-      (updatingProviderInstanceIds.has(updateCandidate.instanceId) ||
-        isProviderUpdateActive(updateCandidate));
+      updatingProviderInstanceIds.has(row.instanceId) ||
+      (liveProvider !== undefined && isProviderUpdateActive(liveProvider));
     const showInlineUpdateButton = updateCandidate !== undefined;
     const canRunInlineUpdate = updateCandidate !== undefined && !isDriverUpdateRunning;
     const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
@@ -3755,6 +3758,19 @@ function EnvironmentProviderSettings(
             modelOrder,
           })
         }
+        onInstallRecommended={
+          liveProvider?.compatibilityAdvisory?.message &&
+          liveProvider.compatibilityAdvisory.recommendedVersion &&
+          liveProvider.versionAdvisory?.canInstallVersion
+            ? () => {
+                if (isDriverUpdateRunning) return;
+                void runProviderUpdate(
+                  liveProvider,
+                  liveProvider.compatibilityAdvisory?.recommendedVersion ?? undefined,
+                );
+              }
+            : undefined
+        }
         onRunUpdate={
           showInlineUpdateButton && updateCandidate
             ? () => {
@@ -3765,7 +3781,7 @@ function EnvironmentProviderSettings(
               }
             : undefined
         }
-        isUpdating={showInlineUpdateButton ? isDriverUpdateRunning : undefined}
+        isUpdating={isDriverUpdateRunning}
       />
     );
   };

@@ -3218,7 +3218,7 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
   if (tone === "thinking") {
     return {
       iconName: "bot",
-      className: "text-foreground/92",
+      className: "text-icon-muted",
     };
   }
   if (tone === "info") {
