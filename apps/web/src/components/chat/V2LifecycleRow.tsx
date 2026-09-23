@@ -28,6 +28,7 @@ import { getProviderInstanceEntry } from "../../providerInstances";
 import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
+import { subagentOrbSeed, type SubagentTurnItem } from "./SubagentsStatusBadge.logic";
 import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
@@ -211,31 +212,43 @@ export function V2LifecycleRow(props: {
     );
   }
   if (item.type === "subagent") {
-    // Once a subagent stops, its last streamed result says more than the stale
-    // progress line; while it runs, live progress comes first.
-    const active = !orchestrationV2TurnItemStatusIsTerminal(item.status);
-    const streamedResult = item.result?.trim() ? item.result : null;
-    const detail = active
-      ? (item.progress ?? streamedResult ?? item.prompt)
-      : (streamedResult ?? item.progress ?? item.prompt);
-    return (
-      <RelatedThreadRow
-        itemType={item.type}
-        orb={{
-          // Seed by child thread id when it exists so the relationships panel
-          // (which only knows thread ids) resolves the same color.
-          seed: item.childThreadId ?? item.subagentId,
-          state: active ? "active" : item.status === "failed" ? "failed" : "done",
-        }}
-        title={subagentDisplayTitle(item.title ?? "Subagent")}
-        detail={detail}
-        status={item.status}
-        threadId={item.childThreadId}
-        onOpenThread={props.onOpenThread}
-      />
-    );
+    return <SubagentRow item={item} onOpenThread={props.onOpenThread} />;
   }
   return null;
+}
+
+/**
+ * A subagent drawn as a row that opens its thread. Shared by the timeline and
+ * the agents pill's popover, so both say the same thing about the same agent.
+ */
+export function SubagentRow(props: {
+  readonly item: SubagentTurnItem;
+  readonly onOpenThread: (threadId: ThreadId) => void;
+}) {
+  const { item } = props;
+  // Once a subagent stops, its last streamed result says more than the stale
+  // progress line; while it runs, live progress comes first.
+  const active = !orchestrationV2TurnItemStatusIsTerminal(item.status);
+  const streamedResult = item.result?.trim() ? item.result : null;
+  const detail = active
+    ? (item.progress ?? streamedResult ?? item.prompt)
+    : (streamedResult ?? item.progress ?? item.prompt);
+  return (
+    <RelatedThreadRow
+      itemType={item.type}
+      orb={{
+        // Seed by child thread id when it exists so the relationships panel
+        // (which only knows thread ids) resolves the same color.
+        seed: subagentOrbSeed(item),
+        state: active ? "active" : item.status === "failed" ? "failed" : "done",
+      }}
+      title={subagentDisplayTitle(item.title ?? "Subagent")}
+      detail={detail}
+      status={item.status}
+      threadId={item.childThreadId}
+      onOpenThread={props.onOpenThread}
+    />
+  );
 }
 
 /**

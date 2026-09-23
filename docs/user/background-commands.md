@@ -39,11 +39,14 @@ instead of as a separate process, because you are waiting on one thing, not two.
 
 ## While you are elsewhere
 
-A strip tucked above the composer shows how many background commands are running for the open
-conversation, with the elapsed time of the oldest. Click it for the latest output of each. In the sidebar, a
-conversation with background work shows a hollow, breathing dot — distinct from the filled dot of a
-conversation that is generating right now, and from no dot at all. It means: idle at the moment, but
-this one will speak again by itself.
+A pill above the composer shows how many background commands are running for the open conversation,
+with the elapsed time of the oldest. Click it for the latest output of each. When subagents are
+working, a pill beside it counts them; click it to see what each agent is doing and open its thread.
+The two pills share one panel, so clicking the other pill swaps what it shows. In the React Native
+mobile client, tapping either pill opens the conversation's details, which list both. In the
+sidebar, a conversation with background work shows a hollow, breathing dot — distinct from the
+filled dot of a conversation that is generating right now, and from no dot at all. It means: idle at
+the moment, but this one will speak again by itself.
 
 ## How commands end
 

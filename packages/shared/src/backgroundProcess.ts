@@ -192,7 +192,7 @@ export interface LiveBackgroundProcess {
 
 /**
  * Live background commands drawn straight from the timeline entries a thread
- * already renders, so the strip above the composer and the rows in the timeline
+ * already renders, so the pill above the composer and the rows in the timeline
  * cannot disagree about what is running.
  */
 export function liveBackgroundProcessesFromTimeline(
@@ -258,4 +258,54 @@ export function liveBackgroundProcesses(
     }
   }
   return processes;
+}
+
+export interface BackgroundProcessesSummary {
+  /** What the pill says: a count, or what a lone wait is doing. */
+  readonly label: string;
+  /** Spoken name, which says "commands" where the visible count leaves it out. */
+  readonly accessibilityLabel: string;
+  /** Clock of the command that has been running longest. */
+  readonly startedAtMs: number;
+  readonly pausedMs: number;
+  readonly paused: boolean;
+}
+
+/**
+ * One line for a thread's live background commands, as the pill above the
+ * composer shows it: how many, and how long the oldest has been running.
+ * Null when nothing is running.
+ */
+export function summarizeBackgroundProcesses(
+  processes: ReadonlyArray<LiveBackgroundProcess>,
+  nowMs: number,
+): BackgroundProcessesSummary | null {
+  let oldest: OrchestrationV2CommandExecutionItem | null = null;
+  let oldestStartedMs = Number.POSITIVE_INFINITY;
+  for (const process of processes) {
+    // Compared on epoch millis, not on stringified DateTimes: those only sort
+    // correctly because Effect happens to render them ISO-prefixed. A command
+    // with no start time counts as starting now, so it never outranks one that
+    // has a real start.
+    const startedMs =
+      process.item.startedAt === null ? nowMs : DateTime.toEpochMillis(process.item.startedAt);
+    if (startedMs < oldestStartedMs) {
+      oldest = process.item;
+      oldestStartedMs = startedMs;
+    }
+  }
+  if (oldest === null) {
+    return null;
+  }
+  const count = processes.length;
+  const waitingOnly = count === 1 && oldest.waitKind === "monitor";
+  return {
+    label: waitingOnly ? "Waiting for a condition" : `${count} in background`,
+    accessibilityLabel: waitingOnly
+      ? "Waiting for a condition"
+      : `${count} background ${count === 1 ? "command" : "commands"} running`,
+    startedAtMs: oldestStartedMs,
+    pausedMs: oldest.pausedMs ?? 0,
+    paused: oldest.paused === true,
+  };
 }

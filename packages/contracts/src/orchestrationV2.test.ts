@@ -493,7 +493,7 @@ describe("orchestration V2 contracts", () => {
       ]),
     ).toBe(1);
     // A monitor with no live target still counts: the agent is asleep either way,
-    // and the sidebar has to agree with the strip above the composer.
+    // and the sidebar has to agree with the pill above the composer.
     expect(
       orchestrationV2BackgroundProcessCount([
         { ...base, taskId: "b8zv6rtg9", waitKind: "monitor" as const },

@@ -240,7 +240,7 @@ export function BackgroundProcessDetail({
 
 /**
  * A live background command listed under a heading that already names it — the
- * composer strip and the thread details panel. The timeline row minus its
+ * background pill's popover and the thread details panel. The timeline row minus its
  * "Background command" title, with any monitor watching it folded in underneath.
  */
 export const BackgroundProcessRow = memo(function BackgroundProcessRow({

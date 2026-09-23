@@ -85,6 +85,7 @@ import {
   createModelSelection,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
+import { liveBackgroundProcessesFromTimeline } from "@t3tools/shared/backgroundProcess";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
@@ -147,7 +148,7 @@ import {
 import { type LegendListRef } from "@legendapp/list/react";
 import { WorkingTreeStatusBadge } from "./chat/WorkingTreeStatusBadge";
 import { deriveWorkingTreeBadgeState } from "./chat/WorkingTreeStatusBadge.logic";
-import { SubagentsStatusBadge } from "./chat/SubagentsStatusBadge";
+import { ThreadActivityPills } from "./chat/ThreadActivityPills";
 import { workingSubagentsFromTimeline } from "./chat/SubagentsStatusBadge.logic";
 import {
   getAnchoredTurnMetrics,
@@ -366,7 +367,6 @@ import {
   shouldShowThreadErrorBanner,
   ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
-import { BackgroundProcessesControl } from "./chat/BackgroundProcessesControl";
 import { QueuedRunsControl } from "./chat/QueuedRunsControl";
 import {
   resolveDisplayedThreadPr,
@@ -3200,8 +3200,15 @@ function ChatViewContent(props: ChatViewProps) {
     () => workingSubagentsFromTimeline(timelineEntries),
     [timelineEntries],
   );
+  const backgroundProcesses = useMemo(
+    () => liveBackgroundProcessesFromTimeline(timelineEntries),
+    [timelineEntries],
+  );
   const showStatusPills =
-    (workingTreeBadgeState !== null || workingSubagents.length > 0) && !isDraftHeroState;
+    (workingTreeBadgeState !== null ||
+      workingSubagents.length > 0 ||
+      backgroundProcesses.length > 0) &&
+    !isDraftHeroState;
   // The broadcaster only recomputes the working tree when something asks it to
   // — nothing does while a run is in flight — so poll it directly here. This
   // has to be the refresh command rather than `gitStatusQuery.refresh()`:
@@ -8456,7 +8463,7 @@ function ChatViewContent(props: ChatViewProps) {
                 topFadeEnabled={!hasTimelineTopBanner}
               />
 
-              {/* floating pills above the composer: scroll-to-end, working-tree status, working subagents */}
+              {/* floating pills above the composer: scroll-to-end, working-tree status, working subagents, background commands */}
               {(showStatusPills || showScrollToBottom) && (
                 <div
                   className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex flex-col items-center gap-1.5 py-1.5"
@@ -8482,9 +8489,12 @@ function ChatViewContent(props: ChatViewProps) {
                           isWorking={isWorking}
                         />
                       )}
-                      {workingSubagents.length > 0 && (
-                        <SubagentsStatusBadge subagents={workingSubagents} />
-                      )}
+                      <ThreadActivityPills
+                        subagents={workingSubagents}
+                        backgroundProcesses={backgroundProcesses}
+                        turnInProgress={isWorking || !latestRunSettled}
+                        onOpenThread={onOpenRelatedThread}
+                      />
                     </div>
                   )}
                 </div>
@@ -8523,12 +8533,6 @@ function ChatViewContent(props: ChatViewProps) {
                         />
                       </div>
                     </div>
-                  ) : null}
-                  {isServerThread ? (
-                    <BackgroundProcessesControl
-                      timelineEntries={timelineEntries}
-                      turnInProgress={isWorking || !latestRunSettled}
-                    />
                   ) : null}
                   {isServerThread && activeThread ? (
                     <QueuedRunsControl

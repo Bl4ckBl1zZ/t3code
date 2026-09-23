@@ -19,6 +19,7 @@ import {
   formatBackgroundSinceOutput,
   liveBackgroundProcesses,
   resolveBackgroundProcessView,
+  summarizeBackgroundProcesses,
 } from "./backgroundProcess.ts";
 
 const START = DateTime.makeUnsafe("2026-08-04T12:00:00.000Z");
@@ -240,5 +241,58 @@ describe("backgroundProcessTail", () => {
   it("has nothing to show for empty output", () => {
     expect(backgroundProcessTail(undefined)).toBeNull();
     expect(backgroundProcessTail("   ")).toBeNull();
+  });
+});
+
+describe("summarizeBackgroundProcesses", () => {
+  it("has nothing to say when nothing is running", () => {
+    expect(summarizeBackgroundProcesses([], NOW_MS)).toBeNull();
+  });
+
+  it("counts the commands and keeps the oldest one's clock", () => {
+    const newer = commandItem({
+      id: TurnItemId.make("newer"),
+      startedAt: at("2026-08-04T12:01:00.000Z"),
+    });
+    const older = commandItem({
+      id: TurnItemId.make("older"),
+      startedAt: at("2026-08-04T11:40:00.000Z"),
+      pausedMs: 5_000,
+      paused: true,
+    });
+    const summary = summarizeBackgroundProcesses(
+      [
+        { item: newer, monitor: null },
+        { item: older, monitor: null },
+      ],
+      NOW_MS,
+    );
+    expect(summary).toEqual({
+      label: "2 in background",
+      accessibilityLabel: "2 background commands running",
+      startedAtMs: DateTime.toEpochMillis(at("2026-08-04T11:40:00.000Z")),
+      pausedMs: 5_000,
+      paused: true,
+    });
+  });
+
+  it("never lets a command with no start time outrank one that has one", () => {
+    const unstarted = commandItem({ id: TurnItemId.make("unstarted"), startedAt: null });
+    const started = commandItem({ id: TurnItemId.make("started"), startedAt: START });
+    const summary = summarizeBackgroundProcesses(
+      [
+        { item: unstarted, monitor: null },
+        { item: started, monitor: null },
+      ],
+      NOW_MS,
+    );
+    expect(summary?.startedAtMs).toBe(DateTime.toEpochMillis(START));
+  });
+
+  it("names a lone wait by what it is doing rather than as a count", () => {
+    const monitor = commandItem({ waitKind: "monitor" });
+    const summary = summarizeBackgroundProcesses([{ item: monitor, monitor: null }], NOW_MS);
+    expect(summary?.label).toBe("Waiting for a condition");
+    expect(summary?.accessibilityLabel).toBe("Waiting for a condition");
   });
 });
