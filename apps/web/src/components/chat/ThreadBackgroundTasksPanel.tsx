@@ -16,7 +16,7 @@ const VISIBLE_TASK_LIMIT = 4;
  * which launched them — `Bash` with `run_in_background`, and the monitors that
  * wait on them.
  *
- * The composer strip already says this while you are reading the thread. This
+ * The background pill already says this while you are reading the thread. This
  * section exists for the reader who is looking at a diff, a file, or another
  * thread's worth of context: the panel stays put, so "something is still
  * running" stays visible. Renders nothing when nothing is running, so the
