@@ -1609,20 +1609,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} must be active before it can be pinned.`,
       });
     }
-    if (
-      command.type === "thread.settle" &&
-      (projection.runs.some((run) =>
-        ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
-      ) ||
+    if (command.type === "thread.settle") {
+      // Queued notification and delegated-completion runs only wake the agent.
+      // They are not user messages and are hidden from the queue UI, so they
+      // must not block settling; they are cancelled below instead.
+      const automaticMessageIds = new Set(
+        projection.messages
+          .filter(
+            (message) =>
+              message.notification !== undefined || message.delegatedCompletion !== undefined,
+          )
+          .map((message) => message.id),
+      );
+      const automaticQueuedRuns = projection.runs.filter(
+        (run) => run.status === "queued" && automaticMessageIds.has(run.userMessageId),
+      );
+      if (
+        projection.runs.some(
+          (run) =>
+            ["preparing", "queued", "starting", "running", "waiting"].includes(run.status) &&
+            !automaticQueuedRuns.includes(run),
+        ) ||
         projection.runtimeRequests.some(
           (request) => request.status === "pending" && request.responseMode !== "message",
-        ))
-    ) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: `Thread ${command.threadId} has active or blocked work and cannot be settled.`,
-      });
+        )
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} has active or blocked work and cannot be settled.`,
+        });
+      }
+      for (const run of automaticQueuedRuns) {
+        yield* dispatchQueuedRunCancel(
+          {
+            type: "queued-run.cancel",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            runId: run.id,
+          },
+          events,
+        );
+      }
     }
 
     const providerSwitchPlan =
