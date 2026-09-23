@@ -1891,7 +1891,7 @@ public actor EnvironmentRuntime {
     private var didAttemptLegacyImport = false
 
     public func environments() async throws -> [Environment] {
-        try await importLegacyEnvironmentsIfNeeded()
+        await importLegacyEnvironmentsIfNeeded()
         return try await environmentStore.load()
     }
 

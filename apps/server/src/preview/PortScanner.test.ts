@@ -143,11 +143,39 @@ const closeServer = (server: NodeNet.Server): Effect.Effect<void> =>
     server.close(() => resume(Effect.void));
   });
 
+// Binding 127.0.0.1 can succeed while another dev server holds the same port on
+// IPv6, and the scanner's `localhost` probe then reaches that server instead.
+const isPortInUse = (port: number): Effect.Effect<boolean> =>
+  Effect.callback((resume) => {
+    const hosts = ["127.0.0.1", "::1"];
+    let pending = hosts.length;
+    let inUse = false;
+    const sockets = hosts.map((host) => {
+      const socket = NodeNet.connect({ port, host });
+      let settled = false;
+      const settle = (connected: boolean) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        inUse ||= connected;
+        pending -= 1;
+        if (pending === 0) resume(Effect.succeed(inUse));
+      };
+      socket.once("connect", () => settle(true));
+      socket.once("error", () => settle(false));
+      return socket;
+    });
+    return Effect.sync(() => {
+      for (const socket of sockets) socket.destroy();
+    });
+  });
+
 const openCommonDevServer = Effect.fn("PortScannerTest.openCommonDevServer")(function* (
   ports: ReadonlyArray<number>,
   onConnection: (socket: NodeNet.Socket) => void,
 ) {
   for (const port of ports) {
+    if (yield* isPortInUse(port)) continue;
     const server = yield* openServer(port, onConnection);
     if (server !== null) return { port, server };
   }
