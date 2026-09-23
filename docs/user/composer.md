@@ -202,7 +202,8 @@ message. If a new task or conversation can't be sent yet, for example because yo
 base branch is chosen, or no computer can run it, send stays disabled and the composer says why,
 with a button to fix it when there is one. Closing **New Task** with unsent text offers **Delete
 Draft** or **Save Draft**; closing **New Chat** or **New Conversation** asks before discarding. The **Outbox** in Drafts shows queued, uploading, sending and failed submissions.
-Use **Retry queued** after a failure, or remove a queued submission to cancel it before delivery.
+A submission interrupted by a lost connection, a timeout, or a busy or briefly unreachable server
+stays queued and sends on its own once the environment answers again. Use **Retry queued** after a failure, or remove a queued submission to cancel it before delivery.
 A submission already being sent cannot be cancelled from the outbox.
 
 On supporting environments, agent questions accept files alongside each answer. Files appear

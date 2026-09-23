@@ -1469,6 +1469,8 @@ public final class FeatureRootModel {
             || (environment.isActive && snapshot.connection.state == .connected)
     }
 
+    private static let transientHTTPStatuses: Set<Int> = [408, 429, 502, 503, 504]
+
     static func shouldQueue(
         _ error: any Error,
         environmentID: String,
@@ -1477,6 +1479,14 @@ public final class FeatureRootModel {
         if error is CancellationError || error is URLError { return true }
         if let rpcError = error as? RPCError,
            case .responseTimedOut = rpcError {
+            return true
+        }
+        // A signed attachment upload can fail with a gateway or overload status
+        // after the socket has already reconnected. Those clear on their own, so
+        // the submission waits for the outbox's backoff instead of failing.
+        if let httpError = error as? HTTPError,
+           case let .status(status, _, _) = httpError,
+           Self.transientHTTPStatuses.contains(status) {
             return true
         }
         if let environment = snapshot.environments.first(where: { $0.id == environmentID }) {

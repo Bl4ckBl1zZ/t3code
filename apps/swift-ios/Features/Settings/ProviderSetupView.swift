@@ -155,7 +155,12 @@ struct ProviderSetupView: View {
         loading = true
         defer { if generation == request { loading = false } }
         do {
-            if refresh { _ = try await context.terminals.refreshSetupProviders(environmentID: context.environmentID) }
+            if refresh {
+                _ = try await context.terminals.refreshSetupProviders(
+                    environmentID: context.environmentID,
+                    refreshModels: true
+                )
+            }
             let next = try await context.settings.providerModelConfiguration(environmentID: context.environmentID)
             guard !Task.isCancelled, generation == request else { return }
             config = next

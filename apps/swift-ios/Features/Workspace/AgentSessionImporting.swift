@@ -19,6 +19,8 @@ protocol FeatureAgentSetupTerminal: AnyObject {
 
 @MainActor
 protocol FeatureAgentSetupTerminalProviding: AnyObject {
-    func refreshSetupProviders(environmentID: String) async throws -> [ServerProviderSnapshot]
+    /// `refreshModels` asks the server to rediscover models past its caches;
+    /// reserve it for an explicit refresh, not a screen appearing.
+    func refreshSetupProviders(environmentID: String, refreshModels: Bool) async throws -> [ServerProviderSnapshot]
     func makeAgentSetupTerminal(environmentID: String, providerInstanceID: String) async throws -> any FeatureAgentSetupTerminal
 }

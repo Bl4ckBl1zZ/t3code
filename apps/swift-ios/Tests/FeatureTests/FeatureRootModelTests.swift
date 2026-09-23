@@ -1042,6 +1042,43 @@ struct FeatureRootModelTests {
         )
     }
 
+    @Test(arguments: [408, 429, 502, 503, 504])
+    func transientUploadStatusKeepsSubmissionQueuedWhileConnected(status: Int) {
+        // The socket is back, but the signed upload answered with a status
+        // that clears on its own, so the outbox retries instead of failing.
+        #expect(
+            FeatureRootModel.shouldQueue(
+                HTTPError.status(status, message: "Environment request failed.", traceID: nil),
+                environmentID: "studio",
+                snapshot: Self.connectedStudioSnapshot
+            )
+        )
+    }
+
+    @Test(arguments: [400, 401, 413, 500])
+    func rejectedUploadStatusFailsSubmissionWhileConnected(status: Int) {
+        #expect(
+            !FeatureRootModel.shouldQueue(
+                HTTPError.status(status, message: "Environment request failed.", traceID: nil),
+                environmentID: "studio",
+                snapshot: Self.connectedStudioSnapshot
+            )
+        )
+    }
+
+    private static let connectedStudioSnapshot = FeatureSnapshot(
+        connection: .init(state: .connected),
+        environments: [
+            .init(
+                id: "studio",
+                name: "Studio",
+                endpoint: "https://studio.example",
+                isActive: true,
+                connectionState: .connected
+            ),
+        ]
+    )
+
     @Test
     func detailEventsIgnoreDuplicatesAndAdvancePerThreadRevision() async {
         let client = FeatureClientStub()
