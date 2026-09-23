@@ -19,7 +19,7 @@ public protocol FeatureServerSettingsManaging: AnyObject {
     func providerInstallEvents(environmentID: String, instanceID: String) async throws -> AsyncThrowingStream<NativeProviderInstallState, Error>
     func updateDesktopApp(environmentID: String, progress: @escaping @Sendable (String) async -> Void) async throws -> String
     func providerUpdateEvents(environmentID: String) async throws -> AsyncThrowingStream<[ServerProviderSnapshot], Error>
-    func updateProvider(environmentID: String, driver: String, instanceID: String) async throws -> [ServerProviderSnapshot]
+    func updateProvider(environmentID: String, driver: String, instanceID: String, targetVersion: String?) async throws -> [ServerProviderSnapshot]
     func refreshProviderUpdates(environmentID: String) async throws -> [ServerProviderSnapshot]
     func sharedSettingsMismatches(environmentID: String) async throws -> [FeatureSharedSettingsMismatch]
     func applySharedSettings(environmentID: String) async throws
@@ -71,7 +71,7 @@ extension FeatureServerSettingsManaging {
 }
 
 extension FeatureServerSettingsManaging {
-    public func updateProvider(environmentID: String, driver: String, instanceID: String) async throws -> [ServerProviderSnapshot] {
+    public func updateProvider(environmentID: String, driver: String, instanceID: String, targetVersion: String?) async throws -> [ServerProviderSnapshot] {
         throw FeatureCapabilityUnavailable("Provider updates")
     }
     public func refreshProviderUpdates(environmentID: String) async throws -> [ServerProviderSnapshot] {

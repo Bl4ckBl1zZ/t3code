@@ -5521,6 +5521,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         )
                     }
                 )
+                mapped.incompatibleVersionWarning = provider.incompatibleVersionWarning
                 mapped.workspaceSnapshots = provider.workspaceSnapshots?.map { workspace in
                     FeatureProviderWorkspace(cwd: workspace.cwd,
                         slashCommands: workspace.slashCommands.map { .init(name: $0.name, description: $0.description, inputHint: $0.input?.hint) },
@@ -6771,9 +6772,9 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         }
     }
 
-    func updateProvider(environmentID: String, driver: String, instanceID: String) async throws -> [ServerProviderSnapshot] {
+    func updateProvider(environmentID: String, driver: String, instanceID: String, targetVersion: String?) async throws -> [ServerProviderSnapshot] {
         let client = try await environmentClient(id: environmentID)
-        let providers = try await client.updateProvider(driver: driver, instanceID: instanceID)
+        let providers = try await client.updateProvider(driver: driver, instanceID: instanceID, targetVersion: targetVersion)
         // Propagate the new catalog through the same environment-owned snapshot path.
         _ = try? await providerModelConfiguration(environmentID: environmentID)
         return providers

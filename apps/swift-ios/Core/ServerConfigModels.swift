@@ -167,6 +167,7 @@ public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable
     public var supportsConversationRollback: Bool? = nil
     public var supportsTextGeneration: Bool? = nil
     public var versionAdvisory: ServerProviderVersionAdvisory? = nil
+    public var compatibilityAdvisory: ServerProviderCompatibilityAdvisory? = nil
     public var updateState: ServerProviderUpdateState? = nil
     public var usageLimits: ServerProviderUsageLimits? = nil
     public var id: String { instanceId }
