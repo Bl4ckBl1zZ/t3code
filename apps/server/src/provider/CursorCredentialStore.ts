@@ -59,5 +59,5 @@ export const makeCursorCredentialStore = Effect.fn("makeCursorCredentialStore")(
       ),
     clear: () => Effect.runPromise(credentials.remove),
   };
-  return { store, key: credentials.key };
+  return { store, binding: credentials.binding };
 });

@@ -52,7 +52,7 @@ it.effect(
       );
       const restored = yield* makeStore("personal");
       assert.deepEqual(yield* Effect.tryPromise(() => restored.store.load()), credentials);
-      data.set(personal.key, new TextEncoder().encode("damaged credential"));
+      data.set(personal.binding.key, new TextEncoder().encode("damaged credential"));
       assert.isUndefined(yield* Effect.tryPromise(() => restored.store.load()));
       yield* Effect.tryPromise(() => restored.store.save(credentials));
       yield* Effect.tryPromise(() => restored.store.clear());
