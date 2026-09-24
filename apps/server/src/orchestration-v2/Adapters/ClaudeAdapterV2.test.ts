@@ -1,3 +1,5 @@
+import * as NodeOS from "node:os";
+
 import { type ClaudeModelCatalog } from "../../provider/ClaudeModelCatalog.ts";
 import type {
   Query as ClaudeQuery,
@@ -42,6 +44,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { Tool } from "effect/unstable/ai";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
+import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { OrchestratorToolkit } from "../../mcp/toolkits/orchestrator/tools.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
@@ -58,6 +61,8 @@ import {
   CLAUDE_READ_ONLY_ALLOWED_TOOLS,
   CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS,
   CLAUDE_T3_MCP_TOOL_WILDCARD,
+  ClaudeAdapterV2Driver,
+  ClaudeAgentSdkQueryRunner,
   ClaudeProviderCapabilitiesV2,
   claudeEffectiveQueryPolicyKey,
   claudeMcpQueryOverrides,
@@ -4347,4 +4352,66 @@ describe("ClaudeAdapterV2 viewed images", () => {
       claudeViewedImagePath("read", toolInput({ file_path: `${"a".repeat(4_093)}.png` })),
     );
   });
+});
+
+describe("ClaudeAdapterV2 executable path", () => {
+  it.effect("expands ~ in the configured binary path for the SDK", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const executablePaths: Array<string | undefined> = [];
+        const adapter = yield* ClaudeAdapterV2Driver.create({
+          instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
+          displayName: undefined,
+          environment: [],
+          enabled: true,
+          config: { ...DEFAULT_CLAUDE_SETTINGS, binaryPath: "~/bin/claude" },
+        }).pipe(
+          Effect.provide(
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-claude-binary-home-" }),
+          ),
+          Effect.provideService(ClaudeAgentSdkQueryRunner, {
+            allocateSessionId: Effect.succeed("native-thread-claude-binary-home"),
+            open: (input) =>
+              Effect.sync(() => {
+                executablePaths.push(input.options.pathToClaudeCodeExecutable);
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            assertComplete: Effect.void,
+          }),
+        );
+        const threadId = ThreadId.make("thread-claude-binary-home");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-binary-home"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-binary-home"),
+            text: "hello",
+            attachments: [],
+          }),
+        );
+
+        assert.deepEqual(executablePaths, [path.join(NodeOS.homedir(), "bin", "claude")]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
 });

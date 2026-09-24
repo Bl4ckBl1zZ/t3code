@@ -96,6 +96,7 @@ import {
   type CompiledClaudeModelSelection,
 } from "../../claudeModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
+import { expandHomePath } from "../../pathExpansion.ts";
 import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
@@ -5769,7 +5770,7 @@ export const ClaudeAdapterV2Driver: ProviderAdapterDriver<
         modelCatalog: Option.isSome(manifest)
           ? manifest.value.current.pipe(Effect.map(resolveClaudeModelCatalog))
           : Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG),
-        settings: { ...config, enabled },
+        settings: { ...config, enabled, binaryPath: expandHomePath(config.binaryPath) },
         environment: claudeEnvironment,
         attachmentsDir: serverConfig.attachmentsDir,
         fileSystem,
