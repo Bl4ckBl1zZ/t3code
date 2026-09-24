@@ -17,6 +17,7 @@ import type {
 } from "@t3tools/contracts";
 
 import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
@@ -160,6 +161,7 @@ function makeService(input: {
   readonly projects: ReadonlyArray<Project>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
+  readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
   return PullRequestService.make.pipe(
     Effect.provide(
@@ -174,6 +176,9 @@ function makeService(input: {
             projects: input.projects,
             updatedAt: "2026-07-01T00:00:00Z",
           }),
+        }),
+        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+          resolve: input.resolveRepositoryIdentity ?? (() => Effect.succeed(null)),
         }),
         SourceControlRateLimit.layer,
         Layer.effect(PullRequestReadCache.PullRequestReadCache, PullRequestReadCache.make).pipe(
@@ -3768,6 +3773,35 @@ it.effect("forgets detail after a host partially writes and then reports a failu
     assert.strictEqual((yield* service.detail(ref)).title, "Before");
     yield* service.update({ ...ref, title: "After" }).pipe(Effect.flip);
     assert.strictEqual((yield* service.detail(ref)).title, "After");
+  }),
+);
+
+it.effect("resolves a project's repository identity when its enrichment is not cached yet", () =>
+  Effect.gen(function* () {
+    const resolved = project({
+      id: "web",
+      title: "web",
+      workspaceRoot: "/web",
+      repository: "acme/web",
+    });
+    const service = yield* makeService({
+      projects: [{ ...resolved, repositoryIdentity: null }],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestSummary: () => Effect.succeed(changeRequest(7, "2026-07-02T00:00:00Z")),
+        }),
+      ],
+      resolveRepositoryIdentity: () => Effect.succeed(resolved.repositoryIdentity ?? null),
+    });
+
+    const summary = yield* service.summary({
+      projectId: "web" as ProjectId,
+      host: "github.com",
+      repository: "acme/web",
+      number: 7,
+    });
+
+    assert.strictEqual(summary.number, 7);
   }),
 );
 

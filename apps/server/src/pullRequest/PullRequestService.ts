@@ -64,6 +64,7 @@ import {
 } from "@t3tools/shared/sourceControl";
 
 import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
@@ -548,6 +549,7 @@ export const make = Effect.gen(function* () {
   const registry = yield* PullRequestProviderRegistry;
   const readCache = yield* PullRequestReadCache.PullRequestReadCache;
   const projectService = yield* ProjectService.ProjectService;
+  const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
 
@@ -625,6 +627,21 @@ export const make = Effect.gen(function* () {
             detail: "The project list could not be read.",
             cause: error,
           }),
+      ),
+      // The snapshot serves only enrichment that has already resolved, so a project read
+      // before its first resolution would have no repository and silently drop out of
+      // merged-PR detection. Resolve those on demand.
+      Effect.flatMap((snapshot) =>
+        Effect.forEach(
+          snapshot.projects,
+          (project) =>
+            project.repositoryIdentity != null
+              ? Effect.succeed(project)
+              : repositoryIdentities
+                  .resolve(project.workspaceRoot)
+                  .pipe(Effect.map((repositoryIdentity) => ({ ...project, repositoryIdentity }))),
+          { concurrency: REPOSITORY_CONCURRENCY },
+        ).pipe(Effect.map((projects) => ({ ...snapshot, projects }))),
       ),
       Effect.flatMap((snapshot) =>
         refineUnknownProjectKinds(snapshot.projects, filter).pipe(
