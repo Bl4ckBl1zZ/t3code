@@ -30,6 +30,7 @@ import {
   executorLayer as effectExecutorLayer,
   layer as effectWorkerLayer,
   runDaemon as runEffectWorkerDaemon,
+  OrchestrationEffectWorkerV2,
 } from "../EffectWorker.ts";
 import { layerFromStores as eventSinkLayer } from "../EventSink.ts";
 import { layer as eventStoreLayer } from "../EventStore.ts";
@@ -214,7 +215,7 @@ export function makeOrchestratorV2ProviderReplayLayer<
     readonly runEffectWorker?: boolean;
   } = {},
 ): Layer.Layer<
-  OrchestratorV2,
+  OrchestratorV2 | OrchestrationEffectWorkerV2,
   Error | MigrationError | PlatformError.PlatformError | SqlError | UpstreamMigrationJournalError
 > {
   const registryLayer = harness.makeProviderAdapterRegistryLayer(scenario.transcript);
@@ -233,7 +234,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     readonly runEffectWorker?: boolean;
   } = {},
 ): Layer.Layer<
-  OrchestratorV2,
+  OrchestratorV2 | OrchestrationEffectWorkerV2,
   Error | MigrationError | PlatformError.PlatformError | SqlError | UpstreamMigrationJournalError
 > {
   const serverConfigLayer = Layer.effect(
@@ -410,7 +411,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   // orchestrator. Keeping this acquisition in the replay layer makes the
   // outbox lifecycle explicit and prevents test-only command-side draining.
   if (options.runEffectWorker === false) {
-    return orchestratorProvided;
+    return replayRuntime;
   }
   return Layer.effect(
     OrchestratorV2,
@@ -419,5 +420,5 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
       yield* runEffectWorkerDaemon.pipe(Effect.forkScoped);
       return orchestrator;
     }),
-  ).pipe(Layer.provide(replayRuntime));
+  ).pipe(Layer.provideMerge(replayRuntime));
 }
