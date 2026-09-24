@@ -736,7 +736,7 @@ export function PullRequestCodeTab({
           variant="ghost-muted"
           aria-expanded={!collapsed}
           aria-label={collapsed ? "Expand diff" : "Collapse diff"}
-          className="mr-1 rounded hover:bg-transparent"
+          className="mr-1"
           onClick={(event) => {
             event.stopPropagation();
             toggleFile(item.id);

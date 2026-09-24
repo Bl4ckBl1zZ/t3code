@@ -1,6 +1,6 @@
 import { type OpenRouterModelOption } from "@t3tools/contracts/voice";
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDownIcon, PencilIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, PencilIcon } from "lucide-react";
 
 import { ClaudeAI, Gemini, GrokIcon, type Icon, OpenAI } from "../Icons";
 import { providerInstanceInitials } from "../chat/ProviderInstanceIcon";
@@ -8,7 +8,7 @@ import { scoreModelPickerSearch } from "../chat/modelPickerSearch";
 import {
   Combobox,
   ComboboxEmpty,
-  ComboboxInput,
+  ComboboxSearchInput,
   ComboboxItem,
   ComboboxListVirtualized,
 } from "../ui/combobox";
@@ -77,7 +77,6 @@ function VoiceModelRow(props: {
       hideIndicator
       index={props.index}
       value={props.model.id}
-      contentClassName="flex w-full items-center gap-3"
       className={cn(
         "group relative w-full !min-w-0 max-w-full cursor-pointer rounded-md px-2 py-2 transition-[background-color,box-shadow,color]",
         "hover:bg-[color-mix(in_srgb,var(--popover)_90%,var(--foreground))] data-highlighted:bg-[color-mix(in_srgb,var(--popover)_90%,var(--foreground))] data-selected:bg-foreground/[0.08] data-selected:text-foreground data-selected:ring-0 [&[data-highlighted][data-selected]]:bg-[color-mix(in_srgb,var(--popover)_90%,var(--foreground))]",
@@ -251,34 +250,21 @@ function VoiceModelPickerContent(props: {
               showSidebar && "border-l border-border/70",
             )}
           >
-            {/* Search bar */}
-            <div className="px-2 pt-2">
-              <div className="border-b border-border/70 pb-2.5 transition-colors focus-within:border-ring">
-                <ComboboxInput
-                  ref={searchInputRef}
-                  className="[&_input]:h-6.5 [&_input]:font-sans [&_input]:leading-6.5"
-                  inputClassName="rounded-none bg-transparent text-sm"
-                  placeholder="Search models..."
-                  showTrigger={false}
-                  startAddon={
-                    <SearchIcon className="-translate-x-0.5 size-4 shrink-0 text-muted-foreground opacity-70" />
-                  }
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      props.onRequestClose();
-                      return;
-                    }
-                    event.stopPropagation();
-                  }}
-                  size="sm"
-                  unstyled
-                />
-              </div>
-            </div>
+            <ComboboxSearchInput
+              ref={searchInputRef}
+              placeholder="Search models..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  props.onRequestClose();
+                  return;
+                }
+                event.stopPropagation();
+              }}
+            />
 
             {/* Model list */}
             <div className="relative min-h-0 flex-1 overflow-hidden">

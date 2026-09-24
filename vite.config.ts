@@ -2,6 +2,34 @@ import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
 
+/** Import restrictions every file keeps. */
+const RESTRICTED_IMPORT_PATHS = [
+  {
+    name: "@t3tools/client-runtime",
+    message:
+      "Import from an explicit @t3tools/client-runtime/* subpath. The package has no root export.",
+  },
+  {
+    name: "@pierre/diffs/react",
+    importNames: ["CodeView"],
+    message: "Use StyledDiffCodeView so web diff surfaces share styling and virtualized geometry.",
+  },
+];
+
+/**
+ * The cva functions behind components/ui exports. They style a foreign element to look
+ * like a Button or Toggle, which bypasses the component's variants; render the component
+ * instead (`render={<Button …/>}`, or `SelectButton` for a picker trigger).
+ */
+const RESTRICTED_UI_VARIANT_PATTERNS = [
+  {
+    group: ["**/components/ui/*", "**/ui/*", "./ui/*"],
+    importNames: ["buttonVariants", "toggleVariants", "badgeVariants", "selectTriggerVariants"],
+    message:
+      "Render the components/ui export instead of borrowing its class recipe (render={<Button …/>}, SelectButton, ToggleGroup).",
+  },
+];
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -118,30 +146,25 @@ export default defineConfig({
       "typescript/require-array-sort-compare": "off",
       "typescript/restrict-template-expressions": "off",
       "typescript/unbound-method": "off",
-      "eslint/no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            {
-              name: "@t3tools/client-runtime",
-              message:
-                "Import from an explicit @t3tools/client-runtime/* subpath. The package has no root export.",
-            },
-            {
-              name: "@pierre/diffs/react",
-              importNames: ["CodeView"],
-              message:
-                "Use StyledDiffCodeView so web diff surfaces share styling and virtualized geometry.",
-            },
-          ],
-        },
-      ],
+      "eslint/no-restricted-imports": ["error", { paths: RESTRICTED_IMPORT_PATHS }],
       "t3code/no-global-process-runtime": "error",
       "t3code/no-inline-schema-compile": "warn",
       "t3code/no-manual-effect-runtime-in-tests": "error",
       "t3code/no-native-title-tooltip": "error",
       "t3code/namespace-node-imports": "error",
     },
+    overrides: [
+      {
+        files: ["apps/web/src/**"],
+        excludeFiles: ["apps/web/src/components/ui/**"],
+        rules: {
+          "eslint/no-restricted-imports": [
+            "error",
+            { paths: RESTRICTED_IMPORT_PATHS, patterns: RESTRICTED_UI_VARIANT_PATTERNS },
+          ],
+        },
+      },
+    ],
     options: {
       // Revisit once Oxlint's tsgolint path can integrate with @effect/tsgo diagnostics.
       typeAware: false,

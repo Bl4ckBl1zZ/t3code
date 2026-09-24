@@ -39,6 +39,10 @@ const selectTriggerVariants = cva(
 
 const selectTriggerIconClassName = "-me-1 size-4.5 opacity-80 sm:size-4";
 
+/**
+ * The select-field look for a picker that is not a Select, such as a Menu or
+ * Combobox trigger. Render it as that trigger: `<MenuTrigger render={<SelectButton />}>`.
+ */
 interface SelectButtonProps extends useRender.ComponentProps<"button"> {
   size?: VariantProps<typeof selectTriggerVariants>["size"];
   variant?: VariantProps<typeof selectTriggerVariants>["variant"];
@@ -107,7 +111,6 @@ function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
 
 function SelectPopup({
   className,
-  popupClassName,
   children,
   side = "bottom",
   sideOffset = 4,
@@ -116,9 +119,9 @@ function SelectPopup({
   alignItemWithTrigger = true,
   matchTriggerWidth = true,
   anchor,
+  popupClassName,
   ...props
 }: SelectPrimitive.Popup.Props & {
-  popupClassName?: string;
   side?: SelectPrimitive.Positioner.Props["side"];
   sideOffset?: SelectPrimitive.Positioner.Props["sideOffset"];
   align?: SelectPrimitive.Positioner.Props["align"];
@@ -126,6 +129,8 @@ function SelectPopup({
   alignItemWithTrigger?: SelectPrimitive.Positioner.Props["alignItemWithTrigger"];
   matchTriggerWidth?: boolean;
   anchor?: SelectPrimitive.Positioner.Props["anchor"];
+  /** Fork-only escape hatch for sizing the glass surface, e.g. thread-details panel rows. */
+  popupClassName?: string;
 }) {
   return (
     <SelectPrimitive.Portal>
@@ -231,7 +236,6 @@ export {
   Select,
   SelectTrigger,
   SelectButton,
-  selectTriggerVariants,
   SelectValue,
   SelectPopup,
   SelectPopup as SelectContent,

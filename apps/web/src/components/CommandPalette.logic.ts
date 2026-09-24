@@ -10,7 +10,7 @@ import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
-import { sortThreads } from "../lib/threadSort";
+import { getThreadSortTimestamp, sortThreads } from "../lib/threadSort";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
@@ -92,6 +92,7 @@ export interface CommandPaletteItem {
   readonly description?: ReactNode;
   readonly threadContentMatch?: CommandPaletteThreadContentMatch;
   readonly timestamp?: string;
+  readonly searchRecency?: number;
   readonly icon: ReactNode;
   readonly disabled?: boolean;
   /** Optional content rendered inline before the title text. */
@@ -264,6 +265,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
         timestamp: formatRelativeTimeLabel(
           thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
         ),
+        searchRecency: getThreadSortTimestamp(thread, "updated_at"),
         icon: input.icon,
       },
       leadingContent ? { titleLeadingContent: leadingContent } : {},
@@ -304,6 +306,10 @@ function rankCommandPaletteItemMatch(
   for (const [index, field] of terms.entries()) {
     const fieldRank = rankSearchFieldMatch(field, normalizedQuery);
     if (fieldRank !== Number.NEGATIVE_INFINITY) {
+      if (index === 0 && item.searchRecency !== undefined) {
+        // All non-exact thread title matches share a tier so recency breaks the tie.
+        return 1_000 + Number(fieldRank === 3);
+      }
       return 1_000 - index * 100 + fieldRank;
     }
   }
@@ -367,7 +373,12 @@ export function filterCommandPaletteGroups(input: {
         rank: rankCommandPaletteItemMatch(item, normalizedQuery),
       });
     })
-      .toSorted((left, right) => right.rank - left.rank || left.index - right.index)
+      .toSorted(
+        (left, right) =>
+          right.rank - left.rank ||
+          (right.item.searchRecency ?? 0) - (left.item.searchRecency ?? 0) ||
+          left.index - right.index,
+      )
       .map((entry) => entry.item);
 
     if (items.length === 0) {

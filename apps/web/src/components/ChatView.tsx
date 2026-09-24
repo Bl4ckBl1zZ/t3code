@@ -8482,7 +8482,7 @@ function ChatViewContent(props: ChatViewProps) {
                     <Button
                       aria-label="Scroll to end"
                       onClick={() => scrollToEnd(true)}
-                      className="pointer-events-auto gap-1.5 rounded-full px-3 text-muted-foreground hover:text-foreground"
+                      className="pointer-events-auto"
                       size="xs"
                       variant="glass"
                     >
@@ -8891,7 +8891,6 @@ function ChatViewContent(props: ChatViewProps) {
       ) : null}
       {shouldUsePlanSidebarSheet && rightPanelPresent && activeThreadRef ? (
         <RightPanelSheet
-          underFloatingPreview={previewMiniPlayerVisible}
           open={rightPanelOpen}
           animationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
           onClose={planSidebarOpen ? closePlanSidebar : closePreviewPanel}

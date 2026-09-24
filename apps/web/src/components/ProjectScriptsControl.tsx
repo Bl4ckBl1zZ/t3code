@@ -113,8 +113,6 @@ export default function ProjectScriptsControl({
   const isPrimaryScriptActive = primaryRunState !== null;
   const activeRunButtonClassName =
     "border-emerald-600/50 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15 hover:text-emerald-600 dark:border-emerald-300/40 dark:bg-emerald-400/10 dark:text-emerald-300/90 dark:hover:bg-emerald-400/15 dark:hover:text-emerald-300/90";
-  const dropdownItemClassName =
-    "data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground data-highlighted:hover:bg-accent data-highlighted:hover:text-accent-foreground data-highlighted:focus-visible:bg-accent data-highlighted:focus-visible:text-accent-foreground";
 
   const openAddDialog = () => {
     setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT });
@@ -164,7 +162,6 @@ export default function ProjectScriptsControl({
         {importableScripts.map((fileScript) => (
           <MenuItem
             key={`${fileScript.name} ${fileScript.command}`}
-            className={dropdownItemClassName}
             onClick={() => void importFileScript(fileScript)}
           >
             <ScriptIcon icon={fileScript.icon ?? "play"} className="size-4" />
@@ -244,7 +241,6 @@ export default function ProjectScriptsControl({
             <GroupSeparator className="hidden @3xl/header-actions:block" />
           )}
           <Menu
-            highlightItemOnHover={false}
             open={actionsMenuOpen.scripts}
             onOpenChange={(open) => setActionsMenuOpen({ scripts: open, imports: false })}
           >
@@ -276,7 +272,7 @@ export default function ProjectScriptsControl({
                 return (
                   <MenuItem
                     key={script.id}
-                    className={`group ${dropdownItemClassName}`}
+                    className="group"
                     aria-label={isScriptActive ? `Stop ${script.name}` : `Run ${script.name}`}
                     onClick={() => onRunScript(script)}
                   >
@@ -294,9 +290,10 @@ export default function ProjectScriptsControl({
                     </span>
                     <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
                       {shortcutLabel && (
-                        <MenuShortcut className="ms-0 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0">
-                          {shortcutLabel}
-                        </MenuShortcut>
+                        // The shortcut yields its slot to the edit button on hover.
+                        <span className="transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0">
+                          <MenuShortcut className="ms-0">{shortcutLabel}</MenuShortcut>
+                        </span>
                       )}
                       <Button
                         type="button"
@@ -321,7 +318,7 @@ export default function ProjectScriptsControl({
                 );
               })}
               {importMenuItems}
-              <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
+              <MenuItem onClick={openAddDialog}>
                 <PlusIcon className="size-4" />
                 {isPanel ? "Add project script" : "Add action"}
               </MenuItem>
@@ -330,7 +327,6 @@ export default function ProjectScriptsControl({
         </ActionGroup>
       ) : importableScripts.length > 0 ? (
         <Menu
-          highlightItemOnHover={false}
           open={actionsMenuOpen.imports}
           onOpenChange={(open) => setActionsMenuOpen({ scripts: false, imports: open })}
         >
@@ -343,7 +339,7 @@ export default function ProjectScriptsControl({
           </MenuTrigger>
           <MenuPopup align="end">
             {importMenuItems}
-            <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
+            <MenuItem onClick={openAddDialog}>
               <PlusIcon className="size-4" />
               Add action
             </MenuItem>

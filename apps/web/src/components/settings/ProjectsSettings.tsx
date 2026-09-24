@@ -1,5 +1,5 @@
 import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
-import { ChevronDownIcon, FolderIcon } from "lucide-react";
+import { FolderIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -15,8 +15,7 @@ import {
   ComboboxPopup,
   ComboboxTrigger,
 } from "../ui/combobox";
-import { selectTriggerVariants } from "../ui/select";
-import { cn } from "../../lib/utils";
+import { SelectButton } from "../ui/select";
 import { ProjectSettingsPanel, useSettingsProjectGroups } from "./ProjectSettingsPanel";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 
@@ -49,7 +48,7 @@ function ScopePicker({
     >
       <ComboboxTrigger
         aria-label={`${label === "project" ? "Project" : "Machine"} scope`}
-        className={cn(selectTriggerVariants({ size: "compact" }), "w-auto min-w-0 max-w-52")}
+        render={<SelectButton size="compact" className="w-auto min-w-0 max-w-52" />}
       >
         <span className="flex min-w-0 items-center gap-1.5">
           {value === null ? allIcon : selected?.icon}
@@ -57,18 +56,13 @@ function ScopePicker({
             {value === null ? `All ${label}s` : (selected?.label ?? `Unavailable ${label}`)}
           </span>
         </span>
-        <ChevronDownIcon aria-hidden className="-me-1 size-3 opacity-50" />
       </ComboboxTrigger>
       <ComboboxPopup align="start" className="w-64">
         <ComboboxSearchInput aria-label={`Search ${label}s`} placeholder={`Search ${label}s...`} />
         <ComboboxEmpty>No matching {label}s.</ComboboxEmpty>
         <ComboboxList>
           {(item: (typeof items)[number]) => (
-            <ComboboxItem
-              key={item.value}
-              value={item}
-              contentClassName="flex min-w-0 items-center gap-2"
-            >
+            <ComboboxItem key={item.value} value={item}>
               {item.icon}
               <span className="truncate">{item.label}</span>
             </ComboboxItem>

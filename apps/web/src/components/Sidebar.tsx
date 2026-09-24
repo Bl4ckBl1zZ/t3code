@@ -237,7 +237,16 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "./ui/menu";
 import {
   SidebarContent,
   SidebarGroup,
@@ -246,7 +255,6 @@ import {
   useSidebar,
 } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import {
@@ -444,14 +452,9 @@ function SidebarThreadTooltip({
     .filter((instanceId) => instanceId !== modelInstanceId)
     .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
   return (
-    <TooltipPopup
-      side="right"
-      align="start"
-      sideOffset={4}
-      variant="glass"
-      className="[&_[data-slot=tooltip-viewport]]:p-0"
-    >
-      <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
+    <TooltipPopup side="right" align="start" sideOffset={4} variant="glass">
+      {/* The viewport's own inset (py-1 px-2) plus this one make the floating inset. */}
+      <div className="flex min-w-0 max-w-80 flex-col gap-2 px-1 py-2">
         <div className="min-w-0 truncate text-xs leading-tight font-medium text-foreground">
           {thread.title}
         </div>
@@ -478,9 +481,9 @@ function SidebarThreadTooltip({
             </div>
           ) : null}
           {showProjectContext && thread.branch ? (
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2 text-foreground/75">
               <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
-              <MiddleTruncate value={thread.branch} className="flex text-foreground/75" />
+              <MiddleTruncate value={thread.branch} className="flex" />
             </div>
           ) : null}
           {showProjectContext && branchMismatch ? (
@@ -548,7 +551,7 @@ function SidebarThreadTooltip({
  * Controlled by the row (which also uses the open state to pin its hover
  * actions while the menu is up).
  */
-function SnoozePopoverButton(props: {
+function SnoozeMenuButton(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
@@ -562,11 +565,11 @@ function SnoozePopoverButton(props: {
     [open, timestampFormat],
   );
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Menu open={open} onOpenChange={onOpenChange}>
       <Tooltip>
         <TooltipTrigger
           render={
-            <PopoverTrigger
+            <MenuTrigger
               render={
                 <button
                   type="button"
@@ -583,39 +586,31 @@ function SnoozePopoverButton(props: {
         </TooltipTrigger>
         <TooltipPopup>Snooze thread</TooltipPopup>
       </Tooltip>
-      <PopoverPopup side="bottom" align="end" width="sm" viewportClassName="p-1">
+      <MenuPopup side="bottom" align="end">
         {presets.map((preset) => (
-          <button
+          <MenuItem
             key={preset.id}
-            type="button"
             onClick={(event) => {
               event.stopPropagation();
-              onOpenChange(false);
               onSnooze(preset);
             }}
-            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
           >
-            <span className="flex-1">{preset.label}</span>
-            <span className="font-mono text-[10px] text-muted-foreground/60 tabular-nums">
-              {preset.whenLabel}
-            </span>
-          </button>
+            {preset.label}
+            <MenuShortcut>{preset.whenLabel}</MenuShortcut>
+          </MenuItem>
         ))}
-        <div className="my-1 border-t border-border/60" />
-        <button
-          type="button"
-          className="flex w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
+        <MenuSeparator />
+        <MenuItem
           onClick={async (event) => {
             event.stopPropagation();
-            onOpenChange(false);
             const choice = await requestCustomSnooze();
             if (choice) onSnooze(choice);
           }}
         >
           Custom…
-        </button>
-      </PopoverPopup>
-    </Popover>
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -1748,7 +1743,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           ) : null}
           {discardDraftButton}
           {showSnoozeButton ? (
-            <SnoozePopoverButton
+            <SnoozeMenuButton
               open={snoozeMenuOpen}
               onOpenChange={setSnoozeMenuOpen}
               onSnooze={handleSnoozePreset}
@@ -4481,8 +4476,6 @@ export default function Sidebar() {
                             key={item.value}
                             hideIndicator
                             value={item}
-                            className="font-medium"
-                            contentClassName="flex min-w-0 items-center gap-2"
                             onContextMenu={(event) => {
                               if (project) handleProjectSettings(event, project);
                             }}
@@ -4512,7 +4505,7 @@ export default function Sidebar() {
                                 tabIndex={-1}
                                 aria-hidden="true"
                                 title={`Project settings for ${project.displayName}`}
-                                className="ml-auto focus-visible:bg-accent focus-visible:text-foreground"
+                                className="ml-auto"
                                 onPointerDown={(event) => event.stopPropagation()}
                                 onClick={(event) => {
                                   void handleProjectSettings(event, project);

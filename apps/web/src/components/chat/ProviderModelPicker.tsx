@@ -4,9 +4,8 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { memo, useEffect, useMemo, useState } from "react";
-import type { VariantProps } from "class-variance-authority";
 import { Badge } from "../ui/badge";
-import { buttonVariants } from "../ui/button";
+import type { ButtonVariant } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
@@ -46,7 +45,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   disabled?: boolean;
   terminalOpen?: boolean;
   open?: boolean;
-  triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
+  triggerVariant?: ButtonVariant;
   triggerClassName?: string;
   triggerAriaLabel?: string;
   onOpenChange?: (open: boolean) => void;
@@ -222,8 +221,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       <PopoverPopup
         {...(props.isComposerOwned ? composerFloatingLayerProps : {})}
         align="start"
-        className="before:hidden [--viewport-inline-padding:0]"
-        viewportClassName="overflow-hidden! rounded-[calc(var(--radius-lg)-1px)] p-0 [clip-path:inset(0_round_calc(var(--radius-lg)-1px))]"
+        className="before:hidden"
+        padding="none"
       >
         <ModelPickerContent
           activeInstanceId={activeInstanceId}

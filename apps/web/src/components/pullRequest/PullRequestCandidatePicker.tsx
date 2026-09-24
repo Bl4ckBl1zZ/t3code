@@ -132,7 +132,6 @@ export function PullRequestCandidatePicker<T>({
             <ComboboxInput
               aria-label={searchLabel}
               className="[&_input]:h-6.5 [&_input]:ps-5 [&_input]:font-sans [&_input]:leading-6.5"
-              inputClassName="rounded-none bg-transparent text-sm"
               placeholder={searchLabel}
               showTrigger={false}
               size="sm"
@@ -161,7 +160,6 @@ export function PullRequestCandidatePicker<T>({
                 index={index}
                 value={keys[index]}
                 disabled={disabled}
-                contentClassName="flex min-w-0 items-center gap-2"
               >
                 {children(candidate)}
               </ComboboxItem>

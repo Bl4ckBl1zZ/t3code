@@ -47,6 +47,7 @@ import { usePrimaryEnvironment } from "../../state/environments";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Kbd, KbdGroup } from "../ui/kbd";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -148,9 +149,11 @@ function ExpandableHeaderSearch({
   }
 
   return (
-    <div className="relative">
-      <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" />
-      <Input
+    <InputGroup className="w-44">
+      <InputGroupAddon>
+        <SearchIcon aria-hidden className="size-3" />
+      </InputGroupAddon>
+      <InputGroupInput
         ref={inputRef}
         autoFocus
         type="search"
@@ -168,10 +171,9 @@ function ExpandableHeaderSearch({
         }}
         placeholder="Search keybindings"
         aria-label="Search keybindings"
-        className="w-44 [&_[data-slot=input]]:pl-7"
         size="compact"
       />
-    </div>
+    </InputGroup>
   );
 }
 
@@ -324,7 +326,7 @@ function WhenVariableSelect({
   return (
     <Select value={value} onValueChange={(nextValue) => nextValue && onChange(nextValue)}>
       <SelectTrigger size="compact" className="min-w-0 flex-1">
-        <SelectValue placeholder="Condition" className="leading-7" />
+        <SelectValue placeholder="Condition" />
         {unknownIdentifiers && unknownIdentifiers.length > 0 ? (
           <UnknownWhenVariableWarning identifiers={unknownIdentifiers} focusable={false} />
         ) : null}
@@ -654,26 +656,22 @@ function WhenExpressionBuilder({
       </div>
 
       <div className="space-y-1.5">
-        <div className="relative">
-          <Input
+        <InputGroup>
+          <InputGroupInput
             value={expressionDraft}
             onChange={(event) => updateExpressionDraft(event.currentTarget.value)}
             placeholder="Always"
             aria-invalid={Boolean(parseError)}
             aria-label="When expression"
+            size="compact"
             font="mono"
-            className={cn(
-              "h-7 rounded-md text-[12px] leading-7 sm:h-7 sm:leading-7",
-              unknownIdentifiers.length > 0 && "pr-9",
-              parseError && "border-destructive/70 focus-visible:border-destructive",
-            )}
           />
           {unknownIdentifiers.length > 0 ? (
-            <span className="absolute inset-y-0 right-2 flex items-center">
+            <InputGroupAddon align="inline-end">
               <UnknownWhenVariableWarning identifiers={unknownIdentifiers} />
-            </span>
+            </InputGroupAddon>
           ) : null}
-        </div>
+        </InputGroup>
         {parseError ? (
           <div className="flex items-center gap-1.5 text-[11px] text-destructive">
             <CircleXIcon className="size-3.5" />
@@ -898,12 +896,12 @@ function WhenClauseControl({
           <Button
             variant={expression ? "ghost" : "ghost-muted"}
             size="micro"
-            className="min-w-0 shrink font-mono"
+            className="min-w-0 shrink"
           />
         }
         aria-label={`Edit when clause for ${label}`}
       >
-        <span className="truncate">{expression || "Always"}</span>
+        <span className="truncate font-mono">{expression || "Always"}</span>
         <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6}>

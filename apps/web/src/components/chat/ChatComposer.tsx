@@ -3984,8 +3984,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 skills={selectedProviderStatus?.skills ?? []}
                 className={cn(
-                  showMobilePendingAnswerActions && "max-sm:pb-11",
-                  isComposerResting && "min-h-8! max-h-8 overflow-hidden whitespace-pre! leading-8",
+                  showMobilePendingAnswerActions && "max-sm:pb-12",
+                  isComposerResting &&
+                    "my-0 min-h-8! max-h-8 overflow-hidden py-0 whitespace-pre! leading-8",
                 )}
                 onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                 onChange={onPromptChange}

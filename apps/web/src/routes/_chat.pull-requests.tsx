@@ -2121,15 +2121,10 @@ function CompactFilterMenu<Value extends string>({
     <Menu>
       <MenuTrigger
         aria-label={triggerLabel ? `${label}: ${current.label}` : label}
-        render={outlined ? <Button variant="outline" /> : undefined}
-        className={
-          outlined
-            ? className
-            : cn(
-                "inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
-                className,
-              )
+        render={
+          outlined ? <Button variant="outline" /> : <Button variant="ghost-muted" size="sm" />
         }
+        className={cn("min-w-0", className)}
       >
         {triggerLabel ? (
           <>

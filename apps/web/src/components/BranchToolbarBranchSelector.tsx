@@ -669,7 +669,6 @@ export function BranchToolbarBranchSelector({
           key={itemValue}
           index={index}
           value={itemValue}
-          className="pe-2"
           onClick={() => selectPickerItem(itemValue)}
         >
           <div className="flex min-w-0 items-center gap-2 py-1">
@@ -691,7 +690,6 @@ export function BranchToolbarBranchSelector({
           key={itemValue}
           index={index}
           value={itemValue}
-          className="pe-1.5"
           onClick={() => selectPickerItem(itemValue)}
         >
           <span className="truncate">Create new ref &quot;{newRefName}&quot;</span>
@@ -719,7 +717,6 @@ export function BranchToolbarBranchSelector({
         key={itemValue}
         index={index}
         value={itemValue}
-        className="pe-1.5"
         onClick={() => selectPickerItem(itemValue)}
         onContextMenu={(event) => handleBranchContextMenu(event, itemValue)}
       >
@@ -809,11 +806,12 @@ export function BranchToolbarBranchSelector({
                 displayMode === "panel" && "max-w-none flex-1 text-left",
               )}
             >
-              <MiddleTruncate
-                value={triggerLabel}
+              <span
                 data-composer-label-motion
                 className="flex w-full max-w-[240px] transition-opacity duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none"
-              />
+              >
+                <MiddleTruncate value={triggerLabel} />
+              </span>
             </span>
             <ChevronDownIcon
               className={cn(
@@ -864,7 +862,6 @@ export function BranchToolbarBranchSelector({
             />
             <ComboboxInput
               className="[&_input]:h-6.5 [&_input]:ps-5 [&_input]:font-sans [&_input]:leading-6.5"
-              inputClassName="rounded-none bg-transparent text-sm"
               placeholder="Search refs..."
               showTrigger={false}
               size="sm"
