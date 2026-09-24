@@ -42,6 +42,8 @@ export function assertThreadRollbackOutput(
     "assistant_message",
     "checkpoint",
     "user_message",
+    "reasoning",
+    "reasoning",
     "assistant_message",
     "checkpoint",
   ]);
@@ -53,6 +55,8 @@ export function assertThreadRollbackOutput(
     // surviving history and the continuation.
     "checkpoint_rollback",
     "user_message",
+    "reasoning",
+    "reasoning",
     "assistant_message",
     "checkpoint",
   ]);
@@ -66,6 +70,10 @@ export function assertThreadRollbackOutput(
     THREAD_ROLLBACK_AFTER_PROMPT,
   ]);
   assertVisibleUserMessagesExclude(projection, [THREAD_ROLLBACK_SECOND_PROMPT]);
+  // Codex's own context was rewound: the post-rollback recall omits the reverted turn.
+  const recall = projection.turnItems.findLast((item) => item.type === "assistant_message");
+  assert.include(recall?.type === "assistant_message" ? recall.text : "", "first turn complete");
+  assert.notInclude(recall?.type === "assistant_message" ? recall.text : "", "second turn");
   assert.isAtLeast(projection.checkpoints.length, 2);
   assert.isTrue(
     projection.runs.some((run) => run.status === "rolled_back"),

@@ -64,9 +64,14 @@ const CODEX_CLIENT_INFO = {
   title: "T3 Code Desktop",
   version: "0.1.0",
 } as const;
+// Match the V2 adapter's initialize and turn/start frames so recordings replay
+// against it without hand edits.
 const CODEX_CLIENT_CAPABILITIES = {
   experimentalApi: true,
+  optOutNotificationMethods: ["turn/diff/updated"],
 } as const;
+const CODEX_REPLAY_MODEL =
+  readArgValue("--model") ?? process.env.T3_CODEX_REPLAY_MODEL ?? "gpt-5.4";
 
 const SCENARIO_NAMES = [
   "simple",
@@ -626,7 +631,7 @@ function scenarios(): ReadonlyArray<ReplayScenario> {
         {
           name: "rollback-one-turn",
           description:
-            "Two completed turns, thread/rollback numTurns=1, then a post-rollback turn.",
+            "Two completed turns, thread/revert before the second turn, then a post-rollback turn.",
           steps: [
             {
               type: "turn",
@@ -862,7 +867,9 @@ function makeRecorder({
         records.push(record);
       });
     const flush = () => {
-      const outputRecords = codexReplayRecordingOutputRecords(records);
+      const outputRecords = codexReplayRecordingOutputRecords(records, {
+        workspace: process.cwd(),
+      });
       return fs.writeFileString(
         outPath,
         `${[
@@ -876,6 +883,7 @@ function makeRecorder({
               source: "record-codex-app-server-replay-fixture",
               fileName: scenario.fileName,
               description: scenario.description,
+              model: CODEX_REPLAY_MODEL,
             },
           },
           ...outputRecords,
@@ -1110,6 +1118,12 @@ function runReplaySession({
     ) =>
       Effect.gen(function* () {
         const turnParams: TurnStartParams = {
+          approvalPolicy: "never",
+          sandboxPolicy: { type: "dangerFullAccess" },
+          cwd: process.cwd(),
+          model: CODEX_REPLAY_MODEL,
+          summary: "detailed",
+          approvalsReviewer: "user",
           ...run.turnDefaults,
           ...step.turnOverrides,
           input: turnInput(step.prompt),
@@ -1212,6 +1226,8 @@ function runReplaySession({
 
       for (const [stepIndex, step] of run.steps.entries()) {
         if (step.type === "rollback") {
+          // The adapter only reverts paginated history, so it reads the mode first.
+          yield* client.request("thread/read", { threadId: activeThreadId, includeTurns: false });
           yield* revertCodexThread(client, activeThreadId, step.numTurns);
           continue;
         }
