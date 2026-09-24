@@ -22,7 +22,6 @@ import {
   openCodeToolProjectionKind,
   makeOpenCodeProtocolLogger,
   OPENCODE_PROVIDER,
-  OpenCodeProviderCapabilitiesV2,
 } from "./OpenCodeAdapterV2.ts";
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 
