@@ -408,12 +408,7 @@ function PullRequestBaseFreshnessWarning({
       >
         <TriangleAlertIcon aria-hidden className={cn("size-3.5", iconClassName)} />
       </PopoverTrigger>
-      <PopoverPopup
-        align="start"
-        side="bottom"
-        className="max-w-80"
-        viewportClassName="py-2.5 [--viewport-inline-padding:--spacing(3)]"
-      >
+      <PopoverPopup align="start" side="bottom" className="max-w-80" padding="compact">
         <p className="text-xs text-foreground">{summary}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">Changes can be cleanly merged.</p>
         {/* Each way the host offers and this reader may take, as its own button: a split button
@@ -2098,8 +2093,7 @@ export function PullRequestDetailPanel({
                 </PullRequestMetaLine>
                 <Button
                   size="xs"
-                  variant="ghost"
-                  className="h-7 px-2 text-[10px] text-muted-foreground"
+                  variant="ghost-muted"
                   aria-label={
                     timelineOrder === "newest"
                       ? "Show oldest activity first"

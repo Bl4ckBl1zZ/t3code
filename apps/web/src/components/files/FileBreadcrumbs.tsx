@@ -162,7 +162,16 @@ function BreadcrumbMenuContent(props: {
                 <>
                   <PierreEntryIcon pathValue={entry.path} kind={entry.kind} theme={resolvedTheme} />
                   <Tooltip>
-                    <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
+                    <TooltipTrigger
+                      render={
+                        <span
+                          className={cn(
+                            "min-w-0 flex-1 truncate",
+                            entry.ignored && "text-muted-foreground",
+                          )}
+                        />
+                      }
+                    >
                       {entry.label}
                     </TooltipTrigger>
                     <TooltipPopup side="right">{entry.path}</TooltipPopup>

@@ -265,9 +265,8 @@ export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
         render={
           <Button
             type="button"
-            variant="ghost"
+            variant="ghost-muted"
             size="icon-xs"
-            className="chat-markdown-chrome-action"
             onClick={handleCopy}
             aria-label={copyLabel}
           />
@@ -328,9 +327,8 @@ export const HtmlEmbedBlock = memo(function HtmlEmbedBlock({
               render={
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="ghost-muted"
                   size="icon-xs"
-                  className="chat-markdown-chrome-action"
                   onClick={() => setExpanded(true)}
                   aria-label="Expand embed"
                 />

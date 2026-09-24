@@ -25,6 +25,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { InlineButton } from "../ui/button";
 
 interface DraftHeroHeadlineProps {
   readonly activeProjectRef: ScopedProjectRef | null;
@@ -110,10 +111,13 @@ export function DraftHeroHeadline({
             // project title) so the hero sentence reads naturally: an
             // aria-label here would replace the title with an action phrase
             // mid-sentence and baffle screen-reader users.
-            <MenuTrigger className="pointer-events-auto inline-block max-w-64 truncate border-foreground/60 border-b border-dotted align-baseline text-foreground transition-colors hover:border-foreground/80 focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring" />
+            <MenuTrigger
+              render={<InlineButton tone="picker" />}
+              className="pointer-events-auto max-w-64 align-baseline"
+            />
           }
         >
-          {activeProjectDisplayName ?? "Choose a project"}
+          <span className="min-w-0 truncate">{activeProjectDisplayName ?? "Choose a project"}</span>
         </TooltipTrigger>
         {activeProjectDisplayName ? (
           <TooltipPopup side="top">{activeProjectDisplayName}</TooltipPopup>
@@ -138,24 +142,21 @@ export function DraftHeroHeadline({
         >
           {projectPickerEntries.map(({ group }) => {
             return (
-              <MenuRadioItem
-                key={group.projectKey}
-                value={group.projectKey}
-                closeOnClick
-                className="[&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-              >
-                <ProjectFavicon
-                  project={group}
-                  environmentId={group.environmentId}
-                  cwd={group.workspaceRoot}
-                  className="size-4.5 shrink-0 sm:size-4"
-                />
-                <Tooltip>
-                  <TooltipTrigger render={<span className="block min-w-0 truncate" />}>
-                    {group.displayName}
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{group.displayName}</TooltipPopup>
-                </Tooltip>
+              <MenuRadioItem key={group.projectKey} value={group.projectKey} closeOnClick>
+                <span className="flex min-w-0 items-center gap-2">
+                  <ProjectFavicon
+                    project={group}
+                    environmentId={group.environmentId}
+                    cwd={group.workspaceRoot}
+                    className="size-4.5 shrink-0 sm:size-4"
+                  />
+                  <Tooltip>
+                    <TooltipTrigger render={<span className="block min-w-0 truncate" />}>
+                      {group.displayName}
+                    </TooltipTrigger>
+                    <TooltipPopup side="top">{group.displayName}</TooltipPopup>
+                  </Tooltip>
+                </span>
               </MenuRadioItem>
             );
           })}
