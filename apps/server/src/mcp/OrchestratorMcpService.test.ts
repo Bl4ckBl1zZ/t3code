@@ -421,6 +421,11 @@ describe("OrchestratorMcpService", () => {
         assert.equal(launches[0]?.projectId, parentProjection.thread.projectId);
         assert.equal(launches[0]?.runtimeMode, "full-access");
         assert.equal(launches[0]?.createdBy, "agent");
+        // The first message is attributed to the calling thread.
+        assert.equal(
+          (launches[0]?.initialMessage as { senderThreadId?: string } | undefined)?.senderThreadId,
+          parentProjection.thread.id,
+        );
         assert.equal(result.branch, "feature/child");
         assert.equal(result.worktreePath, "/tmp/child-worktree");
         assert.equal(result.status, "queued");

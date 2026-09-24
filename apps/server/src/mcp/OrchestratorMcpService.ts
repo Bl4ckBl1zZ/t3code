@@ -1486,7 +1486,14 @@ const make = Effect.gen(function* () {
             workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
             ...(input.message === undefined
               ? {}
-              : { initialMessage: { messageId, text: input.message, attachments: [] } }),
+              : {
+                  initialMessage: {
+                    messageId,
+                    senderThreadId: scope.threadId,
+                    text: input.message,
+                    attachments: [],
+                  },
+                }),
             createdBy: "agent",
             creationSource: "mcp",
           })
