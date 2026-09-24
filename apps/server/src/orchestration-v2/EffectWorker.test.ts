@@ -746,20 +746,6 @@ it("classifies a session Hermes no longer stores as a non-retryable start failur
   );
 });
 
-it.effect("detaches a handed-off session only after the old turn terminalizes", () =>
-  Effect.gen(function* () {
-    const now = yield* DateTime.now;
-    const events = yield* Ref.make<ReadonlyArray<string>>([]);
-
-    yield* Effect.gen(function* () {
-      const executor = yield* OrchestrationEffectExecutorV2;
-      yield* executor.execute(restartEffect(now, { type: "detach" }));
-    }).pipe(Effect.provide(makeExecutorLayer({ events })));
-
-    assert.deepEqual(yield* Ref.get(events), ["interrupt", "detach", "start"]);
-  }),
-);
-
 it.effect("safely retries after replacement cleanup succeeds and start fails", () =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;

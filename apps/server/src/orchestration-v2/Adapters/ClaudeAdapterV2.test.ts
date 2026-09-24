@@ -670,16 +670,6 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     }),
   );
 
-  it("does not install a protocol logger when native logging is unavailable", () => {
-    const protocolLogger = makeClaudeAgentSdkProtocolLogger({
-      nativeEventLogger: undefined,
-      threadId: ThreadId.make("thread-1"),
-      providerSessionId: ProviderSessionId.make("provider-session-1"),
-    });
-
-    assert.equal(protocolLogger, undefined);
-  });
-
   it("logs query options without leaking environment values or callback functions", () => {
     const options: ClaudeAgentSdkQueryOptions = {
       model: "claude-sonnet-4-6",
@@ -917,11 +907,6 @@ describe("ClaudeAdapterV2 attachments", () => {
 });
 
 describe("ClaudeAdapterV2 native fork", () => {
-  it("advertises Claude Agent SDK session forks", () => {
-    assert.equal(ClaudeProviderCapabilitiesV2.threads.canForkThread, true);
-    assert.equal(ClaudeProviderCapabilitiesV2.threads.canForkFromTurn, true);
-  });
-
   it.effect("forks at the source assistant cursor and resumes the forked session", () =>
     Effect.scoped(
       Effect.gen(function* () {

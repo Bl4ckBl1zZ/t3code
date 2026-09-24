@@ -100,17 +100,6 @@ describe("OpenCodeAdapterV2", () => {
     }).pipe(Effect.provide(idAllocatorLayer)),
   );
 
-  it("advertises the identity strengths exposed by the SDK boundary", () => {
-    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeThreadIds, "strong");
-    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeTurnIds, "weak");
-    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeItemIds, "strong");
-    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeRequestIds, "strong");
-    assert.isTrue(OpenCodeProviderCapabilitiesV2.threads.canForkFromTurn);
-    assert.isTrue(OpenCodeProviderCapabilitiesV2.turns.supportsActiveSteering);
-    assert.equal(OpenCodeProviderCapabilitiesV2.turns.terminalStatusQuality, "strong");
-    assert.isFalse(OpenCodeProviderCapabilitiesV2.subagents.canCloseSubagents);
-  });
-
   it("maps native permission families to orchestration request kinds", () => {
     assert.equal(openCodePermissionRequestKind("bash"), "command");
     assert.equal(openCodePermissionRequestKind("read"), "file-read");

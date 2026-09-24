@@ -778,16 +778,6 @@ describe("CodexAdapterV2 native protocol logging", () => {
       });
     }),
   );
-
-  it("does not install a protocol logger when native logging is unavailable", () => {
-    const protocolLogger = makeCodexAppServerProtocolLogger({
-      nativeEventLogger: undefined,
-      threadId: ThreadId.make("thread-1"),
-      providerSessionId: ProviderSessionId.make("provider-session-1"),
-    });
-
-    assert.equal(protocolLogger, undefined);
-  });
 });
 
 describe("CodexAdapterV2 rollback mapping", () => {

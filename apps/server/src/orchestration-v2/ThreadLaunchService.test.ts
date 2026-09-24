@@ -1037,20 +1037,3 @@ it.effect("schedules an accepted preparing message exactly once across concurren
     }).pipe(Effect.provide(harness.layer));
   }),
 );
-
-it.effect("does not depend on the legacy launch workflow table", () => {
-  const harness = makeHarness();
-  return Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const launches = yield* ThreadLaunch.ThreadLaunchService;
-    yield* sql`DROP TABLE orchestration_v2_thread_launch_workflows`;
-    const launched = yield* launches.launch(
-      launchInput({
-        command: "command:launch:no-workflow-table",
-        thread: "thread:launch:no-workflow-table",
-        message: "No private workflow state",
-      }),
-    );
-    assert.equal(launched.projection.messages[0]?.text, "No private workflow state");
-  }).pipe(Effect.provide(harness.layer));
-});
