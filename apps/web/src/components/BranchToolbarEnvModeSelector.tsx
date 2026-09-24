@@ -1,5 +1,7 @@
 import { FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useMemo, type MouseEvent as ReactMouseEvent } from "react";
+import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -26,6 +28,7 @@ import {
   SelectValue,
 } from "./ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { stackedThreadToast, toastManager } from "./ui/toast";
 
 export const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
 
@@ -70,6 +73,48 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
     [activeWorktreePath, previousWorktreeLabel, showPreviousWorktree, workspaceDisplayName],
   );
 
+  const handleWorkspaceContextMenu = (event: ReactMouseEvent) => {
+    if (!workspacePath) return;
+    const api = readLocalApi();
+    if (!api) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void api.contextMenu
+      .show([{ id: "copy-path", label: "Copy full path", icon: "copy" }], {
+        x: event.clientX,
+        y: event.clientY,
+      })
+      .then((action) => {
+        if (action !== "copy-path") return;
+        void writeTextToClipboard(workspacePath, "workspace path").then(
+          (didCopy) => {
+            if (didCopy) {
+              toastManager.add({
+                type: "success",
+                title: "Path copied",
+                description: workspacePath,
+              });
+            }
+          },
+          (error: unknown) => {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to copy path",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          },
+        );
+      });
+  };
+
+  const stopContextMenuMouseDown = (event: ReactMouseEvent) => {
+    if (event.button !== 0 || event.ctrlKey) {
+      event.stopPropagation();
+    }
+  };
+
   if (envLocked) {
     const lockedRow = (
       <span
@@ -78,6 +123,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           displayMode === "panel" && THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
         )}
         data-composer-context-control
+        onContextMenu={handleWorkspaceContextMenu}
       >
         {activeWorktreePath ? (
           <FolderGitIcon
@@ -139,6 +185,8 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
               )}
               aria-label="Workspace"
               data-composer-context-control
+              onMouseDownCapture={stopContextMenuMouseDown}
+              onContextMenu={handleWorkspaceContextMenu}
             />
           }
         >
