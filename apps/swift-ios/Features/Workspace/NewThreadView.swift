@@ -11,6 +11,7 @@ public struct NewThreadView: View {
     private let initialProjectID: String?
     private let draftID: String?
 
+    @ScaledMetric(relativeTo: .title2) private var projectIconSize: CGFloat = 20
     @AppStorage(NativeLoadBalancingPreferences.enabledKey) private var loadBalancingEnabled = false
     @AppStorage(NativeLoadBalancingPreferences.weightsKey) private var loadBalancingWeightsJSON = "{}"
     @State private var routing: FeatureComposerRoutingDraft?
@@ -296,14 +297,30 @@ public struct NewThreadView: View {
                 }
             }
         } label: {
+            // Primary text, not the accent role: most palettes define accent
+            // as the message-bubble fill, which nearly vanishes on the sheet.
             HStack(spacing: 4) {
+                if let project = selectedProject {
+                    ProjectFaviconBadge(
+                        environmentID: project.environmentID,
+                        workspaceRoot: project.path,
+                        faviconPath: project.faviconPath,
+                        projectIcon: project.projectIcon,
+                        projectTitle: project.name,
+                        size: projectIconSize
+                    ) {
+                        Image(systemName: "folder")
+                    }
+                    .padding(.trailing, 2)
+                }
                 Text(selectedProject?.name ?? "a project")
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.semibold))
+                    .foregroundStyle(T3Colors.textSecondary)
                     .accessibilityHidden(true)
             }
-            .foregroundStyle(T3Colors.accent)
+            .foregroundStyle(T3Colors.textPrimary)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
