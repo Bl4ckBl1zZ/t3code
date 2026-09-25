@@ -74,6 +74,10 @@ function nonterminalRuns(projection: OrchestrationV2ThreadProjection) {
   });
 }
 
+function isNonterminalStatus(status: string): boolean {
+  return status === "pending" || status === "running" || status === "waiting";
+}
+
 export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const eventSink = yield* EventSink.EventSinkV2;
@@ -343,6 +347,55 @@ export const make = Effect.gen(function* () {
             providerInstanceId: item.toProviderInstanceId,
             occurredAt: now,
             payload: { ...orphanedHandoff, status: "failed", updatedAt: now },
+          });
+        }
+      }
+      // A provider-native subagent thread has no runs: its work is a runless
+      // root turn, plus items under it (Claude's live progress item), that
+      // only the dead provider process could settle. Left running, the child
+      // would show as working forever.
+      const cancelledItemIds = new Set(
+        events.flatMap((event) => (event.type === "turn-item.updated" ? [event.payload.id] : [])),
+      );
+      for (const node of projection.nodes) {
+        if (node.kind !== "root_turn" || node.runId !== null || !isNonterminalStatus(node.status)) {
+          continue;
+        }
+        events.push({
+          id: yield* allocateEventId(),
+          type: "node.updated",
+          threadId: projection.thread.id,
+          nodeId: node.id,
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+          payload: { ...node, status: "cancelled", completedAt: now },
+        });
+        for (const item of projection.turnItems) {
+          if (
+            item.nodeId !== node.id ||
+            item.runId !== null ||
+            !isNonterminalStatus(item.status) ||
+            cancelledItemIds.has(item.id)
+          ) {
+            continue;
+          }
+          cancelledItemIds.add(item.id);
+          events.push({
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            threadId: projection.thread.id,
+            nodeId: node.id,
+            providerInstanceId: projection.thread.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              ...item,
+              status: "cancelled",
+              completedAt: now,
+              updatedAt: now,
+              ...(item.type === "reasoning" || item.type === "assistant_message"
+                ? { streaming: false }
+                : {}),
+            },
           });
         }
       }

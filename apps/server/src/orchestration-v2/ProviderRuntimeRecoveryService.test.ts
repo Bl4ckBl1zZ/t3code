@@ -370,6 +370,7 @@ it.effect("preserves a waiting run while its replay-safe checkpoint capture is u
     providerSessions: [],
     providerThreads: [],
     runs: [{ id: runId, status: "waiting" }],
+    nodes: [],
     ...({ turnItems: [], contextHandoffs: [] } as object),
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
