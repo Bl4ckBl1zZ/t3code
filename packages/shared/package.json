@@ -332,6 +332,7 @@
       "import": "./src/imageDimensions.ts"
     },
     "./threadPullRequestChains": "./src/threadPullRequestChains.ts",
+    "./threadAutoDelete": "./src/threadAutoDelete.ts",
     "./nodeSqliteClient": {
       "types": "./src/nodeSqliteClient.ts",
       "import": "./src/nodeSqliteClient.ts"

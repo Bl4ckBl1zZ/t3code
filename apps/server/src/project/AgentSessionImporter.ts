@@ -255,6 +255,8 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(
           lastVisitedAt: null,
           settledOverride: "settled",
           settledAt: updatedAt,
+          // Auto-delete counts from the import, not the CLI session's age.
+          settledRecordedAt: yield* DateTime.now,
         };
         const providerThread: OrchestrationV2ProviderThread = {
           id: providerThreadId,

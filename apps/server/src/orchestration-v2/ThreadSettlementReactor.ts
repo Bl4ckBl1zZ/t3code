@@ -1,5 +1,6 @@
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { canonicalRepositoryKey } from "@t3tools/shared/sourceControl";
+import { isAutoDeleteDue } from "@t3tools/shared/threadAutoDelete";
 import { CommandId, type OrchestrationV2ThreadShell, type Project } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequestChains";
@@ -14,6 +15,7 @@ import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as GitManager from "../git/GitManager.ts";
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -43,6 +45,7 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const projects = yield* ProjectService.ProjectService;
   const git = yield* GitManager.GitManager;
+  const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -86,9 +89,7 @@ export const make = Effect.gen(function* () {
     return candidate !== null && pullRequestMatchesProject(candidate, project) ? candidate : null;
   });
 
-  const sweep = Effect.fn("ThreadSettlementReactor.sweep")(function* () {
-    const settings = yield* settingsService.getSettings;
-    if (!settings.sidebarAutoSettleOnMerge && settings.sidebarAutoSettleAfterDays === null) return;
+  const settleSweep = Effect.fn("ThreadSettlementReactor.settleSweep")(function* () {
     const snapshot = yield* engine.getShellSnapshot({ location: "active" });
     const projectSnapshot = yield* projects.snapshot;
     const projectById = new Map(projectSnapshot.projects.map((project) => [project.id, project]));
@@ -158,6 +159,99 @@ export const make = Effect.gen(function* () {
         ),
       { concurrency: 8, discard: true },
     );
+  });
+
+  /**
+   * Removes the deleted thread's worktree and local branch, both forced, unless
+   * another thread (active or archived) still uses them. Never touches the
+   * project root.
+   */
+  const removeThreadWorkspace = Effect.fn("ThreadSettlementReactor.removeThreadWorkspace")(
+    function* (thread: OrchestrationV2ThreadShell) {
+      const worktreePath = thread.worktreePath?.trim();
+      if (worktreePath === undefined || worktreePath === "") return;
+      const project = (yield* projects.snapshot).projects.find(
+        (candidate) => candidate.id === thread.projectId,
+      );
+      if (project === undefined || worktreePath === project.workspaceRoot.trim()) return;
+      const remaining = yield* engine.getShellSnapshot();
+      const others = [...remaining.threads, ...remaining.archivedThreads].filter(
+        (other) => other.id !== thread.id && other.deletedAt === null,
+      );
+      if (others.some((other) => other.worktreePath?.trim() === worktreePath)) return;
+      yield* gitWorkflow.removeWorktree({
+        cwd: project.workspaceRoot,
+        path: worktreePath,
+        force: true,
+      });
+      const branch = thread.branch;
+      if (
+        branch === null ||
+        others.some((other) => other.projectId === thread.projectId && other.branch === branch)
+      ) {
+        return;
+      }
+      // Worktree removal already drops branches T3 created when they are merged;
+      // a missing branch here is the expected outcome, not a failure.
+      yield* gitWorkflow
+        .deleteLocalBranch({ cwd: project.workspaceRoot, refName: branch, force: true })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logDebug("automatic thread deletion left no branch to delete", {
+              threadId: thread.id,
+              branch,
+              cause,
+            }),
+          ),
+        );
+    },
+  );
+
+  const autoDeleteSweep = Effect.fn("ThreadSettlementReactor.autoDeleteSweep")(function* (
+    afterDays: number,
+  ) {
+    const snapshot = yield* engine.getShellSnapshot({ location: "active" });
+    const now = yield* DateTime.now;
+    const due = snapshot.threads.filter((thread) => isAutoDeleteDue(thread, afterDays, now));
+    // One at a time: removals in the same repository contend for its Git lock.
+    yield* Effect.forEach(
+      due,
+      (candidate) =>
+        Effect.gen(function* () {
+          const expectedSequence = yield* engine.getThreadEventSequence(candidate.id);
+          const thread = yield* engine.getThreadShell(candidate.id);
+          const current = (yield* settingsService.getSettings).autoDeleteSettledAfterDays;
+          if (thread === null || !isAutoDeleteDue(thread, current, yield* DateTime.now)) return;
+          const uuid = yield* crypto.randomUUIDv4;
+          yield* engine.dispatch({
+            type: "thread.delete",
+            commandId: CommandId.make(`server:auto-delete:${thread.id}:${uuid}`),
+            threadId: thread.id,
+            automatic: { expectedSequence },
+          });
+          yield* removeThreadWorkspace(thread);
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("automatic thread deletion skipped", {
+                  threadId: candidate.id,
+                  cause: Cause.pretty(cause),
+                }),
+          ),
+        ),
+      { discard: true },
+    );
+  });
+
+  const sweep = Effect.fn("ThreadSettlementReactor.sweep")(function* () {
+    const settings = yield* settingsService.getSettings;
+    if (settings.sidebarAutoSettleOnMerge || settings.sidebarAutoSettleAfterDays !== null) {
+      yield* settleSweep();
+    }
+    if (settings.autoDeleteSettledAfterDays !== null) {
+      yield* autoDeleteSweep(settings.autoDeleteSettledAfterDays);
+    }
   });
   let beforeSweep: Effect.Effect<void> = Effect.void;
   let queued = false;

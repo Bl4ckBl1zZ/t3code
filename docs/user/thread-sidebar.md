@@ -48,7 +48,8 @@ Choose **Delete** from a thread's menu, or select several threads and choose **D
 **Settings → General → Delete confirmation** on, T3 Code asks once before deleting. If the deleted
 threads were the only ones using a worktree, it then asks once whether to delete those worktrees
 too, however many threads you selected. With the setting off, threads are deleted without asking
-and their worktrees are kept.
+and their worktrees are kept. To clean up settled threads automatically, see
+[Auto-delete settled threads](#auto-delete-settled-threads).
 
 ## Snooze until later
 
@@ -162,6 +163,23 @@ To keep one thread out of **Settled** no matter how long it sits idle, open its 
 **Auto-settle behavior**, and pick **Disabled**. On iOS, long-press the thread on Home to open the
 menu. The current option is checked. Pick **Enabled** to return to the usual rules. Manual settle,
 snooze, and archive still work while it is disabled.
+
+### Auto-delete settled threads
+
+**Settings → General → Auto-delete settled threads** is off by default. When you turn it on, the
+selected environment permanently deletes threads that have stayed in **Settled** for the number of
+days you choose (1 to 365, 30 by default). The days count from when the thread moved to
+**Settled**. Threads that were already settled longer than that are deleted within a minute of
+turning the setting on.
+
+Deleting a thread this way also removes its worktree and its local branch, even when the worktree
+has uncommitted changes or the branch was never merged. A worktree or branch that another thread
+still uses is kept. Threads that run in the project folder itself only lose the conversation.
+
+Pinned and archived threads are never deleted automatically, so pin a settled thread to keep it.
+Reopening a thread takes it out of **Settled** and stops its countdown; if it settles again, the
+count starts over. During the final week, a settled row shows a trash icon with the time left, such
+as **2d**, in place of its age.
 
 Pull requests created or opened through a thread’s Git actions are automatically linked to that
 thread. They appear in its pull-request collection, including requests targeting an upstream
