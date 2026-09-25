@@ -649,6 +649,10 @@ public final class FeatureRootModel {
         )
         guard await enqueue(queued) else { return false }
 
+        // Behind a running turn the server queues the message, and the strip
+        // above the composer shows it; the transcript gets it when its run
+        // starts. The local row is only for a send the server hasn't taken.
+        let waitsInServerQueue = queuesBehindRunningTurn(submission.threadID)
         let optimistic = FeatureMessage(
             id: identity.messageID,
             role: .user,
@@ -665,15 +669,18 @@ public final class FeatureRootModel {
                 )
             }
         )
-        mutateDetail(
-            id: submission.threadID,
-            change: .delta(FeatureDetailDelta(
-                changedMessages: [optimistic],
-                appendedMessageIDs: [optimistic.id]
-            ))
-        ) {
-            $0.messages.append(optimistic)
+        let showOptimistic = {
+            self.mutateDetail(
+                id: submission.threadID,
+                change: .delta(FeatureDetailDelta(
+                    changedMessages: [optimistic],
+                    appendedMessageIDs: [optimistic.id]
+                ))
+            ) {
+                $0.messages.append(optimistic)
+            }
         }
+        if !waitsInServerQueue { showOptimistic() }
 
         isPerformingAction = true
         defer { isPerformingAction = false }
@@ -691,6 +698,9 @@ public final class FeatureRootModel {
             return true
         } catch {
             if Self.shouldQueue(error, environmentID: environmentID, snapshot: snapshot) {
+                // Held on this device instead: the transcript is the only
+                // place it shows until delivery.
+                if waitsInServerQueue { showOptimistic() }
                 if isEnvironmentConnected(environmentID) {
                     scheduleOutboxRetry()
                 }
@@ -1263,16 +1273,37 @@ public final class FeatureRootModel {
         return true
     }
 
+    /// A delivered message that landed behind a running turn now lives in the
+    /// server's queue, so its local row leaves the transcript rather than
+    /// sitting there until the next reload drops it. Only the local row: a
+    /// server row with the same id is the real message.
     private func markQueuedMessageDelivered(_ submission: FeatureQueuedSubmission) {
+        let messageID = submission.identity.messageID
+        if queuesBehindRunningTurn(submission.threadID) {
+            mutateDetail(id: submission.threadID) { detail in
+                detail.messages.removeAll { $0.id == messageID && $0.state == .queued }
+            }
+            return
+        }
         mutateDetail(
             id: submission.threadID,
             change: .delta(FeatureDetailDelta(changedMessages: []))
         ) { detail in
-            guard let index = detail.messages.firstIndex(where: {
-                $0.id == submission.identity.messageID
-            }) else { return }
+            guard let index = detail.messages.firstIndex(where: { $0.id == messageID }) else { return }
             detail.messages[index].state = .complete
         }
+    }
+
+    /// Whether a message sent now would wait in the server's queue: the server
+    /// queues behind any active run. The thread's state stands in when the
+    /// detail carries no runs.
+    private func queuesBehindRunningTurn(_ threadID: String) -> Bool {
+        if let runs = details[threadID]?.workflow.runs,
+           ThreadWorkflows.resolveActiveRun(runs: runs) != nil {
+            return true
+        }
+        let state = snapshot.threads.first { $0.id == threadID }?.state
+        return state == .working || state == .queued
     }
 
     @discardableResult
