@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct NewThreadView: View {
     @SwiftUI.Environment(\.dismiss) private var dismiss
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
     @Bindable var model: FeatureRootModel
     let submit: (NewTaskRequest) async -> FeatureThread?
     let onCreated: (FeatureThread) -> Void
@@ -12,6 +13,7 @@ public struct NewThreadView: View {
     private let draftID: String?
 
     @ScaledMetric(relativeTo: .title2) private var projectIconSize: CGFloat = 20
+    private let menuIcons = ProjectMenuIconStore.shared
     @AppStorage(NativeLoadBalancingPreferences.enabledKey) private var loadBalancingEnabled = false
     @AppStorage(NativeLoadBalancingPreferences.weightsKey) private var loadBalancingWeightsJSON = "{}"
     @State private var routing: FeatureComposerRoutingDraft?
@@ -280,19 +282,24 @@ public struct NewThreadView: View {
     private var projectMenu: some View {
         Menu {
             ForEach(creationProjects) { project in
-                Button {
-                    selectProject(project.id)
-                } label: {
-                    // A menu row reads a second Text as its subtitle and a
-                    // bare Image as its trailing mark, so the path sits small
-                    // under the name instead of wrapping beside it.
+                // A toggle rather than a picker: choosing the current project
+                // again still reaches `selectProject`, which reloads branches.
+                // Its on state draws the checkmark, leaving the row's image
+                // slot for the project's icon.
+                Toggle(isOn: Binding(
+                    get: { project.id == projectID },
+                    set: { _ in selectProject(project.id) }
+                )) {
+                    // A menu row reads a second Text as its subtitle, so the
+                    // path sits small under the name instead of wrapping.
                     let row = projectMenuRow(project)
-                    Text(row.title)
-                    if let detail = row.detail {
-                        Text(detail)
-                    }
-                    if project.id == projectID {
-                        Image(systemName: "checkmark")
+                    Label {
+                        Text(row.title)
+                        if let detail = row.detail {
+                            Text(detail)
+                        }
+                    } icon: {
+                        menuIcons.image(for: project, dark: colorScheme == .dark)
                     }
                 }
             }
@@ -325,6 +332,10 @@ public struct NewThreadView: View {
         }
         .buttonStyle(.plain)
         .disabled(isSubmitting)
+        .task(id: creationProjects.map(\.id)) { menuIcons.resolve(creationProjects) }
+        .task(id: menuIcons.faviconURLs(creationProjects)) {
+            await menuIcons.decode(menuIcons.faviconURLs(creationProjects))
+        }
         .accessibilityLabel("Project")
         .accessibilityValue(selectedProject?.name ?? "None")
     }
