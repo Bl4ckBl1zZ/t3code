@@ -239,29 +239,3 @@ public enum VoiceInputDictionary {
         self.entries(from: text) != entries
     }
 }
-
-public enum VoiceModelCatalog {
-    /// Ported from the `filtered` memo in SettingsVoiceModelRouteScreen.tsx: an
-    /// empty needle keeps the catalog order the server chose.
-    public static func filter(
-        _ models: [OpenRouterModelOption],
-        query: String
-    ) -> [OpenRouterModelOption] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return models }
-        return models.filter { model in
-            model.name.lowercased().contains(needle)
-                || model.id.lowercased().contains(needle)
-                || model.providerName.lowercased().contains(needle)
-        }
-    }
-
-    /// The label the Voice Input screen shows for the chosen model. A model the
-    /// catalog no longer lists still reads as its raw id rather than as blank.
-    public static func displayName(
-        for modelID: String,
-        in models: [OpenRouterModelOption]
-    ) -> String {
-        models.first { $0.id == modelID }?.name ?? modelID
-    }
-}

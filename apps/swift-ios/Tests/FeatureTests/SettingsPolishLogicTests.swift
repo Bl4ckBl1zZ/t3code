@@ -2,53 +2,6 @@ import Foundation
 import Testing
 @testable import T3Code
 
-/// Prices are typed in the reader's own notation. A comma locale used to be
-/// unable to enter a fraction at all.
-struct PriceDraftLocaleTests {
-    private let german = Locale(identifier: "de_DE")
-    private let american = Locale(identifier: "en_US")
-
-    @Test func readsTheLocaleDecimalMark() {
-        #expect(PriceDraft.number("1,25", locale: german) == 1.25)
-        #expect(PriceDraft.number("1.25", locale: american) == 1.25)
-        #expect(PriceDraft.number("3", locale: german) == 3)
-    }
-
-    @Test func acceptsAPlainPointInACommaLocale() {
-        #expect(PriceDraft.number("1.25", locale: german) == 1.25)
-        #expect(PriceDraft.number(" 0.5 ", locale: german) == 0.5)
-    }
-
-    @Test func neverReadsGroupingOrPartialNumbers() {
-        #expect(PriceDraft.number("1.234", locale: german) == 1.234)
-        #expect(PriceDraft.number("1,25", locale: american) == nil)
-        #expect(PriceDraft.number("1,2.3", locale: german) == nil)
-        #expect(PriceDraft.number("1..2", locale: american) == nil)
-        #expect(PriceDraft.number(",", locale: german) == nil)
-    }
-
-    @Test func rejectsNegativeAndNonFiniteValues() {
-        for invalid in ["-1", "nan", "inf", "1e3", ""] {
-            #expect(PriceDraft.number(invalid, locale: german) == nil)
-        }
-    }
-
-    @Test func storedPricesRoundTripThroughTheLocale() {
-        #expect(PriceDraft.text(3, locale: german) == "3")
-        #expect(PriceDraft.text(1.25, locale: german) == "1,25")
-        #expect(PriceDraft.text(1234.5, locale: american) == "1234.5")
-        let price = UsageModelPriceOverride(
-            inputCostPerMillionTokens: 1.25,
-            outputCostPerMillionTokens: 10,
-            cacheReadCostPerMillionTokens: 0.125,
-            cacheWriteCostPerMillionTokens: nil
-        )
-        let draft = PriceDraft(model: "Vendor/Model", price: price, locale: german)
-        #expect(draft.input == "1,25")
-        #expect(draft.parsed(locale: german) == price)
-    }
-}
-
 /// The server-backed pages keep what the server last said while they reload
 /// and while their own writes are in flight. Blanking it made every toggle
 /// fall back to its default after each save.
@@ -223,24 +176,5 @@ struct AutomationScheduleEditingTests {
         #expect(ScheduledTaskWeekday.repeatSummary([.monday, .tuesday, .wednesday, .thursday, .friday], calendar: calendar) == "Weekdays")
         #expect(ScheduledTaskWeekday.repeatSummary([.saturday, .sunday], calendar: calendar) == "Weekends")
         #expect(ScheduledTaskWeekday.repeatSummary([.friday, .monday], calendar: calendar) == "Mon, Fri")
-    }
-}
-
-/// Search offers only pages the root would show, and every word must match.
-struct SettingsSearchIndexTests {
-    @Test func findsSettingsByTheirControlsNotJustPageTitles() {
-        let results = SettingsSearchIndex.results(for: "Colorblind diff", available: Set(SettingsRoute.allCases))
-        #expect(results.map(\.title) == ["Diff Colors"])
-        #expect(results.first?.breadcrumb == "Threads")
-    }
-
-    @Test func skipsServerPagesWithoutAServer() {
-        let local = Set(SettingsRoute.allCases.filter { !$0.requiresServer })
-        let results = SettingsSearchIndex.results(for: "automations", available: local)
-        #expect(results.allSatisfy { !$0.route.requiresServer })
-    }
-
-    @Test func aMissReturnsNothing() {
-        #expect(SettingsSearchIndex.results(for: "zzzz qqqq", available: Set(SettingsRoute.allCases)).isEmpty)
     }
 }

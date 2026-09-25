@@ -34,8 +34,11 @@ struct PlatformRootView: View {
             handle(url: url, letOnboardingConfirmConnection: false)
         }
         .onReceive(NotificationCenter.default.publisher(for: .platformRouteReceived)) { note in
-            guard let route = note.userInfo?["route"] as? PlatformRoute else { return }
-            _ = PlatformRouteMailbox.shared.take()
+            // A notification tap leaves its route in the mailbox, which hands it
+            // out once however many of these paths wake for it. In-app posts
+            // carry theirs in `userInfo`.
+            guard let route = PlatformRouteMailbox.shared.take()
+                ?? note.userInfo?["route"] as? PlatformRoute else { return }
             handle(route)
         }
         .onChange(of: model.isLoading, initial: true) { _, isLoading in
@@ -62,6 +65,9 @@ struct PlatformRootView: View {
         }
         .onChange(of: model.snapshot.settings.notificationsEnabled) { _, _ in
             synchronizeNotificationPreference()
+            synchronizeCloudDelivery()
+        }
+        .onChange(of: notificationEventPreferences) { _, _ in
             synchronizeCloudDelivery()
         }
         .onChange(of: model.snapshot.settings.liveActivitiesEnabled) { _, _ in
@@ -202,6 +208,12 @@ struct PlatformRootView: View {
         }
     }
 
+    /// The relay filters pushes by these too, so a change re-registers.
+    private var notificationEventPreferences: [Bool] {
+        let settings = model.snapshot.settings
+        return [settings.notifyOnAttention, settings.notifyOnCompletion, settings.notifyOnFailure]
+    }
+
     private func synchronizeCloudDelivery() {
         guard !model.isLoading else { return }
         PlatformCloudDeliveryCoordinator.shared.synchronize(
@@ -259,20 +271,26 @@ struct PlatformRootView: View {
                 enabled: model.snapshot.settings.hapticsEnabled
             )
         case let .thread(environmentID, threadID):
-            guard await activateEnvironmentIfNeeded(environmentID),
-                  let thread = PlatformRouteResolver.thread(
-                      in: model.snapshot,
-                      environmentID: environmentID,
-                      id: threadID
-                  )
-            else {
+            guard await activateEnvironmentIfNeeded(environmentID) else { return }
+            let resolvedID = PlatformRouteResolver.thread(
+                in: model.snapshot,
+                environmentID: environmentID,
+                id: threadID
+            )?.id
+            // A thread named by a notification can be newer than the snapshot,
+            // such as one started on the computer while the phone slept. With
+            // its environment known, Home holds the request until it arrives.
+            let fallbackID = environmentID.map {
+                FeatureScopedID.thread(environmentID: $0, wireID: threadID)
+            }
+            guard let id = resolvedID ?? fallbackID else {
                 if model.errorMessage == nil {
                     model.reportFailure("That thread is not available on this device.", title: "Couldn't Open Thread")
                 }
                 return
             }
             navigationRequest = FeatureWorkspaceNavigationRequest(
-                destination: .thread(id: thread.id)
+                destination: .thread(id: id)
             )
             PlatformHapticEngine.shared.selection(
                 enabled: model.snapshot.settings.hapticsEnabled
@@ -350,7 +368,7 @@ struct PlatformRootView: View {
                     signal.kind,
                     enabled: model.snapshot.settings.hapticsEnabled
                 )
-            } else if model.snapshot.settings.notificationsEnabled {
+            } else if model.snapshot.settings.notifies(signal.kind) {
                 Task { await PlatformNotificationService.shared.schedule(signal) }
             }
         }

@@ -2,7 +2,7 @@
 
 Open **Usage** from the sidebar or the command palette, or press `mod+u` on web and
 desktop when the terminal is not focused. Customize `usage.open` in
-**Settings → Keybindings**. On iPad with a hardware keyboard, ⌘U opens **Settings → Usage**.
+**Settings → Keybindings**. On iPad with a hardware keyboard, ⌘U opens **Settings → Usage Limits**.
 
 The Usage page combines Codex, Claude Code, and Grok Build activity from your connected
 environments. It reads the providers' local session history and shows API-equivalent token cost,
@@ -20,7 +20,7 @@ usage view, metric and time range are remembered.
 
 ## Subscription limits
 
-Open **Limits** from Usage (or **Settings → Usage → Limits** on iPhone and iPad) to see Codex and Claude subscription windows,
+Open **Limits** from Usage (or **Settings → Usage Limits** on iPhone and iPad) to see Codex and Claude subscription windows,
 quota remaining, reset times, and when each report was checked. Choose which environments to
 include, then use **Refresh limits** to request fresh reports.
 
@@ -73,12 +73,11 @@ Keychain.
 
 ## Quota hubs
 
-On web and desktop, open **Usage → Limits** and choose **Add hub** under an environment.
-On iPhone or iPad, open **Settings → Usage → Limits → Quota Hubs**, select an environment,
-and add its hub URL and management key. The key stays in that server’s secret store.
+On web and desktop, open **Usage → Limits** and choose **Add hub** under an environment,
+then add its hub URL and management key. The key stays in that server’s secret store.
 
-Edit a hub to change its address, label, or key. Leaving the key blank while editing on iOS
-or web keeps the existing key. Disable pauses its reports; Enable resumes them. Remove deletes
+Edit a hub to change its address, label, or key. Leaving the key blank while editing keeps the
+existing key. Disable pauses its reports; Enable resumes them. Remove deletes
 its configuration and stored key. Changes affect only the selected environment.
 
 Hub accounts contribute to the same account comparisons and pooled bars. A known account

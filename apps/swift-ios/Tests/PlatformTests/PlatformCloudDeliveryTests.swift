@@ -45,4 +45,40 @@ struct PlatformCloudDeliveryTests {
         #expect(registration.preferences.liveActivitiesEnabled)
     }
 
+    @Test
+    func attentionCoversBothApprovalsAndQuestions() {
+        var settings = FeatureSettings()
+        settings.notifyOnAttention = false
+        settings.notifyOnFailure = false
+
+        let preferences = PlatformCloudDeliveryRegistrationFactory.registration(
+            deviceID: "device-1",
+            deviceName: "Big O",
+            systemVersion: OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0),
+            appVersion: nil,
+            bundleID: nil,
+            pushToken: nil,
+            pushToStartToken: nil,
+            settings: settings,
+            apsEnvironment: .sandbox
+        ).preferences
+
+        #expect(!preferences.notifyOnApproval)
+        #expect(!preferences.notifyOnInput)
+        #expect(preferences.notifyOnCompletion)
+        #expect(!preferences.notifyOnFailure)
+    }
+
+    @Test
+    func localAlertsFollowTheEventChoicesAndTheMasterSwitch() {
+        var settings = FeatureSettings()
+        settings.notifyOnCompletion = false
+        #expect(!settings.notifies(.success))
+        #expect(settings.notifies(.warning))
+        #expect(settings.notifies(.error))
+
+        settings.notificationsEnabled = false
+        #expect(!settings.notifies(.warning))
+    }
+
 }

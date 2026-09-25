@@ -194,4 +194,28 @@ struct PlatformDeepLinkTests {
             )?.id == passiveProject.id
         )
     }
+
+    @Test
+    func routesALocalNotificationTap() {
+        let url = PlatformRoute.thread(environmentID: "environment-1", threadID: "thread-7").url!
+        #expect(
+            PlatformNotificationPayload.route(from: ["t3_route": url.absoluteString])
+                == .thread(environmentID: "environment-1", threadID: "thread-7")
+        )
+    }
+
+    /// The relay's `deepLink` has no scheme, so the ids beside it carry the tap.
+    @Test
+    func routesARelayPushTap() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "Task completed"]],
+            "deepLink": "/threads/environment-1/thread-7",
+            "environmentId": "environment-1",
+            "threadId": "thread-7",
+        ]
+        #expect(
+            PlatformNotificationPayload.route(from: userInfo)
+                == .thread(environmentID: "environment-1", threadID: "thread-7")
+        )
+    }
 }

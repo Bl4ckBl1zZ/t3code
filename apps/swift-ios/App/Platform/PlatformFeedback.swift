@@ -79,3 +79,16 @@ final class PlatformHapticEngine {
         generator.selectionChanged()
     }
 }
+
+extension FeatureSettings {
+    /// Whether a local notification goes out for this turn outcome. Attention
+    /// covers both approvals and questions, which share the warning signal.
+    func notifies(_ kind: PlatformFeedbackKind) -> Bool {
+        guard notificationsEnabled else { return false }
+        switch kind {
+        case .success: return notifyOnCompletion
+        case .warning: return notifyOnAttention
+        case .error: return notifyOnFailure
+        }
+    }
+}

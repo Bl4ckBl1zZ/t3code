@@ -34,8 +34,13 @@ struct SettingsServersView: View {
             if activeEnvironment != nil {
                 Section("This Server") {
                     routeLink(.devices)
-                    routeLink(.desktopUpdates)
-                    routeLink(.environmentIcons)
+                }
+            }
+
+            // Balancing picks between machines, so it means nothing with one.
+            if environments.count > 1 {
+                Section {
+                    routeLink(.loadBalancing)
                 }
             }
 

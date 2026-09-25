@@ -1,10 +1,9 @@
 # Antigravity
 
-Add an Antigravity account in **Settings → Providers** on web or **Settings → Agents** on iOS. Choose the server that will run it,
+Add an Antigravity account in **Settings → Providers** on web or desktop. Choose the server that will run it,
 then enable the account. Open **Install and sign in** to install the managed runtime and
 sign in with Google. Installation and sign-in happen on the selected server, including
-when you connect remotely from a phone. The native iOS app and web app offer the same
-setup actions.
+when you open the web app remotely from a phone.
 
 Choose a personal Google account, a business Google account, a Gemini API key, or Agent
 Platform in the account editor. Save changes before starting setup. Business accounts

@@ -27,9 +27,7 @@ per-project choice in project settings. **Machine default** restores inheritance
 **Off** remains off even when the default is on. Group changes apply to its
 checkouts on connected, supported machines. Offline machines retain their settings.
 
-On iOS, open **Settings → Project Defaults**, tap the title to choose a machine, and change
-its default or individual project overrides. The choices are shared with other
-clients connected to that machine. Background refreshes respect the machine’s
+The choices are shared with other clients connected to that machine. Background refreshes respect the machine’s
 background activity policy; an explicit source-control refresh also checks for a
 pull. Enabled projects are also refreshed once when the server starts. The default is off.
 
@@ -37,8 +35,7 @@ pull. Enabled projects are also refreshed once when the server starts. The defau
 
 In project settings, **Agent browser access** can be **On**, **Off**, or
 **Machine default**. The project choice overrides the machine’s browser-access
-setting. On iOS, **Settings → Project Defaults** contains both the machine default
-and project overrides. Choose **Machine default** to remove an override.
+setting. Choose **Machine default** to remove an override.
 
 Changes take effect when an agent’s next session is prepared. Turning access off
 withholds its browser tools while preserving its conversation and workspace tools.
@@ -51,9 +48,7 @@ to choose a default model and workspace mode, or select a project to override th
 Use the machine filter when your machines have different installed agents or models.
 A change across machines requires the model to be available on each target.
 
-On iOS, open **Settings → Project Defaults**, tap the title to choose a machine, and choose the
-model or **Local** / **New worktree** workspace. **Use automatic model selection**
-clears the machine's model preference. Your project default and explicit draft
+Your project default and explicit draft
 choices take priority; changing defaults does not change running threads.
 
 New worktrees initialize git submodules recursively. If that step is slow because the repository
@@ -69,7 +64,7 @@ React Native views also refresh the file every 1.5 seconds, so configuration
 changes such as preview URLs and new-thread defaults appear without reloading.
 
 Set **Default actions** in **Settings → Projects → Project defaults** on web or
-desktop. In iOS **Settings → Project Defaults**, use **Machine actions**. Actions
+desktop. Actions
 are available to projects that inherit them, and run in the selected checkout or
 worktree. Setup actions run when a worktree is created; teardown actions run before
 it is removed. Each project can have one of each.
@@ -82,7 +77,8 @@ does not rewrite project files. A failed save keeps the editor open for retry.
 ## Choose a machine automatically
 
 Enable **Automatically balance load** in web or desktop **Settings → Connections**, or
-**Balance new tasks** in iOS **Settings → Load Balancing**. These preferences apply to the
+**Balance new tasks** in iOS **Settings → Servers → Load Balancing**, shown once you have more
+than one server. These preferences apply to the
 client where you set them. Choose **Prefer**, **Normal**, **Less often**, or **Manual only** for
 each machine.
 

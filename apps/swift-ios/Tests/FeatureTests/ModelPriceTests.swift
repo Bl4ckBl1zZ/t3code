@@ -13,17 +13,4 @@ struct ModelPriceTests {
         #expect(patch.json["usagePriceOverrides"]?["Vendor/Model"] == price.json)
         #expect(ServerSettingsPatchInput(usagePriceOverrides: ["Vendor/Model": nil]).json["usagePriceOverrides"]?["Vendor/Model"] == JSONValue.null)
     }
-
-    @Test func validatesRatesAndKeepsZeroDifferentFromBlank() {
-        var draft = PriceDraft(model: "Vendor/Model")
-        draft.input = "2"
-        draft.output = "8"
-        #expect(draft.parsed?.cacheReadCostPerMillionTokens == nil)
-        draft.cacheRead = "0"
-        #expect(draft.parsed?.cacheReadCostPerMillionTokens == 0)
-        for invalid in ["-1", "nan", "inf", "invalid"] {
-            draft.input = invalid
-            #expect(draft.parsed == nil)
-        }
-    }
 }

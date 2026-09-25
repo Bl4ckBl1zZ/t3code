@@ -7,13 +7,12 @@ Use Add provider to create an account on the selected environment. Health-check
 intervals are under Advanced. Sessions with limited permissions can browse accounts
 but cannot change their settings or update provider software.
 
-On iOS, open Settings → Agents, tap the title to choose an environment, then open an account to
-choose its visible models. Enable all and Disable all affect that account's
-built-in models. Claude's auto-compaction setting applies to the selected environment.
+Open an account to choose its visible models. Enable all and Disable all affect that account's
+built-in models. Claude's auto-compaction setting applies to the selected environment. The native
+iOS app shows each account's models in the model picker; manage accounts on web or desktop.
 
 Custom models can have a display name and their own composer options. On web,
-add a model ID in the account's model list and use Edit to customize it. On iOS,
-open the account's Custom models screen. Both editors let you copy options from
+add a model ID in the account's model list and use Edit to customize it. The editor lets you copy options from
 an available model, start with a provider preset, or define choice and toggle
 controls. Select one default per choice control. Save applies the whole edit;
 Cancel leaves the saved model unchanged.

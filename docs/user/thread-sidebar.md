@@ -5,8 +5,7 @@ Pin a thread from its context menu to keep it in the pinned section above your a
 their project, including when you connect to more than one environment.
 
 To require confirmation before unpinning, enable **Settings → Preferences → Confirm before
-unpinning**. On native iOS, the confirmation applies to list swipes, thread menus, and the thread
-details sheet. Web and desktop also apply it to the sidebar controls and `mod+shift+p` shortcut.
+unpinning**. Web and desktop apply it to the sidebar controls and `mod+shift+p` shortcut.
 
 Pinned threads still move to **Settled** when they become inactive. They also move when their pull
 request merges if **Auto-settle merged threads** is enabled.
@@ -149,9 +148,8 @@ Archived rows and batch-selection mode do not accept drops.
 ## Automatic organization
 
 Current servers move finished or inactive threads into **Settled** even when no client is open.
-These settings belong to the selected environment and apply to every connected device. On native
-iOS, open **Settings → Shared Preferences**, tap the title to choose the machine, and configure merge settlement
-or an inactivity period from 1 to 90 days. Turn off inactivity settlement to keep quiet threads
+These settings belong to the selected environment and apply to every connected device. Configure
+merge settlement or an inactivity period from 1 to 90 days on web or desktop. Turn off inactivity settlement to keep quiet threads
 active indefinitely. Older servers keep their existing device-local behavior.
 
 Running or queued work, blocking approvals and unanswered blocking questions stay visible.

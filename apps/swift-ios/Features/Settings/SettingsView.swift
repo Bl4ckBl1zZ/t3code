@@ -12,10 +12,11 @@ public struct SettingsView: View {
     @Bindable private var model: FeatureRootModel
     @State private var settings: FeatureSettings
     @State private var path: [SettingsRoute] = []
-    @State private var query = ""
     @State private var savesInFlight = 0
     @State private var saveError: String?
-    @State private var showingSetup = false
+    /// Agents on the active server that cannot run until installed or signed
+    /// in, such as "Claude signed out". Read once per visit.
+    @State private var agentIssues: [String] = []
 
     public init(model: FeatureRootModel) {
         self.init(model: model, initialRoute: nil)
@@ -31,32 +32,16 @@ public struct SettingsView: View {
 
     public var body: some View {
         NavigationStack(path: $path) {
-            SettingsForm {
-                if isSearching {
-                    searchResults
-                } else {
-                    rootSections
+            SettingsForm { rootSections }
+                .navigationTitle("Settings")
+                .navigationBarTitleDisplayMode(.large)
+                .t3SheetToolbar(.close)
+                .navigationDestination(for: SettingsRoute.self) { route in
+                    destination(route)
                 }
-            }
-            .overlay {
-                if isSearching, searchMatches.isEmpty {
-                    ContentUnavailableView.search(text: query)
-                }
-            }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.large)
-            .t3Searchable(
-                text: $query,
-                placement: .navigationBarDrawer(displayMode: .always),
-                prompt: Text("Search")
-            )
-            .t3SheetToolbar(.close)
-            .navigationDestination(for: SettingsRoute.self) { route in
-                destination(route)
-            }
         }
         .presentationDragIndicator(.visible)
-        .sheet(isPresented: $showingSetup) { AgentSetupView(model: model) }
+        .task(id: activeEnvironment?.id) { await loadAgentIssues() }
         .onAppear { model.setConnectionManagementPresented(true) }
         .onDisappear { model.setConnectionManagementPresented(false) }
         .onChange(of: settings) { _, next in persist(next) }
@@ -77,14 +62,13 @@ public struct SettingsView: View {
 
         if hasServers {
             Section {
-                routeLink(.agents)
                 ProviderModelPicker(
                     providers: model.snapshot.providers,
                     selection: $settings.defaultSelection,
-                    setupContext: ProviderSetupContext(client: model.client, environmentID: activeEnvironment?.id)
+                    setupContext: setupContext
                 )
-                Button { showingSetup = true } label: {
-                    SettingsTileLabel(title: "Set Up T3 Code", systemImage: "checklist", tint: .green)
+                if let setupContext {
+                    agentSetupLink(setupContext)
                 }
             } footer: {
                 if let detail = selectedModel?.detail { Text(detail) }
@@ -101,6 +85,9 @@ public struct SettingsView: View {
             }
             routeLink(.threads)
             routeLink(.notifications)
+            if hasServers {
+                routeLink(.voiceInput)
+            }
             Toggle(isOn: $settings.hapticsEnabled) {
                 SettingsTileLabel(title: "Haptics", systemImage: "hand.tap", tint: .pink)
             }
@@ -108,24 +95,8 @@ public struct SettingsView: View {
             SettingsFooter(error: saveError)
         }
 
-        if let activeEnvironment {
-            Section("On \(activeEnvironment.name)") {
-                routeLink(.sharedPreferences)
-                routeLink(.projectDefaults)
-            }
-        }
-
         if hasServers {
-            Section {
-                routeLink(.automations)
-                routeLink(.work)
-                routeLink(.usage)
-            }
-            Section {
-                routeLink(.loadBalancing)
-                routeLink(.integrations)
-                routeLink(.voiceInput)
-            }
+            Section { routeLink(.usage) }
         }
 
         Section {
@@ -146,6 +117,27 @@ public struct SettingsView: View {
                         .foregroundStyle(T3Colors.textTertiary)
                         .accessibilityHidden(true)
                 }
+            }
+        } footer: {
+            Text("Agent accounts, projects, integrations, and other server settings are in T3 Code on your computer.")
+        }
+    }
+
+    /// The way back into an agent that stopped working: install it or sign in
+    /// again. Says which agent needs it, so a signed-out account shows here
+    /// before a task fails on it.
+    private func agentSetupLink(_ context: ProviderSetupContext) -> some View {
+        NavigationLink {
+            ProviderSetupView(context: context, instanceID: nil)
+                .onDisappear { Task { await loadAgentIssues() } }
+        } label: {
+            LabeledContent {
+                if let issue = agentIssues.first {
+                    Text(agentIssues.count == 1 ? issue : "\(agentIssues.count) need attention")
+                        .foregroundStyle(T3Colors.warning)
+                }
+            } label: {
+                SettingsTileLabel(title: "Install or Sign In", systemImage: "person.badge.key", tint: .purple)
             }
         }
     }
@@ -189,41 +181,6 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Search
-
-    private var isSearching: Bool {
-        !query.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    private var searchMatches: [SettingsSearchEntry] {
-        SettingsSearchIndex.results(for: query, available: availableRoutes)
-    }
-
-    private var searchResults: some View {
-        Section {
-            ForEach(searchMatches) { entry in
-                NavigationLink(value: entry.route) {
-                    SettingsTileLabel(
-                        title: entry.title,
-                        systemImage: entry.route.systemImage,
-                        tint: entry.route.tint,
-                        subtitle: entry.breadcrumb
-                    )
-                }
-            }
-        }
-    }
-
-    /// Search only offers what the root would: server pages once a server is
-    /// paired, T3 Connect when this build can reach it.
-    private var availableRoutes: Set<SettingsRoute> {
-        Set(SettingsRoute.allCases.filter { route in
-            if route.requiresServer, !hasServers { return false }
-            if route == .t3Connect { return model.client is any T3ConnectCapable }
-            return true
-        })
-    }
-
     // MARK: - Destinations
 
     @ViewBuilder
@@ -234,13 +191,6 @@ public struct SettingsView: View {
                 model: model,
                 onAddServer: { path.append(.addServer) },
                 onDisconnected: { dismiss() }
-            )
-        case .agents:
-            SettingsAgentsView(
-                serverSettings: serverSettingsManager,
-                environmentID: activeEnvironment?.id,
-                preferences: activeEnvironmentPreferences,
-                environments: model.snapshot.environments
             )
         case .appearance:
             SettingsAppearanceView(
@@ -253,37 +203,14 @@ public struct SettingsView: View {
             SettingsThreadsView(settings: $settings, saveError: saveError)
         case .notifications:
             SettingsNotificationsView(settings: $settings, saveError: saveError)
-        case .sharedPreferences:
-            SettingsThreadOrganizationView(model: model)
-        case .projectDefaults:
-            SettingsProjectDefaultsView(model: model)
-        case .automations:
-            SettingsAutomationsView(
-                model: model,
-                manager: scheduledTaskManager,
-                onAddServer: { path.append(.addServer) }
-            )
-        case .work:
-            WorkManagementView(model: model)
-        case .usage:
-            SettingsUsageView(model: model)
-        case .loadBalancing:
-            SettingsLoadBalancingView(model: model, onAddServer: { path.append(.addServer) })
-        case .integrations:
-            SettingsIntegrationsView(
-                manager: voiceSettingsManager,
-                serverSettings: serverSettingsManager,
-                environmentID: activeEnvironment?.id,
-                preferences: activeEnvironmentPreferences
-            )
         case .voiceInput:
             SettingsVoiceInputView(manager: voiceSettingsManager)
+        case .usage:
+            SettingsUsageLimitsView(model: model)
         case .devices:
             DevicesView(manager: deviceManager)
-        case .desktopUpdates:
-            SettingsDesktopUpdatesView(model: model)
-        case .environmentIcons:
-            SettingsEnvironmentIconsView(model: model)
+        case .loadBalancing:
+            SettingsLoadBalancingView(model: model, onAddServer: { path.append(.addServer) })
         case .addServer:
             // Pushed without `onCancel`: Back leaves, and it pops itself once
             // the server connects.
@@ -399,9 +326,27 @@ public struct SettingsView: View {
             ?? EmptyFeatureServerSettingsManager.shared
     }
 
-    private var scheduledTaskManager: any FeatureScheduledTaskManaging {
-        (model.client as? any FeatureScheduledTaskManaging)
-            ?? EmptyFeatureScheduledTaskManager.shared
+    private var setupContext: ProviderSetupContext? {
+        ProviderSetupContext(client: model.client, environmentID: activeEnvironment?.id)
+    }
+
+    /// Codex and Claude Code accounts on the active server that need installing
+    /// or signing in. Other agents are set up on the computer.
+    private func loadAgentIssues() async {
+        guard let environmentID = activeEnvironment?.id else {
+            agentIssues = []
+            return
+        }
+        guard let config = try? await serverSettingsManager.providerModelConfiguration(environmentID: environmentID),
+              !Task.isCancelled else { return }
+        agentIssues = config.providers
+            .filter { $0.driver == "codex" || $0.driver == "claudeAgent" }
+            .compactMap { provider in
+                let state = AgentSetupProviderState(provider)
+                guard state.action != nil else { return nil }
+                let name = provider.displayName ?? AgentSetupProviderState.sourceName(provider.driver)
+                return "\(name) \(state.label.lowercased())"
+            }
     }
 }
 
