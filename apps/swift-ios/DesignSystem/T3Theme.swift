@@ -15,6 +15,7 @@ enum T3Colors {
 
     static var uiBackground: UIColor { palette.background }
     static var uiTextPrimary: UIColor { palette.textPrimary }
+    static var uiAccent: UIColor { palette.accent }
 
     static var background: Color { Color(uiColor: palette.background) }
     static var sheet: Color { Color(uiColor: palette.sheet) }
