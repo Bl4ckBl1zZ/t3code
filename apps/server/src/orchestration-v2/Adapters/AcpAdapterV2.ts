@@ -229,11 +229,12 @@ export interface AcpAdapterV2Flavor {
   ) => OrchestrationV2UserInputQuestion | undefined;
   readonly isPermissionQuestion?: (request: EffectAcpSchema.RequestPermissionRequest) => boolean;
   /**
-   * Serves the agent's `fs/read_text_file` and `fs/write_text_file` requests.
-   * Receives the cwd of the policy active when the request arrives (the turn in
+   * Opts the session into the ACP client `fs` capability. Agents read and write
+   * files themselves unless a flavor sets this; without it no fs handler is
+   * registered, so a stray request gets method-not-found. The handlers receive
+   * the cwd of the policy active when the request arrives (the turn in
    * progress, else the latest turn's), which is null when the session has no
-   * workspace. The flavor's runtime must advertise the fs capability itself.
-   * Antigravity confines them to its workspace.
+   * workspace. Antigravity sets it and confines requests to that workspace.
    */
   readonly clientFileSystem?: {
     readonly readTextFile: (
@@ -1854,8 +1855,13 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           runtimePolicy: input.runtimePolicy,
           mcpServers: acpMcpServers(input.threadId),
           interruptPromptOnCancel: flavor.interruptPromptOnCancel ?? false,
+          // Agents read, write and run commands themselves under their own
+          // permission model; only a flavor's clientFileSystem opts into fs.
           clientCapabilities: {
-            fs: { readTextFile: false, writeTextFile: false },
+            fs: {
+              readTextFile: flavor.clientFileSystem !== undefined,
+              writeTextFile: flavor.clientFileSystem !== undefined,
+            },
             terminal: false,
             elicitation: { form: {} },
           },
