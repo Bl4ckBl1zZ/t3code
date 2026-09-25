@@ -1,3 +1,4 @@
+import { CODEX_THREAD_CONFIG } from "../src/orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
@@ -840,6 +841,11 @@ function scenarios(): ReadonlyArray<ReplayScenario> {
   ];
 }
 
+function recorderThreadConfigMetadata(scenario: ReplayScenario) {
+  const keys = [...new Set(scenario.runs.flatMap((run) => Object.keys(run.threadConfig ?? {})))];
+  return keys.length === 0 ? {} : { recorderThreadConfigKeys: keys };
+}
+
 function makeRecorder({
   outPath,
   scenario,
@@ -1169,7 +1175,7 @@ function runReplaySession({
 
       const firstThread = yield* Effect.gen(function* () {
         const client = yield* initializeClient;
-        const thread = yield* client.request("thread/start", {});
+        const thread = yield* client.request("thread/start", { config: CODEX_THREAD_CONFIG });
         yield* runTurnStep(client, thread.thread.id, firstStep);
         return thread;
       }).pipe(
@@ -1189,6 +1195,7 @@ function runReplaySession({
         const client = yield* initializeClient;
         const thread = yield* client.request("thread/resume", {
           threadId: firstThread.thread.id,
+          config: CODEX_THREAD_CONFIG,
         });
         yield* runTurnStep(client, thread.thread.id, secondStep);
       }).pipe(
@@ -1203,7 +1210,7 @@ function runReplaySession({
 
     yield* Effect.gen(function* () {
       const client = yield* initializeClient;
-      const thread = yield* client.request("thread/start", {});
+      const thread = yield* client.request("thread/start", { config: CODEX_THREAD_CONFIG });
       let activeThreadId = thread.thread.id;
       const threadIds = new Map<string, string>([["source", thread.thread.id]]);
 
@@ -1223,6 +1230,7 @@ function runReplaySession({
           }
           const forked = yield* client.request("thread/fork", {
             threadId: sourceThreadId,
+            config: CODEX_THREAD_CONFIG,
           });
           activeThreadId = forked.thread.id;
           if (step.as !== undefined) {
