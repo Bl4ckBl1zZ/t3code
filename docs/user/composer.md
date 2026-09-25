@@ -26,7 +26,8 @@ sends, so queued messages keep their files until they deliver. Select a received
 to save it or open it in another app through the system share sheet.
 
 In the native iOS app, **+** offers **Camera**, **Photos** and **Files**. Photos opens the system
-picker, so T3 Code never asks for access to your photo library. If an image can't be attached, it
+picker, so T3 Code never asks for access to your photo library. On iOS 27, you can also paste an
+image into the message field: touch and hold it and choose **Paste**, or press ⌘V. If an image can't be attached, it
 stays in the composer with **Retry**. Tap any attachment to preview it.
 
 Select a video attachment before or after sending to play it. Web and desktop use the browser's
