@@ -426,8 +426,10 @@ struct FeatureComposerView: View {
     private var composerSurface: some View {
         VStack(spacing: 0) {
             // Above the swap below on purpose: the status describes the turn,
-            // and the turn keeps running while an approval panel is up.
-            if let workingStatus {
+            // and the turn keeps running while an approval panel is up. The
+            // media window takes the whole card, so the camera and picker meet
+            // its rounded top edge the same way they do on a new task.
+            if let workingStatus, mediaSurface == nil {
                 ThreadWorkingStatusBar(status: workingStatus)
             }
 
