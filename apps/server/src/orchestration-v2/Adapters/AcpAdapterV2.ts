@@ -128,6 +128,17 @@ export interface AcpAdapterV2UserInputRequest {
 export interface AcpAdapterV2ExtensionContext {
   readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
   /**
+   * A subagent's structured end on the root session (Grok `subagent_finished`),
+   * keyed by its child session id. Finishes the subagent row, in the turn that
+   * holds it or in the carryover of a settled one.
+   */
+  readonly finishSubagent: (notice: {
+    readonly sessionId: string;
+    readonly childSessionId: string;
+    readonly status: "completed" | "failed" | "cancelled";
+    readonly result: string | null;
+  }) => Effect.Effect<void>;
+  /**
    * Session-scoped background-task lifecycle reported via extension
    * notifications (e.g. Grok `x.ai/task_backgrounded`; older builds use the
    * underscore alias). Mutations for non-root sessions are ignored. A terminal
@@ -1346,6 +1357,18 @@ interface ActiveAcpSubagent {
   childSessionId: string | null;
   assistantText: string;
   nextChildOrdinal: number;
+  /**
+   * A carryover subagent that ended after a non-completed root settled: its
+   * terminal status is recorded but projected only once a later turn adopts it.
+   */
+  terminalProjectionDeferred?: boolean;
+}
+
+/** Live subagents a settled root turn hands to the next turn on its session. */
+interface AcpCarryoverSubagents {
+  readonly sessionId: string;
+  readonly subagents: ReadonlyArray<ActiveAcpSubagent>;
+  readonly rootTerminalStatus: OrchestrationV2ProviderTurn["status"];
 }
 
 function acpTurnHasPendingRuntimeRequest(
@@ -1697,10 +1720,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         // signals can still flip the original turn items instead of leaving
         // them running forever.
         const backgroundToolOwners = new Map<string, ActiveAcpTurn>();
-        const carryoverSubagents = yield* Ref.make<{
-          readonly sessionId: string;
-          readonly subagents: ReadonlyArray<ActiveAcpSubagent>;
-        } | null>(null);
+        const carryoverSubagents = yield* Ref.make<AcpCarryoverSubagents | null>(null);
         const handledBackgroundTaskIdsInActiveTurn = yield* Ref.make<ReadonlySet<string>>(
           new Set(),
         );
@@ -3881,112 +3901,189 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         });
 
         /**
+         * Project a carryover subagent's status without an ActiveAcpTurn. The
+         * subagent keeps the lineage (run, provider turn, turn item) of the turn
+         * that spawned it.
+         */
+        const projectCarryoverSubagentStatus = Effect.fnUntraced(function* (
+          subagent: ActiveAcpSubagent,
+          status: OrchestrationV2Subagent["status"],
+          result: string | null,
+        ) {
+          const now = yield* DateTime.now;
+          const completedAt = status === "running" || status === "pending" ? null : now;
+          const nativeTaskId = subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id;
+          const nativeItemRef = {
+            driver,
+            nativeId: nativeTaskId,
+            strength: "strong" as const,
+          };
+          const parentProviderThreadId = subagent.parentProviderThreadId;
+          subagent.task = {
+            ...subagent.task,
+            status,
+            result,
+            completedAt,
+            updatedAt: now,
+          };
+          subagent.terminalProjectionDeferred = false;
+          yield* emitProviderEvent({
+            type: "node.updated",
+            driver,
+            node: {
+              id: subagent.task.id,
+              threadId: subagent.task.threadId,
+              runId: subagent.task.runId,
+              parentNodeId: subagent.task.parentNodeId,
+              rootNodeId: subagent.task.parentNodeId,
+              kind: "subagent",
+              status,
+              countsForRun: false,
+              providerThreadId: parentProviderThreadId,
+              providerTurnId: subagent.providerTurnId,
+              nativeItemRef,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: subagent.task.startedAt,
+              completedAt,
+            },
+          });
+          yield* emitProviderEvent({
+            type: "node.updated",
+            driver,
+            node: {
+              id: subagent.childRootNodeId,
+              threadId: subagent.childThreadId,
+              runId: null,
+              parentNodeId: null,
+              rootNodeId: subagent.childRootNodeId,
+              kind: "root_turn",
+              status,
+              countsForRun: false,
+              providerThreadId: subagent.task.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: subagent.task.startedAt,
+              completedAt,
+            },
+          });
+          yield* emitProviderEvent({
+            type: "subagent.updated",
+            driver,
+            subagent: subagent.task,
+          });
+          yield* emitProviderEvent({
+            type: "turn_item.updated",
+            driver,
+            turnItem: {
+              id: subagent.turnItemId,
+              threadId: subagent.task.threadId,
+              runId: subagent.task.runId,
+              nodeId: subagent.task.id,
+              providerThreadId: parentProviderThreadId,
+              providerTurnId: subagent.providerTurnId,
+              nativeItemRef,
+              parentItemId: null,
+              ordinal: subagent.turnItemOrdinal,
+              status,
+              title: subagent.task.title,
+              startedAt: subagent.task.startedAt,
+              completedAt,
+              updatedAt: now,
+              type: "subagent",
+              subagentId: subagent.task.id,
+              origin: "provider_native",
+              driver,
+              providerInstanceId: subagent.task.providerInstanceId,
+              childThreadId: subagent.childThreadId,
+              prompt: subagent.task.prompt,
+              result,
+            },
+          });
+        });
+
+        /**
+         * Finishes a subagent from a structured end notice on the root session
+         * (Grok `subagent_finished`), in the turn that holds it or in the
+         * carryover of a settled one.
+         */
+        const finishSubagentFromNotice = Effect.fnUntraced(function* (notice: {
+          readonly childSessionId: string;
+          readonly status: "completed" | "failed" | "cancelled";
+          readonly result: string | null;
+        }) {
+          const context = yield* Ref.get(activeTurn);
+          const subagent =
+            context === null ? undefined : context.subagentsBySessionId.get(notice.childSessionId);
+          if (context !== null && subagent !== undefined && !context.finalized) {
+            if (subagent.task.status !== "running" && subagent.task.status !== "pending") return;
+            yield* emitSubagent(context, {
+              nativeTaskId: subagent.task.nativeTaskRef?.nativeId ?? notice.childSessionId,
+              prompt: subagent.task.prompt,
+              title: subagent.task.title,
+              model: subagent.task.model,
+              status: notice.status,
+              childSessionId: notice.childSessionId,
+              result: notice.result,
+              suppressNormalTool: true,
+            });
+            yield* rearmDeferredFinalize(context);
+            return;
+          }
+          // The root turn already settled: the subagent is carryover.
+          const carryover = yield* Ref.get(carryoverSubagents);
+          if (carryover === null || carryover.sessionId !== (yield* Ref.get(activeSessionId))) {
+            return;
+          }
+          const match = carryover.subagents.find(
+            (candidate) => candidate.childSessionId === notice.childSessionId,
+          );
+          if (
+            match === undefined ||
+            (match.task.status !== "running" && match.task.status !== "pending")
+          ) {
+            return;
+          }
+          const result = notice.result ?? (match.assistantText || match.task.result);
+          if (carryover.rootTerminalStatus === "completed") {
+            // Project while the completed root still owns the run.
+            yield* projectCarryoverSubagentStatus(match, notice.status, result);
+            return;
+          }
+          // A non-completed root's run may no longer ingest events: record the
+          // end and project it when the next turn on this session adopts the
+          // carryover.
+          const now = yield* DateTime.now;
+          match.task = {
+            ...match.task,
+            status: notice.status,
+            result,
+            completedAt: now,
+            updatedAt: now,
+          };
+          match.terminalProjectionDeferred = true;
+        });
+
+        /**
          * Direct Stop after a soft steer clears carryover without an active turn.
          * Emit the same interrupted terminal events terminalizeOpenRunOwnedItems
          * would have, context-free (no ActiveAcpTurn).
          */
         const terminalizeCarryoverSubagents = Effect.fnUntraced(function* (
-          carryover: {
-            readonly sessionId: string;
-            readonly subagents: ReadonlyArray<ActiveAcpSubagent>;
-          } | null,
+          carryover: AcpCarryoverSubagents | null,
         ) {
           if (carryover === null) return;
-          const now = yield* DateTime.now;
           for (const subagent of carryover.subagents) {
             if (subagent.task.status !== "running" && subagent.task.status !== "pending") {
               continue;
             }
-            const nativeTaskId = subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id;
-            const nativeItemRef = {
-              driver,
-              nativeId: nativeTaskId,
-              strength: "strong" as const,
-            };
-            const parentProviderThreadId = subagent.parentProviderThreadId;
-            const result = subagent.assistantText || subagent.task.result;
-            subagent.task = {
-              ...subagent.task,
-              status: "interrupted",
-              result,
-              completedAt: now,
-              updatedAt: now,
-            };
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver,
-              node: {
-                id: subagent.task.id,
-                threadId: subagent.task.threadId,
-                runId: subagent.task.runId,
-                parentNodeId: subagent.task.parentNodeId,
-                rootNodeId: subagent.task.parentNodeId,
-                kind: "subagent",
-                status: "interrupted",
-                countsForRun: false,
-                providerThreadId: parentProviderThreadId,
-                providerTurnId: subagent.providerTurnId,
-                nativeItemRef,
-                runtimeRequestId: null,
-                checkpointScopeId: null,
-                startedAt: subagent.task.startedAt,
-                completedAt: now,
-              },
-            });
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver,
-              node: {
-                id: subagent.childRootNodeId,
-                threadId: subagent.childThreadId,
-                runId: null,
-                parentNodeId: null,
-                rootNodeId: subagent.childRootNodeId,
-                kind: "root_turn",
-                status: "interrupted",
-                countsForRun: false,
-                providerThreadId: subagent.task.providerThreadId,
-                providerTurnId: null,
-                nativeItemRef,
-                runtimeRequestId: null,
-                checkpointScopeId: null,
-                startedAt: subagent.task.startedAt,
-                completedAt: now,
-              },
-            });
-            yield* emitProviderEvent({
-              type: "subagent.updated",
-              driver,
-              subagent: subagent.task,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver,
-              turnItem: {
-                id: subagent.turnItemId,
-                threadId: subagent.task.threadId,
-                runId: subagent.task.runId,
-                nodeId: subagent.task.id,
-                providerThreadId: parentProviderThreadId,
-                providerTurnId: subagent.providerTurnId,
-                nativeItemRef,
-                parentItemId: null,
-                ordinal: subagent.turnItemOrdinal,
-                status: "interrupted",
-                title: subagent.task.title,
-                startedAt: subagent.task.startedAt,
-                completedAt: now,
-                updatedAt: now,
-                type: "subagent",
-                subagentId: subagent.task.id,
-                origin: "provider_native",
-                driver,
-                providerInstanceId: subagent.task.providerInstanceId,
-                childThreadId: subagent.childThreadId,
-                prompt: subagent.task.prompt,
-                result,
-              },
-            });
+            yield* projectCarryoverSubagentStatus(
+              subagent,
+              "interrupted",
+              subagent.assistantText || subagent.task.result,
+            );
           }
         });
 
@@ -4291,6 +4388,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             yield* flavor.registerExtensions({
               runtime,
               requestUserInput,
+              finishSubagent: (notice) =>
+                runRuntimeCallbackAtGeneration(
+                  handlerGeneration,
+                  Effect.gen(function* () {
+                    if (yield* Ref.get(stoppedRunQuarantine)) return;
+                    // Root-session notices only; nested subagents report to
+                    // their own parent session.
+                    if ((yield* Ref.get(activeSessionId)) !== notice.sessionId) return;
+                    yield* finishSubagentFromNotice(notice);
+                  }),
+                ).pipe(Effect.asVoid),
               applyBackgroundTaskMutation: (mutation) =>
                 Effect.gen(function* () {
                   // Direct Stop quarantine: drop residual task lifecycle from
@@ -4597,7 +4705,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           if (liveSubagents.length > 0 && !directStopQuarantine) {
             const sessionId = yield* Ref.get(activeSessionId);
             if (sessionId !== null) {
-              yield* Ref.set(carryoverSubagents, { sessionId, subagents: liveSubagents });
+              yield* Ref.set(carryoverSubagents, {
+                sessionId,
+                subagents: liveSubagents,
+                rootTerminalStatus: settledStatus,
+              });
             }
           }
           yield* Ref.set(activeTurn, null);
@@ -4916,6 +5028,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               backgroundFinalizeGeneration: 0,
             };
             const carryover = yield* Ref.getAndSet(carryoverSubagents, null);
+            const adoptedCarryoverSubagents =
+              carryover !== null && carryover.sessionId === requestedSessionId
+                ? carryover.subagents
+                : [];
             if (carryover !== null && carryover.sessionId === requestedSessionId) {
               for (const subagent of carryover.subagents) {
                 const nativeId = subagent.task.nativeTaskRef?.nativeId ?? null;
@@ -4967,6 +5083,16 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               createdAt: startedAt,
               updatedAt: startedAt,
             });
+            // Subagents that ended while a non-completed root held them project
+            // their recorded end now that a turn owns them again.
+            for (const subagent of adoptedCarryoverSubagents) {
+              if (subagent.terminalProjectionDeferred !== true) continue;
+              yield* projectCarryoverSubagentStatus(
+                subagent,
+                subagent.task.status,
+                subagent.task.result,
+              );
+            }
             if (isContinuationTurn) {
               const drained = yield* Ref.modify(wakeBuffer, (current) => {
                 const next: Array<EffectAcpSchema.SessionNotification> = [];

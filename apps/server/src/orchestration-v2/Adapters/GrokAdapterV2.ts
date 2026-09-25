@@ -32,6 +32,7 @@ import {
   extractXAiKilledBackgroundTasks,
   extractXAiMonitorTaskId,
   isXAiPersistentMonitor,
+  registerXAiSubagentFinished,
   makeXAiAskUserQuestionCancelledResponse,
   makeXAiAskUserQuestionResponse,
   normalizeXAiAcpToolCallState,
@@ -116,8 +117,10 @@ export const registerGrokAcpExtensions: NonNullable<AcpAdapterV2Flavor["register
   runtime,
   requestUserInput,
   applyBackgroundTaskMutation,
+  finishSubagent,
 }) =>
   registerXAiBackgroundTaskTracking(runtime, applyBackgroundTaskMutation).pipe(
+    Effect.andThen(registerXAiSubagentFinished(runtime, finishSubagent)),
     Effect.andThen(registerGrokAskUserQuestionExtensions({ runtime, requestUserInput })),
   );
 
