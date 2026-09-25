@@ -1036,9 +1036,6 @@ export function threadShellFromProjection(
     interactionMode: projection.thread.interactionMode,
     branch: projection.thread.branch,
     worktreePath: projection.thread.worktreePath,
-    ...(projection.thread.worktreeStatus === undefined
-      ? {}
-      : { worktreeStatus: projection.thread.worktreeStatus }),
     ...(projection.thread.pullRequests === undefined
       ? {}
       : { pullRequests: projection.thread.pullRequests }),
@@ -1267,9 +1264,6 @@ function shellFromState(input: {
     interactionMode: input.state.thread.interactionMode,
     branch: input.state.thread.branch,
     worktreePath: input.state.thread.worktreePath,
-    ...(input.state.thread.worktreeStatus === undefined
-      ? {}
-      : { worktreeStatus: input.state.thread.worktreeStatus }),
     ...(input.state.thread.pullRequests === undefined
       ? {}
       : { pullRequests: input.state.thread.pullRequests }),

@@ -291,33 +291,6 @@ export class TerminalCwdStatError extends Schema.TaggedErrorClass<TerminalCwdSta
   }
 }
 
-export class TerminalWorktreeReprovisionError extends Schema.TaggedErrorClass<TerminalWorktreeReprovisionError>()(
-  "TerminalWorktreeReprovisionError",
-  {
-    threadId: Schema.String,
-    terminalId: Schema.String,
-    reason: Schema.Literals([
-      "missing-branch",
-      "branch-unavailable",
-      "removal-in-progress",
-      "worktree-service-unavailable",
-      "project-not-found",
-      "project-read-failed",
-      "create-failed",
-      "register-failed",
-      "metadata-failed",
-      "registry-read-failed",
-      "thread-state-unavailable",
-      "project-unavailable",
-    ]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message() {
-    return `Unable to restore the purged worktree for terminal ${this.terminalId} on thread ${this.threadId} (${this.reason}).`;
-  }
-}
-
 export const TerminalCwdError = Schema.Union([
   TerminalCwdNotFoundError,
   TerminalCwdNotDirectoryError,
@@ -420,7 +393,6 @@ export const TerminalError = Schema.Union([
   TerminalProviderInstanceNotFoundError,
   TerminalProviderEnvironmentError,
   TerminalCwdError,
-  TerminalWorktreeReprovisionError,
   TerminalHistoryError,
   TerminalSessionLookupError,
   TerminalNotRunningError,

@@ -105,7 +105,6 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         interactionMode: "default" as const,
         branch: null,
         worktreePath: null,
-        worktreeStatus: "purged" as const,
         activeProviderThreadId: null,
         lineage: {
           parentThreadId: null,
@@ -140,7 +139,6 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       const visited = yield* projectionStore.getThreadProjection(threadId);
       assert.deepEqual(visited.thread.lastVisitedAt, createdAt);
       assert.deepEqual(visited.thread.updatedAt, createdAt);
-      assert.equal(visited.thread.worktreeStatus, "purged");
 
       yield* projectionStore.apply({
         id: EventId.make("event:projection-read-state:marked-unread"),
@@ -179,11 +177,6 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       const markedUnread = yield* projectionStore.getThreadProjection(threadId);
       assert.isNull(markedUnread.thread.lastVisitedAt);
       assert.deepEqual(markedUnread.thread.updatedAt, createdAt);
-      assert.equal(
-        (yield* projectionStore.getShellSnapshot()).threads.find((shell) => shell.id === threadId)
-          ?.worktreeStatus,
-        "purged",
-      );
     }),
   );
 

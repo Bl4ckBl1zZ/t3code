@@ -108,10 +108,6 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
-import * as WorktreeRegistry from "./worktree/WorktreeRegistry.ts";
-import * as WorktreeInventoryService from "./worktree/WorktreeInventoryService.ts";
-import * as WorktreeOperationCoordinator from "./worktree/WorktreeOperationCoordinator.ts";
-import * as WorktreeProvisioningService from "./worktree/WorktreeProvisioningService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "./sourceControl/SourceControlRateLimit.ts";
@@ -364,17 +360,6 @@ const GitManagerLayerLive = GitManager.layer.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(TextGeneration.layer),
-  Layer.provideMerge(WorktreeRegistry.layer),
-  Layer.provideMerge(WorktreeInventoryService.layer.pipe(Layer.provide(WorktreeRegistry.layer))),
-  Layer.provideMerge(WorktreeOperationCoordinator.layer),
-  Layer.provideMerge(
-    WorktreeProvisioningService.layer.pipe(
-      Layer.provideMerge(
-        WorktreeInventoryService.layer.pipe(Layer.provide(WorktreeRegistry.layer)),
-      ),
-      Layer.provideMerge(WorktreeOperationCoordinator.layer),
-    ),
-  ),
 );
 
 const GitLayerLive = Layer.empty.pipe(

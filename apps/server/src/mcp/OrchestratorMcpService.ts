@@ -184,7 +184,6 @@ function threadManagementFailure(error: ThreadManagementError): OrchestratorMcpF
     case "ThreadManagementProjectionLoadError":
     case "ThreadManagementProjectThreadsListError":
     case "ThreadManagementDurableRunProjectionError":
-    case "ThreadManagementWorktreeReprovisionError":
       return failure("orchestration_error", error.message);
   }
 }

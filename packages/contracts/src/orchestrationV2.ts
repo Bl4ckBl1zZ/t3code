@@ -323,9 +323,6 @@ export const OrchestrationV2ProviderCapabilities = Schema.Struct({
 });
 export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2ProviderCapabilities.Type;
 
-export const OrchestrationV2ThreadWorktreeStatus = Schema.Literals(["none", "present", "purged"]);
-export type OrchestrationV2ThreadWorktreeStatus = typeof OrchestrationV2ThreadWorktreeStatus.Type;
-
 /**
  * A pull request a user pinned to this thread. Kept on the thread rather than
  * derived from the branch: the same branch can back several PRs, and a thread
@@ -359,7 +356,6 @@ export const OrchestrationV2AppThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink).check(Schema.isMaxLength(100))),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -1832,7 +1828,6 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink).check(Schema.isMaxLength(100))),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -2686,7 +2681,6 @@ export const OrchestrationV2Command = Schema.Union([
     regenerateTitle: Schema.optional(Schema.Boolean),
     branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-    worktreeStatus: Schema.optional(OrchestrationV2ThreadWorktreeStatus),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     /** Absent leaves the link alone; null unlinks. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
