@@ -65,7 +65,7 @@ describe("resolvePreviewMiniPlayerFrame", () => {
     expect(frame).toEqual({ x: 100, y: PREVIEW_MINI_PLAYER_EDGE_GAP, width: 602, height: 376 });
   });
 
-  it("never grows past the source's own rendered size", () => {
+  it("can grow beyond the source rendered size", () => {
     expect(
       resolvePreviewMiniPlayerFrame({
         width: 900,
@@ -73,7 +73,7 @@ describe("resolvePreviewMiniPlayerFrame", () => {
         source: { width: 480, height: 320 },
         container,
       }),
-    ).toMatchObject({ width: 480, height: 320 });
+    ).toMatchObject({ width: 900, height: 600 });
   });
 });
 
@@ -116,7 +116,20 @@ describe("resizePreviewMiniPlayer", () => {
     ).toEqual({ x: 300, y: 100, width: 480, height: 300 });
   });
 
-  it("follows the dominant axis on a corner drag", () => {
+  it("does not jump when corner motion crosses opposing dominant axes", () => {
+    const frames = [-99, -100, -101].map((y) =>
+      resizePreviewMiniPlayer({
+        start,
+        direction: "southeast",
+        delta: { x: 160, y },
+        source,
+        container,
+      }),
+    );
+    expect(Math.abs(frames[0]!.width - frames[2]!.width)).toBeLessThanOrEqual(2);
+  });
+
+  it("projects corner motion onto the aspect-ratio diagonal", () => {
     expect(
       resizePreviewMiniPlayer({
         start,
@@ -125,7 +138,7 @@ describe("resizePreviewMiniPlayer", () => {
         source,
         container,
       }),
-    ).toEqual({ x: 300, y: 200, width: 480, height: 300 });
+    ).toEqual({ x: 300, y: 200, width: 379, height: 237 });
   });
 
   it("stops at the container edge in the drag direction", () => {
