@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
 import {
+  deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
@@ -176,16 +177,29 @@ export function useThreadComposerState(options?: {
     };
   }, [selectedThreadRuntime]);
 
+  // Provider-native subagent threads work without an app run; their runless
+  // root turn is what shows them working (and times them).
+  const runlessWorkStartedAt = useMemo(
+    () =>
+      selectedThreadProjection
+        ? deriveRunlessWorkStartedAt(selectedThreadProjection.projection)
+        : null,
+    [selectedThreadProjection],
+  );
   const activeWorkStartedAt = useMemo(() => {
     if (!selectedThreadShell) {
       return null;
     }
-    return deriveActiveWorkStartedAt(
-      selectedThreadActivityRun,
-      selectedThreadSessionActivity,
-      null,
+    return (
+      deriveActiveWorkStartedAt(selectedThreadActivityRun, selectedThreadSessionActivity, null) ??
+      runlessWorkStartedAt
     );
-  }, [selectedThreadActivityRun, selectedThreadSessionActivity, selectedThreadShell]);
+  }, [
+    runlessWorkStartedAt,
+    selectedThreadActivityRun,
+    selectedThreadSessionActivity,
+    selectedThreadShell,
+  ]);
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const interruptibleRunId = selectedThreadRuntime?.activeRunId ?? null;

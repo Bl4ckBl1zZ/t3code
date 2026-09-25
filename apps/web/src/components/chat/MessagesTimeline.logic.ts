@@ -94,12 +94,15 @@ export function collapseWorkEntriesKeepingLiveBackground<
  */
 export function resolveLiveWorkEntry(
   entries: ReadonlyArray<WorkLogEntry>,
-  runId: RunId,
+  /** `null` for a provider-native subagent's runless work. */
+  runId: RunId | null,
 ): WorkLogEntry | null {
   if (
     entries.some(
       (entry) =>
-        entry.runId !== runId || entry.tone === "error" || entry.sourceItemType === "compaction",
+        (entry.runId ?? null) !== runId ||
+        entry.tone === "error" ||
+        entry.sourceItemType === "compaction",
     )
   )
     return null;
@@ -843,6 +846,11 @@ export function deriveMessagesTimelineRows(input: {
    */
   alwaysExpandActivity?: boolean;
   isWorking: boolean;
+  /**
+   * The live work has no app run (a provider-native subagent thread), so
+   * runless entries are the current response instead of settled history.
+   */
+  runlessWorkActive?: boolean;
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
@@ -899,6 +907,7 @@ export function deriveMessagesTimelineRows(input: {
       }
     }
   }
+  const runlessWorkActive = input.isWorking && input.runlessWorkActive === true;
 
   for (let index = 0; index < timelineEntries.length; index += 1) {
     const timelineEntry = timelineEntries[index];
@@ -997,8 +1006,9 @@ export function deriveMessagesTimelineRows(input: {
 
     const assistantTurnStillInProgress =
       timelineEntry.message.role === "assistant" &&
-      unsettledRunId !== null &&
-      timelineEntry.message.runId === unsettledRunId;
+      (timelineEntry.message.runId == null
+        ? runlessWorkActive
+        : unsettledRunId !== null && timelineEntry.message.runId === unsettledRunId);
 
     const durationStart =
       durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt;
@@ -1035,9 +1045,12 @@ export function deriveMessagesTimelineRows(input: {
   }
 
   const lastRow = nextRows.at(-1);
+  // A provider-native subagent works without a run, so its live tail is the
+  // runless entries while that work is active.
+  const liveRunId = unsettledRunId ?? (runlessWorkActive ? null : undefined);
   const liveEntry =
-    input.isWorking && unsettledRunId !== null && lastRow?.kind === "work"
-      ? resolveLiveWorkEntry(lastRow.groupedEntries, unsettledRunId)
+    input.isWorking && liveRunId !== undefined && lastRow?.kind === "work"
+      ? resolveLiveWorkEntry(lastRow.groupedEntries, liveRunId)
       : null;
   if (lastRow?.kind === "work" && liveEntry) {
     lastRow.liveEntry = liveEntry;

@@ -2167,6 +2167,31 @@ describe("V2 live work focus", () => {
   function work(item: WorkLogEntry): TimelineEntry {
     return { kind: "work", id: item.id, createdAt: at, entry: item };
   }
+  it("shows a provider-native subagent's runless tool as live work while it works", () => {
+    const runless = (working: boolean, status: WorkLogEntry["toolLifecycleStatus"]) =>
+      deriveMessagesTimelineRows({
+        timelineEntries: [work(entry("command", status, { runId: null }))],
+        latestRun: null,
+        isWorking: working,
+        runlessWorkActive: working,
+        activeTurnStartedAt: working ? at : null,
+        alwaysExpandActivity: true,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+    const running = runless(true, "inProgress");
+    expect(running.find((row) => row.kind === "work")?.liveEntry?.id).toBe("command");
+    expect(running.some((row) => row.kind === "working")).toBe(false);
+    // Once the subagent settles, the same entry reads as finished history.
+    const settled = runless(false, "completed");
+    expect(settled.find((row) => row.kind === "work")?.liveEntry).toBeUndefined();
+    expect(settled.some((row) => row.kind === "working")).toBe(false);
+  });
+  it("does not treat runless entries as live work on a thread with runs", () => {
+    const result = rows([work(entry("runless", "inProgress", { runId: null }))]);
+    expect(result.find((row) => row.kind === "work")?.liveEntry).toBeUndefined();
+    expect(result.some((row) => row.kind === "working")).toBe(true);
+  });
   it("keeps a running tool focused when a later concurrent call completes", () => {
     const running = entry("running", "inProgress");
     expect(resolveLiveWorkEntry([running, entry("done")], runId)).toBe(running);

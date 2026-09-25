@@ -15,6 +15,7 @@ import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
 import { messageRestartInput } from "./fixtures/message_steering/input.ts";
 import {
+  assertProviderNativeSubagentRootTurns,
   materializeFixtureInput,
   type OrchestratorFixtureInput,
   type ProviderOrchestratorReplayVariant,
@@ -91,6 +92,7 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
     enableLegacyTokenStreaming: input.enableLegacyTokenStreaming ?? false,
   }).pipe(provideDeterministicTestRuntime);
   input.driver.assertOutput(result, transcript);
+  assertProviderNativeSubagentRootTurns(result);
   if (input.enableLegacyTokenStreaming !== true) {
     assert.isFalse(
       result.domainEvents.some(isStreamingAssistantEvent),

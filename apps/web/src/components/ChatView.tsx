@@ -62,6 +62,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
+  deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveLatestThreadRun,
   deriveThreadRuntime,
@@ -1822,6 +1823,10 @@ function ChatViewContent(props: ChatViewProps) {
     () => (serverProjection === null ? null : deriveThreadRuntime(serverProjection)),
     [serverProjection],
   );
+  const runlessWorkStartedAt = useMemo(
+    () => (serverProjection === null ? null : deriveRunlessWorkStartedAt(serverProjection)),
+    [serverProjection],
+  );
   const activeProviderSession = useMemo(
     () => (serverProjection === null ? null : resolveThreadProviderSession(serverProjection)),
     [serverProjection],
@@ -2827,18 +2832,20 @@ function ChatViewContent(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError,
   });
-  const isWorking = shouldShowWorkingTimeline({
-    phase,
-    isSendBusy,
-    isConnecting,
-    isRevertingCheckpoint,
-  });
-  const activeWorkStartedAt = deriveActiveWorkStartedAt(
-    activeActivityRun,
-    activeRuntime,
-    localDispatchStartedAt,
-    latestUserMessageAt,
-  );
+  const isWorking =
+    shouldShowWorkingTimeline({
+      phase,
+      isSendBusy,
+      isConnecting,
+      isRevertingCheckpoint,
+    }) || runlessWorkStartedAt !== null;
+  const activeWorkStartedAt =
+    deriveActiveWorkStartedAt(
+      activeActivityRun,
+      activeRuntime,
+      localDispatchStartedAt,
+      latestUserMessageAt,
+    ) ?? runlessWorkStartedAt;
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
@@ -8481,6 +8488,7 @@ function ChatViewContent(props: ChatViewProps) {
                 {...(activeProject ? { onRunShellCommand: runShellCommand } : {})}
                 key={activeThread.id}
                 isWorking={isWorking}
+                runlessWorkActive={runlessWorkStartedAt !== null}
                 workingActivityText={
                   isHermesConversation ? (activeProviderSession?.activityText ?? null) : null
                 }

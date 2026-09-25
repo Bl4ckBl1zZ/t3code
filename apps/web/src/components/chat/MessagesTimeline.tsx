@@ -288,6 +288,8 @@ interface MessagesTimelineProps {
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   onRunShellCommand?: ((command: string) => void) | undefined;
   isWorking: boolean;
+  /** The live work belongs to a runless root turn (a provider-native subagent). */
+  runlessWorkActive?: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   listRef: React.RefObject<LegendListRef | null>;
@@ -348,6 +350,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRunShellCommand,
   isWorking,
   workingActivityText = null,
+  runlessWorkActive = false,
   isPreparingWorktree = false,
   activeTurnInProgress,
   activeTurnStartedAt,
@@ -471,6 +474,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         expandedAttemptIds,
         alwaysExpandActivity,
         isWorking,
+        runlessWorkActive,
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
@@ -483,6 +487,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedAttemptIds,
       alwaysExpandActivity,
       isWorking,
+      runlessWorkActive,
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
