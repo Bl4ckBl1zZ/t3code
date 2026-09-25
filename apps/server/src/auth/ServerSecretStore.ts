@@ -1,5 +1,7 @@
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -10,6 +12,9 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
+
+/** Each secret is stored as `<secretsDir>/<name>.bin`. */
+const SECRET_FILE_SUFFIX = ".bin";
 
 const secretStoreErrorContext = {
   resource: Schema.String,
@@ -166,7 +171,8 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  const resolveSecretPath = (name: string) => path.join(serverConfig.secretsDir, `${name}.bin`);
+  const resolveSecretPath = (name: string) =>
+    path.join(serverConfig.secretsDir, `${name}${SECRET_FILE_SUFFIX}`);
 
   const get: ServerSecretStore["Service"]["get"] = (name) =>
     fileSystem.readFile(resolveSecretPath(name)).pipe(
@@ -311,3 +317,70 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ServerSecretStore, make);
+
+/** Secrets named `<prefix>...` may be deleted once their file is older than `maxAge`. */
+export interface ExpiringSecretPrefix {
+  readonly prefix: string;
+  readonly maxAge: Duration.Duration;
+}
+
+/**
+ * Deletes single-use records (replay guards written with `create`) whose name
+ * starts with one of the given prefixes and whose file mtime is older than that
+ * prefix's `maxAge`. Only pass prefixes that no real secret can share. Entries
+ * that disappear mid-pass are skipped; other per-entry failures are counted and
+ * retried on the next call.
+ */
+export const removeExpired = Effect.fn("ServerSecretStore.removeExpired")(function* (
+  expiring: ReadonlyArray<ExpiringSecretPrefix>,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { secretsDir } = yield* ServerConfig.ServerConfig;
+  const nowMillis = yield* Clock.currentTimeMillis;
+  const entries = yield* fileSystem.readDirectory(secretsDir);
+  let removed = 0;
+  let failed = 0;
+
+  yield* Effect.forEach(
+    entries,
+    (entry) => {
+      const rule = entry.endsWith(SECRET_FILE_SUFFIX)
+        ? expiring.find(({ prefix }) => entry.startsWith(prefix))
+        : undefined;
+      if (rule === undefined) {
+        return Effect.void;
+      }
+      const entryPath = path.join(secretsDir, entry);
+      return fileSystem.stat(entryPath).pipe(
+        Effect.flatMap((info) => {
+          const mtime = Option.getOrUndefined(info.mtime);
+          if (
+            info.type !== "File" ||
+            mtime === undefined ||
+            nowMillis - mtime.getTime() <= Duration.toMillis(rule.maxAge)
+          ) {
+            return Effect.void;
+          }
+          return fileSystem.remove(entryPath).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                removed += 1;
+              }),
+            ),
+          );
+        }),
+        Effect.catch((cause) =>
+          cause.reason._tag === "NotFound"
+            ? Effect.void
+            : Effect.sync(() => {
+                failed += 1;
+              }),
+        ),
+      );
+    },
+    { concurrency: 16, discard: true },
+  );
+
+  return { removed, failed };
+});
