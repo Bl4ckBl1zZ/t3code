@@ -54,6 +54,7 @@ import {
   ProviderDriverKind,
   RuntimeMode,
   TerminalOpenInput,
+  isProviderNativeSubagentThread,
 } from "@t3tools/contracts";
 import {
   connectionStatusTitle,
@@ -62,8 +63,10 @@ import {
 import * as DateTime from "effect/DateTime";
 import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
+  deriveProviderSubagentStatus,
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
+  formatModelSelectionEffort,
   deriveLatestThreadRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
@@ -85,6 +88,7 @@ import {
 import {
   applyClaudePromptEffortPrefix,
   createModelSelection,
+  formatModelSlugName,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import { liveBackgroundProcessesFromTimeline } from "@t3tools/shared/backgroundProcess";
@@ -255,7 +259,7 @@ import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
+import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import {
   useClientSettings,
   useClientSettingsHydrated,
@@ -345,6 +349,8 @@ import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
+import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { ChatHeader } from "./chat/ChatHeader";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
@@ -471,6 +477,7 @@ const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
 const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more files without additional text. Respond using the conversation context and the attachment(s).]";
 const EMPTY_PROVIDERS: ServerProvider[] = [];
+const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 // During an active turn the thread's updatedAt advances several times per
 // second, and every server-side visit is a full command dispatch plus a
 // broadcast to all shell subscribers. Mid-turn bumps carry no unread signal
@@ -1827,6 +1834,12 @@ function ChatViewContent(props: ChatViewProps) {
     () => (serverProjection === null ? null : deriveRunlessWorkStartedAt(serverProjection)),
     [serverProjection],
   );
+  const providerSubagentStatus = useMemo(
+    () => (serverProjection === null ? null : deriveProviderSubagentStatus(serverProjection)),
+    [serverProjection],
+  );
+  const isProviderSubagent =
+    serverProjection !== null && isProviderNativeSubagentThread(serverProjection.thread);
   const activeProviderSession = useMemo(
     () => (serverProjection === null ? null : resolveThreadProviderSession(serverProjection)),
     [serverProjection],
@@ -3294,10 +3307,36 @@ function ChatViewContent(props: ChatViewProps) {
     }
   }, [environmentId, gitStatusCwd, reportedIsRepo]);
   const isGitRepo = reportedIsRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
+  // A provider-native subagent cannot take messages: a status bar replaces the
+  // composer and its context strip. While the subagent asks for an approval
+  // or an answer, the composer that renders those stays below the bar,
+  // without the thread settings that belong to the provider.
+  const showProviderSubagentBar = isProviderSubagent;
+  const providerSubagentNeedsResponse =
+    isProviderSubagent && (pendingApprovals.length > 0 || pendingUserInputs.length > 0);
+  const composerMounted = !showProviderSubagentBar || providerSubagentNeedsResponse;
+  const providerSubagentEntry = useMemo(
+    () =>
+      showProviderSubagentBar && activeProviderStatus !== null
+        ? (deriveProviderInstanceEntries([activeProviderStatus])[0] ?? null)
+        : null,
+    [activeProviderStatus, showProviderSubagentBar],
+  );
+  const providerSubagentModels = activeProviderStatus?.models ?? EMPTY_PROVIDER_MODELS;
+  const providerSubagentCatalogModel = providerSubagentModels.find(
+    (model) => model.slug === activeThread?.modelSelection.model,
+  );
+  const providerSubagentModelLabel = providerSubagentCatalogModel
+    ? getTriggerDisplayModelName(providerSubagentCatalogModel)
+    : formatModelSlugName(activeThread?.modelSelection.model ?? "");
+  const providerSubagentEffortLabel =
+    activeThread == null
+      ? null
+      : formatModelSelectionEffort(activeThread.modelSelection, providerSubagentModels);
   const showComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     isGitRepo,
-    hasActiveProject: activeProject !== null,
+    hasActiveProject: activeProject !== null && !showProviderSubagentBar,
     isProjectlessConversation: isHermesConversation,
     persistInActiveThreads: settings.persistComposerContextStrip,
   });
@@ -8623,144 +8662,166 @@ function ChatViewContent(props: ChatViewProps) {
                     <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div className="relative z-10">
-                          <ChatComposer
-                            readingTimeline={composerReadingTimeline}
-                            restingControlsHost={restingControlsHost}
-                            expandedTaskDrawer={tasksDrawerExpanded}
-                            onRestingChange={setComposerResting}
-                            onOverlayHeightChange={publishComposerOverlayHeight}
-                            attachments={
-                              <>
-                                <ComposerBannerStack items={composerBannerItems} />
-                                {composerTasks &&
-                                  (tasksDrawerExpanded ? (
-                                    <ComposerTasksDrawer
-                                      onCollapse={() => setTasksDrawerExpanded(false)}
-                                      progress={composerTasks.progress}
-                                      steps={composerTasks.steps}
-                                    />
-                                  ) : (
-                                    <ComposerBanner.Attachment>
-                                      <ComposerTasksBadge
-                                        expanded={false}
-                                        onToggle={() => setTasksDrawerExpanded(true)}
+                          {showProviderSubagentBar ? (
+                            <ProviderSubagentBar
+                              provider={providerSubagentEntry}
+                              modelLabel={providerSubagentModelLabel}
+                              effortLabel={providerSubagentEffortLabel}
+                              status={providerSubagentStatus}
+                              onOpenParent={
+                                parentThreadLink
+                                  ? () => onOpenRelatedThread(parentThreadLink.threadId)
+                                  : null
+                              }
+                            />
+                          ) : null}
+                          {!composerMounted ? null : (
+                            <ChatComposer
+                              hideThreadSettings={isProviderSubagent}
+                              readingTimeline={composerReadingTimeline}
+                              restingControlsHost={restingControlsHost}
+                              expandedTaskDrawer={tasksDrawerExpanded}
+                              onRestingChange={setComposerResting}
+                              onOverlayHeightChange={publishComposerOverlayHeight}
+                              attachments={
+                                <>
+                                  <ComposerBannerStack items={composerBannerItems} />
+                                  {composerTasks &&
+                                    (tasksDrawerExpanded ? (
+                                      <ComposerTasksDrawer
+                                        onCollapse={() => setTasksDrawerExpanded(false)}
                                         progress={composerTasks.progress}
                                         steps={composerTasks.steps}
                                       />
-                                    </ComposerBanner.Attachment>
-                                  ))}
-                              </>
-                            }
-                            promptHistoryMessages={serverProjection?.messages ?? []}
-                            composerRef={composerRef}
-                            composerDraftTarget={composerDraftTarget}
-                            environmentId={environmentId}
-                            attachmentUploadsCapabilityKnown={attachmentUploadsCapabilityKnown}
-                            supportsAttachmentUploads={supportsAttachmentUploads}
-                            supportsFileAttachmentUploads={supportsFileAttachmentUploads}
-                            routeKind={routeKind}
-                            draftId={draftId}
-                            activeThreadId={activeThreadId}
-                            activeThreadEnvironmentId={activeThread?.environmentId}
-                            activeThread={activeThread}
-                            isServerThread={isServerThread}
-                            isLocalDraftThread={isLocalDraftThread}
-                            isProjectlessConversation={isHermesConversation}
-                            hermesProviderScope={hermesProviderScope}
-                            forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
-                            projectSelectionRequired={isLocalDraftThread && activeProject === null}
-                            phase={phase}
-                            isConnecting={isConnecting}
-                            isSendBusy={isSendBusy}
-                            sendDisabledReason={feedbackUploading ? "Sending feedback" : null}
-                            isPreparingWorktree={isPreparingWorktree}
-                            environmentUnavailable={activeEnvironmentUnavailableState}
-                            activePendingApproval={activePendingApproval}
-                            pendingApprovals={pendingApprovals}
-                            pendingUserInputs={pendingUserInputs}
-                            activePendingProgress={activePendingProgress}
-                            activePendingResolvedAnswers={activePendingResolvedAnswers}
-                            activePendingIsResponding={activePendingIsResponding}
-                            activePendingDraftAnswers={activePendingDraftAnswers}
-                            activePendingQuestionIndex={activePendingQuestionIndex}
-                            respondingRequestIds={respondingRequestIds}
-                            showPlanFollowUpPrompt={showPlanFollowUpPrompt}
-                            activeProposedPlan={activeProposedPlan}
-                            activePlan={activePlan}
-                            sidebarProposedPlan={sidebarProposedPlan}
-                            planSidebarLabel={planSidebarLabel}
-                            planSidebarOpen={planSidebarOpen}
-                            runtimeMode={runtimeMode}
-                            interactionMode={interactionMode}
-                            lockedProvider={modelPickerLockedProvider}
-                            providerCatalogLoaded={serverConfig !== null}
-                            providerStatuses={providerStatuses as ServerProvider[]}
-                            activeProjectDefaultModelSelection={
-                              activeProject?.defaultModelSelection
-                            }
-                            activeThreadModelSelection={activeThread?.modelSelection}
-                            onThreadModelOptionsChange={onThreadModelOptionsChange}
-                            threadDetailLoading={isServerThread && serverProjection === null}
-                            activeThreadVisibleTurnItems={serverVisibleTurnItems}
-                            activeThreadLiveTokenUsage={activeThreadLiveTokenUsage}
-                            activeThreadProviderThread={activeThreadProviderThread}
-                            resolvedTheme={resolvedTheme}
-                            settings={settings}
-                            keybindings={keybindings}
-                            terminalOpen={Boolean(terminalUiState.terminalOpen)}
-                            gitCwd={gitCwd}
-                            promptRef={promptRef}
-                            composerImagesRef={composerImagesRef}
-                            composerTerminalContextsRef={composerTerminalContextsRef}
-                            composerElementContextsRef={composerElementContextsRef}
-                            shouldAutoScrollRef={composerShouldStickToEndRef}
-                            scheduleStickToBottom={scrollToEnd}
-                            onSend={onSend}
-                            onStartFreshChat={() => {
-                              const sendContext = composerRef.current?.getSendContext();
-                              if (!activeProject || !sendContext) return;
-                              promptRef.current = "";
-                              clearComposerDraftContent(composerDraftTarget);
-                              composerRef.current?.resetCursorState();
-                              void openFreshHermesConversation(sendContext.selectedModelSelection);
-                            }}
-                            onClearChat={() => {
-                              void (async () => {
-                                const cleared = await clearCurrentHermesTimeline();
-                                if (!cleared) return;
+                                    ) : (
+                                      <ComposerBanner.Attachment>
+                                        <ComposerTasksBadge
+                                          expanded={false}
+                                          onToggle={() => setTasksDrawerExpanded(true)}
+                                          progress={composerTasks.progress}
+                                          steps={composerTasks.steps}
+                                        />
+                                      </ComposerBanner.Attachment>
+                                    ))}
+                                </>
+                              }
+                              promptHistoryMessages={serverProjection?.messages ?? []}
+                              composerRef={composerRef}
+                              composerDraftTarget={composerDraftTarget}
+                              environmentId={environmentId}
+                              attachmentUploadsCapabilityKnown={attachmentUploadsCapabilityKnown}
+                              supportsAttachmentUploads={supportsAttachmentUploads}
+                              supportsFileAttachmentUploads={supportsFileAttachmentUploads}
+                              routeKind={routeKind}
+                              draftId={draftId}
+                              activeThreadId={activeThreadId}
+                              activeThreadEnvironmentId={activeThread?.environmentId}
+                              activeThread={activeThread}
+                              isServerThread={isServerThread}
+                              isLocalDraftThread={isLocalDraftThread}
+                              isProjectlessConversation={isHermesConversation}
+                              hermesProviderScope={hermesProviderScope}
+                              forceExpandedOnMobile={
+                                forceExpandedMobileComposer && isDraftHeroState
+                              }
+                              projectSelectionRequired={
+                                isLocalDraftThread && activeProject === null
+                              }
+                              phase={phase}
+                              isConnecting={isConnecting}
+                              isSendBusy={isSendBusy}
+                              sendDisabledReason={feedbackUploading ? "Sending feedback" : null}
+                              isPreparingWorktree={isPreparingWorktree}
+                              environmentUnavailable={activeEnvironmentUnavailableState}
+                              activePendingApproval={activePendingApproval}
+                              pendingApprovals={pendingApprovals}
+                              pendingUserInputs={pendingUserInputs}
+                              activePendingProgress={activePendingProgress}
+                              activePendingResolvedAnswers={activePendingResolvedAnswers}
+                              activePendingIsResponding={activePendingIsResponding}
+                              activePendingDraftAnswers={activePendingDraftAnswers}
+                              activePendingQuestionIndex={activePendingQuestionIndex}
+                              respondingRequestIds={respondingRequestIds}
+                              showPlanFollowUpPrompt={showPlanFollowUpPrompt}
+                              activeProposedPlan={activeProposedPlan}
+                              activePlan={activePlan}
+                              sidebarProposedPlan={sidebarProposedPlan}
+                              planSidebarLabel={planSidebarLabel}
+                              planSidebarOpen={planSidebarOpen}
+                              runtimeMode={runtimeMode}
+                              interactionMode={interactionMode}
+                              lockedProvider={modelPickerLockedProvider}
+                              providerCatalogLoaded={serverConfig !== null}
+                              providerStatuses={providerStatuses as ServerProvider[]}
+                              activeProjectDefaultModelSelection={
+                                activeProject?.defaultModelSelection
+                              }
+                              activeThreadModelSelection={activeThread?.modelSelection}
+                              onThreadModelOptionsChange={onThreadModelOptionsChange}
+                              threadDetailLoading={isServerThread && serverProjection === null}
+                              activeThreadVisibleTurnItems={serverVisibleTurnItems}
+                              activeThreadLiveTokenUsage={activeThreadLiveTokenUsage}
+                              activeThreadProviderThread={activeThreadProviderThread}
+                              resolvedTheme={resolvedTheme}
+                              settings={settings}
+                              keybindings={keybindings}
+                              terminalOpen={Boolean(terminalUiState.terminalOpen)}
+                              gitCwd={gitCwd}
+                              promptRef={promptRef}
+                              composerImagesRef={composerImagesRef}
+                              composerTerminalContextsRef={composerTerminalContextsRef}
+                              composerElementContextsRef={composerElementContextsRef}
+                              shouldAutoScrollRef={composerShouldStickToEndRef}
+                              scheduleStickToBottom={scrollToEnd}
+                              onSend={onSend}
+                              onStartFreshChat={() => {
+                                const sendContext = composerRef.current?.getSendContext();
+                                if (!activeProject || !sendContext) return;
                                 promptRef.current = "";
                                 clearComposerDraftContent(composerDraftTarget);
                                 composerRef.current?.resetCursorState();
-                              })();
-                            }}
-                            onInterrupt={onInterrupt}
-                            onImplementPlanInNewThread={onImplementPlanInNewThread}
-                            onRespondToApproval={onRespondToApproval}
-                            onSelectActivePendingUserInputOption={
-                              onSelectActivePendingUserInputOption
-                            }
-                            onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
-                            onPreviousActivePendingUserInputQuestion={
-                              onPreviousActivePendingUserInputQuestion
-                            }
-                            onChangeActivePendingUserInputCustomAnswer={
-                              onChangeActivePendingUserInputCustomAnswer
-                            }
-                            {...(serverConfig?.environment.capabilities
-                              .providerTerminalEnvironment === true
-                              ? { onOpenProviderSetup: openProviderSetup }
-                              : {})}
-                            onProviderModelSelect={onProviderModelSelect}
-                            getModelDisabledReason={getModelDisabledReason}
-                            toggleInteractionMode={toggleInteractionMode}
-                            handleRuntimeModeChange={handleRuntimeModeChange}
-                            handleInteractionModeChange={handleInteractionModeChange}
-                            togglePlanSidebar={togglePlanSidebar}
-                            focusComposer={focusComposer}
-                            scheduleComposerFocus={scheduleComposerFocus}
-                            setThreadError={setThreadError}
-                            onExpandImage={onExpandTimelineImage}
-                          />
+                                void openFreshHermesConversation(
+                                  sendContext.selectedModelSelection,
+                                );
+                              }}
+                              onClearChat={() => {
+                                void (async () => {
+                                  const cleared = await clearCurrentHermesTimeline();
+                                  if (!cleared) return;
+                                  promptRef.current = "";
+                                  clearComposerDraftContent(composerDraftTarget);
+                                  composerRef.current?.resetCursorState();
+                                })();
+                              }}
+                              onInterrupt={onInterrupt}
+                              onImplementPlanInNewThread={onImplementPlanInNewThread}
+                              onRespondToApproval={onRespondToApproval}
+                              onSelectActivePendingUserInputOption={
+                                onSelectActivePendingUserInputOption
+                              }
+                              onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+                              onPreviousActivePendingUserInputQuestion={
+                                onPreviousActivePendingUserInputQuestion
+                              }
+                              onChangeActivePendingUserInputCustomAnswer={
+                                onChangeActivePendingUserInputCustomAnswer
+                              }
+                              {...(serverConfig?.environment.capabilities
+                                .providerTerminalEnvironment === true
+                                ? { onOpenProviderSetup: openProviderSetup }
+                                : {})}
+                              onProviderModelSelect={onProviderModelSelect}
+                              getModelDisabledReason={getModelDisabledReason}
+                              toggleInteractionMode={toggleInteractionMode}
+                              handleRuntimeModeChange={handleRuntimeModeChange}
+                              handleInteractionModeChange={handleInteractionModeChange}
+                              togglePlanSidebar={togglePlanSidebar}
+                              focusComposer={focusComposer}
+                              scheduleComposerFocus={scheduleComposerFocus}
+                              setThreadError={setThreadError}
+                              onExpandImage={onExpandTimelineImage}
+                            />
+                          )}
                         </div>
                       </ComposerSurface.Host>
                       <div className="min-h-0">

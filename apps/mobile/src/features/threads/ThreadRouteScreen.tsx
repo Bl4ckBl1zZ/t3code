@@ -611,6 +611,32 @@ function ThreadRouteContent(
     [navigation],
   );
 
+  const parentThreadEnvironmentId = selectedThread?.environmentId ?? null;
+  const parentThreadId = selectedThread?.lineage.parentThreadId ?? null;
+  const providerSubagent = useMemo(
+    () =>
+      composer.isProviderSubagentThread
+        ? {
+            status: composer.providerSubagentStatus,
+            onOpenParent:
+              parentThreadEnvironmentId === null || parentThreadId === null
+                ? null
+                : () =>
+                    navigation.navigate("Thread", {
+                      environmentId: parentThreadEnvironmentId,
+                      threadId: parentThreadId,
+                    }),
+          }
+        : null,
+    [
+      composer.isProviderSubagentThread,
+      composer.providerSubagentStatus,
+      navigation,
+      parentThreadEnvironmentId,
+      parentThreadId,
+    ],
+  );
+
   if (!environmentId || !threadId) {
     return <OpeningThreadLoadingScreen />;
   }
@@ -643,6 +669,7 @@ function ThreadRouteContent(
           activityRun={composer.selectedThreadActivityRun}
           activeWorkActivityText={composer.activeWorkActivityText}
           activeWorkStartedAt={composer.activeWorkStartedAt}
+          providerSubagent={providerSubagent}
           activePendingApproval={requests.activePendingApproval}
           respondingApprovalId={requests.respondingApprovalId}
           activePendingUserInput={requests.activePendingUserInput}

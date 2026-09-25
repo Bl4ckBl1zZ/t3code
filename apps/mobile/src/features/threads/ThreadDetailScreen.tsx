@@ -17,6 +17,11 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import type { ThreadUserInputQuestion } from "@t3tools/client-runtime/state/thread-requests";
+import {
+  formatModelSelectionEffort,
+  type ProviderSubagentStatus,
+} from "@t3tools/client-runtime/state/thread-execution";
+import { formatModelSlugName } from "@t3tools/shared/model";
 import * as Haptics from "expo-haptics";
 import {
   memo,
@@ -73,6 +78,7 @@ import type {
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { PendingUserInputCard } from "./PendingUserInputCard";
+import { ProviderSubagentBar } from "./ProviderSubagentBar";
 import {
   derivePendingUserInputMaxHeight,
   ESTIMATED_KEYBOARD_HEIGHT,
@@ -101,6 +107,14 @@ export interface ThreadDetailScreenProps {
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   readonly activeWorkActivityText: string | null;
+  /**
+   * Set on a provider-native subagent thread, which shows status instead of a
+   * composer. `status` is null until the subagent's root turn arrives.
+   */
+  readonly providerSubagent?: {
+    readonly status: ProviderSubagentStatus | null;
+    readonly onOpenParent: (() => void) | null;
+  } | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: RuntimeRequestId | null;
   readonly activePendingUserInput: PendingUserInput | null;
@@ -472,6 +486,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const layoutVariant = props.layoutVariant ?? "compact";
   const isSplitLayout = layoutVariant === "split";
   const contentMaxWidth = isSplitLayout ? CHAT_CONTENT_MAX_WIDTH : undefined;
+  const providerSubagentProvider = props.serverConfig?.providers.find(
+    (provider) => provider.instanceId === props.selectedThread.modelSelection.instanceId,
+  );
+  const providerSubagentCatalogModel = providerSubagentProvider?.models.find(
+    (model) => model.slug === props.selectedThread.modelSelection.model,
+  );
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
   const selectedProviderSkills = useMemo(
@@ -828,47 +848,72 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
             {/* Hidden (not unmounted) while a user-input request owns the
                 composer slot, so composer drafts and editor state survive. */}
-            <View style={activeUserInputRequestId !== null ? { display: "none" } : undefined}>
-              <ThreadComposer
-                editorRef={composerEditorRef}
-                draftMessage={props.draftMessage}
-                draftAttachments={props.draftAttachments}
-                placeholder="Ask the repo agent, or run a command…"
-                contentMaxWidth={contentMaxWidth}
-                connectionState={props.connectionStateLabel}
-                connectionError={props.connectionError}
-                environmentLabel={props.environmentLabel}
-                threadSyncPhase={threadSyncPhase}
-                selectedThread={props.selectedThread}
-                serverConfig={props.serverConfig}
-                queueCount={props.selectedThreadQueueCount}
-                queuedMessages={props.selectedThreadQueuedMessages}
-                dispatchingQueuedMessageId={props.dispatchingQueuedMessageId}
-                onDeleteQueuedMessage={props.onDeleteQueuedMessage}
-                onMoveQueuedMessage={props.onMoveQueuedMessage}
-                onUpdateQueuedMessageText={props.onUpdateQueuedMessageText}
-                onQueuedMessageEditingChange={props.onQueuedMessageEditingChange}
-                activeThreadBusy={props.activeThreadBusy}
-                canStopThread={props.canStopThread}
-                environmentId={props.environmentId}
-                projectCwd={props.projectWorkspaceRoot}
-                bottomInset={composerBottomInset}
-                onChangeDraftMessage={props.onChangeDraftMessage}
-                onPickDraftImages={props.onPickDraftImages}
-                onPickDraftDocuments={props.onPickDraftDocuments}
-                onAddDraftAttachments={props.onAddDraftAttachments}
-                onNativePasteImages={props.onNativePasteImages}
-                onRemoveDraftImage={props.onRemoveDraftImage}
-                onStopThread={props.onStopThread}
-                onSendMessage={handleSendMessage}
-                onReconnectEnvironment={props.onReconnectEnvironment}
-                onUpdateModelSelection={props.onUpdateThreadModelSelection}
-                onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
-                onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
-                onExpandedChange={setComposerExpanded}
-                onEditorFocusChange={handleOwnedInputFocusChange}
-              />
-            </View>
+            {props.providerSubagent ? (
+              <View
+                className="self-center px-3 pt-1.5"
+                style={{
+                  width: "100%",
+                  maxWidth: contentMaxWidth,
+                  paddingBottom: composerBottomInset + 6,
+                }}
+              >
+                <ProviderSubagentBar
+                  provider={providerSubagentProvider ?? null}
+                  modelLabel={
+                    providerSubagentCatalogModel?.name ??
+                    formatModelSlugName(props.selectedThread.modelSelection.model)
+                  }
+                  effortLabel={formatModelSelectionEffort(
+                    props.selectedThread.modelSelection,
+                    providerSubagentProvider?.models,
+                  )}
+                  status={props.providerSubagent.status}
+                  onOpenParent={props.providerSubagent.onOpenParent}
+                />
+              </View>
+            ) : (
+              <View style={activeUserInputRequestId !== null ? { display: "none" } : undefined}>
+                <ThreadComposer
+                  editorRef={composerEditorRef}
+                  draftMessage={props.draftMessage}
+                  draftAttachments={props.draftAttachments}
+                  placeholder="Ask the repo agent, or run a command…"
+                  contentMaxWidth={contentMaxWidth}
+                  connectionState={props.connectionStateLabel}
+                  connectionError={props.connectionError}
+                  environmentLabel={props.environmentLabel}
+                  threadSyncPhase={threadSyncPhase}
+                  selectedThread={props.selectedThread}
+                  serverConfig={props.serverConfig}
+                  queueCount={props.selectedThreadQueueCount}
+                  queuedMessages={props.selectedThreadQueuedMessages}
+                  dispatchingQueuedMessageId={props.dispatchingQueuedMessageId}
+                  onDeleteQueuedMessage={props.onDeleteQueuedMessage}
+                  onMoveQueuedMessage={props.onMoveQueuedMessage}
+                  onUpdateQueuedMessageText={props.onUpdateQueuedMessageText}
+                  onQueuedMessageEditingChange={props.onQueuedMessageEditingChange}
+                  activeThreadBusy={props.activeThreadBusy}
+                  canStopThread={props.canStopThread}
+                  environmentId={props.environmentId}
+                  projectCwd={props.projectWorkspaceRoot}
+                  bottomInset={composerBottomInset}
+                  onChangeDraftMessage={props.onChangeDraftMessage}
+                  onPickDraftImages={props.onPickDraftImages}
+                  onPickDraftDocuments={props.onPickDraftDocuments}
+                  onAddDraftAttachments={props.onAddDraftAttachments}
+                  onNativePasteImages={props.onNativePasteImages}
+                  onRemoveDraftImage={props.onRemoveDraftImage}
+                  onStopThread={props.onStopThread}
+                  onSendMessage={handleSendMessage}
+                  onReconnectEnvironment={props.onReconnectEnvironment}
+                  onUpdateModelSelection={props.onUpdateThreadModelSelection}
+                  onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
+                  onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
+                  onExpandedChange={setComposerExpanded}
+                  onEditorFocusChange={handleOwnedInputFocusChange}
+                />
+              </View>
+            )}
           </View>
         </KeyboardStickyView>
       ) : null}

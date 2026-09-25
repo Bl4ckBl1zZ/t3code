@@ -261,6 +261,9 @@ Completed web conversations keep the final response visible. Expand **Worked for
 interim responses and completed tools. Subagents, forks, threads the agent created and
 commands still running remain visible outside that fold.
 
+Subagent threads started by the agent can't take messages; message the parent
+thread instead. Their composer is replaced by the subagent's status.
+
 On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same eight-attachment limit applies to the picker and dropped files.
 
 If you choose another panel while a turn is working, its arriving plan will not replace your choice. A later turn can open its plan again when automatic plan opening is enabled.

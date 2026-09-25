@@ -634,6 +634,11 @@ export interface ChatComposerProps {
   hermesProviderScope: "only" | "hidden";
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
+  /**
+   * The thread's model, effort, and access belong to its provider (a native
+   * subagent answering a question): hide those pickers and attachments.
+   */
+  hideThreadSettings?: boolean;
 
   // Session phase
   phase: SessionPhase;
@@ -779,6 +784,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     hermesProviderScope,
     forceExpandedOnMobile,
     projectSelectionRequired,
+    hideThreadSettings = false,
     phase,
     isConnecting,
     isSendBusy,
@@ -1232,6 +1238,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
+  // The picker lives in the hidden thread settings, so it cannot stay open (or
+  // a shortcut that opened it would pop it up later on another thread).
+  if (hideThreadSettings && isComposerModelPickerOpen) {
+    setIsComposerModelPickerOpen(false);
+  }
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
   const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
@@ -3435,7 +3446,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   // Render
   // ------------------------------------------------------------------
-  const composerModelControls = (
+  const composerModelControls = hideThreadSettings ? null : (
     <div
       data-chat-resting-composer-controls="true"
       className={cn(
@@ -4179,34 +4190,36 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </MenuPopup>
                   </Menu>
                 ) : null}
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        onPointerDown={(event) => event.preventDefault()}
-                        onClick={() => attachmentInputRef.current?.click()}
-                        aria-label="Attach files"
-                        disabled={
-                          isConnecting ||
-                          isComposerApprovalState ||
-                          pendingUserInputs.length > 0 ||
-                          projectSelectionRequired ||
-                          isAttachmentLimitReached(composerImages.length)
-                        }
-                      />
-                    }
-                  >
-                    <PaperclipIcon />
-                  </TooltipTrigger>
-                  <TooltipPopup>
-                    {isAttachmentLimitReached(composerImages.length)
-                      ? `Attachment limit reached (${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} of ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS})`
-                      : "Attach files"}
-                  </TooltipPopup>
-                </Tooltip>
+                {hideThreadSettings ? null : (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          onPointerDown={(event) => event.preventDefault()}
+                          onClick={() => attachmentInputRef.current?.click()}
+                          aria-label="Attach files"
+                          disabled={
+                            isConnecting ||
+                            isComposerApprovalState ||
+                            pendingUserInputs.length > 0 ||
+                            projectSelectionRequired ||
+                            isAttachmentLimitReached(composerImages.length)
+                          }
+                        />
+                      }
+                    >
+                      <PaperclipIcon />
+                    </TooltipTrigger>
+                    <TooltipPopup>
+                      {isAttachmentLimitReached(composerImages.length)
+                        ? `Attachment limit reached (${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} of ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS})`
+                        : "Attach files"}
+                    </TooltipPopup>
+                  </Tooltip>
+                )}
                 <ComposerVoiceAction
                   state={voice.state}
                   // Dictation stays available while the agent runs: the transcript only lands

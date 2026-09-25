@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
 import {
+  deriveProviderSubagentStatus,
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
@@ -10,6 +11,7 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import {
   CommandId,
+  isProviderNativeSubagentThread,
   MessageId,
   type EnvironmentId,
   type ModelSelection,
@@ -200,6 +202,19 @@ export function useThreadComposerState(options?: {
     selectedThreadSessionActivity,
     selectedThreadShell,
   ]);
+
+  // A provider-native subagent thread cannot take messages; its status stands
+  // in for the composer.
+  const isProviderSubagentThread =
+    selectedThreadProjection !== null &&
+    isProviderNativeSubagentThread(selectedThreadProjection.projection.thread);
+  const providerSubagentStatus = useMemo(
+    () =>
+      selectedThreadProjection
+        ? deriveProviderSubagentStatus(selectedThreadProjection.projection)
+        : null,
+    [selectedThreadProjection],
+  );
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const interruptibleRunId = selectedThreadRuntime?.activeRunId ?? null;
@@ -537,6 +552,8 @@ export function useThreadComposerState(options?: {
     onQueuedMessageEditingChange,
     activeWorkStartedAt,
     activeWorkActivityText,
+    isProviderSubagentThread,
+    providerSubagentStatus,
     draftMessage,
     draftAttachments,
     modelSelection,
