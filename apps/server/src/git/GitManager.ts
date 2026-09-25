@@ -157,6 +157,11 @@ const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
 const isSourceControlProviderError = Schema.is(SourceControlProviderError);
 
+/** How long a successful PR lookup is cached, given the PR it found. */
+function prLookupSuccessTtl(latest: { readonly state: string } | null): Duration.Duration {
+  return latest?.state === "open" ? PR_LOOKUP_CACHE_TTL : PR_LOOKUP_NO_OPEN_PR_CACHE_TTL;
+}
+
 /**
  * How long a failed PR lookup is cached, given the number of consecutive
  * failures for that branch.
@@ -1099,9 +1104,11 @@ export const make = Effect.gen(function* () {
         ...(remoteName.length > 0 ? { remoteName } : {}),
       };
       return Effect.gen(function* () {
+        // Read before the lookup, so resolvedAt + TTL never outlives this entry.
+        const resolvedAt = yield* Clock.currentTimeMillis;
         const { headContext, lookup } = yield* resolveLookupHeadContext(cwd, details);
         if (!lookup) {
-          return { latest: null, headContext };
+          return { latest: null, headContext, resolvedAt };
         }
         // Only skip when the branch is untracked as well: anything carrying an
         // upstream keeps the old behaviour.
@@ -1110,10 +1117,10 @@ export const make = Effect.gen(function* () {
           details.upstreamRef === null &&
           (yield* isUnpublishedBranch(cwd, headContext))
         ) {
-          return { latest: null, headContext };
+          return { latest: null, headContext, resolvedAt };
         }
         const latest = yield* findLatestPrForHeadContext(cwd, headContext);
-        return { latest, headContext };
+        return { latest, headContext, resolvedAt };
       });
     },
     {
@@ -1121,14 +1128,38 @@ export const make = Effect.gen(function* () {
       timeToLive: (exit, key) => {
         if (Exit.isSuccess(exit)) {
           prLookupFailureStreakByKey.delete(key);
-          return exit.value.latest?.state === "open"
-            ? PR_LOOKUP_CACHE_TTL
-            : PR_LOOKUP_NO_OPEN_PR_CACHE_TTL;
+          return prLookupSuccessTtl(exit.value.latest);
         }
         return nextPrLookupFailureTtl(key);
       },
     },
   );
+  // branchPullRequest spends 5-7 git processes (remotes, saved upstream,
+  // default branch, remote URLs) deriving its PR cache key and verifying the
+  // repository identity, even when the PR answer is already cached. Background
+  // reactors ask about the same saved branches every sweep, so each verified
+  // answer is remembered until the PR lookup it came from expires. Local
+  // upstream or remote edits are therefore noticed within the PR lookup TTL;
+  // invalidateStatus (a new epoch) and `refresh` still bypass it immediately.
+  interface BranchPullRequestAnswer {
+    readonly pr: GitBranchPullRequest | null;
+    readonly resolvedAt: number;
+    readonly expiresAt: number;
+  }
+  const branchPullRequestAnswers = new Map<string, BranchPullRequestAnswer>();
+  const rememberBranchPullRequest = (key: string, answer: BranchPullRequestAnswer) => {
+    const existing = branchPullRequestAnswers.get(key);
+    // A slower concurrent ask must not replace a newer (e.g. refreshed) answer.
+    if (existing !== undefined && existing.resolvedAt > answer.resolvedAt) return;
+    branchPullRequestAnswers.delete(key);
+    if (branchPullRequestAnswers.size >= PR_LOOKUP_CACHE_CAPACITY) {
+      const oldestKey = branchPullRequestAnswers.keys().next().value;
+      if (oldestKey !== undefined) {
+        branchPullRequestAnswers.delete(oldestKey);
+      }
+    }
+    branchPullRequestAnswers.set(key, answer);
+  };
   // A transient lookup failure (rate limit, network blip) must not clear an
   // already-known PR badge, so the last successful answer per branch sticks
   // around as the fallback. Keep the resolved head context with it so a
@@ -2128,6 +2159,15 @@ export const make = Effect.gen(function* () {
     "branchPullRequest",
   )(function* ({ cwd, branch }, options) {
     const cacheCwd = yield* normalizeStatusCacheKey(cwd);
+    const answerKey = [cacheCwd, branch, String(prLookupEpoch(cacheCwd))].join("\u0000");
+    if (options?.refresh) {
+      branchPullRequestAnswers.delete(answerKey);
+    } else {
+      const known = branchPullRequestAnswers.get(answerKey);
+      if (known !== undefined && (yield* Clock.currentTimeMillis) < known.expiresAt) {
+        return known.pr;
+      }
+    }
     const remotes = yield* gitCore.execute({
       operation: "GitManager.branchPullRequest.remotes",
       cwd: cacheCwd,
@@ -2259,23 +2299,27 @@ export const make = Effect.gen(function* () {
         });
       }
     }
-    const { latest } = cached;
-    if (latest === null) return null;
-    if (
-      (branch === defaultBranch ||
-        (defaultBranch === null && (branch === "main" || branch === "master"))) &&
-      latest.state !== "open"
-    ) {
-      return null;
-    }
-    return {
-      ...toStatusPr(latest),
-      closedAt: latest.closedAt ?? null,
-      mergedAt: latest.mergedAt ?? null,
-      // Hosting CLIs can select an upstream repository instead of origin.
-      // The returned PR URL names the repository that actually owns it.
-      repositoryKey: pullRequestRepositoryKey(latest.url),
-    };
+    const { latest, resolvedAt } = cached;
+    const isDefaultBranch =
+      branch === defaultBranch ||
+      (defaultBranch === null && (branch === "main" || branch === "master"));
+    const pr: GitBranchPullRequest | null =
+      latest === null || (isDefaultBranch && latest.state !== "open")
+        ? null
+        : {
+            ...toStatusPr(latest),
+            closedAt: latest.closedAt ?? null,
+            mergedAt: latest.mergedAt ?? null,
+            // Hosting CLIs can select an upstream repository instead of origin.
+            // The returned PR URL names the repository that actually owns it.
+            repositoryKey: pullRequestRepositoryKey(latest.url),
+          };
+    rememberBranchPullRequest(answerKey, {
+      pr,
+      resolvedAt,
+      expiresAt: resolvedAt + Duration.toMillis(prLookupSuccessTtl(latest)),
+    });
+    return pr;
   });
   const invalidateLocalStatus: GitManager["Service"]["invalidateLocalStatus"] = Effect.fn(
     "invalidateLocalStatus",
