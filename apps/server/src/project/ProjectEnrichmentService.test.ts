@@ -341,3 +341,54 @@ it.effect("deduplicates requests, bounds pending work, and reloads invalidated r
     );
   }),
 );
+
+it.effect("keeps serving an expired answer and republishes only when it changes", () =>
+  Effect.gen(function* () {
+    const version = yield* Ref.make(1);
+    const repositoryCalls = yield* Ref.make(0);
+    const metadataLayer = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: (workspaceRoot) =>
+          Ref.get(version).pipe(
+            Effect.tap(() => Ref.update(repositoryCalls, (count) => count + 1)),
+            Effect.map((current) => identity(workspaceRoot, current)),
+          ),
+      }),
+      Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+        resolvePath: () => Effect.succeed(null),
+      }),
+    );
+    const requestUntilResolved = Effect.fn("ProjectEnrichmentServiceTest.requestUntilResolved")(
+      function* (service: ProjectEnrichment.ProjectEnrichmentService["Service"], calls: number) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if ((yield* Ref.get(repositoryCalls)) >= calls) return;
+          yield* service.request("/repo");
+          yield* Effect.yieldNow;
+        }
+        return yield* Effect.die(`Repository identity was not resolved ${calls} times.`);
+      },
+    );
+
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectEnrichment.ProjectEnrichmentService;
+      const changes = yield* service.subscribeChanges;
+
+      yield* requestUntilResolved(service, 1);
+      const first = yield* PubSub.take(changes);
+      assert.equal(first.enrichment.repositoryIdentity?.canonicalKey, "example.test/v1/repo");
+
+      // Every entry has already expired; the last answer still reads as resolved.
+      const expired = yield* service.peek("/repo");
+      assert.equal(expired.repositoryIdentity?.canonicalKey, "example.test/v1/repo");
+      assert.isTrue(expired.repositoryIdentityResolved);
+
+      // Refreshing to the same answer publishes nothing, so the next change
+      // taken is the one that actually differs.
+      yield* requestUntilResolved(service, 2);
+      yield* Ref.set(version, 2);
+      yield* requestUntilResolved(service, 3);
+      const changed = yield* PubSub.take(changes);
+      assert.equal(changed.enrichment.repositoryIdentity?.canonicalKey, "example.test/v2/repo");
+    }).pipe(Effect.provide(makeLayer(metadataLayer, { successTtl: 0 })));
+  }),
+);
