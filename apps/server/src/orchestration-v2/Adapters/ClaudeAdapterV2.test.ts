@@ -1733,6 +1733,38 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("does not wait on or wake for a foreground task", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-foreground-task"),
+            text: "Run the build.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({ ...wakeTaskStarted, is_backgrounded: false }),
+        );
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+
+        yield* Queue.offer(harness.sdkMessages, wakeNotification);
+        let settleYields = 0;
+        yield* awaitUntil(() => settleYields++ >= 50, "late notification to be handled");
+        assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("drains buffered wake messages into a continuation turn", () =>
     Effect.scoped(
       Effect.gen(function* () {

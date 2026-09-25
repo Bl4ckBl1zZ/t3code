@@ -1435,7 +1435,9 @@ const CLAUDE_KNOWN_TOOL_CLASSIFICATIONS: Record<
   multiedit: { itemType: "file_change", requestKind: "file-change" },
   notebookedit: { itemType: "file_change", requestKind: "file-change" },
   read: { itemType: "dynamic_tool", requestKind: "file-read" },
+  sendmessage: { itemType: "dynamic_tool", requestKind: "command" },
   task: { itemType: "dynamic_tool", requestKind: "command" },
+  taskstop: { itemType: "dynamic_tool", requestKind: "command" },
   todowrite: { itemType: "dynamic_tool", requestKind: "command" },
   toolsearch: { itemType: "dynamic_tool", requestKind: "command" },
   webfetch: { itemType: "web_search", requestKind: "command" },
@@ -1587,6 +1589,11 @@ function claudeTaskTypeFromSdkMessage(message: SDKMessage): string | null {
 
 function isClaudeNonSubagentTask(message: SDKMessage): boolean {
   return claudeTaskTypeFromSdkMessage(message) === "local_bash";
+}
+
+/** Newer CLIs mark a task that blocks its tool call with `is_backgrounded: false`. */
+function isClaudeForegroundTask(message: SDKMessage): boolean {
+  return Reflect.get(message, "is_backgrounded") === false;
 }
 
 function fileNameFromClaudeTool(toolName: string, input: ClaudeNativeToolInput): string {
@@ -4536,9 +4543,14 @@ export function makeClaudeAdapterV2(
           if (message.type === "system" && message.subtype === "task_started") {
             if (isClaudeNonSubagentTask(message)) {
               context.ignoredTaskIds.add(message.task_id);
-              yield* Ref.update(pendingBackgroundTaskIds, (current) =>
-                new Set(current).add(message.task_id),
-              );
+              // A foreground task blocks its tool call (a subagent's own Bash
+              // steps included), so it is not background work that can wake
+              // the thread after the turn settles.
+              if (!isClaudeForegroundTask(message)) {
+                yield* Ref.update(pendingBackgroundTaskIds, (current) =>
+                  new Set(current).add(message.task_id),
+                );
+              }
             } else {
               yield* updateClaudeSubagentNode({
                 context,
