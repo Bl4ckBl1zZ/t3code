@@ -1,4 +1,4 @@
-import type { RepositoryIdentity } from "@t3tools/contracts";
+import { RepositoryIdentity } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
@@ -20,6 +21,8 @@ const DEFAULT_MAX_PENDING = 512;
 const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_SUCCESS_TTL = Duration.minutes(1);
 const DEFAULT_FAILURE_TTL = Duration.seconds(5);
+
+const sameRepositoryIdentity = Schema.toEquivalence(Schema.NullOr(RepositoryIdentity));
 
 export interface ProjectEnrichment {
   readonly repositoryIdentity: RepositoryIdentity | null;
@@ -131,6 +134,26 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     PubSub.sliding<ProjectEnrichmentChange>(256),
     (pubsub) => PubSub.shutdown(pubsub),
   );
+  // Last successful answers per root. Entries expire so a changed remote or
+  // favicon is picked up, but an expired entry is not news: peek keeps serving
+  // the last answer while the refresh runs, and a refresh that lands on the
+  // same answer publishes nothing. Every published change makes each live
+  // shell subscriber reload the full snapshot, so republishing unchanged
+  // answers on every TTL kept those reloads running forever.
+  const lastRepositoryIdentity = new Map<string, RepositoryIdentity | null>();
+  const lastFaviconPath = new Map<string, string | null>();
+  const lastPublished = new Map<string, ProjectEnrichment>();
+
+  // The cached answer when there is one (a failure reads as unresolved), else
+  // the last success.
+  const currentValue = <A, E>(
+    cached: Option.Option<Exit.Exit<A, E>>,
+    last: ReadonlyMap<string, A>,
+    workspaceRoot: string,
+  ) =>
+    Option.isSome(cached)
+      ? { value: availableValue(cached), resolved: isSuccessfullyResolved(cached) }
+      : { value: last.get(workspaceRoot) ?? null, resolved: last.has(workspaceRoot) };
 
   const removePending = (lane: EnrichmentWorkLane, workspaceRoot: string) =>
     Ref.update(lane.pendingRoots, (current) => {
@@ -167,17 +190,27 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     function* (workspaceRoot: string) {
       const repositoryIdentity = yield* Cache.get(repositoryIdentityCache, workspaceRoot);
       yield* logFailure(workspaceRoot, "repositoryIdentity", repositoryIdentity);
+      if (Exit.isSuccess(repositoryIdentity)) {
+        lastRepositoryIdentity.set(workspaceRoot, repositoryIdentity.value);
+      }
       const faviconPath = yield* Cache.getSuccess(faviconCache, workspaceRoot);
       const repositoryIdentityResolved = Exit.isSuccess(repositoryIdentity);
-      yield* PubSub.publish(changes, {
-        workspaceRoot,
+      const enrichment: ProjectEnrichment = {
+        repositoryIdentity: availableValue(Option.some(repositoryIdentity)),
+        faviconPath: currentValue(faviconPath, lastFaviconPath, workspaceRoot).value,
         repositoryIdentityResolved,
-        enrichment: {
-          repositoryIdentity: availableValue(Option.some(repositoryIdentity)),
-          faviconPath: availableValue(faviconPath),
-          repositoryIdentityResolved,
-        },
-      });
+      };
+      const previous = lastPublished.get(workspaceRoot);
+      if (
+        previous !== undefined &&
+        previous.repositoryIdentityResolved === enrichment.repositoryIdentityResolved &&
+        previous.faviconPath === enrichment.faviconPath &&
+        sameRepositoryIdentity(previous.repositoryIdentity, enrichment.repositoryIdentity)
+      ) {
+        return;
+      }
+      lastPublished.set(workspaceRoot, enrichment);
+      yield* PubSub.publish(changes, { workspaceRoot, repositoryIdentityResolved, enrichment });
     },
   );
 
@@ -186,6 +219,7 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   ) {
     const faviconPath = yield* Cache.get(faviconCache, workspaceRoot);
     yield* logFailure(workspaceRoot, "faviconPath", faviconPath);
+    if (Exit.isSuccess(faviconPath)) lastFaviconPath.set(workspaceRoot, faviconPath.value);
   });
 
   const startWorkers = (
@@ -235,10 +269,11 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       ] as const,
       { concurrency: "unbounded" },
     );
+    const identity = currentValue(repositoryIdentity, lastRepositoryIdentity, workspaceRoot);
     return {
-      repositoryIdentity: availableValue(repositoryIdentity),
-      faviconPath: availableValue(faviconPath),
-      repositoryIdentityResolved: isSuccessfullyResolved(repositoryIdentity),
+      repositoryIdentity: identity.value,
+      faviconPath: currentValue(faviconPath, lastFaviconPath, workspaceRoot).value,
+      repositoryIdentityResolved: identity.resolved,
     };
   });
 
@@ -274,12 +309,20 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     yield* Effect.forEach(
       new Set(workspaceRoots),
       (workspaceRoot) =>
-        Effect.all(
-          [
-            Cache.invalidate(repositoryIdentityCache, workspaceRoot),
-            Cache.invalidate(faviconCache, workspaceRoot),
-          ],
-          { concurrency: "unbounded", discard: true },
+        Effect.sync(() => {
+          lastRepositoryIdentity.delete(workspaceRoot);
+          lastFaviconPath.delete(workspaceRoot);
+          lastPublished.delete(workspaceRoot);
+        }).pipe(
+          Effect.andThen(
+            Effect.all(
+              [
+                Cache.invalidate(repositoryIdentityCache, workspaceRoot),
+                Cache.invalidate(faviconCache, workspaceRoot),
+              ],
+              { concurrency: "unbounded", discard: true },
+            ),
+          ),
         ),
       { discard: true },
     );

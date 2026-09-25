@@ -116,6 +116,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as ReplayRecordPruner from "./auth/ReplayRecordPruner.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   connectHttpApiLayer,
@@ -478,6 +479,7 @@ const T3ProjectFileSyncLayerLive = T3ProjectFileSync.layer.pipe(
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   T3ProjectFileSyncLayerLive,
+  ReplayRecordPruner.layer,
   Layer.effectDiscard(
     Effect.gen(function* () {
       yield* (yield* HermesWorkSyncService).start();

@@ -563,10 +563,32 @@ const make = Effect.gen(function* () {
       };
     });
 
+  // Secrets are read once per settings object; the cache hands out a new object on
+  // every reload and update. updateSettings bumps the generation once its secret
+  // writes settle (committed or rolled back), so a read that overlapped them is
+  // never remembered.
+  const materializedSettingsRef = yield* Ref.make<{
+    readonly generation: number;
+    readonly entry?: { readonly source: ServerSettings; readonly settings: ServerSettings };
+  }>({ generation: 0 });
+
+  const materializeSettings = (settings: ServerSettings) =>
+    Effect.gen(function* () {
+      const { generation, entry } = yield* Ref.get(materializedSettingsRef);
+      if (entry?.source === settings) return entry.settings;
+      const materialized = yield* materializeProviderEnvironmentSecrets(settings);
+      yield* Ref.update(materializedSettingsRef, (current) =>
+        current.generation === generation
+          ? { generation, entry: { source: settings, settings: materialized } }
+          : current,
+      );
+      return materialized;
+    });
+
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>
-        materializeProviderEnvironmentSecrets(settings).pipe(
+        materializeSettings(settings).pipe(
           Effect.catch((error: ServerSettingsError) =>
             Effect.logWarning("failed to materialize provider environment secrets", {
               operation: error.operation,
@@ -824,8 +846,19 @@ const make = Effect.gen(function* () {
             }
             return materializedExit.value;
           }),
+        ).pipe(
+          Effect.ensuring(
+            Ref.update(materializedSettingsRef, ({ generation }) => ({
+              generation: generation + 1,
+            })),
+          ),
         );
         yield* Cache.set(settingsCache, cacheKey, next);
+        // Secrets cannot change again while this write permit is held.
+        yield* Ref.update(materializedSettingsRef, ({ generation }) => ({
+          generation,
+          entry: { source: next, settings: materialized },
+        }));
         yield* emitChange(next);
         return resolveTextGenerationProvider(materialized);
       }),
@@ -927,7 +960,7 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
-      Effect.flatMap(materializeProviderEnvironmentSecrets),
+      Effect.flatMap(materializeSettings),
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings,

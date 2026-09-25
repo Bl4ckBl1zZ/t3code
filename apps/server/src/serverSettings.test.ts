@@ -1264,6 +1264,110 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("reads stored secrets once per settings version", () => {
+    let secretReads = 0;
+    const countingSecretStoreLayer = Layer.effect(
+      ServerSecretStore.ServerSecretStore,
+      Effect.map(ServerSecretStore.ServerSecretStore, (store) => ({
+        ...store,
+        get: (name: string) =>
+          Effect.suspend(() => {
+            secretReads++;
+            return store.get(name);
+          }),
+      })),
+    ).pipe(Layer.provide(ServerSecretStore.layer));
+    const instanceId = ProviderInstanceId.make("codex_personal");
+    const sourceId = UsageLimitSourceId.make("hub-test");
+
+    return Effect.gen(function* () {
+      const writer = yield* ServerSettingsModule.ServerSettingsService;
+      yield* writer.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("codex"),
+            environment: [{ name: "OPENROUTER_API_KEY", value: "sk-or-secret", sensitive: true }],
+            config: {},
+          },
+        },
+        usageLimitSources: {
+          [sourceId]: {
+            kind: "cliproxy",
+            url: "https://hub.example.test",
+            managementKey: "hub-secret",
+            enabled: true,
+          },
+        },
+      });
+
+      // A fresh service loads the redacted settings from disk.
+      yield* Effect.gen(function* () {
+        const reader = yield* ServerSettingsModule.ServerSettingsService;
+        const readsBefore = secretReads;
+        for (let call = 0; call < 3; call++) {
+          const settings = yield* reader.getSettings;
+          assert.equal(
+            settings.providerInstances[instanceId]?.environment?.[0]?.value,
+            "sk-or-secret",
+          );
+          assert.equal(settings.usageLimitSources[sourceId]?.managementKey, "hub-secret");
+        }
+        assert.equal(secretReads - readsBefore, 2);
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(ServerSettingsModule.layer).pipe(Layer.provide(countingSecretStoreLayer)),
+        ),
+      );
+    }).pipe(
+      Effect.provide(
+        ServerSettingsModule.layer.pipe(
+          Layer.provide(countingSecretStoreLayer),
+          Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
+          Layer.provideMerge(
+            Layer.fresh(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3code-server-settings-secret-reads-test-",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
+  it.effect("serves a changed secret even though settings.json stays identical", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const instanceId = ProviderInstanceId.make("codex_personal");
+      const setToken = (value: string) =>
+        serverSettings.updateSettings({
+          providerInstances: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "OPENROUTER_API_KEY", value, sensitive: true }],
+              config: {},
+            },
+          },
+        });
+
+      yield* setToken("sk-old");
+      assert.equal(
+        (yield* serverSettings.getSettings).providerInstances[instanceId]?.environment?.[0]?.value,
+        "sk-old",
+      );
+      const rawBefore = yield* fileSystem.readFileString(serverConfig.settingsPath);
+
+      yield* setToken("sk-new");
+      assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), rawBefore);
+      assert.equal(
+        (yield* serverSettings.getSettings).providerInstances[instanceId]?.environment?.[0]?.value,
+        "sk-new",
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("rolls back provider secret changes when the settings file commit fails", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

@@ -93,6 +93,20 @@ const CLOUD_HEALTH_NONCE_PREFIX = "cloud-health-nonce-";
 const CLOUD_HEALTH_JTI_PREFIX = "cloud-health-jti-";
 const CLOUD_PROOF_MAX_LIFETIME_SECONDS = 5 * 60;
 const CLOUD_PROOF_CLOCK_SKEW_SECONDS = 60;
+
+/**
+ * Replay guards written by `consumeCloudReplayGuards`. A cloud proof passes
+ * `verifyRelayJwt` (5 min max age, 60s tolerance) and
+ * `hasBoundedCloudProofLifetime` (iat up to 60s ahead) for at most ~7 min after
+ * its guard is written. The pruner keeps guards well past that.
+ */
+export const CLOUD_REPLAY_RECORDS: ReadonlyArray<ServerSecretStore.ExpiringSecretPrefix> = [
+  CLOUD_MINT_NONCE_PREFIX,
+  CLOUD_MINT_JTI_PREFIX,
+  CLOUD_HEALTH_NONCE_PREFIX,
+  CLOUD_HEALTH_JTI_PREFIX,
+].map((prefix) => ({ prefix, maxAge: Duration.hours(1) }));
+
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const CLOUD_CREDENTIAL_RESPONSE_HEADERS = {
   "cache-control": "no-store",

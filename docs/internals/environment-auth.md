@@ -94,6 +94,12 @@ bearer token. Newer servers include a safe `dpopFailureReason` category in that
 error. When an older server omits the category, clients mention clock skew as
 one possible cause rather than presenting it as confirmed.
 
+Each accepted proof is recorded once as a `dpop-proof-*` entry in the server
+secret store, so a replayed proof is rejected; the cloud mint and health
+endpoints record their `jti` and nonce the same way. `ReplayRecordPruner`
+deletes these records an hour after they are written, long after their proofs
+would fail the time-window check anyway.
+
 `dpop-access-token` is advertised alongside `browser-session-cookie` and
 `bearer-access-token` in the descriptor's `sessionMethods`
 (`EnvironmentAuthPolicy.ts`), so clients can discover support rather than
