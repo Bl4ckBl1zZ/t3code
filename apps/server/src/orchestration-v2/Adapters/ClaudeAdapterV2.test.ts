@@ -4398,6 +4398,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly uuid: string;
     readonly messageId?: string;
     readonly text?: string;
+    readonly thinking?: string;
     readonly bashToolUseId?: string;
   }) =>
     claudeSdkFrame({
@@ -4406,6 +4407,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         ...(input.messageId === undefined ? {} : { id: input.messageId }),
         role: "assistant",
         content: [
+          ...(input.thinking === undefined
+            ? []
+            : [{ type: "thinking", thinking: input.thinking, signature: "sig" }]),
           ...(input.text === undefined ? [] : [{ type: "text", text: input.text }]),
           ...(input.bashToolUseId === undefined
             ? []
@@ -4827,6 +4831,75 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           FINAL_REPORT,
         ]);
         assert.deepEqual(routing.assistantTexts(harness.threadId), ["The auditor finished."]);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("shows a subagent's thinking in its child thread", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const TASK_ID = "task-thinking-subagent";
+        const TOOL_USE_ID = "toolu-thinking-subagent";
+        const THINKING = "The user wants a commit audit; reply with DONE.";
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-thinking-subagent"),
+            text: "Run an auditor.",
+            attachments: [],
+          }),
+        );
+        const frames = [
+          makeSubagentTaskStartedFrame({
+            taskId: TASK_ID,
+            toolUseId: TOOL_USE_ID,
+            uuid: "00000000-0000-4000-8000-000000000341",
+          }),
+          makeSubagentAssistantFrame({
+            parentToolUseId: TOOL_USE_ID,
+            uuid: "00000000-0000-4000-8000-000000000342",
+            thinking: THINKING,
+          }),
+          makeSubagentAssistantFrame({
+            parentToolUseId: TOOL_USE_ID,
+            uuid: "00000000-0000-4000-8000-000000000343",
+            text: "DONE",
+          }),
+          makeSubagentNotificationFrame({
+            taskId: TASK_ID,
+            toolUseId: TOOL_USE_ID,
+            summary: "DONE",
+            uuid: "00000000-0000-4000-8000-000000000344",
+          }),
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000345",
+            result: "The auditor finished.",
+          }),
+        ];
+        for (const frame of frames) {
+          yield* Queue.offer(harness.sdkMessages, frame);
+        }
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+
+        const routing = subagentRouting(harness.events, []);
+        assert.isDefined(routing.childThreadId);
+        const thinking = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "reasoning"
+            ? [event.turnItem]
+            : [],
+        );
+        assert.lengthOf(thinking, 1);
+        const item = thinking[0];
+        assert.equal(item?.threadId, routing.childThreadId);
+        assert.isNull(item?.runId ?? null);
+        assert.equal(item?.status, "completed");
+        assert.isFalse(item?.type === "reasoning" && item.streaming);
+        assert.equal(item?.type === "reasoning" ? item.text : undefined, THINKING);
+        assert.deepEqual(routing.assistantTexts(routing.childThreadId), ["DONE"]);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );
