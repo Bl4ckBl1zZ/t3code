@@ -7,7 +7,7 @@ Attachments work in the chat composer on web, desktop, and mobile.
 ## Attaching files
 
 - **Web and desktop**: drag files onto the composer, paste them, or use **+ → Attach files**.
-- **Mobile**: tap the attach button for **Camera**, **Photos**, or **Files**, or share a file into T3 Code from another app.
+- **Mobile**: tap the attach button for **Camera**, **Photos**, or **Files**, or share a file into T3 Code from another app. On iOS 27, the native iOS app also pastes images into the composer.
 
 You can attach up to 8 files per message. Images can be up to 10 MB and other files up to 50 MB on current servers. Large images are scaled down to fit rather than rejected.
 

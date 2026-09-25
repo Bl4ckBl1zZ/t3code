@@ -426,8 +426,10 @@ struct FeatureComposerView: View {
     private var composerSurface: some View {
         VStack(spacing: 0) {
             // Above the swap below on purpose: the status describes the turn,
-            // and the turn keeps running while an approval panel is up.
-            if let workingStatus {
+            // and the turn keeps running while an approval panel is up. The
+            // media window takes the whole card, so the camera and picker meet
+            // its rounded top edge the same way they do on a new task.
+            if let workingStatus, mediaSurface == nil {
                 ThreadWorkingStatusBar(status: workingStatus)
             }
 
@@ -645,6 +647,7 @@ struct FeatureComposerView: View {
         // at content height, and the lineLimit ceiling above keeps a pasted
         // wall of text to seven lines that scroll within the field.
         .fixedSize(horizontal: false, vertical: true)
+        .composerImagePaste(appendPastedImages)
         .focused(focused)
         // Return is always editing input. Sending is the button or ⌘↩.
         .submitLabel(.return)
@@ -1005,6 +1008,16 @@ struct FeatureComposerView: View {
                 await prepareImage(data, ordinal: firstOrdinal + offset, generation: generation)
             }
         }
+    }
+
+    /// Pasted images join the draft the way camera shots do, so a paste reads
+    /// "Image 3.jpg" in the strip.
+    private func appendPastedImages(_ datas: [Data]) {
+        guard !isSending, !isStashing, !voice.state.isBusy else { return }
+        if datas.count > remainingAttachmentSlots {
+            fileDropError = "A message can contain up to 8 attachments. Extra images were not added."
+        }
+        appendImageData(datas)
     }
 
     private func prepareImage(_ data: Data, ordinal: Int, generation: UUID) async {

@@ -400,6 +400,42 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func sendingBehindARunningTurnLeavesTheTranscriptToTheQueue() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            environmentID: "environment-1",
+            title: "Thread",
+            state: .working
+        )
+        client.snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "environment-1",
+                    name: "Studio",
+                    endpoint: "https://studio.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ],
+            threads: [thread]
+        )
+        client.threadDetail = FeatureThreadDetail(thread: thread)
+        let model = testRootModel(client: client)
+        await model.reload()
+        _ = await model.detail(for: thread.id)
+
+        let sent = await model.sendMessage(threadID: thread.id, text: "next up", selection: nil)
+
+        #expect(sent)
+        #expect(client.sentText == "next up")
+        // The server queued it; the strip above the composer is its only row.
+        #expect(model.details[thread.id]?.messages.isEmpty == true)
+    }
+
+    @Test
     func loadingEarlierTurnsPrependsHistoryAndClearsTheCursor() async {
         let client = FeatureClientStub()
         let thread = FeatureThread(

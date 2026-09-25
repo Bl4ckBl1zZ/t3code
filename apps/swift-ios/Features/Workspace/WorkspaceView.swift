@@ -184,8 +184,14 @@ public struct WorkspaceView: View {
                 }
                 // Never shown: selecting it composes and the selection snaps
                 // back. iPad keeps compose in the list's toolbar instead.
-                Tab("New", systemImage: "plus", value: HomeTab.new, role: Self.newTabRole) {
+                Tab(value: HomeTab.new, role: .search) {
                     Color.clear
+                } label: {
+                    Label {
+                        Text("New")
+                    } icon: {
+                        newTabIcon
+                    }
                 }
                 .hidden(usesToolbarCompose)
             }
@@ -212,16 +218,17 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// iOS 27 draws a prominent tab as the detached circle beside the bar;
-    /// before that + is an ordinary trailing tab. The role only exists in the
-    /// iOS 27 SDK (Swift 6.4), so builds with an older Xcode take the
-    /// ordinary tab on every system.
-    @available(iOS 18, *)
-    private static var newTabRole: TabRole? {
-        #if compiler(>=6.4)
-        if #available(iOS 27, *) { return .prominent }
-        #endif
-        return nil
+    /// New sits apart from the three workspaces as its own circle beside the
+    /// bar. The search role is what detaches a tab on iOS 26 and later; the
+    /// tab has no search behind it, since selecting it composes and snaps back.
+    ///
+    /// Tab bars recolor icons to the unselected gray, so the accent is baked
+    /// into the image and drawn as-is. Reading the palette here repaints it on
+    /// a theme change.
+    private var newTabIcon: Image {
+        let symbol = UIImage(systemName: "plus")?
+            .withTintColor(T3Colors.uiAccent, renderingMode: .alwaysOriginal)
+        return Image(uiImage: symbol ?? UIImage()).renderingMode(.original)
     }
 
     /// A regular-width window has room for compose in the toolbar, where iPad
