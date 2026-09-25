@@ -20,6 +20,9 @@ public struct ThreadRowMenuAction: Equatable, Sendable, Identifiable {
     /// `separatorBefore` field the web context menu contract carries, so the two
     /// clients group the same menu the same way.
     public let separatorBefore: Bool
+    /// Non-nil renders a checkmark state; used by option submenus whose
+    /// current choice is ticked. Nil for plain actions.
+    public let checked: Bool?
     /// Non-empty makes this row a submenu; the row itself then never fires.
     public let children: [ThreadRowMenuAction]
 
@@ -31,6 +34,7 @@ public struct ThreadRowMenuAction: Equatable, Sendable, Identifiable {
         disabled: Bool = false,
         destructive: Bool = false,
         separatorBefore: Bool = false,
+        checked: Bool? = nil,
         children: [ThreadRowMenuAction] = []
     ) {
         self.id = id
@@ -40,6 +44,7 @@ public struct ThreadRowMenuAction: Equatable, Sendable, Identifiable {
         self.disabled = disabled
         self.destructive = destructive
         self.separatorBefore = separatorBefore
+        self.checked = checked
         self.children = children
     }
 }

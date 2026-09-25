@@ -50,8 +50,9 @@ struct ThreadLinkedPullRequestSheet: View {
         List {
             if !links.isEmpty {
                 Section {
+                    let showsRepository = ThreadLinkedPullRequestPresentation.showsRepository(links)
                     ForEach(FeaturePullRequestLines.resolve(links)) { line in
-                        linkRow(line)
+                        linkRow(line, showsRepository: showsRepository)
                     }
                 } header: {
                     Text("Linked")
@@ -124,7 +125,7 @@ struct ThreadLinkedPullRequestSheet: View {
         .t3NavigationChrome()
     }
 
-    private func linkRow(_ line: FeaturePullRequestLine) -> some View {
+    private func linkRow(_ line: FeaturePullRequestLine, showsRepository: Bool) -> some View {
         let link = line.link
         return NavigationLink {
             detail(for: link)
@@ -133,7 +134,7 @@ struct ThreadLinkedPullRequestSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         PullRequestStateBadge(snapshot: link.snapshot)
-                        Text(ThreadLinkedPullRequestPresentation.identityLine(line))
+                        Text(ThreadLinkedPullRequestPresentation.identityLine(line, showsRepository: showsRepository))
                             .font(T3Typography.supporting)
                             .monospacedDigit()
                             .foregroundStyle(T3Colors.textTertiary)

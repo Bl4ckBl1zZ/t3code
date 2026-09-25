@@ -886,6 +886,36 @@ struct FeatureRootModelTests {
         #expect(updated.snoozedAt! > updated.attentionAt!)
     }
 
+    /// Disabling stamps once and keeps the stamp on a repeat, like the server;
+    /// enabling clears it. A refused command leaves the row as it was.
+    @Test
+    func testAutoSettleChoiceMirrorsTheServerStamp() async {
+        let client = FeatureClientStub()
+        client.createdThread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            title: "Thread",
+            state: .idle
+        )
+        let model = testRootModel(client: client)
+        _ = await model.createThread(projectID: "project-1", title: nil, selection: nil)
+
+        #expect(await model.setAutoSettle("thread-1", enabled: false))
+        let stamp = model.snapshot.threads[0].autoSettleDisabledAt
+        #expect(stamp != nil)
+
+        #expect(await model.setAutoSettle("thread-1", enabled: false))
+        #expect(model.snapshot.threads[0].autoSettleDisabledAt == stamp)
+
+        #expect(await model.setAutoSettle("thread-1", enabled: true))
+        #expect(model.snapshot.threads[0].autoSettleDisabledAt == nil)
+
+        client.lifecycleError = FeatureCapabilityUnavailable("Auto-settle behavior")
+        #expect(await model.setAutoSettle("thread-1", enabled: false) == false)
+        #expect(model.snapshot.threads[0].autoSettleDisabledAt == nil)
+        #expect(client.lifecycleCalls == ["autoSettle:false", "autoSettle:false", "autoSettle:true"])
+    }
+
     @Test
     func testPinOptimisticallyWakesWithoutInventingSettlementOverride() async {
         let client = FeatureClientStub()
@@ -1680,6 +1710,10 @@ private final class FeatureClientStub: FeatureClient {
     func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws {
         if let lifecycleError { throw lifecycleError }
         lifecycleCalls.append("pin:\(pinned):\(orderKey ?? "-")")
+    }
+    func setThreadAutoSettle(id: String, enabled: Bool) async throws {
+        if let lifecycleError { throw lifecycleError }
+        lifecycleCalls.append("autoSettle:\(enabled)")
     }
     var deleteError: (any Error)?
     func deleteThread(id: String) async throws { if let deleteError { throw deleteError } }
