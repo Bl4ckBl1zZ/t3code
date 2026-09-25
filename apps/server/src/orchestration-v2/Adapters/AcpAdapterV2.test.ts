@@ -3273,6 +3273,113 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("serves flavor client file requests under the policy of the turn in progress", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      // effect-acp keeps the last handler registered per method; so does this.
+      let readTextFile: Parameters<RuntimeService["handleReadTextFile"]>[0] | undefined;
+      const servedCwds: Array<string | null> = [];
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          clientFileSystem: {
+            readTextFile: (_request, cwd) =>
+              Effect.sync(() => {
+                servedCwds.push(cwd);
+                return { content: "" };
+              }),
+            writeTextFile: () => Effect.succeed({}),
+          },
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleReadTextFile: (handler) =>
+                Effect.sync(() => {
+                  readTextFile = handler;
+                }).pipe(Effect.andThen(runtime.handleReadTextFile(handler))),
+            }),
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const policyFor = (cwd: string | null) =>
+        ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd,
+        });
+      const read = Effect.suspend(() =>
+        readTextFile === undefined
+          ? Effect.die("the flavor's client file system must be wired")
+          : readTextFile({ sessionId: "mock-session-1", path: "/any/file.txt" }),
+      );
+
+      // A session without a workspace passes no cwd, not the server's.
+      const noWorkspaceThreadId = ThreadId.make("thread-acp-client-fs-no-workspace");
+      yield* adapter
+        .openSession({
+          threadId: noWorkspaceThreadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-client-fs-none"),
+          modelSelection: { instanceId, model: "default" },
+          runtimePolicy: policyFor(null),
+        })
+        .pipe(Effect.andThen(read), Effect.scoped);
+      assert.deepEqual(servedCwds, [null]);
+
+      const workspaceA = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-fs-a-" });
+      const workspaceB = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-fs-b-" });
+      const threadId = ThreadId.make("thread-acp-client-fs-workspace-change");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-client-fs"),
+        modelSelection,
+        runtimePolicy: policyFor(workspaceA),
+      });
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: policyFor(workspaceA),
+      });
+      yield* read;
+      // The session opened for A now runs a turn for B.
+      yield* session
+        .startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy: policyFor(workspaceB),
+            now: yield* DateTime.now,
+          }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* session.events.pipe(
+        Stream.filter((event) => event.type === "provider_turn.updated"),
+        Stream.runHead,
+      );
+      yield* read;
+      assert.deepEqual(servedCwds, [null, workspaceA, workspaceB]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("finishes a settled root's carryover subagent from its structured end", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;

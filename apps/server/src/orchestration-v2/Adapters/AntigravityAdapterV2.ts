@@ -64,6 +64,14 @@ export interface AntigravityAdapterV2Options extends Omit<AcpAdapterV2Options, "
 
 /** Reuses V2's request receipts, interruption quarantine and durable thread identity. */
 export function makeAntigravityAdapterV2(options: AntigravityAdapterV2Options) {
+  // The attachments dir lets the agent read uploads that buildAntigravityPrompt
+  // names by path instead of sending natively. It is a leaf directory of
+  // uploads. A session without a workspace gets no workspace root rather than
+  // the server's cwd.
+  const clientFileRoots = (cwd: string | null) =>
+    cwd === null
+      ? [options.serverConfig.attachmentsDir]
+      : [cwd, options.serverConfig.attachmentsDir];
   const flavor: AcpAdapterV2Flavor = {
     driver: ProviderDriverKind.make("antigravity"),
     capabilities: {
@@ -82,6 +90,22 @@ export function makeAntigravityAdapterV2(options: AntigravityAdapterV2Options) {
     permissionQuestionResponse: makeAntigravityUserInputResponse,
     approvalOptions: antigravityApprovalOptions,
     selectPermissionOption: selectAntigravityPermissionOptionId,
+    clientFileSystem: {
+      readTextFile: (request, cwd) =>
+        readAntigravityClientTextFile({
+          fileSystem: options.fileSystem,
+          path: options.path,
+          allowedRoots: clientFileRoots(cwd),
+          request,
+        }),
+      writeTextFile: (request, cwd) =>
+        writeAntigravityClientTextFile({
+          fileSystem: options.fileSystem,
+          path: options.path,
+          allowedRoots: clientFileRoots(cwd),
+          request,
+        }),
+    },
     normalizeToolCall: normalizeAntigravityToolCall,
     preserveBackgroundToolUpdates: true,
     extractBackgroundTaskId: (toolCall) =>
@@ -118,25 +142,6 @@ export function makeAntigravityAdapterV2(options: AntigravityAdapterV2Options) {
               const runtime = yield* options.makeRuntime({ ...input, clientFileSystem: true });
               const subagentBatches = new Set<string>();
               const mcpTools = new Set<string>();
-              // The attachments dir lets the agent read uploads that
-              // buildAntigravityPrompt names by path instead of sending natively.
-              const allowedRoots = [input.cwd, options.serverConfig.attachmentsDir];
-              yield* runtime.handleReadTextFile((request) =>
-                readAntigravityClientTextFile({
-                  fileSystem: options.fileSystem,
-                  path: options.path,
-                  allowedRoots,
-                  request,
-                }),
-              );
-              yield* runtime.handleWriteTextFile((request) =>
-                writeAntigravityClientTextFile({
-                  fileSystem: options.fileSystem,
-                  path: options.path,
-                  allowedRoots,
-                  request,
-                }),
-              );
               const publish = (started: AcpSessionRuntimeStartResult) =>
                 options.onSessionStarted(started, input.cwd);
               return {

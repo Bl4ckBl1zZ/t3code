@@ -228,6 +228,23 @@ export interface AcpAdapterV2Flavor {
     request: EffectAcpSchema.RequestPermissionRequest,
   ) => OrchestrationV2UserInputQuestion | undefined;
   readonly isPermissionQuestion?: (request: EffectAcpSchema.RequestPermissionRequest) => boolean;
+  /**
+   * Serves the agent's `fs/read_text_file` and `fs/write_text_file` requests.
+   * Receives the cwd of the policy active when the request arrives (the turn in
+   * progress, else the latest turn's), which is null when the session has no
+   * workspace. The flavor's runtime must advertise the fs capability itself.
+   * Antigravity confines them to its workspace.
+   */
+  readonly clientFileSystem?: {
+    readonly readTextFile: (
+      request: EffectAcpSchema.ReadTextFileRequest,
+      cwd: string | null,
+    ) => Effect.Effect<EffectAcpSchema.ReadTextFileResponse, EffectAcpErrors.AcpError>;
+    readonly writeTextFile: (
+      request: EffectAcpSchema.WriteTextFileRequest,
+      cwd: string | null,
+    ) => Effect.Effect<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError>;
+  };
   readonly permissionQuestionResponse?: (
     request: EffectAcpSchema.RequestPermissionRequest,
     answers: ProviderUserInputAnswers,
@@ -1931,6 +1948,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         });
         let runtimeScope: Scope.Closeable | undefined;
         let runtime!: AcpSessionRuntime.AcpSessionRuntime["Service"];
+        // Policy of the latest turn, so client requests from post-settle
+        // background work stay under the policy that work started with.
+        let latestRuntimePolicy = input.runtimePolicy;
         yield* Effect.addFinalizer(() =>
           runtimeScope === undefined
             ? Effect.void
@@ -4404,6 +4424,25 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               return response;
             }),
           );
+          const clientFileSystem = flavor.clientFileSystem;
+          if (clientFileSystem !== undefined) {
+            // Confine requests to the workspace of the policy active when they
+            // arrive, not the one the session opened with.
+            const clientFileCwd = Effect.map(
+              Ref.get(activeTurn),
+              (context) => (context?.input.runtimePolicy ?? latestRuntimePolicy).cwd ?? null,
+            );
+            yield* runtime.handleReadTextFile((request) =>
+              clientFileCwd.pipe(
+                Effect.flatMap((cwd) => clientFileSystem.readTextFile(request, cwd)),
+              ),
+            );
+            yield* runtime.handleWriteTextFile((request) =>
+              clientFileCwd.pipe(
+                Effect.flatMap((cwd) => clientFileSystem.writeTextFile(request, cwd)),
+              ),
+            );
+          }
           if (flavor.registerExtensions !== undefined) {
             yield* flavor.registerExtensions({
               runtime,
@@ -5064,6 +5103,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
             }
             yield* Ref.set(activeTurn, context);
+            latestRuntimePolicy = turnInput.runtimePolicy;
             // Direct Stop closes and recreates the old runtime before reaching
             // this reset. The quarantine remains session-scoped by design.
             yield* Ref.set(stoppedRunQuarantine, false);

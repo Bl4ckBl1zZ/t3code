@@ -62,4 +62,47 @@ it.layer(NodeServices.layer)("Antigravity client files", (it) => {
         assert.isFalse(yield* fileSystem.exists(path.join(outside, "new")));
       }),
   );
+  it.effect.skipIf(!symlinksSupported)(
+    "rejects writes through a dangling symlink to a path outside the workspace",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const temp = yield* fileSystem.makeTempDirectoryScoped();
+        const root = path.join(temp, "workspace");
+        const outside = path.join(temp, "outside");
+        yield* fileSystem.makeDirectory(root);
+        yield* fileSystem.makeDirectory(outside);
+        const plantedFile = path.join(outside, "created-through-link.txt");
+        yield* fileSystem.symlink(plantedFile, path.join(root, "dangling.txt"));
+        const plantedDir = path.join(outside, "created-dir");
+        yield* fileSystem.symlink(plantedDir, path.join(root, "dangling-dir"));
+        const input = { fileSystem, path, allowedRoots: [root] };
+        const leafWrite = yield* writeAntigravityClientTextFile({
+          ...input,
+          request: { sessionId: "test", path: path.join(root, "dangling.txt"), content: "x" },
+        }).pipe(Effect.exit);
+        const nestedWrite = yield* writeAntigravityClientTextFile({
+          ...input,
+          request: {
+            sessionId: "test",
+            path: path.join(root, "dangling-dir", "new.txt"),
+            content: "x",
+          },
+        }).pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(leafWrite));
+        assert.isTrue(Exit.isFailure(nestedWrite));
+        assert.isFalse(yield* fileSystem.exists(plantedFile));
+        assert.isFalse(yield* fileSystem.exists(plantedDir));
+        // A link that stays inside the workspace keeps working.
+        const insideFile = path.join(root, "inside.txt");
+        yield* fileSystem.writeFileString(insideFile, "inside");
+        yield* fileSystem.symlink(insideFile, path.join(root, "inside-link.txt"));
+        const viaLink = yield* readAntigravityClientTextFile({
+          ...input,
+          request: { sessionId: "test", path: path.join(root, "inside-link.txt") },
+        });
+        assert.deepEqual(viaLink, { content: "inside" });
+      }),
+  );
 });
