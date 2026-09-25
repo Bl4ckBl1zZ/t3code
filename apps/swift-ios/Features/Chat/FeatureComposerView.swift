@@ -464,12 +464,15 @@ struct FeatureComposerView: View {
                 editor
             }
         }
+        // Clipped before the glass, not after: iOS 26 hosts glass content in
+        // its own layer, and an outer clip there misses UIKit content — the
+        // live camera and the photo picker kept square corners past the card.
+        .clipShape(composerShape)
         // Liquid Glass rather than a solid fill: the transcript scrolls behind
         // the pill and refracts through it. Real glass has its own edge, so
         // the palette rim only draws on the pre-26 material.
         .t3GlassEffect(.regular, in: composerShape)
         .t3GlassRim(in: composerShape, color: T3Colors.inputBorder)
-        .clipShape(composerShape)
         .overlay {
             if isFileDropTargeted {
                 composerShape

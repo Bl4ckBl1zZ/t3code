@@ -157,9 +157,13 @@ struct ComposerCameraWindow: View {
             Color.black
 
             if let capturedImage {
+                // Pinned to the window's frame: a fill image otherwise sizes
+                // the window to the photo's aspect and pushes past the card.
                 Image(uiImage: capturedImage)
                     .resizable()
                     .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                     .transition(.opacity)
             } else if authorization == .denied || authorization == .restricted {
                 ContentUnavailableView {
