@@ -181,6 +181,23 @@ describe("buildThreadSettingsMenu", () => {
     ).toEqual({ type: "set-runtime", mode: "full-access" });
   });
 
+  it("offers only the runtime modes the provider supports", () => {
+    const menu = buildThreadSettingsMenu({
+      ...baseInput(),
+      runtimeMode: "auto-accept-edits",
+      supportedRuntimeModes: ["approval-required", "auto", "full-access"],
+    });
+    const runtime = menu.actions.find((action) => action.title === "Runtime");
+    expect(runtime?.subactions?.map((action) => action.title)).toEqual([
+      "Approve actions",
+      "Auto",
+      "Full access",
+    ]);
+    // A stored mode the provider does not offer runs, and reads, as the first.
+    expect(runtime?.subtitle).toBe("Approve actions");
+    expect(runtime?.subactions?.[0]?.state).toBe("on");
+  });
+
   it("toggles boolean options with the inverted current value", () => {
     const menu = buildThreadSettingsMenu(baseInput());
 

@@ -741,6 +741,7 @@ export function NewTaskDraftScreen(props: {
     runtimeMode: flow.runtimeMode,
     interactionMode: flow.interactionMode,
     isHermes: isWorkConversation,
+    supportedRuntimeModes: flow.selectedModelOption?.supportedRuntimeModes,
   });
   const workspaceLabel = useMemo(
     () =>

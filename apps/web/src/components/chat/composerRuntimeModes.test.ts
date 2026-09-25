@@ -18,6 +18,18 @@ describe("resolveRuntimeModePicker", () => {
     expect(picker.selected.label).toBe("Full access");
   });
 
+  it("offers only the modes a provider supports, showing an unsupported one as Supervised", () => {
+    const grok = ProviderDriverKind.make("grok");
+    const supported = ["approval-required", "auto", "full-access"] as const;
+    const picker = resolveRuntimeModePicker(grok, "full-access", supported);
+    expect(picker.options.map((option) => option.mode)).toEqual(supported);
+    expect(picker.selected.mode).toBe("full-access");
+    // A thread stored as Auto-accept edits runs Supervised on this provider.
+    const carried = resolveRuntimeModePicker(grok, "auto-accept-edits", supported);
+    expect(carried.selected.mode).toBe("approval-required");
+    expect(carried.options).toContain(carried.selected);
+  });
+
   it("offers Hermes the two modes it distinguishes, with its own copy", () => {
     const picker = resolveRuntimeModePicker(hermes, "full-access");
     expect(picker.options.map((option) => option.mode)).toEqual([

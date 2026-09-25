@@ -734,6 +734,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     runtimeMode: currentRuntimeMode,
     interactionMode: currentInteractionMode,
     isHermes: isHermesConversation,
+    supportedRuntimeModes: currentModelOption?.supportedRuntimeModes,
   });
 
   // iOS gets a native menu on the trigger pill: the everyday adjustments
@@ -747,9 +748,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             selectedModel: currentModelSelection,
             optionDescriptors: providerOptionDescriptors,
             runtimeMode: currentRuntimeMode,
+            supportedRuntimeModes: currentModelOption?.supportedRuntimeModes,
           })
         : null,
-    [threadProviderGroups, currentModelSelection, providerOptionDescriptors, currentRuntimeMode],
+    [
+      threadProviderGroups,
+      currentModelSelection,
+      providerOptionDescriptors,
+      currentRuntimeMode,
+      currentModelOption?.supportedRuntimeModes,
+    ],
   );
 
   const onUpdateModelSelection = props.onUpdateModelSelection;

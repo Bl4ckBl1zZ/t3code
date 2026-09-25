@@ -1171,9 +1171,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }),
     [isProjectlessConversation, providerStatuses, selectedProvider],
   );
+  const supportedRuntimeModes = selectedProviderEntry?.snapshot.supportedRuntimeModes;
   const runtimeModePicker = useMemo(
-    () => resolveRuntimeModePicker(selectedProvider, runtimeMode),
-    [runtimeMode, selectedProvider],
+    () => resolveRuntimeModePicker(selectedProvider, runtimeMode, supportedRuntimeModes),
+    [runtimeMode, selectedProvider, supportedRuntimeModes],
   );
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
