@@ -11,7 +11,6 @@ public struct SettingsVoiceInputView: View {
 
     @State private var status: OpenRouterIntegrationStatus?
     @State private var settings: VoiceInputSettings?
-    @State private var audioModels: [OpenRouterModelOption] = []
     @State private var isLoaded = false
     @State private var loadError: String?
     @State private var saveError: String?
@@ -45,26 +44,20 @@ public struct SettingsVoiceInputView: View {
         .refreshable { await reload() }
     }
 
+    /// OpenRouter is connected from T3 Code on the computer; pasting an API key
+    /// on a phone is not worth a screen.
     private var integrationSection: some View {
         Section {
-            NavigationLink {
-                SettingsOpenRouterView(manager: manager) { latest in
-                    status = latest
-                    Task { await reload() }
-                }
+            LabeledContent {
+                Text(VoiceIntegrationLabels.connection(status, isLoaded: isLoaded))
             } label: {
-                LabeledContent {
-                    Text(isConnected ? "Connected" : "Not Connected")
-                        .redacted(reason: isLoaded ? [] : .placeholder)
-                } label: {
-                    SettingsTileLabel(title: "OpenRouter", systemImage: "waveform", tint: .indigo)
-                }
+                SettingsTileLabel(title: "OpenRouter", systemImage: "waveform", tint: .indigo)
             }
         } footer: {
             if let loadError {
                 Text(loadError).foregroundStyle(T3Colors.danger)
             } else if isLoaded, !isConnected {
-                Text("Connect OpenRouter to enable these controls. Saved preferences are preserved.")
+                Text("Connect OpenRouter in T3 Code on your computer, under Settings → Integrations, to enable these controls. Saved preferences are preserved.")
             }
         }
     }
@@ -77,13 +70,6 @@ public struct SettingsVoiceInputView: View {
                     Task { await patch(.init(cleanupEnabled: enabled)) { $0.cleanupEnabled = enabled } }
                 }
             ))
-            NavigationLink {
-                SettingsVoiceModelPickerView(manager: manager) {
-                    Task { await reload() }
-                }
-            } label: {
-                LabeledContent("Model", value: selectedModelName)
-            }
             NavigationLink {
                 VoiceLanguageList(selection: settings?.language) { code in
                     let language: VoiceInputSettingsPatch.Language
@@ -133,13 +119,6 @@ public struct SettingsVoiceInputView: View {
         .disabled(!isConnected)
     }
 
-    private var selectedModelName: String {
-        VoiceModelCatalog.displayName(
-            for: settings?.model ?? VoiceInputSettings.defaultModel,
-            in: audioModels
-        )
-    }
-
     private func addWord() {
         let word = String(newWord.trimmingCharacters(in: .whitespacesAndNewlines)
             .prefix(VoiceInputSettings.maximumDictionaryEntryLength))
@@ -159,13 +138,6 @@ public struct SettingsVoiceInputView: View {
             self.status = status
             self.settings = settings
             isLoaded = true
-            guard status.isConnected else {
-                audioModels = []
-                return
-            }
-            // A catalog failure only costs the model row its friendly name, so
-            // it must not take the whole screen down with it.
-            audioModels = (try? await manager.listOpenRouterAudioModels()) ?? []
         } catch {
             isLoaded = true
             loadError = error.localizedDescription

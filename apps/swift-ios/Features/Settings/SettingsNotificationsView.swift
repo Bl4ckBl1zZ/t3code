@@ -38,6 +38,17 @@ struct SettingsNotificationsView: View {
             }
 
             Section {
+                Toggle("Needs Your Input", isOn: $settings.notifyOnAttention)
+                Toggle("Finished", isOn: $settings.notifyOnCompletion)
+                Toggle("Failed", isOn: $settings.notifyOnFailure)
+            } header: {
+                Text("Notify When a Task")
+            } footer: {
+                Text("Needs Your Input covers approvals and questions from the agent.")
+            }
+            .disabled(!settings.notificationsEnabled || isDeniedByIOS)
+
+            Section {
                 Toggle("Live Activities", isOn: $settings.liveActivitiesEnabled)
             } footer: {
                 Text("Shows running work on the Lock Screen and in the Dynamic Island.")

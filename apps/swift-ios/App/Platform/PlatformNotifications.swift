@@ -190,28 +190,37 @@ final class PlatformNotificationService: NSObject, UNUserNotificationCenterDeleg
         tokenSink.registrationFailed(error)
     }
 
+    // The completion-handler forms, finished on the main thread. The `async`
+    // forms return on a background executor when `nonisolated`, and UIKit
+    // asserts when a tap's completion handler runs off the main thread, which
+    // crashed the app on every notification tap.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
-        guard let route = PlatformNotificationPayload.route(
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let route = PlatformNotificationPayload.route(
             from: response.notification.request.content.userInfo
-        ) else { return }
-        PlatformRouteMailbox.shared.put(route)
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .platformRouteReceived,
-                object: nil,
-                userInfo: ["route": route]
-            )
+        )
+        Task { @MainActor in
+            if let route {
+                // The mailbox carries the route; the post only wakes a running
+                // root. A cold launch finds it in the mailbox once loaded.
+                PlatformRouteMailbox.shared.put(route)
+                NotificationCenter.default.post(name: .platformRouteReceived, object: nil)
+            }
+            completionHandler()
         }
     }
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        await MainActor.run { enabled ? [.banner, .sound] : [] }
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        Task { @MainActor in
+            completionHandler(enabled ? [.banner, .sound] : [])
+        }
     }
 
     private func notificationTitle(for kind: PlatformFeedbackKind) -> String {

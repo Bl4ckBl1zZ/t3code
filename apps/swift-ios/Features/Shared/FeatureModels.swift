@@ -1203,6 +1203,12 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     public var hapticsEnabled: Bool
     public var notificationsEnabled: Bool
     public var liveActivitiesEnabled: Bool
+    /// Which turn outcomes alert while `notificationsEnabled` is on: an agent
+    /// waiting on an approval or an answer, a finished turn, a failed one. The
+    /// relay honors the same choices for pushes.
+    public var notifyOnAttention: Bool
+    public var notifyOnCompletion: Bool
+    public var notifyOnFailure: Bool
     /// Web's "Activity detail": a settled turn keeps its tool calls and
     /// reasoning steps expanded instead of folding them away. Off by default so
     /// the transcript stays scannable unless the reader asks for the detail.
@@ -1228,6 +1234,9 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         hapticsEnabled: Bool = true,
         notificationsEnabled: Bool = true,
         liveActivitiesEnabled: Bool = true,
+        notifyOnAttention: Bool = true,
+        notifyOnCompletion: Bool = true,
+        notifyOnFailure: Bool = true,
         alwaysExpandActivity: Bool = false,
         showSkillsInSlashMenu: Bool = true,
         confirmThreadUnpin: Bool = false,
@@ -1240,6 +1249,9 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         self.hapticsEnabled = hapticsEnabled
         self.notificationsEnabled = notificationsEnabled
         self.liveActivitiesEnabled = liveActivitiesEnabled
+        self.notifyOnAttention = notifyOnAttention
+        self.notifyOnCompletion = notifyOnCompletion
+        self.notifyOnFailure = notifyOnFailure
         self.alwaysExpandActivity = alwaysExpandActivity
         self.showSkillsInSlashMenu = showSkillsInSlashMenu
         self.confirmThreadUnpin = confirmThreadUnpin
@@ -1254,6 +1266,9 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         case hapticsEnabled
         case notificationsEnabled
         case liveActivitiesEnabled
+        case notifyOnAttention
+        case notifyOnCompletion
+        case notifyOnFailure
         case alwaysExpandActivity
         case showSkillsInSlashMenu
         case confirmThreadUnpin
@@ -1281,6 +1296,9 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
             Bool.self,
             forKey: .liveActivitiesEnabled
         ) ?? true
+        notifyOnAttention = try container.decodeIfPresent(Bool.self, forKey: .notifyOnAttention) ?? true
+        notifyOnCompletion = try container.decodeIfPresent(Bool.self, forKey: .notifyOnCompletion) ?? true
+        notifyOnFailure = try container.decodeIfPresent(Bool.self, forKey: .notifyOnFailure) ?? true
         alwaysExpandActivity = try container.decodeIfPresent(
             Bool.self,
             forKey: .alwaysExpandActivity
@@ -1316,6 +1334,9 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         try container.encode(hapticsEnabled, forKey: .hapticsEnabled)
         try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
         try container.encode(liveActivitiesEnabled, forKey: .liveActivitiesEnabled)
+        try container.encode(notifyOnAttention, forKey: .notifyOnAttention)
+        try container.encode(notifyOnCompletion, forKey: .notifyOnCompletion)
+        try container.encode(notifyOnFailure, forKey: .notifyOnFailure)
         try container.encode(alwaysExpandActivity, forKey: .alwaysExpandActivity)
         try container.encode(showSkillsInSlashMenu, forKey: .showSkillsInSlashMenu)
         try container.encode(confirmThreadUnpin, forKey: .confirmThreadUnpin)

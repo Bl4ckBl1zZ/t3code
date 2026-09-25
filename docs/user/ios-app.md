@@ -64,14 +64,20 @@ sheets use the system glass material.
 
 ## Settings
 
-- **Layout.** Settings is a single screen with search. The server you are connected to appears at
-  the top.
+- **Layout.** Settings is a single short screen: the server you are connected to, your default
+  model, and this device's appearance, chat, notification, voice and haptics preferences. Agent
+  accounts, projects, integrations and other server settings are in T3 Code on your computer.
+- **Agents.** **Install or Sign In** names an agent that needs installing or signing in again and
+  opens its setup.
 - **Saving.** Changes save as you make them, with no Save button. If a change can't be saved, the
   setting goes back to its previous value and the reason appears under its section.
 - **Servers.** **Settings → Servers** switches, adds, removes and disconnects servers. Removing or
   disconnecting asks first.
-- **Choosing a server.** Pages that belong to one server, such as **Agents**, **Project Defaults**
-  and **Shared Preferences**, choose it from their title.
+- **Notifications.** **Settings → Notifications** chooses which events alert you: a task that needs
+  your input, finishes, or fails. Tapping a notification opens its thread, waiting for it to load if
+  it was started elsewhere.
+- **Automations and Work.** **Automations**, and **Work Settings** on the Work tab, are in Home's
+  **More** menu.
 
 ## Feedback
 

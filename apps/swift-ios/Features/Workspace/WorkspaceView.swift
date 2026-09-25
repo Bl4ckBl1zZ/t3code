@@ -63,11 +63,12 @@ public struct WorkspaceView: View {
     @State private var showingAddProject = false
     @State private var editingProjectIcon: FeatureProject?
     @State private var showingSettings = false
-    /// Connection problems open Settings on Servers rather than its root.
-    /// The page Settings opens on: Servers from the connection banner, Usage from ⌘U.
+    /// The page Settings opens on: Servers from the connection banner, Usage Limits from ⌘U.
     @State private var settingsInitialRoute: SettingsRoute?
     @State private var showingHermesSetup = false
     @State private var showingPullRequests = false
+    @State private var showingAutomations = false
+    @State private var showingWorkSettings = false
     @State private var showingArrangement = false
     @State private var renamingThread: FeatureThread?
     @State private var renameTitle = ""
@@ -519,6 +520,14 @@ public struct WorkspaceView: View {
                 }
             }
             Section {
+                if model.client is any FeatureScheduledTaskManaging {
+                    Button("Automations", systemImage: "calendar.badge.clock") { showingAutomations = true }
+                }
+                if tab == .work, model.client is any FeatureWorkManaging {
+                    Button("Work Settings", systemImage: "briefcase") { showingWorkSettings = true }
+                }
+            }
+            Section {
                 Button("Add Project…", systemImage: "folder.badge.plus") { showingAddProject = true }
                     .accessibilityIdentifier("sidebar-add-project-button")
             }
@@ -853,6 +862,20 @@ public struct WorkspaceView: View {
                 }
             }
             .sheet(isPresented: $showingHermesSetup) { WorkSetupSheet(model: model) }
+            .sheet(isPresented: $showingAutomations) {
+                if let manager = model.client as? any FeatureScheduledTaskManaging {
+                    NavigationStack {
+                        SettingsAutomationsView(model: model, manager: manager)
+                            .t3SheetToolbar(.close)
+                    }
+                }
+            }
+            .sheet(isPresented: $showingWorkSettings) {
+                NavigationStack {
+                    WorkManagementView(model: model)
+                        .t3SheetToolbar(.close)
+                }
+            }
             .sheet(item: $customSnoozeTargets) { targets in
                 CustomSnoozeSheet(threadCount: targets.threadIDs.count) { until in
                     if targets.isBatch {

@@ -167,7 +167,6 @@ struct AgentSetupView: View {
 
     private func agentSection(_ environment: FeatureEnvironment) -> some View {
         let loaded = providers[environment.id].map { $0.filter(\.isSetupAgent) }
-        let settings = model.client as? any FeatureServerSettingsManaging
         return Section {
             if let error = providerErrors[environment.id] {
                 AgentSetupErrorRow(message: error) {
@@ -183,24 +182,13 @@ struct AgentSetupView: View {
                     AgentSetupPlaceholderRow()
                 }
             }
-            if let settings {
-                NavigationLink {
-                    SettingsAgentsView(serverSettings: settings, environmentID: environment.id, preferences: nil, environments: [environment])
-                } label: {
-                    Label {
-                        Text("Configure Agents").foregroundStyle(T3Colors.textPrimary)
-                    } icon: {
-                        T3SettingsTile("slider.horizontal.3", tint: .gray)
-                    }
-                }
-            }
         } header: {
             Label(environment.name, systemImage: environment.machineSymbol)
         } footer: {
             if loaded?.isEmpty == true {
                 Text("No Codex or Claude Code on this computer.")
-            } else if settings == nil {
-                Text("Agent settings can’t be changed from this client.")
+            } else {
+                Text("Other agents and account settings are in T3 Code on your computer.")
             }
         }
         .t3GroupedRow()

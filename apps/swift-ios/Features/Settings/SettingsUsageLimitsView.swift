@@ -1,19 +1,24 @@
 import SwiftUI
 
-/// Subscription limits for every provider account on the selected servers:
-/// one section per account with a gauge per window. Shown by Usage when its
-/// Limits segment is selected; Usage owns the server filter and pull-to-refresh.
+/// Subscription limits for every provider account across the saved servers:
+/// one section per account with a gauge per window. The phone's answer to "am I
+/// about to hit my quota?"; cost history and quota hubs live on the computer.
 struct SettingsUsageLimitsView: View {
     @Bindable var model: FeatureRootModel
-    let selectedEnvironmentIDs: Set<String>
-    var refreshTrigger: UUID
+    @State private var refreshTrigger = UUID()
     @State private var accounts: [FeatureLimitAccount] = []
     @State private var notices: [String] = []
     @State private var isLoading = true
     @State private var unsupported = false
 
+    private var selectedEnvironmentIDs: Set<String> { Set(model.snapshot.environments.map(\.id)) }
+
     var body: some View {
-        content.task(id: taskID) { await reload() }
+        content
+            .navigationTitle("Usage Limits")
+            .navigationBarTitleDisplayMode(.inline)
+            .task(id: taskID) { await reload() }
+            .refreshable { refreshTrigger = UUID() }
     }
 
     @ViewBuilder
@@ -29,11 +34,7 @@ struct SettingsUsageLimitsView: View {
             ContentUnavailableView {
                 Label("No Accounts", systemImage: "person.crop.circle.badge.questionmark")
             } description: {
-                Text((["No enabled providers report limits on the selected servers."] + notices).joined(separator: "\n"))
-            } actions: {
-                NavigationLink("Set Up Quota Hubs") {
-                    SettingsQuotaHubsView(model: model).onDisappear { Task { await reload() } }
-                }
+                Text((["No enabled providers report limits on your servers."] + notices).joined(separator: "\n"))
             }
             .background(T3Colors.background)
         } else {
@@ -44,15 +45,9 @@ struct SettingsUsageLimitsView: View {
                 comparisonSections
                 poolSection
                 ForEach(accounts) { account in accountSection(account) }
-                Section {
-                    NavigationLink {
-                        SettingsQuotaHubsView(model: model).onDisappear { Task { await reload() } }
-                    } label: {
-                        Text("Quota Hubs")
-                    }
-                } footer: {
+                Section {} footer: {
                     SettingsFooter(
-                        text: "Known accounts are counted once across the selected servers. Percentages are per account, not additive quota.",
+                        text: "Known accounts are counted once across your servers. Percentages are per account, not additive quota.",
                         error: notices.isEmpty ? nil : notices.joined(separator: "\n")
                     )
                 }

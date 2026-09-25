@@ -43,6 +43,10 @@ final class ThreadAppearanceSettingsTests: XCTestCase {
         XCTAssertTrue(settings.showSkillsInSlashMenu)
         XCTAssertEqual(settings.appearance, .dark)
         XCTAssertFalse(settings.hapticsEnabled)
+        // Every notification event stays on for anyone upgrading.
+        XCTAssertTrue(settings.notifyOnAttention)
+        XCTAssertTrue(settings.notifyOnCompletion)
+        XCTAssertTrue(settings.notifyOnFailure)
     }
 
     func testUnknownKeysFromANewerBuildAreIgnored() throws {

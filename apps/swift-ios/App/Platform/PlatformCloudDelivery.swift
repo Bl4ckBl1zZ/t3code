@@ -77,7 +77,11 @@ enum PlatformCloudDeliveryRegistrationFactory {
             pushToStartToken: pushToStartToken,
             preferences: T3ConnectDevicePreferences(
                 liveActivitiesEnabled: settings.liveActivitiesEnabled,
-                notificationsEnabled: settings.notificationsEnabled
+                notificationsEnabled: settings.notificationsEnabled,
+                notifyOnApproval: settings.notifyOnAttention,
+                notifyOnInput: settings.notifyOnAttention,
+                notifyOnCompletion: settings.notifyOnCompletion,
+                notifyOnFailure: settings.notifyOnFailure
             )
         )
     }
