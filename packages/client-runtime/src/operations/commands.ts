@@ -106,6 +106,11 @@ export interface PinThreadInput extends ThreadCommandInput {
 
 export type UnpinThreadInput = ThreadCommandInput;
 
+export interface SetThreadAutoSettleInput extends ThreadCommandInput {
+  /** False keeps the thread out of automatic settlement until turned back on. */
+  readonly enabled: boolean;
+}
+
 export interface ReorderPinnedThreadInput extends ThreadCommandInput {
   readonly orderKey: string;
 }
@@ -475,6 +480,17 @@ export const unpinThread = Effect.fn("EnvironmentCommands.unpinThread")(function
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     pinned: false,
+  });
+});
+
+export const setThreadAutoSettle = Effect.fn("EnvironmentCommands.setThreadAutoSettle")(function* (
+  input: SetThreadAutoSettleInput,
+) {
+  return yield* dispatch({
+    type: "thread.metadata.update",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    autoSettle: input.enabled,
   });
 });
 

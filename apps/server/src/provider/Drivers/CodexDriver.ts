@@ -68,10 +68,7 @@ import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
-import {
-  CodexResetCreditCoordinator,
-  CODEX_RESET_CREDIT_TIMEOUT,
-} from "../Layers/codexResetCredit.ts";
+import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -95,7 +92,7 @@ function makeCodexMaintenanceResolver(sharedHomePath: string) {
  */
 export type CodexDriverEnv =
   | CodexAdapterV2DriverEnv
-  | CodexResetCreditCoordinator
+  | ResetCreditCoordinator.ResetCreditCoordinator
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
@@ -138,7 +135,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   defaultConfig: (): CodexSettings => decodeCodexSettings({}),
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
-      const resetCreditCoordinator = yield* CodexResetCreditCoordinator;
+      const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
@@ -287,7 +284,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
               return (yield* client.request("account/rateLimitResetCredit/consume", {
                 idempotencyKey,
               })).outcome;
-            }).pipe(Effect.scoped, Effect.timeout(CODEX_RESET_CREDIT_TIMEOUT)),
+            }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
           )
           .pipe(
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -301,6 +298,8 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
                   cause,
                 }),
             ),
+            // Only a reset claims the limits changed, so only a reset warns
+            // when the re-probe cannot confirm new ones.
             Effect.flatMap((outcome) =>
               Effect.gen(function* () {
                 const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
@@ -308,9 +307,10 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
                 const limits = refreshed.usageLimits;
                 return {
                   outcome,
-                  ...(limits?.checkedAt === undefined ||
-                  limits.checkedAt === before ||
-                  limits.unavailable?.reason === "probeFailed"
+                  ...(outcome === "reset" &&
+                  (limits?.checkedAt === undefined ||
+                    limits.checkedAt === before ||
+                    limits.unavailable?.reason === "probeFailed")
                     ? {
                         warning:
                           "Codex reported the redemption outcome, but new limits could not be confirmed. Refresh to check.",

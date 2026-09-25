@@ -1,5 +1,6 @@
 import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
 import { makeLocalFileTracer, makeTraceSink } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -339,6 +340,11 @@ const readPersistedOtlpTracesUrl: Effect.Effect<
 });
 
 const resolveOtlpTracesUrl = Effect.gen(function* () {
+  const otel = yield* OtelEnvironment.load;
+  if (otel.disabled) {
+    return Option.none<string>();
+  }
+
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   if (Option.isSome(environment.otlpTracesUrl)) {
     return environment.otlpTracesUrl;
@@ -603,11 +609,32 @@ const tracerLayer = Layer.unwrap(
 
     return Layer.succeed(Tracer.Tracer, tracer);
   }),
-).pipe(Layer.provide(OtlpExporter.layerFlusher), Layer.provideMerge(OtlpSerialization.layerJson));
+).pipe(
+  Layer.provide(OtlpExporter.layerFlusher),
+  Layer.provideMerge(OtlpSerialization.layerJson),
+  // Effect's OTLP tracer reads OTEL_RESOURCE_ATTRIBUTES itself and dies when it
+  // does not decode, so it sees what the kill-switch read accepted instead.
+  Layer.provide(
+    Layer.unwrap(
+      Effect.map(OtelEnvironment.load, (otel) =>
+        OtelEnvironment.layerResourceAttributes(otel.resourceAttributes),
+      ),
+    ),
+  ),
+);
+
+// Logged once the desktop loggers are installed, so the warnings use them.
+const otelWarningsLayer = Layer.effectDiscard(
+  OtelEnvironment.load.pipe(
+    Effect.flatMap((otel) =>
+      Effect.forEach(otel.warnings, (warning) => Effect.logWarning(warning)),
+    ),
+  ),
+);
 
 export const layer = Layer.mergeAll(
   backendOutputLogFactoryLayer,
-  desktopLoggerLayer,
+  otelWarningsLayer.pipe(Layer.provideMerge(desktopLoggerLayer)),
   tracerLayer,
   Layer.succeed(Tracer.MinimumTraceLevel, "Info"),
   Layer.succeed(References.TracerTimingEnabled, true),

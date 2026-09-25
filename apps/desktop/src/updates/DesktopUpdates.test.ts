@@ -1,12 +1,14 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { DesktopUpdateState } from "@t3tools/contracts";
+import { DESKTOP_UPDATE_RESTART_MARKER_FILE } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
@@ -210,7 +212,23 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
         ? DesktopAppSettings.layerTest(options.initialSettings)
         : DesktopAppSettings.layer;
 
+  // Tracks the restart markers installs leave, so installs stay free of real
+  // disk I/O that would outrun the tests' settle loops.
+  const updateRestartMarkers = new Set<string>();
+  const fileSystemLayer = FileSystem.layerNoop({
+    makeDirectory: () => Effect.void,
+    writeFileString: (path) =>
+      Effect.sync(() => {
+        updateRestartMarkers.add(path);
+      }),
+    remove: (path) =>
+      Effect.sync(() => {
+        updateRestartMarkers.delete(path);
+      }),
+  });
+
   const layer = DesktopUpdates.layer.pipe(
+    Layer.provide(fileSystemLayer),
     Layer.provideMerge(updaterLayer),
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
@@ -232,6 +250,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   return {
     layer,
     checkCount: () => checkCount,
+    updateRestartMarkers,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
@@ -751,6 +770,55 @@ describe("DesktopUpdates", () => {
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
+
+  it.effect("marks the backend stop for an install as an update restart", () => {
+    let markersAtStop: ReadonlyArray<string> = [];
+    const harness = makeHarness({
+      stopBackend: Effect.sync(() => {
+        markersAtStop = [...harness.updateRestartMarkers];
+      }),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+
+        assert.isTrue((yield* updates.install).accepted);
+        assert.deepEqual(markersAtStop, [
+          environment.path.join(environment.baseDir, "runtime", DESKTOP_UPDATE_RESTART_MARKER_FILE),
+        ]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("drops the update restart marker when an install is interrupted", () =>
+    Effect.gen(function* () {
+      const stopping = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        stopBackend: Deferred.succeed(stopping, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* flushCallbacks;
+
+          const installFiber = yield* updates.install.pipe(Effect.forkScoped);
+          yield* Deferred.await(stopping);
+          assert.equal(harness.updateRestartMarkers.size, 1);
+
+          yield* Fiber.interrupt(installFiber);
+          assert.equal(harness.updateRestartMarkers.size, 0);
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    }),
+  );
 
   it.effect("persists channel changes through the settings service", () => {
     const harness = makeHarness();

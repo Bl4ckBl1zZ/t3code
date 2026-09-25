@@ -152,6 +152,11 @@ a stack is not finished until every visible linked request is terminal. A merge 
 your latest engagement does not settle resumed work again. Manually reopen any settled thread to
 bring it back to the active list. Automatic settlement retains its pin and ordering metadata.
 
+On web and desktop, to keep one thread out of **Settled** no matter how long it sits idle, open its
+menu, choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
+**Enabled** to return to the usual rules. Manual settle, snooze, and archive still work while it is
+disabled.
+
 Pull requests created or opened through a thread’s Git actions are automatically linked to that
 thread. They appear in its pull-request collection, including requests targeting an upstream
 repository. Existing manual links keep their labels. Actions from an unsent draft have no saved

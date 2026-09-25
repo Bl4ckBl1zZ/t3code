@@ -1,5 +1,9 @@
 # Review usage
 
+Open **Usage** from the sidebar or the command palette, or press `mod+u` on web and
+desktop when the terminal is not focused. Customize `usage.open` in
+**Settings → Keybindings**.
+
 The Usage page combines Codex, Claude Code, and Grok Build activity from your connected
 environments. It reads the providers' local session history and shows API-equivalent token cost,
 processed tokens, cache savings, provider shares, and model breakdowns. Subscription billing is
@@ -57,13 +61,15 @@ without waiting for the daily update. Closely repeated requests reuse the latest
 price source is unavailable, cached prices still work. On iPhone and iPad, pull to refresh.
 Native history also supports **Past 24h**, environment selection, and the full model breakdown.
 
-## Codex reset credits
+## Reset credits
 
-When Codex reports banked reset credits, Limits shows their count and next expiry. Choose
+When Codex or Claude reports banked reset credits, Limits shows their count and next expiry. Choose
 **Use reset** (or **Use reset credit** on iPhone and iPad), then confirm **Use credit** to redeem
 one. This spends a banked credit and cannot be undone. The action requires permission to operate
 the selected environment. A failed attempt can be retried with the same attempt ID. If redemption
 succeeds but its follow-up report fails, refresh the limits to confirm their current state.
+Claude resets are not available when the server runs on macOS, where Claude keeps its login in the
+Keychain. iPhone and iPad currently show reset credits for Codex accounts only.
 
 ## Quota hubs
 

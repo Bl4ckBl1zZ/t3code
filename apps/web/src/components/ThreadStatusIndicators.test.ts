@@ -3,6 +3,7 @@ import { ProjectId, ProviderInstanceId, ThreadId, type VcsStatusResult } from "@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { AtomRegistry } from "effect/unstable/reactivity";
+import type { AnimationEvent } from "react";
 
 import {
   nextThreadChangeRequestSnapshot,
@@ -10,11 +11,27 @@ import {
   resolveDisplayedThreadPr,
   resolveDisplayedThreadPrProvider,
   resolveThreadPr,
+  synchronizeTerminalPulse,
   settledPrHoverColorClass,
   threadChangeRequestSnapshotsAtom,
   threadChangeRequestSnapshotsEqual,
   type ThreadChangeRequestSnapshot,
 } from "./ThreadStatusIndicators";
+
+describe("synchronizeTerminalPulse", () => {
+  it("pins only the status pulse to the document clock", () => {
+    const pulse = { animationName: "status-pulse", startTime: 975 } as CSSAnimation;
+    const otherCss = { animationName: "other-animation", startTime: 125 } as CSSAnimation;
+    const otherAnimation = { startTime: 250 } as Animation;
+
+    synchronizeTerminalPulse({
+      animationName: "status-pulse",
+      currentTarget: { getAnimations: () => [pulse, otherCss, otherAnimation] },
+    } as AnimationEvent<SVGSVGElement>);
+
+    expect([pulse.startTime, otherCss.startTime, otherAnimation.startTime]).toEqual([0, 125, 250]);
+  });
+});
 
 function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
   return {

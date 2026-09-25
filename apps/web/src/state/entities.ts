@@ -241,6 +241,15 @@ export function readEnvironmentSupportsTitleRegeneration(environmentId: Environm
 
 /** Whether the environment's server understands pinned reordering. Same
     version-skew contract as settlement. */
+/** Whether the environment's server understands autoSettle on
+    thread.metadata.update. Same version-skew contract as settlement. */
+export function readEnvironmentSupportsAutoSettleOptOut(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadAutoSettleOptOut === true
+  );
+}
+
 export function readEnvironmentSupportsPinReorder(environmentId: EnvironmentId): boolean {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities

@@ -27,6 +27,7 @@ import { threadChangeRequestSnapshotsAtom } from "../components/ThreadStatusIndi
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
+  readEnvironmentSupportsAutoSettleOptOut,
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
@@ -94,6 +95,7 @@ export function useHeaderThreadActions(input: {
     unsnoozeThread,
     pinThread,
     confirmAndUnpinThread,
+    setThreadAutoSettle,
     archiveThread,
     deleteThread,
   } = useThreadActions();
@@ -142,6 +144,9 @@ export function useHeaderThreadActions(input: {
           settlement:
             thread.workInboxRole !== "main" &&
             readEnvironmentSupportsSettlement(threadRef.environmentId),
+          autoSettleOptOut:
+            thread.workInboxRole !== "main" &&
+            readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
           snooze:
             thread.workInboxRole !== "main" &&
             readEnvironmentSupportsSnooze(threadRef.environmentId),
@@ -175,6 +180,7 @@ export function useHeaderThreadActions(input: {
               autoSettleOnMerge,
               changeRequest,
             }),
+          autoSettleEnabled: thread.autoSettleDisabledAt == null,
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           canSettleNow: canSettle(thread, { now: now.toISOString() }),
@@ -260,6 +266,12 @@ export function useHeaderThreadActions(input: {
             await reportFailure("Failed to unpin thread", () => confirmAndUnpinThread(threadRef));
             return;
           }
+          case "auto-settle:enabled":
+          case "auto-settle:disabled":
+            await reportFailure("Failed to update auto-settle", () =>
+              setThreadAutoSettle(threadRef, action === "auto-settle:enabled"),
+            );
+            return;
           case "rename":
             onStartRename();
             return;
@@ -370,6 +382,7 @@ export function useHeaderThreadActions(input: {
       projectGroupingSettings,
       projects,
       router,
+      setThreadAutoSettle,
       settleThread,
       snoozeThread,
       threadRef,

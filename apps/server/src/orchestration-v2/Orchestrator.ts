@@ -1848,26 +1848,40 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     : {}),
                 }),
             ...(command.clearTimeline === true ? { timelineClearedAt: now } : {}),
-            // Host refreshes do not create user activity or postpone inactivity settlement.
+            // Only the automatic paths read this; manual settle keeps working.
+            ...(command.autoSettle === undefined
+              ? {}
+              : {
+                  autoSettleDisabledAt: command.autoSettle
+                    ? null
+                    : (thread.autoSettleDisabledAt ?? now),
+                }),
+            // Host refreshes do not create user activity or postpone inactivity
+            // settlement, and re-sending the current auto-settle choice does not churn order.
             updatedAt:
-              (command.syncPullRequest !== undefined ||
+              (command.autoSettle !== undefined &&
+                command.autoSettle === (thread.autoSettleDisabledAt == null) &&
+                Object.keys(command).every((key) =>
+                  ["type", "commandId", "threadId", "autoSettle"].includes(key),
+                )) ||
+              ((command.syncPullRequest !== undefined ||
                 command.branchPullRequest !== undefined ||
                 command.linkPullRequestSource === "stack") &&
-              Object.keys(command).every((key) =>
-                [
-                  "type",
-                  "commandId",
-                  "threadId",
-                  "syncPullRequest",
-                  "branchPullRequest",
-                  "expectedBranch",
-                  "expectedProjectId",
-                  "expectedPullRequestLink",
-                  "linkPullRequest",
-                  "linkPullRequestSource",
-                  "expectedWorktreePath",
-                ].includes(key),
-              )
+                Object.keys(command).every((key) =>
+                  [
+                    "type",
+                    "commandId",
+                    "threadId",
+                    "syncPullRequest",
+                    "branchPullRequest",
+                    "expectedBranch",
+                    "expectedProjectId",
+                    "expectedPullRequestLink",
+                    "linkPullRequest",
+                    "linkPullRequestSource",
+                    "expectedWorktreePath",
+                  ].includes(key),
+                ))
                 ? thread.updatedAt
                 : now,
           };

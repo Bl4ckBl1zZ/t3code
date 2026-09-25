@@ -141,6 +141,29 @@ it("updates Claude live fractions without losing reset times, scoped identities 
   expect(decodeLimits(update)).toEqual(update);
 });
 
+it("keeps Claude banked resets when a live event moves a window", () => {
+  const previous = {
+    checkedAt,
+    windows: [
+      {
+        id: "five_hour",
+        kind: "session" as const,
+        label: "Session",
+        usedPercent: 20,
+        windowDurationMins: 300,
+      },
+    ],
+    resetCredits: { availableCount: 2, nextCreditId: "grant_1" },
+  };
+  const update = applyClaudeRateLimitEvent(
+    previous,
+    { status: "allowed", rateLimitType: "five_hour", utilization: 0.4 },
+    "2026-09-06T01:00:00.000Z",
+  );
+  expect(update?.windows[0]?.usedPercent).toBe(40);
+  expect(update?.resetCredits).toEqual(previous.resetCredits);
+});
+
 it("does not invent unknown model buckets or turn unsupported accounts into quota bars", () => {
   const unavailable = { checkedAt, windows: [], unavailable: { reason: "unsupported" as const } };
   const scoped = {

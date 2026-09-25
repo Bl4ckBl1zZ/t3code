@@ -86,6 +86,33 @@ describe("quota accounts", () => {
     expect(accounts[0]?.resetTarget).toEqual({ environmentId: "newer", instanceId: "work" });
     expect(accounts[0]?.limits?.resetCredits?.availableCount).toBe(2);
   });
+  it("offers banked resets for Claude logins but not for other providers", () => {
+    const accounts = collectLimitAccounts([
+      {
+        id: "local",
+        label: "Local",
+        providers: [
+          provider({
+            instanceId: ProviderInstanceId.make("claude"),
+            driver: ProviderDriverKind.make("claudeAgent"),
+            displayName: "Claude",
+            auth: { email: "claude@example.com" },
+            usageLimits: limits({ resetCredits: { availableCount: 1 } }),
+          }),
+          provider({
+            instanceId: ProviderInstanceId.make("grok"),
+            driver: ProviderDriverKind.make("grok"),
+            displayName: "Grok",
+            auth: { email: "grok@example.com" },
+            usageLimits: limits({ resetCredits: { availableCount: 1 } }),
+          }),
+        ],
+      },
+    ]);
+    const byInstance = new Map(accounts.map((account) => [account.label, account.resetTarget]));
+    expect(byInstance.get("Claude")).toEqual({ environmentId: "local", instanceId: "claude" });
+    expect(byInstance.get("Grok")).toBeUndefined();
+  });
   it("counts a signed-in account once across environments and keeps its newest report", () => {
     const accounts = collectLimitAccounts([
       { id: "mac", label: "Mac", providers: [provider({ auth: { email: " User@Example.com " } })] },

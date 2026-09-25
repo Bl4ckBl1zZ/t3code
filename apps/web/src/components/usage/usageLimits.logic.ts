@@ -44,8 +44,10 @@ export function collectLimitAccounts(
       const newer =
         Date.parse(provider.usageLimits?.checkedAt ?? "") >
         Date.parse(held?.limits?.checkedAt ?? "1970-01-01");
+      // Codex and Claude logins can redeem banked resets through their own instance.
       const resetTarget =
-        provider.driver === "codex" && provider.usageLimits?.resetCredits
+        (provider.driver === "codex" || provider.driver === "claudeAgent") &&
+        provider.usageLimits?.resetCredits
           ? { environmentId: environment.id as EnvironmentId, instanceId: provider.instanceId }
           : undefined;
       const label = provider.displayName || email || String(provider.instanceId);

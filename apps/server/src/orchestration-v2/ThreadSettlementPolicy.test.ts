@@ -150,4 +150,12 @@ describe("V2 automatic settlement policy", () => {
       true,
     );
   });
+  it("never auto-settles a thread the user opted out, whatever the trigger", () => {
+    const optedOut = { autoSettleDisabledAt: before };
+    expect(decide(optedOut)).toBeNull();
+    expect(
+      decide(optedOut, { state: "merged", mergedAt: "2026-09-10T12:00:00Z" }, null),
+    ).toBeNull();
+    expect(decide({ autoSettleDisabledAt: null })).toEqual(before);
+  });
 });
