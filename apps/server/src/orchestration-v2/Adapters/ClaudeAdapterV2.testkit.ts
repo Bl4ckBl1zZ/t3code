@@ -28,6 +28,7 @@ import {
   ClaudeAdapterV2Driver,
   ClaudeAgentSdkQueryRunner,
   ClaudeAgentSdkQueryRunnerError,
+  claudePromptUuid,
   makeClaudeUserMessage,
   makeClaudeQueryOptions,
   type ClaudeAgentSdkSessionForkInput,
@@ -296,6 +297,9 @@ function isClaudeSdkReplayMessage(frame: unknown): frame is SDKMessage {
     type === "result" ||
     type === "system" ||
     type === "rate_limit_event" ||
+    // Undeclared in the SDK types: queued/started/completed for each prompt
+    // that carries a uuid.
+    type === "command_lifecycle" ||
     // The adapter always opens queries with includePartialMessages, so every
     // fresh recording carries stream_event frames that replay has to accept.
     type === "stream_event"
@@ -483,7 +487,7 @@ function makeReplayQueryRunner(transcript: ClaudeAgentSdkReplayTranscript): Clau
           continue;
         }
         advance();
-        yield sdkMessageFromReplayFrame(entry.frame);
+        yield sdkMessageFromReplayFrame(withReplayedPromptUuids(entry.frame));
         continue;
       }
 
@@ -509,6 +513,54 @@ function makeReplayQueryRunner(transcript: ClaudeAgentSdkReplayTranscript): Clau
       }
     }
   }
+
+  // Prompt uuids are derived from ids that differ between the recording and
+  // a replay run, so a matched prompt offer maps the recorded uuid to the
+  // replayed one, and inbound frames echoing it are rewritten to match.
+  const promptUuidReplacements = new Map<string, string>();
+  const replayedPromptUuid = (value: string): string => promptUuidReplacements.get(value) ?? value;
+  const withReplayedPromptUuids = (frame: unknown): unknown => {
+    if (promptUuidReplacements.size === 0 || typeof frame !== "object" || frame === null) {
+      return frame;
+    }
+    const uuid: unknown = Reflect.get(frame, "user_message_uuid");
+    const uuids: unknown = Reflect.get(frame, "user_message_uuids");
+    if (typeof uuid !== "string" && !Array.isArray(uuids)) {
+      return frame;
+    }
+    return {
+      ...frame,
+      ...(typeof uuid === "string" ? { user_message_uuid: replayedPromptUuid(uuid) } : {}),
+      ...(Array.isArray(uuids)
+        ? {
+            user_message_uuids: uuids.map((entry) =>
+              typeof entry === "string" ? replayedPromptUuid(entry) : entry,
+            ),
+          }
+        : {}),
+    };
+  };
+  const promptOfferUuid = (frame: unknown): string | undefined => {
+    if (
+      typeof frame !== "object" ||
+      frame === null ||
+      Reflect.get(frame, "type") !== "prompt.offer"
+    ) {
+      return undefined;
+    }
+    const message: unknown = Reflect.get(frame, "message");
+    const uuid: unknown =
+      typeof message === "object" && message !== null ? Reflect.get(message, "uuid") : undefined;
+    return typeof uuid === "string" ? uuid : undefined;
+  };
+  const withoutPromptOfferUuid = (frame: unknown): unknown => {
+    if (promptOfferUuid(frame) === undefined || typeof frame !== "object" || frame === null) {
+      return frame;
+    }
+    const message = Reflect.get(frame, "message") as Record<string, unknown>;
+    const { uuid: _uuid, ...rest } = message;
+    return { ...frame, message: rest };
+  };
 
   const assertNextOutboundFrame = (actual: ClaudeOutboundFrame) => {
     if (failure !== null) {
@@ -536,7 +588,13 @@ function makeReplayQueryRunner(transcript: ClaudeAgentSdkReplayTranscript): Clau
     }
 
     const expected = entry.frame;
-    if (!sameFrame(expected, actual)) {
+    const expectedUuid = promptOfferUuid(expected);
+    const actualUuid = promptOfferUuid(actual);
+    // Recordings made before prompts carried a uuid simply lack one.
+    if (
+      !sameFrame(withoutPromptOfferUuid(expected), withoutPromptOfferUuid(actual)) ||
+      (expectedUuid !== undefined && actualUuid === undefined)
+    ) {
       fail(
         new ClaudeReplayFrameMismatchError({
           scenario: transcript.scenario,
@@ -546,6 +604,9 @@ function makeReplayQueryRunner(transcript: ClaudeAgentSdkReplayTranscript): Clau
           actual,
         }),
       );
+    }
+    if (expectedUuid !== undefined && actualUuid !== undefined) {
+      promptUuidReplacements.set(expectedUuid, actualUuid);
     }
 
     advance();
@@ -1213,7 +1274,11 @@ async function recordClaudeStreamingQuery(input: {
   const iterator = queryRuntime[Symbol.asyncIterator]();
   try {
     for (const [index, prompt] of input.prompts.entries()) {
-      const message = makeClaudeUserMessage({ text: prompt });
+      // Like the adapter, give each prompt a uuid Claude echoes on its turn.
+      const message = makeClaudeUserMessage({
+        text: prompt,
+        uuid: claudePromptUuid(`${input.sessionId}:prompt:${index + 1}`),
+      });
       input.entries.push({
         type: "expect_outbound",
         label: `prompt.offer:${index + 1}`,

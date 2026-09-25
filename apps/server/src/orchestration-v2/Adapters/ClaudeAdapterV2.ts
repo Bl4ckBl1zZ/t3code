@@ -1,3 +1,5 @@
+import * as NodeCrypto from "node:crypto";
+
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { ClaudeUsageLimitListener } from "../../provider/providerUsageLimits.ts";
 import { ModelManifest } from "../../provider/ModelManifest.ts";
@@ -1106,6 +1108,8 @@ function isSupportedClaudeImageMimeType(
 export function makeClaudeUserMessage(input: {
   readonly text: string;
   readonly priority?: SDKUserMessage["priority"];
+  // Claude echoes it as user_message_uuid on the turn that answers it.
+  readonly uuid?: SDKUserMessage["uuid"];
 }): SDKUserMessage {
   return {
     type: "user",
@@ -1115,6 +1119,7 @@ export function makeClaudeUserMessage(input: {
     },
     parent_tool_use_id: null,
     ...(input.priority === undefined ? {} : { priority: input.priority }),
+    ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
   };
 }
 
@@ -1122,6 +1127,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly priority?: SDKUserMessage["priority"];
+  readonly uuid?: SDKUserMessage["uuid"];
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
 }) {
@@ -1129,6 +1135,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
     return makeClaudeUserMessage({
       text: input.text,
       ...(input.priority === undefined ? {} : { priority: input.priority }),
+      ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
     });
   }
 
@@ -1199,8 +1206,17 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
     },
     parent_tool_use_id: null,
     ...(input.priority === undefined ? {} : { priority: input.priority }),
+    ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
   } satisfies SDKUserMessage;
 });
+
+// Stable per run attempt, so a replayed prompt offer matches its recording.
+// Claude echoes it back as user_message_uuid on the turn that answers it.
+export function claudePromptUuid(attemptId: string): NonNullable<SDKUserMessage["uuid"]> {
+  const hex = NodeCrypto.createHash("sha256").update(`t3-claude-prompt:${attemptId}`).digest("hex");
+  const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
 
 type ClaudeAssistantContentBlock = SDKAssistantMessage["message"]["content"][number];
 type ClaudeToolUseContentBlock = Extract<
@@ -2115,6 +2131,48 @@ function isClaudeProviderContinuationTurn(input: ProviderAdapterV2TurnInput): bo
   return input.message.createdBy === "agent" && input.message.creationSource === "provider";
 }
 
+// Root turn output whose owner (the offered prompt or a queued wake turn)
+// the prompt echo decides. Subagent frames, lifecycle frames, and anything
+// else not produced by the root model turn pass straight through.
+function isClaudePromptEchoGatedFrame(message: SDKMessage): boolean {
+  switch (message.type) {
+    case "assistant":
+    case "stream_event":
+    case "user":
+      return message.parent_tool_use_id === null;
+    case "result":
+      return true;
+    default:
+      return false;
+  }
+}
+
+// The tool_use a non-root frame belongs to: a subagent frame's parent, or a
+// task lifecycle frame's tool_use_id.
+function claudeFrameToolUseIds(message: SDKMessage): ReadonlyArray<string> {
+  const ids: Array<string> = [];
+  const parent = Reflect.get(message, "parent_tool_use_id");
+  if (typeof parent === "string") {
+    ids.push(parent);
+  }
+  if (message.type === "system") {
+    const toolUseId = Reflect.get(message, "tool_use_id");
+    if (typeof toolUseId === "string") {
+      ids.push(toolUseId);
+    }
+  }
+  return ids;
+}
+
+function claudeEchoedPromptUuids(message: SDKMessage): ReadonlyArray<string> {
+  const uuids = Reflect.get(message, "user_message_uuids");
+  if (Array.isArray(uuids)) {
+    return uuids.filter((uuid): uuid is string => typeof uuid === "string");
+  }
+  const uuid = Reflect.get(message, "user_message_uuid");
+  return typeof uuid === "string" ? [uuid] : [];
+}
+
 function isClaudeTaskNotificationOriginResult(message: SDKMessage): message is SDKResultMessage & {
   readonly origin: Extract<
     NonNullable<SDKResultMessage["origin"]>,
@@ -2285,6 +2343,14 @@ interface ActiveClaudeTurnContext {
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
+  // Set on turns that offered a prompt. Claude runs a wake turn it queued
+  // for background work before the next prompt's turn, and only the
+  // prompt's turn echoes this uuid (see handleSdkMessage).
+  readonly promptUuid: string | null;
+  promptEcho: "pending" | "confirmed";
+  // Root frames seen before the echo; held only when the CLI echoes early.
+  gatedFramesBeforeEcho: number;
+  readonly heldRootFrames: Array<SDKMessage>;
 }
 
 interface ActiveClaudeProviderRetry {
@@ -2322,6 +2388,10 @@ interface ClaudeLiveQueryContext {
   readonly queryPolicyKey: string;
   readonly selectionKey: string;
   readonly closed: Deferred.Deferred<void, never>;
+  // Whether this CLI process echoes a prompt's uuid on the first frame of
+  // the turn answering it ("early") or only on its result. Learned from the
+  // first prompt turn, which no queued wake turn can precede in a new process.
+  promptEchoMode: "unknown" | "early" | "result_only";
 }
 
 /**
@@ -4928,7 +4998,7 @@ export function makeClaudeAdapterV2(
           });
         });
 
-        const handleSdkMessage = Effect.fnUntraced(function* (input: {
+        const handleRoutedSdkMessage = Effect.fnUntraced(function* (input: {
           readonly query: ClaudeAgentSdkQuerySession;
           readonly message: SDKMessage;
         }) {
@@ -4944,6 +5014,123 @@ export function makeClaudeAdapterV2(
           for (const message of yield* takeReleasableSubagentFrames(input.message)) {
             yield* handleSdkMessageFrame({ query: input.query, message, replayed: true });
           }
+        });
+
+        // Root tool_use ids among a turn's held frames.
+        const heldToolUseIds = (context: ActiveClaudeTurnContext): ReadonlySet<string> =>
+          new Set(
+            context.heldRootFrames.flatMap((frame) =>
+              parentToolUseIdFromSdkMessage(frame) === null
+                ? claudeToolUseBlocksFromAssistantMessage(frame).map((toolUse) => toolUse.id)
+                : [],
+            ),
+          );
+
+        // Gives held root output to the pending prompt turn.
+        const releaseHeldRootFrames = Effect.fnUntraced(function* (
+          context: ActiveClaudeTurnContext,
+        ) {
+          context.promptEcho = "confirmed";
+          const liveQuery = yield* Ref.get(queryContext);
+          const held = context.heldRootFrames.splice(0);
+          if (liveQuery === null) {
+            return;
+          }
+          for (const message of held) {
+            yield* handleRoutedSdkMessage({ query: liveQuery.query, message });
+          }
+        });
+
+        // A prompt offered while Claude has a wake turn queued (a background
+        // task or subagent finished during the previous turn) is answered
+        // only after that wake turn runs, and the two look alike until each
+        // turn's result. Claude echoes the prompt's uuid on the turn that
+        // answers it. On a CLI that echoes on the turn's first frame, root
+        // output that arrives before the echo is held: the echo releases it
+        // to this turn, and a task-notification-origin result proves it was a
+        // wake turn, which goes to the wake buffer and so to a continuation
+        // run. The echo lands on the turn's first frame, so the prompt's own
+        // turn streams without delay. A CLI that echoes only on the result
+        // (or not at all) is never held, exactly as before this gate.
+        const handleSdkMessage = Effect.fnUntraced(function* (input: {
+          readonly query: ClaudeAgentSdkQuerySession;
+          readonly message: SDKMessage;
+        }) {
+          const message = input.message;
+          const context = yield* Ref.get(activeTurn);
+          const liveQuery = yield* Ref.get(queryContext);
+          if (
+            context === null ||
+            context.promptUuid === null ||
+            context.promptEcho === "confirmed" ||
+            liveQuery?.query !== input.query
+          ) {
+            yield* handleRoutedSdkMessage(input);
+            return;
+          }
+          if (claudeEchoedPromptUuids(message).includes(context.promptUuid)) {
+            if (liveQuery.promptEchoMode === "unknown") {
+              liveQuery.promptEchoMode =
+                message.type !== "result" && context.gatedFramesBeforeEcho === 0
+                  ? "early"
+                  : "result_only";
+            }
+            yield* releaseHeldRootFrames(context);
+            yield* handleRoutedSdkMessage(input);
+            return;
+          }
+          if (!isClaudePromptEchoGatedFrame(message)) {
+            // Frames the held turn produced through its own tool uses (a
+            // subagent it launched, its task lifecycle) follow that turn;
+            // anything else, such as an earlier subagent still streaming,
+            // keeps its own owner.
+            if (
+              context.heldRootFrames.length > 0 &&
+              claudeFrameToolUseIds(message).some((id) => heldToolUseIds(context).has(id))
+            ) {
+              context.heldRootFrames.push(message);
+              return;
+            }
+            yield* handleRoutedSdkMessage(input);
+            return;
+          }
+          context.gatedFramesBeforeEcho += 1;
+          if (liveQuery.promptEchoMode !== "early") {
+            yield* handleRoutedSdkMessage(input);
+            return;
+          }
+          if (message.type !== "result") {
+            context.heldRootFrames.push(message);
+            return;
+          }
+          const held = context.heldRootFrames.splice(0);
+          if (isClaudeTaskNotificationOriginResult(message) && message.num_turns === 0) {
+            // Lifecycle debris, not a turn: the frame handler drops it as it
+            // always has, and any held output stays held for its real owner.
+            context.heldRootFrames.push(...held);
+            yield* handleRoutedSdkMessage(input);
+            return;
+          }
+          if (isClaudeTaskNotificationOriginResult(message)) {
+            // The held turn was a wake turn Claude ran before this prompt's
+            // turn, which still follows on the same stream.
+            yield* Effect.logInfo("orchestration-v2.claude-wake-turn-before-prompt", {
+              providerTurnId: context.providerTurnId,
+              heldFrames: held.length,
+            });
+            for (const frame of [...held, message]) {
+              yield* bufferWakeMessage({
+                nativeThreadId: liveQuery.nativeThreadId,
+                message: frame,
+              });
+            }
+            return;
+          }
+          // A result that neither echoes the prompt nor comes from a wake
+          // (an interrupt, a startup failure) settles the prompt's turn.
+          context.heldRootFrames.unshift(...held);
+          yield* releaseHeldRootFrames(context);
+          yield* handleRoutedSdkMessage(input);
         });
 
         const canUseToolEffect = Effect.fn("ClaudeAdapterV2.canUseTool")(function* (
@@ -4962,7 +5149,13 @@ export function makeClaudeAdapterV2(
 
           const nativeRequestId = callbackOptions.toolUseID;
           const nativeToolInput = claudeNativeToolInputFromRecord(toolInput);
-          if (toolName !== "Agent") {
+          // While root output awaits its prompt echo, the tool's streamed
+          // frames are held and may belong to a queued wake turn, so the
+          // callback must not attach anything to the pending prompt turn:
+          // the held tool_use frame starts the tool (and projects an
+          // ExitPlanMode plan) in whichever run it is released to.
+          const heldForEcho = context.heldRootFrames.length > 0;
+          if (toolName !== "Agent" && !heldForEcho) {
             yield* ensureToolCallStarted({
               context,
               nativeItemId: nativeRequestId,
@@ -4981,6 +5174,24 @@ export function makeClaudeAdapterV2(
               message: CLAUDE_EXIT_PLAN_MODE_DENY_MESSAGE,
               toolUseID: callbackOptions.toolUseID,
             } satisfies PermissionResult;
+          }
+
+          if (heldForEcho) {
+            // The SDK blocks on the answer, and the prompt echo cannot arrive
+            // until the held turn goes on, so the request is raised now and
+            // the held output goes with it to the pending prompt turn, as it
+            // did before this turn was held. ExitPlanMode is answered at once
+            // above, so its frames stay held.
+            yield* releaseHeldRootFrames(context);
+            if (toolName !== "Agent") {
+              yield* ensureToolCallStarted({
+                context,
+                nativeItemId: nativeRequestId,
+                toolName,
+                toolInput: nativeToolInput,
+                parentToolUseId: null,
+              });
+            }
           }
 
           const requestKind = providerRequestKindFromClaudeTool(toolName);
@@ -5133,6 +5344,7 @@ export function makeClaudeAdapterV2(
             queryPolicyKey,
             selectionKey: compiledSelection.queryIdentity,
             closed,
+            promptEchoMode: "unknown",
           };
           yield* Ref.set(queryContext, context);
           yield* querySession.messages.pipe(
@@ -5140,6 +5352,17 @@ export function makeClaudeAdapterV2(
             Effect.exit,
             Effect.flatMap(
               Effect.fnUntraced(function* (exit: ClaudeQueryStreamExit) {
+                // Output held for a prompt echo that never came still
+                // belongs to the turn this stream ended in. A replaced
+                // query's exit must not touch the next query's turn.
+                const heldContext = yield* Ref.get(activeTurn);
+                if (
+                  (yield* Ref.get(queryContext))?.query === querySession &&
+                  heldContext !== null &&
+                  heldContext.heldRootFrames.length > 0
+                ) {
+                  yield* releaseHeldRootFrames(heldContext);
+                }
                 const ownsLiveQuery = yield* Ref.modify(queryContext, (current) =>
                   current?.query === querySession ? [true, null] : [false, current],
                 );
@@ -5244,6 +5467,10 @@ export function makeClaudeAdapterV2(
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),
+              promptUuid: isContinuationTurn ? null : claudePromptUuid(turnInput.attemptId),
+              promptEcho: isContinuationTurn ? "confirmed" : "pending",
+              gatedFramesBeforeEcho: 0,
+              heldRootFrames: [],
             };
             const userMessage = isContinuationTurn
               ? null
@@ -5255,6 +5482,7 @@ export function makeClaudeAdapterV2(
                   attachments: turnInput.message.attachments,
                   attachmentsDir,
                   fileSystem,
+                  uuid: claudePromptUuid(turnInput.attemptId),
                 });
             const querySession = yield* openQuery(turnInput, nativeThreadId, compiledSelection);
             yield* Ref.set(activeTurn, context);
