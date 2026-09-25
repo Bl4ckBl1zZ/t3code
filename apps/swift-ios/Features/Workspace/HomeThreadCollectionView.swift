@@ -51,6 +51,9 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     var onCustomSnooze: (FeatureThread) -> Void = { _ in }
     /// The leading Snooze swipe: the caller offers the presets.
     var onSnoozeRequest: (FeatureThread) -> Void = { _ in }
+    /// The row's Auto-settle behavior choice: true returns the thread to the
+    /// usual settlement rules, false keeps it out of Settled.
+    var onSetAutoSettle: (FeatureThread, Bool) -> Void = { _, _ in }
     /// Message-content matches for the current query, by thread id. Title
     /// matching already happened in `presentation`; these add the excerpt.
     var contentMatches: [String: FeatureThreadSearchMatch] = [:]
@@ -716,6 +719,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 offersParking: parent.workspace != .chat,
                 settlementSupported: thread.canShelveSettled,
                 snoozeSupported: thread.canShelveSnoozed,
+                autoSettleSupported: thread.supportsAutoSettleOptOut == true,
+                autoSettleEnabled: thread.autoSettleDisabledAt == nil,
                 hasWorktreePath: ThreadCopy.value(for: .path, on: thread) != nil,
                 hasBranch: ThreadCopy.value(for: .branch, on: thread) != nil,
                 titleRegenerationSupported: thread.canRegenerateTitle,
@@ -803,6 +808,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 self?.perform(action.id, on: thread)
             }
             if action.disabled { element.attributes.insert(.disabled) }
+            if let checked = action.checked { element.state = checked ? .on : .off }
             return element
         }
 
@@ -833,6 +839,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 parent.onCustomSnooze(thread)
             case ThreadRowMenuActions.unsnoozeActionID:
                 parent.onSnooze(thread, nil)
+            case ThreadRowMenuActions.autoSettleEnabledActionID:
+                parent.onSetAutoSettle(thread, true)
+            case ThreadRowMenuActions.autoSettleDisabledActionID:
+                parent.onSetAutoSettle(thread, false)
             case ThreadRowMenuActions.copyHandoffScriptActionID:
                 parent.onCopyHandoffScript(thread)
             case ThreadRowMenu.regenerateTitleActionID:

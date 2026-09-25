@@ -42,6 +42,7 @@ import {
 } from "./CursorAdapterV2.ts";
 import type { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 const CursorAgentSdkReplayTranscript = Schema.Struct({
   provider: Schema.Literal(CURSOR_PROVIDER),
@@ -565,6 +566,7 @@ function makeReplayServerConfig(
       otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
       otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
       otlpServiceName: "t3-server",
+      otelEnvironment: OtelEnvironment.none,
       mode: "web",
       port: 0,
       host: undefined,

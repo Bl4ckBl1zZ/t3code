@@ -267,6 +267,11 @@ works for a server that was wiped or is no longer reachable. Device-local connec
 controls remain in **Settings** → **Connections** on web and desktop or **Settings** →
 **Environments** on mobile.
 
+When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's tunnel after it stays
+offline for several minutes. The environment stays linked and keeps the same address. When the host
+starts again or wakes, T3 Connect creates a replacement tunnel on its own. You do not need to pair
+again. Cleanup usually runs five to ten minutes after the tunnel goes down.
+
 ## Security Notes
 
 - Treat pairing URLs and pairing tokens like passwords.

@@ -1386,6 +1386,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refresh(client: route.client)
     }
 
+    func setThreadAutoSettle(id: String, enabled: Bool) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(
+            threadID: route.wireID, fields: ["autoSettle": .bool(enabled)]))
+        try? await refresh(client: route.client)
+    }
+
     func setActiveOrder(id: String, key: String?) async throws {
         let route = try threadRoute(for: id)
         _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(
@@ -5094,6 +5101,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             supportsActiveOrder: environment.descriptor?.capabilities.threadActiveOrderV2,
             supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
             serverAutoSettlement: environment.descriptor?.capabilities.threadAutoSettlement,
+            autoSettleDisabledAt: thread.autoSettleDisabledAt.map(parseDate),
+            supportsAutoSettleOptOut: environment.descriptor?.capabilities.threadAutoSettleOptOut,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
@@ -5259,6 +5268,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             supportsActiveOrder: environment.descriptor?.capabilities.threadActiveOrderV2,
             supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
             serverAutoSettlement: environment.descriptor?.capabilities.threadAutoSettlement,
+            autoSettleDisabledAt: thread.autoSettleDisabledAt.map(parseDate),
+            supportsAutoSettleOptOut: environment.descriptor?.capabilities.threadAutoSettleOptOut,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             // The two fields the workspaces sort on: `workInboxRole` is what
             // gives the T3 Work inbox a Main section at all, and

@@ -303,7 +303,7 @@ function ChipBadge(props: { readonly label: string; readonly children: React.Rea
           <span
             role="img"
             aria-label={props.label}
-            className="absolute left-1 top-1 inline-flex items-center justify-center rounded bg-background/85 p-0.5 text-amber-600"
+            className="absolute left-1 top-1 inline-flex items-center justify-center rounded bg-background/85 p-0.5 text-warning-foreground"
           >
             <CircleAlertIcon className="size-3" />
           </span>

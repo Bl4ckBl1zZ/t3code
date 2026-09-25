@@ -217,7 +217,11 @@ export function applyClaudeRateLimitEvent(
     if (kind === "session") windows.unshift(next);
     else windows.push(next);
   }
-  return { checkedAt, windows };
+  return {
+    checkedAt,
+    windows,
+    ...(previous?.resetCredits ? { resetCredits: previous.resetCredits } : {}),
+  };
 }
 
 /** Failed or cached probes cannot erase fresher usage received during a turn. */

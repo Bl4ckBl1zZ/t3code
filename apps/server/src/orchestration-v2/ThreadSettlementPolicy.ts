@@ -21,6 +21,7 @@ export type SettlementThread = Pick<
   | "archivedAt"
   | "deletedAt"
   | "settledOverride"
+  | "autoSettleDisabledAt"
   | "snoozedAt"
   | "snoozedUntil"
   | "pinnedAt"
@@ -44,6 +45,8 @@ const latest = (values: readonly (DateTime.Utc | null | undefined)[]) =>
 export function isAutoSettlementCandidate(thread: SettlementThread, now: DateTime.Utc): boolean {
   if (thread.archivedAt !== null || thread.deletedAt !== null || thread.settledOverride !== null)
     return false;
+  // The user turned automatic settlement off for this thread.
+  if (thread.autoSettleDisabledAt != null) return false;
   if (thread.workInboxRole === "main") return false;
   if (
     thread.activeRunId !== null ||

@@ -220,6 +220,7 @@ import {
   setThreadChangeRequestSnapshot,
   settledPrHoverColorClass,
   terminalStatusFromRunningIds,
+  synchronizeTerminalPulse,
   threadChangeRequestSnapshotsAtom,
   type ThreadChangeRequestSnapshot,
   type TerminalStatusIndicator,
@@ -387,7 +388,7 @@ function JumpHintBadge(props: { label: string }) {
   return (
     <span
       aria-hidden
-      className="pointer-events-none absolute right-1.5 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+      className="pointer-events-none absolute right-1.5 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-3xs font-medium tracking-tight text-foreground shadow-sm"
     >
       {props.label}
     </span>
@@ -535,7 +536,7 @@ function SidebarThreadTooltip({
             </div>
           ) : null}
           {thread.runtime?.lastError ? (
-            <div className="flex min-w-0 items-center gap-2 text-red-600 dark:text-red-400">
+            <div className="flex min-w-0 items-center gap-2 text-destructive-foreground">
               <CircleAlertIcon className="size-3 shrink-0 stroke-current" />
               <div className="min-w-0 truncate">Error occurred</div>
             </div>
@@ -721,19 +722,14 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         data-testid="sidebar-draft-row"
         className={cn(
           "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left text-sidebar-foreground outline-none select-none",
-          props.isActive
-            ? "bg-sidebar-row-active"
-            : "bg-amber-400/[0.04] hover:bg-amber-400/[0.08]",
+          props.isActive ? "bg-sidebar-row-active" : "bg-warning/4 hover:bg-warning/8",
         )}
         onClick={handleActivate}
         onKeyDown={handleKeyDown}
       >
-        <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
+        <div className="relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
-            <SquarePenIcon
-              aria-hidden
-              className="size-3 shrink-0 text-amber-600 dark:text-amber-300/80"
-            />
+            <SquarePenIcon aria-hidden className="size-3 shrink-0 text-warning-foreground" />
             <ProjectFavicon
               environmentId={session.environmentId}
               cwd={props.projectCwd ?? ""}
@@ -998,7 +994,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     <SquarePenIcon
       role="img"
       aria-label="Unsent draft"
-      className="size-3 shrink-0 text-amber-600 dark:text-amber-300/80"
+      className="size-3 shrink-0 text-warning-foreground"
     />
   ) : null;
   const discardDraftButton = hasUnsentDraft ? (
@@ -1052,7 +1048,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         ? {
             label: "Approval",
             icon: "approval" as const,
-            className: "text-amber-700 dark:text-amber-300",
+            className: "text-warning-foreground",
           }
         : status === "input"
           ? {
@@ -1070,7 +1066,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               ? {
                   label: "Woke",
                   icon: "woke" as const,
-                  className: "text-amber-700 dark:text-amber-300",
+                  className: "text-warning-foreground",
                 }
               : isUnread
                 ? {
@@ -1348,14 +1344,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       : isSelected
         ? "bg-sidebar-row-selected text-sidebar-foreground"
         : hasUnsentDraft
-          ? "bg-amber-400/[0.04] text-sidebar-foreground hover:bg-amber-400/[0.08]"
+          ? "bg-warning/4 text-sidebar-foreground hover:bg-warning/8"
           : shouldRecede
             ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
     isInFlight &&
       !props.isActive &&
       !isSelected &&
-      "opacity-70 transition-opacity hover:opacity-100",
+      "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
   );
 
   const title = isRenaming ? (
@@ -1382,7 +1378,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               isUnread || isWoke || status === "input"
                 ? "text-foreground"
                 : hasUnsentDraft
-                  ? "bg-amber-400/[0.04] text-sidebar-foreground hover:bg-amber-400/[0.08]"
+                  ? "bg-warning/4 text-sidebar-foreground hover:bg-warning/8"
                   : shouldRecede
                     ? "text-muted-foreground/80"
                     : status === "failed"
@@ -1397,7 +1393,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   ? "text-muted-foreground"
                   : "text-muted-foreground/70",
             ),
-        isRegeneratingTitle && "opacity-[0.55]",
+        isRegeneratingTitle && "opacity-55",
       )}
     >
       {thread.title}
@@ -1462,7 +1458,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       data-testid={`sidebar-terminal-status-${thread.id}`}
       className={cn("inline-flex shrink-0 items-center justify-center", terminalStatus.colorClass)}
     >
-      <TerminalIcon className={cn("size-3.5", terminalStatus.pulse && "animate-status-pulse")} />
+      <TerminalIcon
+        className={cn("size-3.5", terminalStatus.pulse && "motion-safe:animate-status-pulse")}
+        onAnimationStart={synchronizeTerminalPulse}
+      />
     </span>
   ) : null;
   // A pinned thread now reaches every shelf, so the marker is the row's pin
@@ -1567,7 +1566,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
                   // Snoozed rows show when they come BACK, not when they were
                   // last touched — the return ticket is the row's whole story.
-                  <span className="text-xs text-blue-600 tabular-nums dark:text-blue-400">
+                  <span className="text-xs text-info-foreground tabular-nums">
                     {props.snoozeWakeLabelText}
                   </span>
                 ) : isWoke ? (
@@ -1576,7 +1575,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <span
                     role="status"
                     aria-label="Woke from snooze"
-                    className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-warning-foreground"
                   >
                     <AlarmClockIcon aria-hidden className="size-3" />
                     Woke
@@ -2209,6 +2208,7 @@ export default function Sidebar() {
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
+    setThreadAutoSettle,
     archiveThread,
     deleteThread,
     deleteThreads,
@@ -3754,6 +3754,11 @@ export default function Sidebar() {
         const supportsSnooze =
           !isWorkMain &&
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
+        const supportsAutoSettleOptOut =
+          !isWorkMain &&
+          serverConfigs.get(thread.environmentId)?.environment.capabilities
+            .threadAutoSettleOptOut === true;
+        const autoSettleEnabled = thread.autoSettleDisabledAt == null;
         const supportsTitleRegeneration =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
@@ -3866,6 +3871,26 @@ export default function Sidebar() {
                     },
                   ]
                 : []),
+              // A setting, not a lifecycle verb: a submenu with the current
+              // option checked. Disabled keeps long-running threads out of the
+              // settled shelf no matter how quiet they get.
+              ...(supportsAutoSettleOptOut
+                ? [
+                    {
+                      id: "auto-settle",
+                      label: "Auto-settle behavior",
+                      icon: "timer",
+                      children: [
+                        { id: "auto-settle:enabled", label: "Enabled", checked: autoSettleEnabled },
+                        {
+                          id: "auto-settle:disabled",
+                          label: "Disabled",
+                          checked: !autoSettleEnabled,
+                        },
+                      ],
+                    },
+                  ]
+                : []),
               // One "Copy" entry with a submenu, instead of four sibling rows
               // that each said "Copy ...".
               {
@@ -3954,6 +3979,24 @@ export default function Sidebar() {
           case "unpin":
             toggleThreadPin(threadRef);
             return;
+          case "auto-settle:enabled":
+          case "auto-settle:disabled": {
+            const result = await setThreadAutoSettle(
+              threadRef,
+              clicked.value === "auto-settle:enabled",
+            );
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to update auto-settle",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "rename":
             startThreadRename(threadRef, thread.title);
             return;
@@ -4126,6 +4169,7 @@ export default function Sidebar() {
       projectScopeKey,
       providerDriverKindByInstance,
       serverConfigs,
+      setThreadAutoSettle,
       startThreadRename,
       toggleThreadPin,
       updateThreadMetadata,
@@ -4825,16 +4869,16 @@ export default function Sidebar() {
                               data-testid="sidebar-v2-snoozed-shelf-toggle"
                               className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
                             >
-                              <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                              <span className="text-xs font-medium text-info-foreground">
                                 {snoozedShelfExpanded
                                   ? "Snoozed"
                                   : `Snoozed (${snoozedThreads.length})`}
                               </span>
-                              <span className="h-px flex-1 bg-blue-500/20 dark:bg-blue-400/15" />
+                              <span className="h-px flex-1 bg-info/20" />
                               <ChevronDownIcon
                                 aria-hidden
                                 className={cn(
-                                  "size-3 text-blue-600 transition-transform dark:text-blue-400",
+                                  "size-3 text-info-foreground transition-transform",
                                   snoozedShelfExpanded && "rotate-180",
                                 )}
                               />
@@ -4908,7 +4952,7 @@ export default function Sidebar() {
                   <button
                     type="button"
                     onClick={openAddProjectCommandPalette}
-                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-[11px] font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
                   >
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project

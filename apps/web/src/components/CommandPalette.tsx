@@ -442,6 +442,7 @@ function overlayModeForCommand(command: string | null): SearchOverlayMode | null
 }
 
 export function CommandPalette({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
     open: false,
     mode: "command",
@@ -509,6 +510,13 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         });
         return;
       }
+      if (command === "usage.open") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        void navigate({ to: "/usage" });
+        return;
+      }
       const mode = overlayModeForCommand(command);
       if (mode === null) {
         return;
@@ -519,7 +527,17 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [keybindings, previewOpen, resolvedTheme, terminalOpen, theme, themeHalves, toggleMode]);
+  }, [
+    keybindings,
+    navigate,
+    previewOpen,
+    resolvedTheme,
+    setOpen,
+    terminalOpen,
+    theme,
+    themeHalves,
+    toggleMode,
+  ]);
 
   useEffect(
     () =>
@@ -1765,6 +1783,7 @@ function OpenCommandPaletteDialog(props: {
     searchTerms: ["usage", "use", "tokens", "cost", "spend", "limits", "stats", "analytics"],
     title: "Open usage",
     icon: <ChartNoAxesColumnIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "usage.open",
     run: async () => {
       await navigate({ to: "/usage" });
     },
@@ -2626,7 +2645,6 @@ function OpenCommandPaletteDialog(props: {
         setHighlightedItemValue(typeof value === "string" ? value : null);
       }}
       onValueChange={handleQueryChange}
-      panelClassName="max-h-[min(28rem,70vh)]"
       showBackHint={isSubmenu}
       value={query}
     >

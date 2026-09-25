@@ -210,6 +210,7 @@ interface TimelineRowSharedState {
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
+  onRunShellCommand?: ((command: string) => void) | undefined;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
   threadRef: ScopedThreadRef | null;
@@ -279,6 +280,7 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
+  onRunShellCommand?: ((command: string) => void) | undefined;
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
@@ -337,6 +339,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   citationHistoryLoading = false,
   onCiteAssistantText,
   onUseArtifactTemplate,
+  onRunShellCommand,
   isWorking,
   workingActivityText = null,
   isPreparingWorktree = false,
@@ -644,6 +647,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenWorkspaceFile,
       onCopyWorkspacePath,
       onUseArtifactTemplate,
+      onRunShellCommand,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -672,6 +676,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenWorkspaceFile,
       onCopyWorkspacePath,
       onUseArtifactTemplate,
+      onRunShellCommand,
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
@@ -1664,6 +1669,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         >
           <ChatMarkdown
             onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+            onRunShellCommand={ctx.onRunShellCommand}
             text={messageText}
             cwd={ctx.markdownCwd}
             threadRef={ctx.threadRef ?? undefined}
@@ -3340,7 +3346,7 @@ function buildToolCallExpandedBody(
 }
 
 const toolCallExpandedBodyClassName =
-  "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
+  "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-(length:--font-size-code,var(--text-2xs)) leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   const item = workEntry.projectedItem?.item;

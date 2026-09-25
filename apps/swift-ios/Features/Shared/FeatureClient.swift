@@ -59,6 +59,9 @@ public protocol FeatureClient: AnyObject {
     func setThreadArchived(id: String, archived: Bool) async throws
     func setThreadSettled(id: String, settled: Bool) async throws
     func setThreadSnoozed(id: String, until: Date?) async throws
+    /// False keeps the thread out of automatic settlement; true returns it to
+    /// the environment's usual rules. Manual settle is unaffected.
+    func setThreadAutoSettle(id: String, enabled: Bool) async throws
     func setActiveOrder(id: String, key: String?) async throws
     /// `orderKey` re-pins a thread at the slot it held before, as undo does.
     func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws
@@ -272,6 +275,9 @@ public extension FeatureClient {
     }
     func setThreadSettled(id: String, settled: Bool) async throws {}
     func setThreadSnoozed(id: String, until: Date?) async throws {}
+    func setThreadAutoSettle(id: String, enabled: Bool) async throws {
+        throw FeatureCapabilityUnavailable("Auto-settle behavior")
+    }
     func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws {}
     @discardableResult
     func setThreadLinkedPullRequest(

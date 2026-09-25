@@ -406,6 +406,9 @@ export const OrchestrationV2AppThread = Schema.Struct({
   ),
   workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  // Set while the user has turned automatic settlement off for this thread.
+  // Survives manual settle, un-settle, and activity: only the user clears it.
+  autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
@@ -1893,6 +1896,9 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   ),
   workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  // Set while the user has turned automatic settlement off for this thread.
+  // Survives manual settle, un-settle, and activity: only the user clears it.
+  autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   /**
@@ -1990,6 +1996,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
     ),
   ),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
@@ -2414,6 +2421,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
     ),
   ),
   timelineClearedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -2709,6 +2717,8 @@ export const OrchestrationV2Command = Schema.Union([
     ),
     workInboxRole: Schema.optional(Schema.NullOr(Schema.Literals(["main", "chat"]))),
     clearTimeline: Schema.optional(Schema.Literal(true)),
+    /** False turns automatic settlement off for this thread, true turns it back on. */
+    autoSettle: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.runtime-mode.set"),

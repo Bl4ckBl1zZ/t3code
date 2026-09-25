@@ -39,7 +39,8 @@ export function CodexArtifactTemplateCard(props: {
     <div
       role="group"
       aria-label={`${props.template.displayName} template`}
-      className="chat-markdown-artifact-template my-[0.65rem] flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5 text-foreground shadow-xs"
+      data-chat-markdown-artifact-template
+      className="my-[0.65rem] flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5 text-foreground shadow-xs"
       data-artifact-kind={props.template.artifactKind}
       data-markdown-copy={`${props.template.displayName} (${presentationLabel})\n\n`}
       data-skill-name={props.template.skillName}
@@ -47,7 +48,7 @@ export function CodexArtifactTemplateCard(props: {
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <span className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground shadow-xs">
           <Icon aria-hidden className="size-5" />
-          <span className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full border border-background bg-fuchsia-500 text-white shadow-xs">
+          <span className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full border border-background bg-primary text-primary-foreground shadow-xs">
             <SparklesIcon aria-hidden className="size-2.5" />
           </span>
         </span>

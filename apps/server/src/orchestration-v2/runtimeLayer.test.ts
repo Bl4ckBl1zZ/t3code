@@ -1702,6 +1702,54 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("keeps the auto-settle opt-out stamp until the user turns it back on", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-auto-settle-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-auto-settle-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-auto-settle-project"),
+        title: "Long-running",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const setAutoSettle = (id: string, autoSettle: boolean) =>
+        orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(id),
+          threadId,
+          autoSettle,
+        });
+      const shellOf = Effect.map(orchestrator.getShellSnapshot(), (snapshot) =>
+        snapshot.threads.find((candidate) => candidate.id === threadId),
+      );
+
+      yield* setAutoSettle("runtime-layer-auto-settle-off", false);
+      const off = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNotNull(off.thread.autoSettleDisabledAt ?? null);
+      assert.deepEqual((yield* shellOf)?.autoSettleDisabledAt, off.thread.autoSettleDisabledAt);
+
+      // Re-sending the current choice keeps the original stamp and does not
+      // bump updatedAt, so duplicates never churn ordering.
+      yield* setAutoSettle("runtime-layer-auto-settle-off-again", false);
+      const again = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(again.thread.autoSettleDisabledAt, off.thread.autoSettleDisabledAt);
+      assert.deepEqual(again.thread.updatedAt, off.thread.updatedAt);
+
+      yield* setAutoSettle("runtime-layer-auto-settle-on", true);
+      const on = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(on.thread.autoSettleDisabledAt ?? null);
+      assert.isNull((yield* shellOf)?.autoSettleDisabledAt ?? null);
+    }),
+  );
+
   it.effect("consumes a restart marker atomically and never dispatches it twice", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

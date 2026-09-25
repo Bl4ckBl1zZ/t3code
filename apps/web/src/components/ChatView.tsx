@@ -1135,7 +1135,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         "grid shrink-0 overflow-clip",
         active ? (visible ? "grid-rows-[1fr]" : "grid-rows-[0fr]") : "hidden",
         active &&
-          "[[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+          "[[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
         active && visible && "[[data-panel-animations=true]_&]:starting:grid-rows-[0fr]!",
       )}
     >
@@ -4006,6 +4006,25 @@ function ChatViewContent(props: ChatViewProps) {
       writeTerminal,
     ],
   );
+
+  // A ref keeps the handler stable, so every rendered code block does not
+  // re-render each time the terminal state behind runProjectScript changes.
+  const runProjectScriptRef = useRef(runProjectScript);
+  useLayoutEffect(() => {
+    runProjectScriptRef.current = runProjectScript;
+  }, [runProjectScript]);
+  const runShellCommand = useCallback((command: string) => {
+    void runProjectScriptRef.current(
+      {
+        id: "chat-code-block",
+        name: "Chat code block",
+        command,
+        icon: "play",
+        runOnWorktreeCreate: false,
+      },
+      { rememberAsLastInvoked: false },
+    );
+  }, []);
 
   const persistProjectScripts = useCallback(
     async (input: {
@@ -8280,7 +8299,7 @@ function ChatViewContent(props: ChatViewProps) {
           className={cn(
             "flex shrink-0",
             panelAnimationsActive &&
-              "motion-safe:transition-opacity motion-safe:[transition-duration:var(--panel-animation-duration)] motion-safe:ease-out",
+              "motion-safe:transition-opacity motion-safe:duration-(--panel-animation-duration) motion-safe:ease-out",
             rightPanelOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
           )}
         >
@@ -8427,6 +8446,7 @@ function ChatViewContent(props: ChatViewProps) {
                   ? { onCiteAssistantText: citeAssistantText }
                   : {})}
                 onUseArtifactTemplate={useArtifactTemplate}
+                {...(activeProject ? { onRunShellCommand: runShellCommand } : {})}
                 key={activeThread.id}
                 isWorking={isWorking}
                 workingActivityText={

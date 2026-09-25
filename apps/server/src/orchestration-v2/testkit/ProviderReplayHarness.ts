@@ -62,6 +62,7 @@ import {
   type OrchestratorV2ScenarioResult,
 } from "./OrchestratorScenario.ts";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 export function makeReplayServerConfig(
   scenario: string,
@@ -111,6 +112,7 @@ export function makeReplayServerConfig(
       otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
       otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
       otlpServiceName: "t3-server",
+      otelEnvironment: OtelEnvironment.none,
       mode: "web",
       port: 0,
       host: undefined,

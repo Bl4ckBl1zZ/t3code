@@ -17,6 +17,7 @@ import {
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 const isServerEnvironmentIdPersistenceError = Schema.is(
   ServerEnvironment.ServerEnvironmentIdPersistenceError,
@@ -55,6 +56,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
     otlpServiceName: "t3-server",
+    otelEnvironment: OtelEnvironment.none,
     cwd: process.cwd(),
     baseDir,
     mode: "web",

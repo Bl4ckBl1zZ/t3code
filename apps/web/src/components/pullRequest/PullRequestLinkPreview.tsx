@@ -55,7 +55,7 @@ export function PullRequestLinkPreview({
           </p>
         ) : (
           <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
               <span className="min-w-0 truncate">{detail.repository}</span>
               <span className="shrink-0">#{detail.number}</span>
               <span aria-hidden>·</span>

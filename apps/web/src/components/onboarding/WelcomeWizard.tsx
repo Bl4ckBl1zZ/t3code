@@ -187,7 +187,7 @@ export function WelcomeWizard({
           identity={
             <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
               <T3Wordmark className="h-4 w-auto shrink-0" aria-hidden />
-              <span className="text-[1.4rem] font-medium tracking-tight text-muted-foreground">
+              <span className="text-2xl font-medium tracking-tight text-muted-foreground">
                 Code
               </span>
             </div>
@@ -1271,9 +1271,7 @@ function ImportCandidateRow({
             {label}
           </span>
           {secondary !== undefined ? (
-            <span className="truncate font-mono text-[11px] text-muted-foreground">
-              {secondary}
-            </span>
+            <span className="truncate font-mono text-2xs text-muted-foreground">{secondary}</span>
           ) : null}
         </TooltipTrigger>
         <TooltipPopup variant="code">{candidate.path}</TooltipPopup>

@@ -139,13 +139,23 @@ public enum ThreadLinkedPullRequestInput {
 /// reader acts on is folded into the meta line instead of stacked beneath.
 public enum ThreadLinkedPullRequestPresentation {
     /// "#413 · in stack", "#413 · 2 in stack" on a chain's base, or "#413".
-    public static func identityLine(_ line: FeaturePullRequestLine) -> String {
+    /// `showsRepository` appends the repository, for lists where it tells the
+    /// rows apart (see ``showsRepository(_:)``).
+    public static func identityLine(_ line: FeaturePullRequestLine, showsRepository: Bool = false) -> String {
         var parts = ["#\(line.link.number)"]
         if line.chainSize > 1 {
             let noun = line.isNativeStack ? "in stack" : "in branch chain"
             parts.append(line.depth == 0 ? "\(line.chainSize) \(noun)" : noun)
         }
+        if showsRepository { parts.append(line.link.repository) }
         return parts.joined(separator: " · ")
+    }
+
+    /// Names the repository only when the thread's requests span more than
+    /// one, such as a fork's pull request and its upstream one. With a single
+    /// repository it is the project's and would only repeat on every row.
+    public static func showsRepository(_ links: [FeatureLinkedPullRequest]) -> Bool {
+        Set(links.map { $0.repository.lowercased() }).count > 1
     }
 
     /// Checks, review verdict, conflicts and size, in the order a reader

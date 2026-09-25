@@ -1,9 +1,25 @@
 import { EnvironmentId } from "@t3tools/contracts";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("./ui/tooltip", async () => {
+  const { cloneElement, isValidElement } = await import("react");
+  return {
+    Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+    TooltipTrigger({
+      render,
+      children,
+    }: ComponentProps<typeof import("./ui/tooltip").TooltipTrigger>) {
+      if (!isValidElement(render)) return <>{children}</>;
+      return children === undefined ? render : cloneElement(render, undefined, children);
+    },
+    TooltipPopup: () => null,
+  };
+});
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => ({
@@ -34,6 +50,13 @@ import ChatMarkdown, {
   orderedListGutterStyle,
   shouldUseMarkdownFileBrowserPrimaryAction,
 } from "./ChatMarkdown";
+import { Button } from "./ui/button";
+
+function hasRunButton(renderer: ReactTestRenderer) {
+  return renderer.root
+    .findAllByType(Button)
+    .some((button) => button.props["aria-label"] === "Run in terminal");
+}
 
 describe("canUseMarkdownFileShellActions", () => {
   const environmentId = EnvironmentId.make("environment-1");
@@ -341,5 +364,71 @@ describe("ChatMarkdown Windows file links", () => {
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("d:alert");
     expect(html).not.toContain("chat-markdown-file-link");
+  });
+});
+
+describe("ChatMarkdown shell code blocks", () => {
+  it("runs only a complete single-line shell block after a click", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const onRunShellCommand = vi.fn();
+    let renderer: ReactTestRenderer | undefined;
+    const message = (text: string, isStreaming = false) => (
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={text}
+        isStreaming={isStreaming}
+        onRunShellCommand={onRunShellCommand}
+      />
+    );
+    try {
+      await act(async () => {
+        renderer = create(message("```bash\necho hello\n```", true));
+      });
+      const mounted = renderer!;
+      expect(hasRunButton(mounted)).toBe(false);
+
+      await act(async () => {
+        mounted.update(message("```bash\necho hello\n```"));
+      });
+      const run = mounted.root
+        .findAllByType(Button)
+        .find((button) => button.props["aria-label"] === "Run in terminal");
+      await act(async () => {
+        run?.props.onClick?.({} as never);
+      });
+      expect(onRunShellCommand).toHaveBeenCalledExactlyOnceWith("echo hello");
+
+      for (const text of [
+        "~~~bash\necho tilde\n~~~",
+        "> ```bash\n> echo quote\n> ```",
+        "````bash\necho four\n````",
+      ]) {
+        await act(async () => {
+          mounted.update(message(text));
+        });
+        expect(hasRunButton(mounted)).toBe(true);
+      }
+
+      for (const text of [
+        "```bash\necho one\necho two\n```",
+        "```typescript\necho hello\n```",
+        "```bash\n\n```",
+        "```bash\necho hello\n\n```",
+        "```bash\necho hello\\\n```",
+        "```bash\necho safe \u202e#\n```",
+        "```bash\necho incomplete",
+        "~~~bash\necho incomplete",
+        "````bash\necho incomplete\n```",
+        '<pre><code class="language-bash">echo html</code></pre>',
+      ]) {
+        await act(async () => {
+          mounted.update(message(text));
+        });
+        expect(hasRunButton(mounted)).toBe(false);
+      }
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 });

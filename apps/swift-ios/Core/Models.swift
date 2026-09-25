@@ -44,6 +44,9 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let threadSettlement: Bool?
         public var threadRestartContinuation: Bool? = nil
         public var threadAutoSettlement: Bool? = nil
+        /// Whether `thread.metadata.update` accepts `autoSettle`, turning
+        /// automatic settlement off (or back on) for one thread.
+        public var threadAutoSettleOptOut: Bool? = nil
         public let threadSnooze: Bool?
         public let threadPinning: Bool?
         public let threadActiveOrderV2: Bool?
@@ -81,6 +84,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case connectionProbe
             case threadRestartContinuation
             case threadAutoSettlement
+            case threadAutoSettleOptOut
             case threadSettlement
             case threadSnooze
             case threadPinning, threadActiveOrderV2, threadQuestionActionsV2
@@ -113,6 +117,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             connectionProbe = try container.decodeIfPresent(Bool.self, forKey: .connectionProbe)
             threadRestartContinuation = try container.decodeIfPresent(Bool.self, forKey: .threadRestartContinuation)
             threadAutoSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadAutoSettlement)
+            threadAutoSettleOptOut = try container.decodeIfPresent(Bool.self, forKey: .threadAutoSettleOptOut)
             threadSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadSettlement)
             threadSnooze = try container.decodeIfPresent(Bool.self, forKey: .threadSnooze)
             threadPinning = try container.decodeIfPresent(Bool.self, forKey: .threadPinning)

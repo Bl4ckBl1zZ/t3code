@@ -4,11 +4,11 @@ import Testing
 
 @Suite("Subscription limit pooling")
 struct UsageLimitsMergeTests {
-    private func provider(_ id: String, email: String?, percent: Double, credits: Int = 0, checkedAt: String = "2026-09-06T00:00:00Z") throws -> ServerProviderSnapshot {
+    private func provider(_ id: String, email: String?, percent: Double, credits: Int = 0, checkedAt: String = "2026-09-06T00:00:00Z", driver: String = "codex") throws -> ServerProviderSnapshot {
         var auth: [String: Any] = ["status": "authenticated"]
         if let email { auth["email"] = email }
         return try JSONDecoder().decode(ServerProviderSnapshot.self, from: JSONSerialization.data(withJSONObject: [
-            "instanceId": id, "driver": "codex", "enabled": true, "installed": true,
+            "instanceId": id, "driver": driver, "enabled": true, "installed": true,
             "status": "ready", "auth": auth, "checkedAt": checkedAt, "models": [],
             "usageLimits": ["checkedAt": checkedAt, "resetCredits": ["availableCount": credits], "windows": [["id": "primary", "kind": "session", "label": "Session", "usedPercent": percent, "windowDurationMins": 300]]],
         ]))
@@ -50,6 +50,19 @@ struct UsageLimitsMergeTests {
         #expect(merged.first?.resetTarget?.environmentID == "b")
         #expect(merged.first?.resetTarget?.instanceID == "work")
         #expect(merged.first?.limits?.resetCredits?.availableCount == 2)
+    }
+
+    @Test func claudeAccountsWithBankedCreditsCanRedeemThroughTheirInstance() throws {
+        let merged = FeatureUsageLimitsMerge.merge([
+            .init(id: "mac", label: "Mac", providers: [
+                try provider("claude-work", email: "claude@example.com", percent: 90, credits: 1, driver: "claudeAgent"),
+                try provider("grok", email: "grok@example.com", percent: 10, credits: 1, driver: "grok"),
+            ]),
+        ])
+        let claude = merged.first { $0.driver == "claudeAgent" }
+        #expect(claude?.resetTarget?.environmentID == "mac")
+        #expect(claude?.resetTarget?.instanceID == "claude-work")
+        #expect(merged.first { $0.driver == "grok" }?.resetTarget == nil)
     }
 
     @Test func countsKnownAccountsOnceAndUsesFreshestReport() throws {

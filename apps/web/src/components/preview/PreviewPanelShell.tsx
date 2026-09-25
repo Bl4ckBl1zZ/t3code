@@ -1,6 +1,5 @@
 import { type ReactNode, type RefObject, useRef, useState, useLayoutEffect } from "react";
 
-import { isElectron } from "~/env";
 import {
   getPreviewPanelMaxWidth,
   type PreviewPanelInlineSize,
@@ -63,7 +62,6 @@ function ResizablePreviewPanelShell(props: PreviewPanelShellProps) {
 function PreviewPanelShellFrame(
   props: PreviewPanelShellProps & { inlineSize: PreviewPanelInlineSize },
 ) {
-  const useDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "embedded";
   const isInline = props.mode === "inline";
   const localHostRef = useRef<HTMLDivElement | null>(null);
   const hostRef = props.hostRef ?? localHostRef;
@@ -119,7 +117,7 @@ function PreviewPanelShellFrame(
             : "shrink-0 border-l border-border"
           : "w-full",
         collapsible &&
-          "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
+          "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
         collapsible && open && "[[data-panel-animations=true]_&]:starting:w-0!",
         collapsible && !open && "pointer-events-none",
       )}
@@ -142,7 +140,6 @@ function PreviewPanelShellFrame(
           className="flex h-full min-h-0 min-w-0 flex-col"
           style={collapsible && !maximized ? { width: `calc(${width}px - 1px)` } : undefined}
         >
-          {useDragRegion ? <div className="electron-drag-region h-0 w-full" aria-hidden /> : null}
           {props.children}
         </div>
       </div>

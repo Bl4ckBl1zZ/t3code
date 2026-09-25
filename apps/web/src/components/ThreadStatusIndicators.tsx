@@ -15,7 +15,7 @@ import type {
 } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { FolderGit2Icon, TerminalIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type AnimationEvent } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { useProject } from "../state/entities";
@@ -455,6 +455,17 @@ export function terminalStatusFromRunningIds(
   };
 }
 
+/** Align newly started pulses with the document clock without a timer or frame loop. */
+export function synchronizeTerminalPulse(event: AnimationEvent<SVGSVGElement>) {
+  if (event.animationName !== "status-pulse") return;
+
+  for (const animation of event.currentTarget.getAnimations()) {
+    if ("animationName" in animation && animation.animationName === "status-pulse") {
+      animation.startTime = 0;
+    }
+  }
+}
+
 export function ThreadWorktreeIndicator({
   thread,
 }: {
@@ -524,7 +535,7 @@ export function ThreadStatusLabel({
         render={
           <span
             aria-label={status.tooltip ?? status.label}
-            className={`inline-flex items-center gap-1 text-[10px] ${status.colorClass}`}
+            className={`inline-flex items-center gap-1 text-3xs ${status.colorClass}`}
           />
         }
       >
@@ -655,7 +666,8 @@ export function ThreadRowTrailingStatus({ thread }: { thread: SidebarThreadSumma
             }
           >
             <TerminalIcon
-              className={`size-3 ${terminalStatus.pulse ? "animate-status-pulse" : ""}`}
+              className={`size-3 ${terminalStatus.pulse ? "motion-safe:animate-status-pulse" : ""}`}
+              onAnimationStart={synchronizeTerminalPulse}
             />
           </TooltipTrigger>
           <TooltipPopup side="top">{terminalStatus.label}</TooltipPopup>

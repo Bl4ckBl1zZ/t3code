@@ -41,7 +41,7 @@ describe("preview favicon image", () => {
       <PreviewFaviconIcon threadRef={threadRef} url="http://localhost:3000/" />,
     );
     expect(html).not.toContain("<img");
-    expect(html).toContain("rounded-[5px]");
+    expect(html).toContain("rounded-sm");
     mocks.favicon = "data:image/png;base64,AAAA";
     const faviconHtml = renderToStaticMarkup(
       <PreviewFaviconIcon threadRef={threadRef} url="http://localhost:3000/" />,

@@ -57,6 +57,18 @@ rl.on("line", (line) => {
     });
     return;
   }
+  if (method === "account/read" && script.account) {
+    write({ id, result: { account: script.account, requiresOpenaiAuth: false } });
+    return;
+  }
+  if (method === "account/rateLimits/read" && script.failRateLimitsRead) {
+    write({ id, error: { code: -32000, message: "usage unavailable" } });
+    return;
+  }
+  if (method === "account/rateLimitResetCredit/consume" && script.resetCreditOutcome) {
+    write({ id, result: { outcome: script.resetCreditOutcome } });
+    return;
+  }
   if (method === "thread/start") {
     write({ id, result: fixture.responses.threadStart });
     return;

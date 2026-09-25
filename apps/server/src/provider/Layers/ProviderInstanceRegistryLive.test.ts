@@ -34,9 +34,12 @@ import {
   type ProviderInstanceConfigMap,
   ProviderInstanceId,
 } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
@@ -45,14 +48,14 @@ import { ServerConfig } from "../../config.ts";
 import type { HermesSessionBindingRepository } from "../../hermes/HermesSessionBindingRepository.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { BuiltInDriversEnv } from "../builtInDrivers.ts";
-import { ClaudeDriver } from "../Drivers/ClaudeDriver.ts";
+import { ClaudeDriver, type ClaudeDriverEnv } from "../Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "../Drivers/CodexDriver.ts";
 import { CursorDriver } from "../Drivers/CursorDriver.ts";
 import { GrokDriver } from "../Drivers/GrokDriver.ts";
 import { OpenCodeDriver } from "../Drivers/OpenCodeDriver.ts";
-import * as CodexResetCredit from "./codexResetCredit.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import { OpenCodeRuntimeLive } from "../opencodeRuntime.ts";
+import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "./ProviderEventLoggers.ts";
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistryLive.ts";
 import { ProviderOrchestrationAdapterInfrastructureLive } from "./ProviderOrchestrationAdapterInfrastructure.ts";
@@ -137,6 +140,72 @@ const makeOpenCodeConfig = (overrides: Partial<OpenCodeSettings>): OpenCodeSetti
   ...overrides,
 });
 
+/** A Claude CLI stand-in that answers the capability probe and its usage read. */
+const makeClaudeResetFixture = Effect.fn(
+  "ProviderInstanceRegistryLive.test.makeClaudeResetFixture",
+)(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const fixtureDir = yield* fileSystem.makeTempDirectoryScoped({
+    prefix: "t3-claude-reset-test-",
+  });
+  const claudePath = path.join(fixtureDir, "claude");
+  const claudeHomePath = path.join(fixtureDir, "claude-home");
+  yield* fileSystem.writeFileString(
+    claudePath,
+    [
+      "#!/usr/bin/env node",
+      'import { existsSync } from "node:fs";',
+      'import * as NodeReadline from "node:readline";',
+      'if (process.argv.includes("--version")) {',
+      '  process.stdout.write("claude 2.1.219\\n");',
+      "  process.exit(0);",
+      "}",
+      "const lines = NodeReadline.createInterface({ input: process.stdin });",
+      'lines.on("line", (line) => {',
+      "  const message = JSON.parse(line);",
+      '  if (message.type !== "control_request") return;',
+      '  if (message.request?.subtype === "get_usage") {',
+      "    const marker = process.env.T3_CLAUDE_RESET_MARKER;",
+      "    if (process.env.T3_CLAUDE_USAGE_FAILS_AFTER_CLAIM && marker && existsSync(marker)) {",
+      "      process.stdout.write(JSON.stringify({",
+      '        type: "control_response",',
+      '        response: { subtype: "error", request_id: message.request_id, error: "usage failed" },',
+      '      }) + "\\n");',
+      "      return;",
+      "    }",
+      "    process.stdout.write(JSON.stringify({",
+      '      type: "control_response",',
+      '      response: { subtype: "success", request_id: message.request_id, response: {',
+      '        session: {}, subscription_type: "pro", rate_limits_available: true,',
+      "        rate_limits: { five_hour: { utilization: marker && existsSync(marker) ? 0 : 100, resets_at: null } },",
+      "      } },",
+      '    }) + "\\n");',
+      "    return;",
+      "  }",
+      '  if (message.request?.subtype !== "initialize") return;',
+      "  process.stdout.write(JSON.stringify({",
+      '    type: "control_response",',
+      "    response: {",
+      '      subtype: "success",',
+      "      request_id: message.request_id,",
+      "      response: {",
+      "        commands: [], agents: [], models: [],",
+      '        output_style: "default", available_output_styles: ["default"],',
+      '        account: { email: "test@example.com", subscriptionType: "pro", tokenSource: "oauth" },',
+      "      },",
+      "    },",
+      '  }) + "\\n");',
+      "});",
+      "setInterval(() => {}, 1_000);",
+      "",
+    ].join("\n"),
+  );
+  yield* fileSystem.chmod(claudePath, 0o755);
+  yield* fileSystem.makeDirectory(claudeHomePath);
+  return { claudeBinaryPath: claudePath, claudeHomePath };
+});
+
 describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
   // `ServerConfig.layerTest` needs `FileSystem` to materialize its scratch
   // directory. `Layer.merge` just unions requirements, so we have to push
@@ -153,7 +222,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     Layer.provideMerge(ModelManifest.layerTest),
-    Layer.provideMerge(CodexResetCredit.layerTest),
+    Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
   const testLayer = ProviderOrchestrationAdapterInfrastructureLive.pipe(
     Layer.provideMerge(baseLayer),
@@ -259,6 +328,144 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.live("reports Codex's answer without a warning when a redemption changed nothing", () =>
+    Effect.gen(function* () {
+      if (HostProcessPlatform.defaultValue() === "win32") return;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const fixtureDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-codex-reset-credit-test-",
+      });
+      const scriptPath = path.join(fixtureDir, "codex-script.json");
+      yield* fileSystem.writeFileString(
+        scriptPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed script document read by the external Codex mock peer.
+        JSON.stringify({
+          rootThreadId: "probe-thread",
+          notifications: [],
+          account: { type: "chatgpt", email: "test@example.com", planType: "plus" },
+          failRateLimitsRead: true,
+          resetCreditOutcome: "alreadyRedeemed",
+        }),
+      );
+      const codexId = ProviderInstanceId.make("codex_reset");
+      const { registry } = yield* makeProviderInstanceRegistry<CodexDriverEnv>({
+        drivers: [CodexDriver],
+        configMap: {
+          [codexId]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            environment: [{ name: "T3_CODEX_COLLAB_SCRIPT", value: scriptPath, sensitive: false }],
+            config: makeCodexConfig({
+              enabled: true,
+              binaryPath: path.join(import.meta.dirname, "../testFixtures/codexCollabMockPeer.sh"),
+            }),
+          },
+        },
+      });
+      const codex = yield* registry.getInstance(codexId);
+      expect(codex).toBeDefined();
+      // The usage read fails, so the re-probe cannot confirm new limits; only
+      // a reset claims they changed, so this answer carries no warning.
+      yield* codex!.snapshot.refresh;
+      expect(yield* codex!.consumeResetCredit!()).toEqual({ outcome: "alreadyRedeemed" });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  const redeemClaudeReset = (claim: { result: string; usageFailsAfterClaim: boolean }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const fixtures = yield* makeClaudeResetFixture();
+      const marker = path.join(fixtures.claudeHomePath, "redeemed");
+      yield* fs.writeFileString(
+        path.join(fixtures.claudeHomePath, ".credentials.json"),
+        '{"claudeAiOauth":{"accessToken":"fake-token"}}',
+      );
+      yield* fs.writeFileString(
+        path.join(fixtures.claudeHomePath, ".claude.json"),
+        '{"oauthAccount":{"organizationUuid":"fake-org"}}',
+      );
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          if (request.url.endsWith("/api/oauth/usage")) {
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                cedar_ember: {
+                  eligible: true,
+                  next_grant_id: "grant_a",
+                  grants: [{ id: "grant_a", resets_left: 1, usable_now: true }],
+                },
+              }),
+            );
+          }
+          if (request.url.endsWith("/reset_rate_limits")) {
+            yield* fs.writeFileString(marker, "redeemed").pipe(Effect.orDie);
+            return HttpClientResponse.fromWeb(request, Response.json({ result: claim.result }));
+          }
+          return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
+        }),
+      );
+      const instanceId = ProviderInstanceId.make("claude_reset");
+      const { registry } = yield* makeProviderInstanceRegistry<ClaudeDriverEnv>({
+        drivers: [ClaudeDriver],
+        configMap: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            environment: [
+              { name: "T3_CLAUDE_RESET_MARKER", value: marker, sensitive: false },
+              ...(claim.usageFailsAfterClaim
+                ? [{ name: "T3_CLAUDE_USAGE_FAILS_AFTER_CLAIM", value: "1", sensitive: false }]
+                : []),
+            ],
+            config: makeClaudeConfig({
+              enabled: true,
+              binaryPath: fixtures.claudeBinaryPath,
+              homePath: fixtures.claudeHomePath,
+            }),
+          },
+        },
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+      const instance = yield* registry.getInstance(instanceId);
+      expect(instance).toBeDefined();
+      const before = yield* instance!.snapshot.refresh;
+      expect(before.usageLimits?.windows[0]?.usedPercent).toBe(100);
+      expect(before.usageLimits?.resetCredits?.nextCreditId).toBe("grant_a");
+      const outcome = yield* instance!.consumeResetCredit!().pipe(Effect.result);
+      return { outcome, after: yield* instance!.snapshot.getSnapshot };
+    }).pipe(
+      // macOS logins live in the Keychain, where resets are never read.
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.scoped,
+      Effect.provide(testLayer),
+    );
+
+  it.live("refreshes Claude usage after redeeming a reset", () =>
+    Effect.gen(function* () {
+      if (HostProcessPlatform.defaultValue() === "win32") return;
+      const { outcome, after } = yield* redeemClaudeReset({
+        result: "reset",
+        usageFailsAfterClaim: false,
+      });
+      expect(outcome).toMatchObject({ _tag: "Success", success: { outcome: "reset" } });
+      expect(after.usageLimits?.windows[0]?.usedPercent).toBe(0);
+    }),
+  );
+
+  it.live("reports Claude's answer when a claim changed nothing and the re-probe fails", () =>
+    Effect.gen(function* () {
+      if (HostProcessPlatform.defaultValue() === "win32") return;
+      const { outcome } = yield* redeemClaudeReset({
+        result: "already_used",
+        usageFailsAfterClaim: true,
+      });
+      expect(outcome).toMatchObject({ _tag: "Success", success: { outcome: "alreadyRedeemed" } });
+      if (outcome._tag === "Success") expect(outcome.success.warning).toBeUndefined();
+    }),
+  );
+
   it.live(
     "shadows instances whose driver is not registered in this build without failing boot",
     () =>
@@ -338,7 +545,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     Layer.provideMerge(ModelManifest.layerTest),
-    Layer.provideMerge(CodexResetCredit.layerTest),
+    Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
   const testLayer = ProviderOrchestrationAdapterInfrastructureLive.pipe(
     Layer.provideMerge(baseLayer),

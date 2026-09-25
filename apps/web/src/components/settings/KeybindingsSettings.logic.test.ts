@@ -170,6 +170,7 @@ describe("KeybindingsSettings.logic", () => {
         "threadPanel.toggle",
         "thread.stop",
         "rightPanel.toggleMaximized",
+        "usage.open",
         "script.setup-db.run",
       ]),
     );

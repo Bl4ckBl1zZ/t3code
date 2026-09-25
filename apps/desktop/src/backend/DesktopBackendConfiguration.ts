@@ -91,7 +91,13 @@ const DESKTOP_BACKEND_ENV_NAMES = [
 // forward across the wsl.exe boundary without WSLENV. The dev-server URL is
 // handled separately via a `--dev-url` CLI flag because WSLENV translation of
 // URL-shaped values (colons / slashes) is unreliable.
-const WSL_FORWARDED_ENV_NAMES = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] as const;
+const WSL_FORWARDED_ENV_NAMES = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  // Otherwise the WSL server keeps exporting to endpoints from the bootstrap.
+  "T3CODE_OTEL_SDK_DISABLED",
+  "OTEL_SDK_DISABLED",
+] as const;
 
 const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
