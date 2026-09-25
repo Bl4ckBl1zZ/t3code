@@ -10,7 +10,6 @@ import { withCreatedPullRequestLink } from "./git/linkCreatedPullRequest.ts";
 import { AgentSessionScanner } from "./project/AgentSessionScanner.ts";
 import { AgentSessionImporter } from "./project/AgentSessionImporter.ts";
 import * as DateTime from "effect/DateTime";
-import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Encoding from "effect/Encoding";
@@ -39,7 +38,6 @@ import {
   ClientSurface,
   ClientWebDeployment,
   CommandId,
-  GitCommandError,
   type DiscoveredLocalServerList,
   type EditorId,
   type FileManagerRevealKind,
@@ -80,7 +78,6 @@ import {
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
-  AssetWorkspacePurgedError,
   type ChatAttachment,
   ChatAttachmentId,
   PersistChatAttachmentsError,
@@ -91,7 +88,6 @@ import {
   type TerminalError,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
-  TerminalWorktreeReprovisionError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -185,10 +181,6 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
-import * as WorktreeRegistry from "./worktree/WorktreeRegistry.ts";
-import * as WorktreeInventoryService from "./worktree/WorktreeInventoryService.ts";
-import * as WorktreeOperationCoordinator from "./worktree/WorktreeOperationCoordinator.ts";
-import * as WorktreeProvisioningService from "./worktree/WorktreeProvisioningService.ts";
 import {
   makeThreadHandoffScript,
   makeThreadHandoffTranscript,
@@ -805,73 +797,10 @@ const makeWsRpcLayer = (
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
-      const worktreeRegistry = yield* WorktreeRegistry.WorktreeRegistry;
-      const worktreeInventory = yield* WorktreeInventoryService.WorktreeInventoryService;
-      const worktreeCoordinator = yield* WorktreeOperationCoordinator.WorktreeOperationCoordinator;
-      const worktreeProvisioning = yield* WorktreeProvisioningService.WorktreeProvisioningService;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
-      const withResolvedPurgedThreadWorktree = <A>(
-        threadId: ThreadId,
-        terminalId: string,
-        use: (worktreePath: string | null) => Effect.Effect<A, TerminalError>,
-      ): Effect.Effect<A, TerminalError> =>
-        Effect.gen(function* () {
-          const projection = yield* threadManagement.getThreadProjection(threadId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new TerminalWorktreeReprovisionError({
-                  threadId: String(threadId),
-                  terminalId,
-                  reason: "thread-state-unavailable",
-                  cause,
-                }),
-            ),
-          );
-          if (
-            projection.thread.worktreeStatus !== "purged" &&
-            projection.thread.worktreePath === null
-          ) {
-            return yield* use(null);
-          }
-
-          return yield* threadManagement
-            .withEnsuredWorktreeForThread(
-              {
-                projectId: projection.thread.projectId,
-                threadId,
-              },
-              (ensured) => {
-                if (ensured.thread.worktreePath === null) {
-                  return Effect.fail(
-                    new TerminalWorktreeReprovisionError({
-                      threadId: String(threadId),
-                      terminalId,
-                      reason: "project-unavailable",
-                    }),
-                  );
-                }
-                return use(ensured.thread.worktreePath);
-              },
-            )
-            .pipe(
-              Effect.mapError((cause) =>
-                cause._tag === "TerminalWorktreeReprovisionError"
-                  ? cause
-                  : new TerminalWorktreeReprovisionError({
-                      threadId: String(threadId),
-                      terminalId,
-                      reason:
-                        cause._tag === "ThreadManagementWorktreeReprovisionError"
-                          ? cause.reason
-                          : "thread-state-unavailable",
-                      cause,
-                    }),
-              ),
-            );
-        });
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
@@ -2593,29 +2522,6 @@ const makeWsRpcLayer = (
                   resource: input.resource,
                 });
               }
-              const removedRegistryEntry =
-                thread.thread.worktreePath === null
-                  ? Option.none()
-                  : yield* worktreeRegistry
-                      .getRemovedForThreadPath({
-                        threadId: String(input.resource.threadId),
-                        worktreePath: thread.thread.worktreePath,
-                      })
-                      .pipe(
-                        Effect.mapError(
-                          (cause) =>
-                            new AssetWorkspaceContextResolutionError({
-                              resource: input.resource,
-                              cause,
-                            }),
-                        ),
-                      );
-              if (
-                thread.thread.worktreeStatus === "purged" ||
-                Option.isSome(removedRegistryEntry)
-              ) {
-                return yield* new AssetWorkspacePurgedError({ resource: input.resource });
-              }
               return yield* issueAssetUrl({
                 resource: input.resource,
                 workspaceRoot: thread.thread.worktreePath ?? project.value.workspaceRoot,
@@ -2720,65 +2626,13 @@ const makeWsRpcLayer = (
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateWorktree,
-            worktreeProvisioning
-              .create(
-                {
-                  git: input,
-                  projectId: null,
-                  threadId: null,
-                  ownership: input.path === null ? "t3-created" : "unmanaged",
-                },
-                {
-                  create: () => gitWorkflow.createWorktree(input),
-                  remove: (path) => gitWorkflow.removeWorktree({ cwd: input.cwd, path }),
-                },
-              )
-              .pipe(
-                Effect.map(({ worktree }) => ({ worktree })),
-                // Only the registry failure is reworded. `create` also fails with
-                // git's own GitCommandError when `git worktree add` refuses — a
-                // branch already checked out elsewhere, a path in the way — and
-                // rewriting that one to "the worktree was created but could not be
-                // registered" tells the user two things that are both false.
-                Effect.catchTag(
-                  "PersistenceSqlError",
-                  (cause) =>
-                    new GitCommandError({
-                      operation: "vcsCreateWorktree.registry",
-                      command: "worktree-registry",
-                      cwd: input.cwd,
-                      detail: "The worktree was created but could not be registered for retention.",
-                      cause,
-                    }),
-                ),
-                Effect.tap(() => refreshGitStatus(input.cwd)),
-              ),
+            gitWorkflow.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsRemoveWorktree]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsRemoveWorktree,
-            worktreeCoordinator
-              .withRepositoryLock(
-                input.cwd,
-                gitWorkflow.removeWorktree(input).pipe(
-                  Effect.tap(() =>
-                    Clock.currentTimeMillis.pipe(
-                      Effect.flatMap((removedAtMs) =>
-                        worktreeInventory
-                          .markRemoved({
-                            repositoryRoot: input.cwd,
-                            worktreePath: input.path,
-                            removedAtMs,
-                            reason: "manual",
-                          })
-                          .pipe(Effect.ignoreCause({ log: true })),
-                      ),
-                    ),
-                  ),
-                ),
-              )
-              .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsCreateRef]: (input) =>
@@ -2812,32 +2666,15 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "review" },
           ),
         [WS_METHODS.terminalOpen]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.terminalOpen,
-            withResolvedPurgedThreadWorktree(
-              ThreadId.make(input.threadId),
-              input.terminalId,
-              (worktreePath) =>
-                terminalManager.open(
-                  worktreePath === null ? input : { ...input, cwd: worktreePath, worktreePath },
-                ),
-            ),
-            { "rpc.aggregate": "terminal" },
-          ),
+          observeRpcEffect(WS_METHODS.terminalOpen, terminalManager.open(input), {
+            "rpc.aggregate": "terminal",
+          }),
         [WS_METHODS.terminalAttach]: (input) =>
           observeRpcStream(
             WS_METHODS.terminalAttach,
             Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
               Effect.acquireRelease(
-                withResolvedPurgedThreadWorktree(
-                  ThreadId.make(input.threadId),
-                  input.terminalId,
-                  (worktreePath) =>
-                    terminalManager.attachStream(
-                      worktreePath === null ? input : { ...input, cwd: worktreePath, worktreePath },
-                      (event) => Queue.offer(queue, event),
-                    ),
-                ),
+                terminalManager.attachStream(input, (event) => Queue.offer(queue, event)),
                 (unsubscribe) => Effect.sync(unsubscribe),
               ),
             ),

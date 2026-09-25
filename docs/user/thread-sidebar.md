@@ -48,7 +48,7 @@ Choose **Delete** from a thread's menu, or select several threads and choose **D
 **Settings → General → Delete confirmation** on, T3 Code asks once before deleting. If the deleted
 threads were the only ones using a worktree, it then asks once whether to delete those worktrees
 too, however many threads you selected. With the setting off, threads are deleted without asking
-and their worktrees are kept; [worktree retention](./worktree-retention.md) can clean them up later.
+and their worktrees are kept.
 
 ## Snooze until later
 

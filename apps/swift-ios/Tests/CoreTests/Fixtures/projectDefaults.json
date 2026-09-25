@@ -41,14 +41,6 @@
     "defaultRuntimeMode": "full-access",
     "defaultThreadEnvMode": "worktree",
     "newWorktreesStartFromOrigin": true,
-    "worktreeRetention": {
-      "schemaVersion": 1,
-      "mode": "off",
-      "maxAge": null,
-      "staleAfter": null,
-      "deleteOnPullRequestMerge": false,
-      "scanInterval": 86400000
-    },
     "addProjectBaseDirectory": "",
     "textGenerationModelSelection": {
       "instanceId": "codex",
