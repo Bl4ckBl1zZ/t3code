@@ -3110,7 +3110,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("delete-confirmation")}
-          description="Ask before deleting a thread and its chat history."
+          description="Ask before deleting threads, and whether to remove a worktree they leave unused. When off, those worktrees are kept."
           resetAction={
             settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete ? (
               <SettingResetButton

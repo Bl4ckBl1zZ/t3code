@@ -43,6 +43,14 @@ changed agents -- which ones it ran on before. The elapsed time beside a working
 the moment that turn started, including while it waits for your approval, and disappears once the
 thread stops working.
 
+## Delete threads on web and desktop
+
+Choose **Delete** from a thread's menu, or select several threads and choose **Delete (N)**. With
+**Settings → General → Delete confirmation** on, T3 Code asks once before deleting. If the deleted
+threads were the only ones using a worktree, it then asks once whether to delete those worktrees
+too, however many threads you selected. With the setting off, threads are deleted without asking
+and their worktrees are kept; [worktree retention](./worktree-retention.md) can clean them up later.
+
 ## Snooze until later
 
 On web and desktop, choose **Snooze → Custom…** from a thread's menu, the chat header menu, or a
