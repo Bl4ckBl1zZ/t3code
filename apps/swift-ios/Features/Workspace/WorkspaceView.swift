@@ -168,8 +168,14 @@ public struct WorkspaceView: View {
                 }
                 // Never shown: selecting it composes and the selection snaps
                 // back. iPad keeps compose in the list's toolbar instead.
-                Tab("New", systemImage: "plus", value: HomeTab.new, role: Self.newTabRole) {
+                Tab(value: HomeTab.new, role: Self.newTabRole) {
                     Color.clear
+                } label: {
+                    Label {
+                        Text("New")
+                    } icon: {
+                        newTabIcon
+                    }
                 }
                 .hidden(usesToolbarCompose)
             }
@@ -196,16 +202,33 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// iOS 27 draws a prominent tab as the detached circle beside the bar;
-    /// before that + is an ordinary trailing tab. The role only exists in the
-    /// iOS 27 SDK (Swift 6.4), so builds with an older Xcode take the
-    /// ordinary tab on every system.
+    /// Detaches + into its own circle beside the bar. iOS 27 has a role for
+    /// exactly that; iOS 26 only detaches the search role, so + borrows it
+    /// (the selection snaps back before any search UI could appear). Before
+    /// iOS 26 + is an ordinary trailing tab. `.prominent` only exists in the
+    /// iOS 27 SDK (Swift 6.4), so older Xcode builds use search on iOS 27 too.
     @available(iOS 18, *)
     private static var newTabRole: TabRole? {
         #if compiler(>=6.4)
         if #available(iOS 27, *) { return .prominent }
         #endif
+        if #available(iOS 26, *) { return .search }
         return nil
+    }
+
+    /// The detached + paints itself in the accent (blue by default). Tabs
+    /// take no per-tab tint, so the color is baked into an original-mode
+    /// image the bar cannot template over.
+    private var newTabIcon: Image {
+        guard #available(iOS 26, *),
+              let symbol = UIImage(
+                  systemName: "plus.circle.fill",
+                  withConfiguration: UIImage.SymbolConfiguration(
+                      paletteColors: [.white, UIColor(T3Colors.accent)]
+                  )
+              )
+        else { return Image(systemName: "plus") }
+        return Image(uiImage: symbol.withRenderingMode(.alwaysOriginal))
     }
 
     /// A regular-width window has room for compose in the toolbar, where iPad
