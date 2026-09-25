@@ -73,31 +73,26 @@ type LogicalSidebarProject = SidebarProject & {
 export type ThreadTraversalDirection = "previous" | "next";
 
 /**
- * Shared-worktree checks must exclude only successful deletions, never the
- * whole batch. A null result skips an entry that the caller can no longer find.
+ * Splits a batch delete's results, aligned with `threadKeys`, into the keys
+ * that were deleted and the first failure worth reporting. Interruptions are
+ * never reported.
  */
-export async function deleteSelectedThreadEntries<
-  TEntry extends { readonly threadKey: string },
->(input: {
-  entries: readonly TEntry[];
-  delete: (
-    entry: TEntry,
-    deletedThreadKeys: ReadonlySet<string>,
-  ) => Promise<AtomCommandResult<unknown, unknown> | null>;
-}) {
+export function summarizeThreadDeletions(
+  threadKeys: readonly string[],
+  results: readonly AtomCommandResult<unknown, unknown>[],
+) {
   const deletedThreadKeys = new Set<string>();
   let firstFailure: AsyncResult.Failure<unknown, unknown> | null = null;
 
-  for (const entry of input.entries) {
-    const result = await input.delete(entry, deletedThreadKeys);
-    if (result === null) continue;
-    if (result._tag === "Failure") {
-      if (isAtomCommandInterrupted(result)) break;
-      firstFailure ??= result;
-      continue;
+  results.forEach((result, index) => {
+    const threadKey = threadKeys[index];
+    if (threadKey === undefined) return;
+    if (result._tag === "Success") {
+      deletedThreadKeys.add(threadKey);
+      return;
     }
-    deletedThreadKeys.add(entry.threadKey);
-  }
+    if (!isAtomCommandInterrupted(result)) firstFailure ??= result;
+  });
 
   return { deletedThreadKeys, firstFailure };
 }

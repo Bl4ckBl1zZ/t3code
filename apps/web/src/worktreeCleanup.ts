@@ -27,28 +27,51 @@ export function mergeWorktreeOwners(
   return [...activeThreads, ...archivedThreads.filter((thread) => !activeIds.has(thread.id))];
 }
 
-export function getOrphanedWorktreePathForThread(
-  threads: ReadonlyArray<Pick<ThreadShell, "id" | "worktreePath">>,
-  threadId: ThreadShell["id"],
-): string | null {
-  const targetThread = threads.find((thread) => thread.id === threadId);
-  if (!targetThread) {
-    return null;
+/**
+ * Worktrees that deleting `deletingThreadIds` together leaves with no owner,
+ * each mapped to the deleting threads that hold it. A single delete is a batch
+ * of one; a worktree any other thread still points at is never included.
+ */
+export function getWorktreesOrphanedByDeletion(
+  owners: ReadonlyArray<WorktreeOwner>,
+  deletingThreadIds: ReadonlySet<ThreadShell["id"]>,
+): ReadonlyMap<string, ReadonlyArray<ThreadShell["id"]>> {
+  const ownersByPath = new Map<string, ThreadShell["id"][]>();
+  for (const owner of owners) {
+    const worktreePath = normalizeWorktreePath(owner.worktreePath);
+    if (!worktreePath) continue;
+    const pathOwners = ownersByPath.get(worktreePath);
+    if (pathOwners) pathOwners.push(owner.id);
+    else ownersByPath.set(worktreePath, [owner.id]);
   }
 
-  const targetWorktreePath = normalizeWorktreePath(targetThread.worktreePath);
-  if (!targetWorktreePath) {
-    return null;
-  }
-
-  const isShared = threads.some((thread) => {
-    if (thread.id === threadId) {
-      return false;
+  const orphaned = new Map<string, ReadonlyArray<ThreadShell["id"]>>();
+  for (const [worktreePath, pathOwners] of ownersByPath) {
+    if (pathOwners.every((id) => deletingThreadIds.has(id))) {
+      orphaned.set(worktreePath, pathOwners);
     }
-    return normalizeWorktreePath(thread.worktreePath) === targetWorktreePath;
-  });
+  }
+  return orphaned;
+}
 
-  return isShared ? null : targetWorktreePath;
+const MAX_LISTED_WORKTREES = 5;
+
+/** The one question asked before removing worktrees a delete leaves unused. */
+export function formatOrphanedWorktreeRemovalMessage(input: {
+  readonly threadCount: number;
+  readonly worktreePaths: ReadonlyArray<string>;
+}): string {
+  const { threadCount, worktreePaths } = input;
+  const single = worktreePaths.length === 1;
+  const listed = worktreePaths.slice(0, MAX_LISTED_WORKTREES).map(formatWorktreePathForDisplay);
+  const unlisted = worktreePaths.length - listed.length;
+  return [
+    `${threadCount === 1 ? "This thread is the only one" : "These threads are the only ones"} linked to ${single ? "this worktree" : `${worktreePaths.length} worktrees`}:`,
+    ...listed,
+    ...(unlisted > 0 ? [`and ${unlisted} more`] : []),
+    "",
+    single ? "Delete the worktree too?" : "Delete the worktrees too?",
+  ].join("\n");
 }
 
 export function formatWorktreePathForDisplay(worktreePath: string): string {

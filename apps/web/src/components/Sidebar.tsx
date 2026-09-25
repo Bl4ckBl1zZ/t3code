@@ -179,7 +179,7 @@ import {
 } from "../workEnvironmentScope";
 import { cn } from "~/lib/utils";
 import {
-  deleteSelectedThreadEntries,
+  summarizeThreadDeletions,
   animatePinnedLayoutChanges,
   applyManualThreadOrderForSidebarV2,
   buildBulkTitleRegenerationContextMenuItem,
@@ -2211,6 +2211,7 @@ export default function Sidebar() {
     unsnoozeThread,
     archiveThread,
     deleteThread,
+    deleteThreads,
   } = useThreadActions();
   const markThreadUnread = useMarkThreadUnread();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -3684,17 +3685,15 @@ export default function Sidebar() {
         );
         if (confirmed._tag === "Failure" || !confirmed.value) return;
       }
-      const { deletedThreadKeys, firstFailure } = await deleteSelectedThreadEntries({
-        entries: threadKeys.map((threadKey) => ({ threadKey })),
-        delete: async ({ threadKey }, deletedKeys) => {
-          const thread = threadByKeyRef.current.get(threadKey);
-          return thread
-            ? deleteThread(scopeThreadRef(thread.environmentId, thread.id), {
-                deletedThreadKeys: deletedKeys,
-              })
-            : null;
-        },
+      // Rows deleted elsewhere while the dialog was open are skipped.
+      const deleteTargets = threadKeys.flatMap((threadKey) => {
+        const thread = threadByKeyRef.current.get(threadKey);
+        return thread ? [{ threadKey, ref: scopeThreadRef(thread.environmentId, thread.id) }] : [];
       });
+      const { deletedThreadKeys, firstFailure } = summarizeThreadDeletions(
+        deleteTargets.map((target) => target.threadKey),
+        await deleteThreads(deleteTargets.map((target) => target.ref)),
+      );
       if (firstFailure) {
         const error = squashAtomCommandFailure(firstFailure);
         toastManager.add(
@@ -3718,7 +3717,7 @@ export default function Sidebar() {
       toggleThreadPin,
       clearSelection,
       confirmThreadDelete,
-      deleteThread,
+      deleteThreads,
       markThreadUnread,
       removeFromSelection,
       serverConfigs,

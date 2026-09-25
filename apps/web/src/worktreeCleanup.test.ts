@@ -4,8 +4,9 @@ import { describe, expect, it } from "vite-plus/test";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 import { makeThreadFixture } from "./test-fixtures";
 import {
+  formatOrphanedWorktreeRemovalMessage,
   formatWorktreePathForDisplay,
-  getOrphanedWorktreePathForThread,
+  getWorktreesOrphanedByDeletion,
   mergeWorktreeOwners,
 } from "./worktreeCleanup";
 
@@ -39,52 +40,75 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
   });
 }
 
-describe("getOrphanedWorktreePathForThread", () => {
-  it("returns null when the target thread does not exist", () => {
-    const result = getOrphanedWorktreePathForThread([], ThreadId.make("missing-thread"));
-    expect(result).toBeNull();
-  });
+describe("getWorktreesOrphanedByDeletion", () => {
+  const featureA = "/tmp/repo/worktrees/feature-a";
+  const featureB = "/tmp/repo/worktrees/feature-b";
+  const one = ThreadId.make("thread-1");
+  const two = ThreadId.make("thread-2");
+  const three = ThreadId.make("thread-3");
 
-  it("returns null when the target thread has no worktree", () => {
-    const threads = [makeThread()];
-    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
-    expect(result).toBeNull();
-  });
-
-  it("returns the path when no other thread links to that worktree", () => {
-    const threads = [makeThread({ worktreePath: "/tmp/repo/worktrees/feature-a" })];
-    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
-    expect(result).toBe("/tmp/repo/worktrees/feature-a");
-  });
-
-  it("returns null when another thread links to the same worktree", () => {
+  it("returns the worktree when the only thread linked to it is deleted", () => {
     const threads = [
-      makeThread({
-        id: ThreadId.make("thread-1"),
-        worktreePath: "/tmp/repo/worktrees/feature-a",
-      }),
-      makeThread({
-        id: ThreadId.make("thread-2"),
-        worktreePath: "/tmp/repo/worktrees/feature-a",
-      }),
+      makeThread({ id: one, worktreePath: featureA }),
+      makeThread({ id: two, worktreePath: featureB }),
+      makeThread({ id: three }),
     ];
-    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
-    expect(result).toBeNull();
+
+    expect(getWorktreesOrphanedByDeletion(threads, new Set([one, three]))).toEqual(
+      new Map([[featureA, [one]]]),
+    );
   });
 
-  it("ignores threads linked to different worktrees", () => {
+  it("keeps a worktree another thread still links to", () => {
     const threads = [
-      makeThread({
-        id: ThreadId.make("thread-1"),
-        worktreePath: "/tmp/repo/worktrees/feature-a",
-      }),
-      makeThread({
-        id: ThreadId.make("thread-2"),
-        worktreePath: "/tmp/repo/worktrees/feature-b",
-      }),
+      makeThread({ id: one, worktreePath: featureA }),
+      makeThread({ id: two, worktreePath: featureA }),
     ];
-    const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
-    expect(result).toBe("/tmp/repo/worktrees/feature-a");
+
+    expect(getWorktreesOrphanedByDeletion(threads, new Set([one]))).toEqual(new Map());
+  });
+
+  it("orphans a shared worktree when every thread linked to it is deleted together", () => {
+    const threads = [
+      makeThread({ id: one, worktreePath: featureA }),
+      makeThread({ id: two, worktreePath: `${featureA} ` }),
+      makeThread({ id: three, worktreePath: featureB }),
+    ];
+
+    expect(getWorktreesOrphanedByDeletion(threads, new Set([one, two]))).toEqual(
+      new Map([[featureA, [one, two]]]),
+    );
+  });
+});
+
+describe("formatOrphanedWorktreeRemovalMessage", () => {
+  it("asks about a single thread's worktree", () => {
+    expect(
+      formatOrphanedWorktreeRemovalMessage({
+        threadCount: 1,
+        worktreePaths: ["/Users/julius/.t3/worktrees/t3code/t3code-4e609bb8"],
+      }),
+    ).toBe(
+      "This thread is the only one linked to this worktree:\nt3code-4e609bb8\n\nDelete the worktree too?",
+    );
+  });
+
+  it("asks once for a batch and caps the listed worktrees", () => {
+    const worktreePaths = Array.from({ length: 7 }, (_, index) => `/tmp/worktrees/wt-${index}`);
+
+    expect(formatOrphanedWorktreeRemovalMessage({ threadCount: 27, worktreePaths })).toBe(
+      [
+        "These threads are the only ones linked to 7 worktrees:",
+        "wt-0",
+        "wt-1",
+        "wt-2",
+        "wt-3",
+        "wt-4",
+        "and 2 more",
+        "",
+        "Delete the worktrees too?",
+      ].join("\n"),
+    );
   });
 });
 
@@ -123,10 +147,15 @@ describe("mergeWorktreeOwners", () => {
 
     // Without the archived thread the active delete looks like the last
     // reference and would take the worktree the archived thread still uses.
-    expect(getOrphanedWorktreePathForThread([active], active.id)).toBe(worktreePath);
+    expect(getWorktreesOrphanedByDeletion([active], new Set([active.id])).has(worktreePath)).toBe(
+      true,
+    );
     expect(
-      getOrphanedWorktreePathForThread(mergeWorktreeOwners([active], [archived]), active.id),
-    ).toBeNull();
+      getWorktreesOrphanedByDeletion(
+        mergeWorktreeOwners([active], [archived]),
+        new Set([active.id]),
+      ).size,
+    ).toBe(0);
   });
 
   it("still reports an orphan when the archived threads use other worktrees", () => {
@@ -137,8 +166,11 @@ describe("mergeWorktreeOwners", () => {
     });
 
     expect(
-      getOrphanedWorktreePathForThread(mergeWorktreeOwners([active], [archived]), active.id),
-    ).toBe(worktreePath);
+      getWorktreesOrphanedByDeletion(
+        mergeWorktreeOwners([active], [archived]),
+        new Set([active.id]),
+      ).has(worktreePath),
+    ).toBe(true);
   });
 
   it("counts a thread present in both stores once", () => {
@@ -150,6 +182,8 @@ describe("mergeWorktreeOwners", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.worktreePath).toBe(worktreePath);
     // The duplicate must not shadow the active copy and make it look shared.
-    expect(getOrphanedWorktreePathForThread(merged, active.id)).toBe(worktreePath);
+    expect(getWorktreesOrphanedByDeletion(merged, new Set([active.id])).has(worktreePath)).toBe(
+      true,
+    );
   });
 });
