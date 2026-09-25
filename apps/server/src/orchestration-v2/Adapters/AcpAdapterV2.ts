@@ -29,6 +29,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -802,6 +803,47 @@ export function acpProjectedCommandExitCode(
     return undefined;
   }
   return commandExitCode(rawOutput);
+}
+
+// Past this edit distance an edit keeps no patch text, so projecting a large
+// rewrite cannot stall the event loop in the diff search. A created or emptied
+// file has one empty side and needs no search, so it is never capped.
+const ACP_V1_DIFF_MAX_EDITS = 1_000;
+
+/**
+ * Patch text for a tool call's diff content. ACP v2 diffs carry it as
+ * `patch.text`. ACP v1 diffs carry `oldText`/`newText` instead (`oldText`
+ * null or absent for a new file), and agents that negotiate v1 still send
+ * that shape, so the patch is built from the two sides.
+ */
+export function acpToolCallDiffPatch(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const diffs = content.flatMap((entry) => {
+    const diff = unknownRecord(entry);
+    return diff?.type === "diff" ? [diff] : [];
+  });
+  for (const diff of diffs) {
+    const patch = unknownRecord(diff.patch);
+    if (typeof patch?.text === "string") return patch.text;
+  }
+  const v1Patches = diffs.flatMap((diff) => {
+    if (typeof diff.path !== "string" || typeof diff.newText !== "string") return [];
+    const oldText = typeof diff.oldText === "string" ? diff.oldText : undefined;
+    const patch = structuredPatch(
+      oldText === undefined ? "/dev/null" : diff.path,
+      diff.path,
+      oldText ?? "",
+      diff.newText,
+      undefined,
+      undefined,
+      {
+        context: 3,
+        maxEditLength: oldText && diff.newText ? ACP_V1_DIFF_MAX_EDITS : Number.POSITIVE_INFINITY,
+      },
+    );
+    return patch === undefined || patch.hunks.length === 0 ? [] : [patch];
+  });
+  return v1Patches.length === 0 ? undefined : formatPatch(v1Patches, FILE_HEADERS_ONLY);
 }
 
 function pathFromToolCall(toolCall: AcpToolCallState): string | undefined {
@@ -2674,6 +2716,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const rawInput = toolCall.data.rawInput;
           const rawOutput = toolCall.data.rawOutput ?? toolCall.data.content;
           const path = pathFromToolCall(toolCall);
+          const diffText =
+            acpToolCallDiffPatch(toolCall.data.content) ?? textFromUnknown(rawOutput);
           const rawInputRecord = unknownRecord(rawInput);
           const inputVariant =
             typeof rawInputRecord?.variant === "string"
@@ -2740,9 +2784,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 ...base,
                 type: "file_change",
                 fileName: path ?? toolCall.title ?? "File change",
-                ...(textFromUnknown(rawOutput) === undefined
-                  ? {}
-                  : { diffStr: textFromUnknown(rawOutput) }),
+                ...(diffText === undefined ? {} : { diffStr: diffText }),
               };
               break;
             case "fetch":
