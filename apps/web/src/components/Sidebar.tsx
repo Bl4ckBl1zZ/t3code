@@ -91,6 +91,7 @@ import {
   ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
+  Trash2Icon,
   Undo2Icon,
   XIcon,
 } from "lucide-react";
@@ -227,6 +228,7 @@ import {
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
 import { resolveSnoozePresets, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
+import { resolveAutoDeleteAtMs } from "@t3tools/shared/threadAutoDelete";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
@@ -376,6 +378,17 @@ function SidebarWorkspaceSelector(props: {
 function settledTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = resolveSettledTimestamp(thread);
   return timestamp === null ? "" : compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
+}
+
+const AUTO_DELETE_LABEL_WINDOW_MS = 7 * 86_400_000;
+
+// Settled rows swap their age for a countdown during the final week before
+// the server deletes them; earlier it would only be noise.
+function autoDeleteLabel(thread: SidebarThreadSummary, afterDays: number | null): string | null {
+  const dueAtMs = resolveAutoDeleteAtMs(thread, afterDays);
+  const nowMs = Date.now();
+  if (dueAtMs === null || dueAtMs - nowMs > AUTO_DELETE_LABEL_WINDOW_MS) return null;
+  return snoozeWakeLabel(new Date(dueAtMs).toISOString(), { now: new Date(nowMs).toISOString() });
 }
 
 // Floats at the row's right edge, vertically centered, while the jump
@@ -903,6 +916,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   snoozeSupported: boolean;
   // Compact wake countdown ("2h") for rows in the snoozed shelf.
   snoozeWakeLabelText: string | null;
+  // Compact auto-delete countdown ("2d") for settled rows in their last week.
+  autoDeleteLabelText: string | null;
   // Pins exist only in the unsettled card list. A lifecycle transition out
   // of that list removes the affordance and the pin no longer affects order.
   isPinned: boolean;
@@ -1579,6 +1594,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   >
                     <AlarmClockIcon aria-hidden className="size-3" />
                     Woke
+                  </span>
+                ) : variantAction === "unsettle" && props.autoDeleteLabelText !== null ? (
+                  <span
+                    aria-label={`Deletes in ${props.autoDeleteLabelText}`}
+                    className="inline-flex items-center gap-1 text-xs text-warning-foreground"
+                  >
+                    <Trash2Icon aria-hidden className="size-3" />
+                    {props.autoDeleteLabelText}
                   </span>
                 ) : (
                   <span className="text-xs">
@@ -4764,6 +4787,14 @@ export default function Sidebar() {
                             thread.workInboxRole !== "main" &&
                             serverConfigs.get(thread.environmentId)?.environment.capabilities
                               .threadSnooze === true,
+                          autoDeleteLabelText:
+                            section === "settled"
+                              ? autoDeleteLabel(
+                                  thread,
+                                  serverConfigs.get(thread.environmentId)?.settings
+                                    .autoDeleteSettledAfterDays ?? null,
+                                )
+                              : null,
                           snoozeWakeLabelText:
                             section === "snoozed" && thread.snoozedUntil != null
                               ? snoozeWakeLabel(thread.snoozedUntil, {

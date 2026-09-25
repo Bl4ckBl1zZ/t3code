@@ -65,6 +65,9 @@ import {
   MIN_INTERFACE_FONT_SIZE,
   MIN_PROMPT_FONT_SIZE,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+  MIN_AUTO_DELETE_SETTLED_AFTER_DAYS,
+  MAX_AUTO_DELETE_SETTLED_AFTER_DAYS,
+  DEFAULT_AUTO_DELETE_SETTLED_AFTER_DAYS,
   MIN_TERMINAL_FONT_SIZE,
 } from "@t3tools/contracts/settings";
 import {
@@ -725,6 +728,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
         : []),
+      ...(settings.autoDeleteSettledAfterDays !==
+      DEFAULT_UNIFIED_SETTINGS.autoDeleteSettledAfterDays
+        ? ["Auto-delete settled threads"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
@@ -841,6 +848,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarAutoSettleAfterDays,
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleOnMerge,
+      settings.autoDeleteSettledAfterDays,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.persistComposerContextStrip,
@@ -941,6 +949,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
+      autoDeleteSettledAfterDays: DEFAULT_UNIFIED_SETTINGS.autoDeleteSettledAfterDays,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
@@ -2113,12 +2122,19 @@ function FontFamilySettingsRow({
 }
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
+const AUTO_DELETE_DEFAULT_DAYS = DEFAULT_AUTO_DELETE_SETTLED_AFTER_DAYS;
 
-function AutoSettleDaysInput({
+function DaysInput({
   value,
+  min,
+  max,
+  ariaLabel,
   onCommit,
 }: {
   value: number;
+  min: number;
+  max: number;
+  ariaLabel: string;
   onCommit: (days: number) => void;
 }) {
   // Local draft so the field can be emptied mid-edit; the setting only moves
@@ -2131,8 +2147,8 @@ function AutoSettleDaysInput({
   return (
     <Input
       type="number"
-      min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
-      max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+      min={min}
+      max={max}
       className="w-full sm:w-24"
       value={draft}
       onChange={(event) => {
@@ -2141,16 +2157,12 @@ function AutoSettleDaysInput({
         // committed 3 while the field shows 3.5) — commit only when the
         // persisted value matches the displayed one.
         const parsed = Number(event.target.value);
-        if (
-          Number.isInteger(parsed) &&
-          parsed >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
-          parsed <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS
-        ) {
+        if (Number.isInteger(parsed) && parsed >= min && parsed <= max) {
           onCommit(parsed);
         }
       }}
       onBlur={() => setDraft(String(value))}
-      aria-label="Days of inactivity before auto-settle"
+      aria-label={ariaLabel}
     />
   );
 }
@@ -2485,9 +2497,58 @@ export function GeneralSettingsPanel() {
             title="Days of inactivity before auto-settle"
             description="Any new activity un-settles a thread automatically."
             control={
-              <AutoSettleDaysInput
+              <DaysInput
                 value={settings.sidebarAutoSettleAfterDays}
+                min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+                max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+                ariaLabel="Days of inactivity before auto-settle"
                 onCommit={(days) => updateSettings({ sidebarAutoSettleAfterDays: days })}
+              />
+            }
+          />
+        ) : null}
+
+        <SettingsRow
+          {...searchableSetting("auto-delete-settled-threads")}
+          serverScoped
+          description="Permanently delete threads that stay settled this long, along with their worktree and local branch, even with uncommitted changes. Pinned and archived threads are kept."
+          resetAction={
+            settings.autoDeleteSettledAfterDays !==
+            DEFAULT_UNIFIED_SETTINGS.autoDeleteSettledAfterDays ? (
+              <SettingResetButton
+                label="auto-delete"
+                onClick={() =>
+                  updateSettings({
+                    autoDeleteSettledAfterDays: DEFAULT_UNIFIED_SETTINGS.autoDeleteSettledAfterDays,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.autoDeleteSettledAfterDays !== null}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  autoDeleteSettledAfterDays: checked ? AUTO_DELETE_DEFAULT_DAYS : null,
+                })
+              }
+              aria-label="Auto-delete settled threads"
+            />
+          }
+        />
+        {settings.autoDeleteSettledAfterDays !== null ? (
+          <SettingsRow
+            title="Days settled before deletion"
+            description="Counted from when a thread moved to Settled. Threads already past it are deleted within a minute."
+            serverScoped
+            control={
+              <DaysInput
+                value={settings.autoDeleteSettledAfterDays}
+                min={MIN_AUTO_DELETE_SETTLED_AFTER_DAYS}
+                max={MAX_AUTO_DELETE_SETTLED_AFTER_DAYS}
+                ariaLabel="Days settled before deletion"
+                onCommit={(days) => updateSettings({ autoDeleteSettledAfterDays: days })}
               />
             }
           />

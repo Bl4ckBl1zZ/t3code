@@ -2036,6 +2036,67 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("records the real settle time and guards automatic deletion", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-auto-delete-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-auto-delete-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-auto-delete-project"),
+        title: "Auto delete",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* TestClock.adjust("10 days");
+      const settledAt = "1970-01-01T00:00:00.000Z";
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("runtime-layer-auto-delete-settle"),
+        threadId,
+        settledAt,
+      });
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      assert.equal(DateTime.formatIso(shell!.settledAt!), settledAt);
+      assert.equal(
+        DateTime.formatIso(shell!.settledRecordedAt!),
+        DateTime.formatIso(yield* DateTime.now),
+      );
+
+      const sequence = yield* orchestrator.getThreadEventSequence(threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-auto-delete-edit"),
+        threadId,
+        title: "Changed",
+      });
+      const stale = yield* orchestrator
+        .dispatch({
+          type: "thread.delete",
+          commandId: CommandId.make("runtime-layer-auto-delete-stale"),
+          threadId,
+          automatic: { expectedSequence: sequence },
+        })
+        .pipe(Effect.flip);
+      assert.equal(stale._tag, "OrchestratorDispatchError");
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.deletedAt);
+
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("runtime-layer-auto-delete-fresh"),
+        threadId,
+        automatic: { expectedSequence: yield* orchestrator.getThreadEventSequence(threadId) },
+      });
+      assert.isNotNull((yield* orchestrator.getThreadProjection(threadId)).thread.deletedAt);
+    }),
+  );
+
   it.effect("rejects settling a thread while a run is active", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

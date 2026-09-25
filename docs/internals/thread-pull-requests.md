@@ -73,6 +73,20 @@ classify persisted state, while older servers retain client-side automatic rules
 the server only when it advertises the capability; retained legacy preferences serve older servers.
 Native Settings → Thread organization edits these sparse preferences on a selected machine.
 
+### Automatic deletion
+
+The same sweep deletes settled threads once `autoDeleteSettledAfterDays` (server-only, null by
+default) has elapsed. The clock is `settledRecordedAt`, stamped by `thread.settle` and session
+imports at the wall-clock moment the thread entered Settled, because `settledAt` is backdated to
+last activity or imported history. Threads settled before the field existed fall back to
+`settledAt`. Pinned and archived threads are kept; `resolveAutoDeleteAtMs` in
+`@t3tools/shared/threadAutoDelete` is shared with the web countdown label.
+
+Deletions run one at a time. `thread.delete.automatic` carries the event sequence captured before
+the shell read, so a thread that changed since is rejected. After the delete, the worker force-removes
+the thread's worktree and force-deletes its local branch unless another active or archived thread
+still uses them. It never removes the project root.
+
 Pending request summaries include optional `responseMode`. Blocking requests outrank newer
 asynchronous messages in both SQL and in-memory shell projections. Message-mode questions remain
 answerable in the transcript without falsely blocking settlement or sidebar status.

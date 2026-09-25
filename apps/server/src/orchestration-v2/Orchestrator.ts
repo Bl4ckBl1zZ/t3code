@@ -1649,6 +1649,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
+    if (command.type === "thread.delete" && command.automatic !== undefined) {
+      const sequence = yield* eventSink
+        .latestSequence({ threadId: command.threadId })
+        .pipe(mapDispatchError(command));
+      if (sequence !== command.automatic.expectedSequence) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The thread changed after it was judged due for automatic deletion.",
+        });
+      }
+    }
 
     let snoozedUntil: DateTime.Utc | null = null;
     if (command.type === "thread.snooze") {
@@ -1727,6 +1739,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : settledAt,
+            settledRecordedAt: alreadySettled ? (thread.settledRecordedAt ?? null) : now,
             unsettledAt: null,
             pinnedAt: command.automatic !== undefined ? thread.pinnedAt : null,
             updatedAt: alreadySettled ? thread.updatedAt : settledAt,

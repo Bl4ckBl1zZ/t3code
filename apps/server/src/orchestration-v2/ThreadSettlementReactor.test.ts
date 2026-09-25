@@ -20,6 +20,7 @@ import {
   PullRequestService,
 } from "../pullRequest/PullRequestService.ts";
 import { GitManager } from "../git/GitManager.ts";
+import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { make } from "./ThreadSettlementReactor.ts";
 
@@ -80,6 +81,7 @@ function harness(thread: OrchestrationV2ThreadShell, enabled = true) {
       }),
       Layer.mock(PullRequestService)({ summary }),
       Layer.mock(GitManager)({ branchPullRequest: branch }),
+      Layer.mock(GitWorkflowService)({}),
       ServerSettings.layerTest(
         enabled ? {} : { sidebarAutoSettleOnMerge: false, sidebarAutoSettleAfterDays: null },
       ),
@@ -181,6 +183,7 @@ it.effect("a confirmed merge invalidates the matching checkout before scheduling
         subscribeMerges: Effect.succeed(Stream.fromEffect(Deferred.await(notified))),
       }),
       Layer.mock(GitManager)({ invalidateStatus: invalidate }),
+      Layer.mock(GitWorkflowService)({}),
       ServerSettings.layerTest({
         sidebarAutoSettleOnMerge: false,
         sidebarAutoSettleAfterDays: null,
@@ -200,5 +203,132 @@ it.effect("a confirmed merge invalidates the matching checkout before scheduling
     yield* Deferred.await(invalidated);
     yield* reactor.drain;
     expect(invalidate).toHaveBeenCalledTimes(1);
+  }).pipe(Effect.scoped),
+);
+
+const deleteProject = {
+  id: ProjectId.make("project"),
+  workspaceRoot: "/repo",
+  updatedAt: "1970-01-01T00:00:00Z",
+} as unknown as Project;
+const settled = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
+  fixture({
+    settledOverride: "settled",
+    settledAt: epoch,
+    branch: "feature",
+    worktreePath: "/repo-worktrees/feature",
+    ...overrides,
+  });
+
+function deleteHarness(thread: OrchestrationV2ThreadShell, others: OrchestrationV2ThreadShell[]) {
+  const calls: string[] = [];
+  const dispatch = vi.fn((command: OrchestrationV2Command) =>
+    Effect.sync(() => {
+      calls.push(command.type);
+      return { sequence: 8, storedEvents: [] };
+    }),
+  );
+  const removeWorktree = vi.fn(
+    (input: { readonly path: string; readonly force?: boolean | undefined }) =>
+      Effect.sync(() => void calls.push(`remove ${input.path} force=${input.force}`)),
+  );
+  const deleteLocalBranch = vi.fn(
+    (input: { readonly refName: string; readonly force?: boolean | undefined }) =>
+      Effect.sync(() => void calls.push(`branch ${input.refName} force=${input.force}`)),
+  );
+  const layer = Layer.mergeAll(
+    Layer.mock(ThreadManagementService)({
+      getShellSnapshot: (options) =>
+        Effect.succeed({
+          schemaVersion: 1,
+          snapshotSequence: 7,
+          threads: options?.location === "active" ? [thread] : others.filter((t) => !t.archivedAt),
+          archivedThreads: options?.location === "active" ? [] : others.filter((t) => t.archivedAt),
+        }),
+      getThreadEventSequence: () => Effect.succeed(7),
+      getThreadShell: () => Effect.succeed(thread),
+      dispatch,
+    }),
+    Layer.mock(ProjectService)({
+      snapshot: Effect.succeed({ projects: [deleteProject], updatedAt: "1970-01-01T00:00:00Z" }),
+    }),
+    Layer.mock(PullRequestService)({}),
+    Layer.mock(GitManager)({}),
+    Layer.mock(GitWorkflowService)({ removeWorktree, deleteLocalBranch }),
+    ServerSettings.layerTest({
+      sidebarAutoSettleOnMerge: false,
+      sidebarAutoSettleAfterDays: null,
+      autoDeleteSettledAfterDays: 30,
+    }),
+    NodeServices.layer,
+  );
+  return { calls, dispatch, removeWorktree, deleteLocalBranch, layer };
+}
+
+it.effect("deletes a long-settled thread, then force-removes its worktree and branch", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("31 days");
+    const h = deleteHarness(settled(), []);
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(h.dispatch.mock.calls[0]?.[0]).toMatchObject({
+      type: "thread.delete",
+      automatic: { expectedSequence: 7 },
+    });
+    expect(h.calls).toEqual([
+      "thread.delete",
+      "remove /repo-worktrees/feature force=true",
+      "branch feature force=true",
+    ]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("counts from when the thread entered Settled, not its backdated settle time", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("31 days");
+    const h = deleteHarness(settled({ settledRecordedAt: DateTime.makeUnsafe("1970-01-30") }), []);
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(h.dispatch).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("keeps pinned threads", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("31 days");
+    const h = deleteHarness(settled({ pinnedAt: epoch }), []);
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(h.dispatch).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("keeps a worktree and branch another thread still uses", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("31 days");
+    const archivedOwner = settled({
+      id: ThreadId.make("other"),
+      settledOverride: null,
+      archivedAt: epoch,
+    });
+    const h = deleteHarness(settled(), [archivedOwner]);
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(h.calls).toEqual(["thread.delete"]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("never removes the project root", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("31 days");
+    const h = deleteHarness(settled({ worktreePath: "/repo", branch: "main" }), []);
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(h.calls).toEqual(["thread.delete"]);
   }).pipe(Effect.scoped),
 );

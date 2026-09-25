@@ -136,6 +136,16 @@ export const SidebarAutoSettleAfterDays = Schema.Number.check(
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
 export const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 3;
+export const MIN_AUTO_DELETE_SETTLED_AFTER_DAYS = 1;
+export const MAX_AUTO_DELETE_SETTLED_AFTER_DAYS = 365;
+export const AutoDeleteSettledAfterDays = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_AUTO_DELETE_SETTLED_AFTER_DAYS,
+    maximum: MAX_AUTO_DELETE_SETTLED_AFTER_DAYS,
+  }),
+);
+export type AutoDeleteSettledAfterDays = typeof AutoDeleteSettledAfterDays.Type;
+export const DEFAULT_AUTO_DELETE_SETTLED_AFTER_DAYS: AutoDeleteSettledAfterDays = 30;
 export const MIN_GLASS_OPACITY = 40;
 export const MAX_GLASS_OPACITY = 100;
 export const GlassOpacity = Schema.Int.check(
@@ -1242,6 +1252,11 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Days a thread stays settled before the server deletes it together with its
+  // worktree and local branch. Null (the default) never deletes.
+  autoDeleteSettledAfterDays: Schema.NullOr(AutoDeleteSettledAfterDays).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
   // including prior opt-ins, resets to the buffered default.
@@ -1566,6 +1581,7 @@ export const ServerSettingsPatch = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
+  autoDeleteSettledAfterDays: Schema.optionalKey(Schema.NullOr(AutoDeleteSettledAfterDays)),
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableHermes: Schema.optionalKey(Schema.Boolean),

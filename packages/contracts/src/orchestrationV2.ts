@@ -391,6 +391,10 @@ export const OrchestrationV2AppThread = Schema.Struct({
   // to its creation-order slot. Cleared on settle. Optional so threads
   // projected before the field existed still decode.
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  // Wall-clock time the thread entered Settled. `settledAt` may be backdated to
+  // the last activity or imported history, so auto-delete counts from this.
+  // Absent on threads settled before it existed; readers fall back to settledAt.
+  settledRecordedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   // Fractional sort key for the user-arranged pinned run. Absent on threads
   // pinned before reordering existed; those sort below arranged ones.
@@ -1880,6 +1884,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   settledAt: Schema.NullOr(Schema.DateTimeUtc),
   // See OrchestrationV2AppThread.unsettledAt: last re-entry into the active list.
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  settledRecordedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   // Fractional sort key for the user-arranged pinned run. Absent on threads
   // pinned before reordering existed; those sort below arranged ones.
@@ -1983,6 +1988,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  settledRecordedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(
@@ -2408,6 +2414,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   archivedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   settledAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  settledRecordedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(
@@ -2628,6 +2635,8 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.delete"),
     commandId: CommandId,
     threadId: ThreadId,
+    // Server auto-delete: rejected when the thread changed after it was judged due.
+    automatic: Schema.optional(Schema.Struct({ expectedSequence: NonNegativeInt })),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.settle"),
