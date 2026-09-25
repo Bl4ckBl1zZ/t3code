@@ -3397,6 +3397,137 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("asks a subagent's approval on the parent thread under its subagent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const childCommand = "printf 'subagent approval' > subagent-approval.txt";
+        const transcript = makeCodexReplayTranscript({
+          scenario: "codex-subagent-approval",
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId: INTERRUPT_NATIVE_THREAD,
+              nativeTurnId: INTERRUPT_NATIVE_TURN,
+              prompt: INTERRUPT_PROMPT,
+            }),
+            {
+              type: "emit_inbound",
+              label: "item/completed/subAgentActivity-started",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "subAgentActivity",
+                    id: "call-codex-approval-subagent",
+                    kind: "started",
+                    agentThreadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                    agentPath: "/root/writer",
+                  },
+                  threadId: INTERRUPT_NATIVE_THREAD,
+                  turnId: INTERRUPT_NATIVE_TURN,
+                  completedAtMs: 1782622441000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/started/child",
+              frame: {
+                method: "turn/started",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turn: makeCodexReplayTurn({
+                    id: INTERRUPT_CHILD_NATIVE_TURN,
+                    status: "inProgress",
+                  }),
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/commandExecution/requestApproval/child",
+              frame: {
+                method: "item/commandExecution/requestApproval",
+                id: 0,
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_CHILD_NATIVE_TURN,
+                  itemId: INTERRUPT_CHILD_COMMAND_ITEM,
+                  command: childCommand,
+                  cwd: "/tmp",
+                  availableDecisions: ["accept", "cancel"],
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "item/commandExecution/requestApproval/child",
+              frame: { id: 0, result: { decision: "accept" } },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed/child",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turn: makeCodexReplayTurn({
+                    id: INTERRUPT_CHILD_NATIVE_TURN,
+                    status: "completed",
+                  }),
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed/root",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: INTERRUPT_NATIVE_THREAD,
+                  turn: makeCodexReplayTurn({ id: INTERRUPT_NATIVE_TURN, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-codex-subagent-approval"),
+            text: INTERRUPT_PROMPT,
+          }),
+        );
+        const event = yield* harness.awaitApproval;
+        const item = event.turnItem;
+        if (item.type !== "approval_request") return yield* Effect.die("Missing approval");
+        const subagent = harness.subagentUpdates().at(-1)?.subagent;
+        assert.isDefined(subagent);
+        assert.notEqual(subagent?.childThreadId, harness.threadId);
+        // Native subagent threads are hidden, so the request lands on the
+        // parent thread and run, under the subagent that asked.
+        assert.equal(item.threadId, harness.threadId);
+        assert.equal(item.runId, subagent?.runId);
+        const requestNode = harness.events.find(
+          (candidate) => candidate.type === "node.updated" && candidate.node.id === item.nodeId,
+        );
+        assert.ok(requestNode?.type === "node.updated");
+        if (requestNode?.type === "node.updated") {
+          assert.equal(requestNode.node.threadId, harness.threadId);
+          assert.equal(requestNode.node.parentNodeId, subagent?.id);
+        }
+        yield* harness.runtime.respondToRuntimeRequest({
+          requestId: item.requestId,
+          decision: "accept",
+        });
+        yield* harness.awaitTerminal;
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   const childInterruptResponseIndex = interruptSubagentCommandTranscript.entries.findIndex(
     (entry) => entry.type === "emit_inbound" && entry.label === "turn/interrupt/child",
   );
