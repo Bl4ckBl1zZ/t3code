@@ -20,6 +20,7 @@ import { CodexOrchestratorReplayHarness } from "../Adapters/CodexAdapterV2.testk
 import { IdAllocatorV2, layer as idAllocatorLayer } from "../IdAllocator.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import {
+  CODEX_MODEL_SELECTION,
   THREAD_MERGE_BACK_FORK_PROMPT,
   THREAD_MERGE_BACK_HANDOFF_PROMPT,
   THREAD_MERGE_BACK_RECALL,
@@ -40,10 +41,6 @@ import {
   materializeReplayTranscriptWorkspace,
 } from "./ReplayTranscriptNdjson.ts";
 
-const CODEX_MODEL_SELECTION = {
-  instanceId: ProviderInstanceId.make("codex"),
-  model: "gpt-5.4",
-} as const;
 const CLAUDE_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("claudeAgent"),
   model: "claude-sonnet-4-6",
@@ -63,7 +60,8 @@ interface ProviderVariant {
 const PROVIDERS: ReadonlyArray<ProviderVariant> = [
   {
     driver: ProviderDriverKind.make("codex"),
-    modelSelection: CODEX_MODEL_SELECTION,
+    // Recorded on gpt-6-sol: gpt-6-luna tends to recall an acknowledgement instead of the markers.
+    modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-6-sol" },
   },
   {
     driver: ProviderDriverKind.make("claudeAgent"),

@@ -22,7 +22,10 @@ import { openCodeRunningChildApprovalInput } from "./opencode_running_child_appr
 import { assertOpenCodeRunningChildApprovalOutput } from "./opencode_running_child_approval/output.ts";
 import { openCodeSubagentInput } from "./opencode_subagent/input.ts";
 import { assertOpenCodeSubagentOutput } from "./opencode_subagent/output.ts";
-import { assertPlanQuestionsOutput } from "./plan_questions/codex_output.ts";
+import {
+  assertCodexPlanQuestionsOutput,
+  assertPlanQuestionsOutput,
+} from "./plan_questions/codex_output.ts";
 import { assertOpenCodePlanQuestionsOutput } from "./plan_questions/opencode_output.ts";
 import { planQuestionsInput } from "./plan_questions/input.ts";
 import { assertProposedPlanOutput } from "./proposed_plan/codex_output.ts";
@@ -251,7 +254,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
           "./tool_call_read_only_on_request/codex_transcript.ndjson",
           import.meta.url,
         ),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-6-luna declines the write under a read-only sandbox, so nothing asks for approval.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-6-sol" },
         runtimePolicyOverride: READ_ONLY_ON_REQUEST_POLICY,
         assertOutput: assertToolCallReadOnlyOnRequestOutput,
       },
@@ -323,7 +327,9 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
           "./tool_call_restricted_granular/codex_transcript.ndjson",
           import.meta.url,
         ),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-6 models write through the shell; gpt-5.6-terra's apply_patch raises the
+        // file-change approval this fixture covers.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-terra" },
         runtimePolicyOverride: RESTRICTED_GRANULAR_POLICY,
         assertOutput: assertToolCallRestrictedGranularOutput,
       },
@@ -346,7 +352,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent/codex_transcript.ndjson", import.meta.url),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-5.6-luna still runs multi-agent v1 (collabAgentToolCall); subagent_v2 covers v2.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-luna" },
         runtimePolicyOverride: READ_ONLY_ON_REQUEST_POLICY,
         assertOutput: assertSubagentOutput,
       },
@@ -372,7 +379,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent_continue/codex_transcript.ndjson", import.meta.url),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-5.6-luna still runs multi-agent v1 (collabAgentToolCall); subagent_v2 covers v2.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-luna" },
         assertOutput: assertSubagentContinueOutput,
       },
     ],
@@ -384,8 +392,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent_v2/codex_transcript.ndjson", import.meta.url),
-        // Recorded live on Codex 0.156.1; gpt-5.6-sol runs multi-agent v2.
-        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-sol" },
+        modelSelection: CODEX_MODEL_SELECTION,
         assertOutput: assertSubagentV2Output,
       },
     ],
@@ -397,8 +404,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent_v2_nested/codex_transcript.ndjson", import.meta.url),
-        // Recorded live on Codex 0.156.1; gpt-5.6-sol runs multi-agent v2.
-        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-sol" },
+        modelSelection: CODEX_MODEL_SELECTION,
         assertOutput: assertSubagentV2NestedOutput,
       },
     ],
@@ -573,7 +579,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./plan_questions/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
         runtimePolicyOverride: READ_ONLY_NEVER_POLICY,
-        assertOutput: assertPlanQuestionsOutput,
+        assertOutput: assertCodexPlanQuestionsOutput,
       },
       {
         driver: ProviderDriverKind.make("grok"),
@@ -762,8 +768,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./thread_rollback/codex_transcript.ndjson", import.meta.url),
-        // Recorded live on Codex 0.156.1, where gpt-5.4 is no longer served.
-        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-luna" },
+        modelSelection: CODEX_MODEL_SELECTION,
         assertOutput: assertThreadRollbackOutput,
       },
       {
