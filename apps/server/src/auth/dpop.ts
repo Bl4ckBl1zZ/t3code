@@ -5,6 +5,7 @@ import {
 import type { DpopFailureReason } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Option from "effect/Option";
@@ -17,6 +18,17 @@ import {
   type ServerAuthInternalError,
 } from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+
+/**
+ * Consumed DPoP proofs are recorded as `dpop-proof-<hash>` secrets so a proof
+ * is accepted once. `verifyDpopProof` accepts `iat` from 5s ahead to 300s
+ * behind the clock, so a record can stop a replay for at most ~305s after it is
+ * written. The pruner keeps records well past that.
+ */
+export const DPOP_REPLAY_RECORDS: ServerSecretStore.ExpiringSecretPrefix = {
+  prefix: "dpop-proof-",
+  maxAge: Duration.hours(1),
+};
 
 export const mapDpopFailureReason = (code: DpopVerificationFailureCodeType): DpopFailureReason => {
   switch (code) {
@@ -96,7 +108,7 @@ export const verifyRequestDpopProof = (input: {
     );
     yield* secretStore
       .create(
-        `dpop-proof-${replayKey}`,
+        `${DPOP_REPLAY_RECORDS.prefix}${replayKey}`,
         new TextEncoder().encode(
           [
             `thumbprint=${result.thumbprint}`,

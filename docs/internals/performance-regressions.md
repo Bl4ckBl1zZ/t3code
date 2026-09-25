@@ -25,6 +25,14 @@ The v2 checks pin these invariants:
 - Shell resume sends deltas plus compact repository-enrichment metadata, not another full project
   and thread snapshot. Enrichment frames are metadata-only at any sequence, so a trimmed frame can
   never replace the client's project, thread, or archive lists.
+- An enrichment refresh publishes only when its answer changed, and an expired answer keeps being
+  served while it refreshes. Each published change makes every live shell subscriber reload the
+  full snapshot, so republishing unchanged answers on every cache TTL kept those reloads running
+  forever.
+- The server's SQLite driver is synchronous, so a slow query stalls every client, not just its
+  caller. The shell query stays index-driven per thread (a partial index for live background
+  commands, a pinned join order for the last provider error) and carries only the latest message's
+  preview. On a 760-thread store it went from ~2s to ~0.1s.
 
 When changing projection schemas, windowing, shell synchronization, or thread state, run this
 command alongside the focused package typechecks and a real-client pass on every affected surface.

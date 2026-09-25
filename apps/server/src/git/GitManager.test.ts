@@ -645,8 +645,26 @@ function makeManager(input?: {
 
   const serverSettingsLayer = ServerSettings.ServerSettingsService.layerTest(input?.serverSettings);
 
-  const vcsDriverLayer = GitVcsDriver.layer.pipe(
+  // Every git process the manager spawns, by argv.
+  const gitCalls: string[] = [];
+  const recordingSpawnerLayer = Layer.effect(
+    ChildProcessSpawner.ChildProcessSpawner,
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      return ChildProcessSpawner.make((command) => {
+        if (command._tag === "StandardCommand" && command.command === "git") {
+          gitCalls.push(command.args.join(" "));
+        }
+        return spawner.spawn(command);
+      });
+    }),
+  ).pipe(Layer.provide(NodeServices.layer));
+
+  // Fresh, so the manager's driver spawns through the recorder instead of
+  // reusing the suite layer's already-built driver.
+  const vcsDriverLayer = Layer.fresh(GitVcsDriver.layer).pipe(
     Layer.provideMerge(VcsProcess.layer),
+    Layer.provideMerge(recordingSpawnerLayer),
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(serverConfigLayer),
   );
@@ -682,7 +700,7 @@ function makeManager(input?: {
 
   return GitManager.make.pipe(
     Effect.provide(managerLayer),
-    Effect.map((manager) => ({ manager, ghCalls })),
+    Effect.map((manager) => ({ manager, ghCalls, gitCalls })),
   );
 }
 
@@ -886,63 +904,63 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("branch PR lookup does not reuse a cached PR after the remote is repointed", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
-      yield* initRepo(repoDir);
-      const originalRemoteDir = yield* createBareRemote();
-      yield* runGit(repoDir, ["remote", "add", "origin", originalRemoteDir]);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/repointed-lookup"]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "feature/repointed-lookup"]);
-      yield* configureVisibleRemoteUrlWithLocalRewrite(
-        repoDir,
-        "origin",
-        "git@github.com:old-owner/old-repository.git",
-        originalRemoteDir,
-      );
-      const { manager, ghCalls } = yield* makeManager({
-        ghScenario: {
-          prListSequence: [
-            // Fake gh returns raw JSON stdout, matching the CLI boundary under test.
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            JSON.stringify([
-              {
-                number: 219,
-                title: "Old repository PR",
-                url: "https://github.com/old-owner/old-repository/pull/219",
-                baseRefName: "main",
-                headRefName: "feature/repointed-lookup",
-                state: "MERGED",
-                updatedAt: "2026-04-06T15:00:00Z",
-              },
-            ]),
-            "[]",
-          ],
-        },
-      });
+  it.effect(
+    "branch PR lookup does not reuse a status-cached PR after the remote is repointed",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const originalRemoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", originalRemoteDir]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/repointed-lookup"]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "feature/repointed-lookup"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "origin",
+          "git@github.com:old-owner/old-repository.git",
+          originalRemoteDir,
+        );
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              // Fake gh returns raw JSON stdout, matching the CLI boundary under test.
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify([
+                {
+                  number: 219,
+                  title: "Old repository PR",
+                  url: "https://github.com/old-owner/old-repository/pull/219",
+                  baseRefName: "main",
+                  headRefName: "feature/repointed-lookup",
+                  state: "MERGED",
+                  updatedAt: "2026-04-06T15:00:00Z",
+                },
+              ]),
+              "[]",
+            ],
+          },
+        });
 
-      const first = yield* manager.branchPullRequest({
-        cwd: repoDir,
-        branch: "feature/repointed-lookup",
-      });
-      expect(first?.state).toBe("merged");
+        // The status poll caches the PR under the same key branchPullRequest derives.
+        const status = yield* manager.status({ cwd: repoDir });
+        expect(status.pr?.state).toBe("merged");
 
-      const replacementRemoteDir = yield* createBareRemote();
-      yield* configureVisibleRemoteUrlWithLocalRewrite(
-        repoDir,
-        "origin",
-        "git@github.com:new-owner/new-repository.git",
-        replacementRemoteDir,
-      );
+        const replacementRemoteDir = yield* createBareRemote();
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "origin",
+          "git@github.com:new-owner/new-repository.git",
+          replacementRemoteDir,
+        );
 
-      const second = yield* manager.branchPullRequest({
-        cwd: repoDir,
-        branch: "feature/repointed-lookup",
-      });
+        const second = yield* manager.branchPullRequest({
+          cwd: repoDir,
+          branch: "feature/repointed-lookup",
+        });
 
-      expect(second).toBeNull();
-      expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
-    }),
+        expect(second).toBeNull();
+        expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
+      }),
   );
 
   it.effect("branch PR lookup shares the status cache for the same repository identity", () =>
@@ -1004,6 +1022,121 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         repositoryKey: "github.com/pingdotgg/codething-mvp",
       });
       expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
+    }),
+  );
+
+  it.effect("branch PR lookup answers repeat asks without git until its PR lookup expires", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/remembered"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/remembered"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      const pullRequest = (number: number, state: string) => ({
+        number,
+        title: "Remembered PR",
+        url: `https://github.com/pingdotgg/codething-mvp/pull/${number}`,
+        baseRefName: "main",
+        headRefName: "feature/remembered",
+        state,
+        updatedAt: "2026-04-07T15:00:00Z",
+      });
+      const { manager, ghCalls, gitCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([pullRequest(230, "MERGED")]),
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([pullRequest(231, "OPEN")]),
+          ],
+        },
+      });
+      const lookup = manager.branchPullRequest({ cwd: repoDir, branch: "feature/remembered" });
+      const prListCalls = () => ghCalls.filter((call) => call.startsWith("pr list "));
+
+      const first = yield* lookup;
+      expect(first).toMatchObject({ number: 230, state: "merged" });
+      const gitCallsAfterFirst = gitCalls.length;
+      expect(gitCallsAfterFirst).toBeGreaterThan(0);
+
+      // Settlement sweeps re-ask within the merged answer's 5-minute lifetime.
+      expect(yield* lookup).toEqual(first);
+      yield* TestClock.adjust("299 seconds");
+      expect(yield* lookup).toEqual(first);
+      expect(gitCalls).toHaveLength(gitCallsAfterFirst);
+      expect(prListCalls()).toHaveLength(1);
+
+      // Once the PR lookup expires, git and the host are both read again.
+      yield* TestClock.adjust("2 seconds");
+      expect(yield* lookup).toMatchObject({ number: 231, state: "open" });
+      expect(gitCalls.length).toBeGreaterThan(gitCallsAfterFirst);
+      expect(prListCalls()).toHaveLength(2);
+
+      // An open answer lives one minute, like its PR lookup.
+      const gitCallsAfterOpen = gitCalls.length;
+      yield* TestClock.adjust("59 seconds");
+      yield* lookup;
+      expect(gitCalls).toHaveLength(gitCallsAfterOpen);
+      yield* TestClock.adjust("2 seconds");
+      yield* lookup;
+      expect(gitCalls.length).toBeGreaterThan(gitCallsAfterOpen);
+      expect(prListCalls()).toHaveLength(3);
+    }),
+  );
+
+  it.effect("branch PR lookup re-reads a remembered answer after invalidation or refresh", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/fresh-merge"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/fresh-merge"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      const pullRequest = (number: number, state: string) => ({
+        number,
+        title: "Fresh merge PR",
+        url: `https://github.com/pingdotgg/codething-mvp/pull/${number}`,
+        baseRefName: "main",
+        headRefName: "feature/fresh-merge",
+        state,
+        updatedAt: "2026-04-07T15:00:00Z",
+      });
+      const { manager, ghCalls, gitCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([pullRequest(240, "OPEN")]),
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([pullRequest(240, "MERGED")]),
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([pullRequest(241, "OPEN")]),
+          ],
+        },
+      });
+      const lookup = (options?: { readonly refresh?: boolean }) =>
+        manager.branchPullRequest({ cwd: repoDir, branch: "feature/fresh-merge" }, options);
+      const prListCalls = () => ghCalls.filter((call) => call.startsWith("pr list "));
+
+      expect(yield* lookup()).toMatchObject({ number: 240, state: "open" });
+      expect(yield* lookup()).toMatchObject({ number: 240, state: "open" });
+      expect(prListCalls()).toHaveLength(1);
+
+      // A confirmed in-app merge invalidates the checkout; the next ask sees it.
+      yield* manager.invalidateStatus(repoDir);
+      const gitCallsBeforeInvalidatedLookup = gitCalls.length;
+      expect(yield* lookup()).toMatchObject({ number: 240, state: "merged" });
+      expect(gitCalls.length).toBeGreaterThan(gitCallsBeforeInvalidatedLookup);
+      expect(prListCalls()).toHaveLength(2);
+
+      // A refresh re-reads, and later plain asks get the refreshed answer.
+      expect(yield* lookup({ refresh: true })).toMatchObject({ number: 241, state: "open" });
+      expect(prListCalls()).toHaveLength(3);
+      const gitCallsAfterRefresh = gitCalls.length;
+      expect(yield* lookup()).toMatchObject({ number: 241, state: "open" });
+      expect(gitCalls).toHaveLength(gitCallsAfterRefresh);
     }),
   );
 

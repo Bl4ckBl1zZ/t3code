@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
+  OrchestrationV2LatestVisibleMessageSummary,
   OrchestrationV2PlanArtifact,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ProviderTurn,
@@ -21,6 +22,7 @@ import {
   OrchestrationV2ContextTransferJson as OrchestrationV2ContextTransferJsonSchema,
   OrchestrationV2ConversationMessageJson as OrchestrationV2ConversationMessageJsonSchema,
   OrchestrationV2ExecutionNodeJson as OrchestrationV2ExecutionNodeJsonSchema,
+  OrchestrationV2LatestVisibleMessageSummaryJson as OrchestrationV2LatestVisibleMessageSummaryJsonSchema,
   OrchestrationV2PlanArtifact as OrchestrationV2PlanArtifactSchema,
   OrchestrationV2ProviderSessionJson as OrchestrationV2ProviderSessionJsonSchema,
   OrchestrationV2ProviderThreadJson as OrchestrationV2ProviderThreadJsonSchema,
@@ -487,7 +489,7 @@ type ShellThreadRow = {
   readonly provider_instance_history_json: string | null;
   readonly last_error: string | null;
   readonly pending_request_payload_json: string | null;
-  readonly latest_message_payload_json: string | null;
+  readonly latest_message_summary_json: string | null;
   readonly latest_user_message_at: string | null;
   readonly has_actionable_proposed_plan: number;
   readonly item_count: number;
@@ -690,6 +692,9 @@ const decodeRuntimeRequestPayload = Schema.decodeUnknownEffect(
 );
 const decodeMessagePayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2ConversationMessageJsonSchema),
+);
+const decodeLatestVisibleMessageSummary = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationV2LatestVisibleMessageSummaryJsonSchema),
 );
 const decodePlanArtifact = Schema.decodeUnknownEffect(OrchestrationV2PlanArtifactSchema);
 const decodePlanPayload = (json: string) => decodePlanArtifact(parseEncodedPayload(json));
@@ -1150,7 +1155,7 @@ type ShellThreadState = {
   readonly providerInstanceHistory: OrchestrationV2ThreadShell["providerInstanceHistory"];
   readonly lastError: string | null;
   readonly pendingRuntimeRequest: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null;
-  readonly latestVisibleMessage: OrchestrationV2ConversationMessage | null;
+  readonly latestVisibleMessage: OrchestrationV2LatestVisibleMessageSummary | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
   readonly backgroundProcessCount: number;
@@ -2588,11 +2593,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   GROUP BY provider_instance_id
                 ) pt
               ) AS provider_instance_history_json,
+              -- CROSS JOIN pins the join order: start from this thread's few
+              -- bindings. Left to itself the planner starts from every session
+              -- of the provider instance instead, once per thread (~1s for the
+              -- whole shell on a 760-thread store, vs ~5ms).
               (
                 SELECT json_extract(session.payload_json, '$.lastError')
-                FROM orchestration_v2_projection_provider_sessions session
-                INNER JOIN orchestration_v2_projection_provider_session_bindings binding
-                  ON binding.provider_session_id = session.provider_session_id
+                FROM orchestration_v2_projection_provider_session_bindings binding
+                CROSS JOIN orchestration_v2_projection_provider_sessions session
+                  ON session.provider_session_id = binding.provider_session_id
                 WHERE binding.thread_id = t.thread_id
                   AND session.provider_instance_id = t.provider_instance_id
                 ORDER BY session.updated_at DESC, session.provider_session_id DESC
@@ -2607,13 +2616,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   request.created_at DESC, request.runtime_request_id DESC
                 LIMIT 1
               ) AS pending_request_payload_json,
+              -- Only the fields the shell shows, with the text cut to the preview
+              -- length. Whole payloads were most of the snapshot's bytes. substr
+              -- counts code points, so the prefix is never shorter than the
+              -- UTF-16 slice shellPreviewText takes from it.
               (
-                SELECT message.payload_json
+                SELECT json_object(
+                  'id', json_extract(message.payload_json, '$.id'),
+                  'role', json_extract(message.payload_json, '$.role'),
+                  'text', substr(json_extract(message.payload_json, '$.text'), 1, ${SHELL_PREVIEW_TEXT_MAX_LENGTH}),
+                  'updatedAt', json_extract(message.payload_json, '$.updatedAt')
+                )
                 FROM orchestration_v2_projection_messages message
                 WHERE message.thread_id = t.thread_id
                 ORDER BY message.updated_at DESC, message.message_id DESC
                 LIMIT 1
-              ) AS latest_message_payload_json,
+              ) AS latest_message_summary_json,
               (
                 SELECT message.updated_at
                 FROM orchestration_v2_projection_messages message
@@ -2646,7 +2664,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               -- Background commands still running. The rows rather than a count,
               -- because whether a monitor folds into the command it watches is a
               -- rule shared with the clients; recomputing it in SQL would let the
-              -- sidebar and the timeline disagree.
+              -- sidebar and the timeline disagree. The type/status terms must
+              -- match migration 063's partial index word for word, or SQLite
+              -- falls back to reading every item row of every thread.
               (
                 SELECT json_group_array(
                   json_object(
@@ -2750,9 +2770,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ? null
             : yield* decodeRuntimeRequestPayload(row.pending_request_payload_json);
         const latestVisibleMessage =
-          row.latest_message_payload_json === null
+          row.latest_message_summary_json === null
             ? null
-            : yield* decodeMessagePayload(row.latest_message_payload_json);
+            : yield* decodeLatestVisibleMessageSummary(row.latest_message_summary_json);
         return {
           thread,
           latestRunId: row.latest_run_id === null ? null : RunId.make(row.latest_run_id),

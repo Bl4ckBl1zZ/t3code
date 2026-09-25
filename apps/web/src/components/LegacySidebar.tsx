@@ -182,7 +182,7 @@ import {
 } from "../threadSelectionStore";
 import { openCommandPalette } from "../commandPaletteBus";
 import {
-  deleteSelectedThreadEntries,
+  summarizeThreadDeletions,
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
   getSidebarForkParentThreadId,
@@ -1152,6 +1152,7 @@ interface SidebarProjectItemProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  deleteThreads: ReturnType<typeof useThreadActions>["deleteThreads"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -1173,6 +1174,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     handleNewThread,
     archiveThread,
     deleteThread,
+    deleteThreads,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -1957,11 +1959,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         if (!confirmed) return;
       }
 
-      const { deletedThreadKeys, firstFailure } = await deleteSelectedThreadEntries({
-        entries: selectedThreadEntries,
-        delete: ({ threadRef }, deletedKeys) =>
-          deleteThread(threadRef, { deletedThreadKeys: deletedKeys }),
-      });
+      const { deletedThreadKeys, firstFailure } = summarizeThreadDeletions(
+        selectedThreadEntries.map(({ threadKey }) => threadKey),
+        await deleteThreads(selectedThreadEntries.map(({ threadRef }) => threadRef)),
+      );
       if (firstFailure) {
         const error = squashAtomCommandFailure(firstFailure);
         toastManager.add(
@@ -1984,7 +1985,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       appSettingsConfirmThreadDelete,
       archiveThread,
       clearSelection,
-      deleteThread,
+      deleteThreads,
       markThreadUnread,
       removeFromSelection,
     ],
@@ -2867,6 +2868,7 @@ interface SidebarProjectsContentProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  deleteThreads: ReturnType<typeof useThreadActions>["deleteThreads"];
   sortedProjects: readonly SidebarProjectSnapshot[];
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
@@ -2909,6 +2911,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     handleNewThread,
     archiveThread,
     deleteThread,
+    deleteThreads,
     sortedProjects,
     expandedThreadListsByProject,
     activeRouteProjectKey,
@@ -3049,6 +3052,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                         handleNewThread={handleNewThread}
                         archiveThread={archiveThread}
                         deleteThread={deleteThread}
+                        deleteThreads={deleteThreads}
                         threadJumpLabelByKey={threadJumpLabelByKey}
                         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                         expandThreadListForProject={expandThreadListForProject}
@@ -3082,6 +3086,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 handleNewThread={handleNewThread}
                 archiveThread={archiveThread}
                 deleteThread={deleteThread}
+                deleteThreads={deleteThreads}
                 threadJumpLabelByKey={threadJumpLabelByKey}
                 attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                 expandThreadListForProject={expandThreadListForProject}
@@ -3117,7 +3122,7 @@ export default function LegacySidebar() {
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
-  const { archiveThread, deleteThread } = useThreadActions();
+  const { archiveThread, deleteThread, deleteThreads } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
   const routeTarget = useParams({
     strict: false,
@@ -3764,6 +3769,7 @@ export default function LegacySidebar() {
         handleNewThread={handleNewThread}
         archiveThread={archiveThread}
         deleteThread={deleteThread}
+        deleteThreads={deleteThreads}
         sortedProjects={sortedProjects}
         expandedThreadListsByProject={expandedThreadListsByProject}
         activeRouteProjectKey={activeRouteProjectKey}

@@ -534,6 +534,90 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("summarizes the latest message exactly like the full projection does", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-latest-message");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-latest-message:created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:projection-latest-message"),
+          title: "Latest message",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      // Astral characters take two UTF-16 units but one SQLite character, so
+      // the preview cut lands mid-emoji-run on one side and mid-ASCII on the other.
+      const messages = [
+        { suffix: "user", role: "user" as const, text: "hello", at: now },
+        {
+          suffix: "assistant",
+          role: "assistant" as const,
+          text: `${"\u{1F600}".repeat(300)}${"x".repeat(1000)}`,
+          at: DateTime.add(now, { seconds: 1 }),
+        },
+      ];
+      for (const message of messages) {
+        yield* projectionStore.apply({
+          id: EventId.make(`event:projection-latest-message:${message.suffix}`),
+          type: "message.updated",
+          threadId,
+          occurredAt: message.at,
+          payload: {
+            createdBy: message.role === "user" ? "user" : "agent",
+            creationSource: message.role === "user" ? "web" : "provider",
+            id: MessageId.make(`message:projection-latest-message:${message.suffix}`),
+            threadId,
+            runId: null,
+            nodeId: null,
+            role: message.role,
+            text: message.text,
+            attachments: [],
+            streaming: false,
+            createdAt: message.at,
+            updatedAt: message.at,
+          },
+        });
+      }
+
+      const expected = threadShellFromProjection(
+        yield* projectionStore.getThreadProjection(threadId),
+      ).latestVisibleMessage;
+      assert.equal(expected?.role, "assistant");
+      assert.equal(expected?.text, messages[1]!.text.slice(0, 512));
+      const fromSnapshot = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      assert.deepEqual(fromSnapshot?.latestVisibleMessage, expected);
+      assert.deepEqual(
+        (yield* projectionStore.getThreadShell(threadId))?.latestVisibleMessage,
+        expected,
+      );
+    }),
+  );
+
   it.effect("counts live background commands in the shell the sidebar reads", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;

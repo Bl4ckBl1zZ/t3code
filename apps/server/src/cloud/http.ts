@@ -109,6 +109,20 @@ const CLOUD_PROOF_CLOCK_SKEW_SECONDS = 60;
 // The desktop app stops its backends within seconds of writing the marker.
 const DESKTOP_UPDATE_RESTART_MARKER_TTL = Duration.minutes(1);
 const MANAGED_ENDPOINT_PROVISION_REQUEST_TIMEOUT = Duration.minutes(2);
+
+/**
+ * Replay guards written by `consumeCloudReplayGuards`. A cloud proof passes
+ * `verifyRelayJwt` (5 min max age, 60s tolerance) and
+ * `hasBoundedCloudProofLifetime` (iat up to 60s ahead) for at most ~7 min after
+ * its guard is written. The pruner keeps guards well past that.
+ */
+export const CLOUD_REPLAY_RECORDS: ReadonlyArray<ServerSecretStore.ExpiringSecretPrefix> = [
+  CLOUD_MINT_NONCE_PREFIX,
+  CLOUD_MINT_JTI_PREFIX,
+  CLOUD_HEALTH_NONCE_PREFIX,
+  CLOUD_HEALTH_JTI_PREFIX,
+].map((prefix) => ({ prefix, maxAge: Duration.hours(1) }));
+
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const CLOUD_CREDENTIAL_RESPONSE_HEADERS = {
   "cache-control": "no-store",

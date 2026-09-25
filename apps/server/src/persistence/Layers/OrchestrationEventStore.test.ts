@@ -231,6 +231,69 @@ layer("OrchestrationEventStore", (it) => {
       );
     }),
   );
+
+  it.effect("reads a thread's latest V2 sequence past newer non-V2 rows", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-latest-agent-sequence");
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const occurredAt = DateTime.makeUnsafe("2026-01-03T00:00:00.000Z");
+      const [agentEvent] = yield* eventStore.appendAgentEvents({
+        commandId: CommandId.make("command-latest-agent-sequence"),
+        events: [
+          {
+            id: EventId.make("event-latest-agent-sequence"),
+            type: "thread.created",
+            threadId,
+            providerInstanceId,
+            occurredAt,
+            payload: {
+              id: threadId,
+              projectId: ProjectId.make("project-latest-agent-sequence"),
+              title: "Thread",
+              providerInstanceId,
+              modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              activeProviderThreadId: null,
+              lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+              forkedFrom: null,
+              createdBy: "user",
+              creationSource: "web",
+              createdAt: occurredAt,
+              updatedAt: occurredAt,
+              archivedAt: null,
+              settledOverride: null,
+              settledAt: null,
+              lastVisitedAt: null,
+              deletedAt: null,
+            },
+          },
+        ],
+      });
+      // A newer row on the same stream that is not a V2 application event.
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at,
+          command_id, causation_event_id, correlation_id, actor_kind, payload_json, metadata_json
+        )
+        VALUES (
+          ${EventId.make("event-latest-agent-sequence-legacy")}, ${"thread"}, ${threadId}, ${99},
+          ${"thread.created"}, ${DateTime.formatIso(occurredAt)}, ${null}, ${null}, ${null},
+          ${"server"}, ${"{}"}, ${"{}"}
+        )
+      `;
+
+      assert.equal(yield* eventStore.latestAgentSequence(threadId), agentEvent!.sequence);
+      assert.equal(
+        yield* eventStore.latestAgentSequence(ThreadId.make("thread-without-events")),
+        0,
+      );
+    }),
+  );
 });
 
 // Exercise multiple SQL pages while the consumer remains active.
