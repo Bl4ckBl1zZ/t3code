@@ -1,9 +1,26 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import {
+  GrokSettings,
+  ProviderInstanceId,
+  ProviderSessionId,
+  type RuntimeMode,
+  ThreadId,
+} from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as EffectAcpErrors from "effect-acp/errors";
 import { xAiRateLimitedErrorCode } from "../../provider/acp/XAiAcpExtension.ts";
 import { assert, describe, it } from "@effect/vitest";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { ServerConfig } from "../../config.ts";
+import { layer as idAllocatorLayer, IdAllocatorV2 } from "../IdAllocator.ts";
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 import {
   AcpProviderCapabilitiesV2,
@@ -19,9 +36,14 @@ import {
 } from "./AcpAdapterV2.ts";
 import {
   makeGrokAcpAdapterFlavor,
+  makeGrokAdapterV2,
   GrokProviderCapabilitiesV2,
   type GrokAdapterV2Options,
 } from "./GrokAdapterV2.ts";
+
+const LAUNCH_TEST_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({
+  binaryPath: "grok-launch-test",
+});
 
 function permissionRequest(
   kind: EffectAcpSchema.ToolKind,
@@ -398,4 +420,115 @@ describe("ACP permission policy", () => {
       "allow",
     );
   });
+
+  it("auto-accept-edits approves file changes without locations and asks for the rest", () => {
+    // Grok's session/request_permission carries no locations.
+    const autoAcceptEdits = runtimePolicy({ runtimeMode: "auto-accept-edits" });
+    for (const kind of ["edit", "delete", "move"] as const) {
+      assert.equal(acpPermissionDisposition(autoAcceptEdits, permissionRequest(kind)), "allow");
+    }
+    for (const kind of ["execute", "fetch", "other"] as const) {
+      assert.equal(acpPermissionDisposition(autoAcceptEdits, permissionRequest(kind)), "ask");
+    }
+    assert.equal(acpPermissionDisposition(autoAcceptEdits, permissionRequest("read")), "allow");
+    assert.equal(
+      acpPermissionDisposition(
+        runtimePolicy({ runtimeMode: "auto-accept-edits", approvalPolicy: "on-request" }),
+        permissionRequest("edit"),
+      ),
+      "ask",
+    );
+  });
+});
+
+describe("Grok launch permission mode", () => {
+  const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
+    prefix: "t3-grok-v2-launch-",
+  }).pipe(Layer.provide(NodeServices.layer));
+  const testLayer = Layer.mergeAll(NodeServices.layer, idAllocatorLayer, serverConfigLayer);
+
+  // Opens a session through the adapter's own Grok runtime factory and returns
+  // the argv it tried to launch. The spawn fails after recording, so no
+  // process starts.
+  const launchArgs = (runtimePolicy: ProviderAdapterV2RuntimePolicy) =>
+    Effect.gen(function* () {
+      const launches: Array<ReadonlyArray<string>> = [];
+      const childProcessSpawner = ChildProcessSpawner.make((command) => {
+        if (command._tag === "StandardCommand") launches.push(command.args);
+        return Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "grok-launch-test",
+            method: "spawn",
+          }),
+        );
+      });
+      const instanceId = ProviderInstanceId.make("grok-launch-test");
+      const adapter = makeGrokAdapterV2({
+        instanceId,
+        settings: LAUNCH_TEST_GROK_SETTINGS,
+        environment: {},
+        childProcessSpawner,
+        crypto: yield* Crypto.Crypto,
+        fileSystem: yield* FileSystem.FileSystem,
+        idAllocator: yield* IdAllocatorV2,
+        serverConfig: yield* ServerConfig,
+      });
+      yield* adapter
+        .openSession({
+          threadId: ThreadId.make("grok-launch-test"),
+          providerSessionId: ProviderSessionId.make("grok-launch-test"),
+          modelSelection: { instanceId, model: "grok-build" },
+          runtimePolicy,
+        })
+        .pipe(Effect.scoped, Effect.ignore);
+      return launches;
+    }).pipe(
+      // Keep the launch argv unwrapped by the Linux cgroup shim.
+      Effect.provideService(HostProcessPlatform, "darwin"),
+      Effect.provide(testLayer),
+    );
+
+  const policy = (
+    runtimeMode: RuntimeMode,
+    override: Partial<ProviderAdapterV2RuntimePolicy> = {},
+  ) =>
+    ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode,
+      interactionMode: "default",
+      cwd: process.cwd(),
+      ...override,
+    });
+
+  for (const [runtimeMode, args] of [
+    ["approval-required", ["--permission-mode", "default", "agent", "stdio"]],
+    ["auto-accept-edits", ["--permission-mode", "default", "agent", "stdio"]],
+    ["auto", ["--permission-mode", "auto", "agent", "stdio"]],
+    ["full-access", ["agent", "--always-approve", "stdio"]],
+  ] as const) {
+    it.effect(`launches ${runtimeMode} threads with ${args.join(" ")}`, () =>
+      Effect.gen(function* () {
+        assert.deepEqual(yield* launchArgs(policy(runtimeMode)), [args]);
+      }),
+    );
+  }
+
+  it.effect("launches asking when an explicit approval or sandbox policy governs the thread", () =>
+    Effect.gen(function* () {
+      const asking = [["--permission-mode", "default", "agent", "stdio"]];
+      assert.deepEqual(
+        yield* launchArgs(
+          policy("full-access", {
+            approvalPolicy: "never",
+            sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+          }),
+        ),
+        asking,
+      );
+      assert.deepEqual(
+        yield* launchArgs(policy("full-access", { approvalPolicy: "on-request" })),
+        asking,
+      );
+    }),
+  );
 });

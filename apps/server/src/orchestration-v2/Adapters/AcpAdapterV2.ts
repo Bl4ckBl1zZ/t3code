@@ -99,6 +99,11 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
+  /**
+   * Policy the session opened with. A runtime-mode change reopens the session,
+   * so flavors that encode permissions in the launch command (Grok) read it here.
+   */
+  readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly interruptPromptOnCancel?: boolean;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
@@ -1096,7 +1101,7 @@ export function acpPermissionDisposition(
     case "readOnly":
       return "deny";
     case "workspaceWrite":
-      if (toolKind === "edit" || toolKind === "delete" || toolKind === "move") {
+      if (isAcpMutationKind(toolKind)) {
         return acpWorkspaceWriteAllowsMutation(runtimePolicy, sandboxPolicy ?? {}, request)
           ? "allow"
           : "deny";
@@ -1106,10 +1111,24 @@ export function acpPermissionDisposition(
     case "externalSandbox":
       return "allow";
     case undefined:
-      return runtimePolicy.runtimeMode === "approval-required" ? "deny" : "allow";
+      if (runtimePolicy.runtimeMode === "approval-required") return "deny";
+      // Auto-accept edits approves file changes wherever the agent makes them
+      // (Grok's prompts carry no locations to confine); other actions still ask.
+      if (
+        runtimePolicy.runtimeMode === "auto-accept-edits" &&
+        runtimePolicy.approvalPolicy === undefined &&
+        !isAcpMutationKind(toolKind)
+      ) {
+        return "ask";
+      }
+      return "allow";
     default:
       return "deny";
   }
+}
+
+function isAcpMutationKind(toolKind: string): boolean {
+  return toolKind === "edit" || toolKind === "delete" || toolKind === "move";
 }
 
 function elicitationContent(
@@ -1815,6 +1834,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const nativeLogging = options.nativeLogging?.(input.threadId);
         const makeRuntimeInput = (runtimeGeneration: number): AcpAdapterV2RuntimeInput => ({
           cwd: input.runtimePolicy.cwd ?? process.cwd(),
+          runtimePolicy: input.runtimePolicy,
           mcpServers: acpMcpServers(input.threadId),
           interruptPromptOnCancel: flavor.interruptPromptOnCancel ?? false,
           clientCapabilities: {
