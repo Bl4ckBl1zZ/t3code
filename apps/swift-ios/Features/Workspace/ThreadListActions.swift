@@ -35,6 +35,11 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
     public let settlementSupported: Bool
     /// The Snooze counterpart of ``settlementSupported``.
     public let snoozeSupported: Bool
+    /// Whether the server takes a per-thread auto-settle choice. Older servers
+    /// would ignore it, so the submenu is omitted rather than offered.
+    public let autoSettleSupported: Bool
+    /// False while the user has kept this thread out of automatic settlement.
+    public let autoSettleEnabled: Bool
     public let handoffScriptSupported: Bool
     /// Whether the row has a workspace path to copy. Absent on a thread whose
     /// worktree has not been provisioned, so the entry is omitted rather than
@@ -64,6 +69,8 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         offersParking: Bool = true,
         settlementSupported: Bool = true,
         snoozeSupported: Bool = true,
+        autoSettleSupported: Bool = false,
+        autoSettleEnabled: Bool = true,
         handoffScriptSupported: Bool = true,
         hasWorktreePath: Bool = true,
         hasBranch: Bool = true,
@@ -82,6 +89,8 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         self.offersParking = offersParking
         self.settlementSupported = settlementSupported
         self.snoozeSupported = snoozeSupported
+        self.autoSettleSupported = autoSettleSupported
+        self.autoSettleEnabled = autoSettleEnabled
         self.handoffScriptSupported = handoffScriptSupported
         self.hasWorktreePath = hasWorktreePath
         self.hasBranch = hasBranch
@@ -103,6 +112,9 @@ public enum ThreadRowMenuActions {
     public static let unsettleActionID = "unsettle"
     public static let snoozeActionID = "snooze"
     public static let unsnoozeActionID = "unsnooze"
+    public static let autoSettleActionID = "auto-settle"
+    public static let autoSettleEnabledActionID = "auto-settle:enabled"
+    public static let autoSettleDisabledActionID = "auto-settle:disabled"
     public static let copyHandoffScriptActionID = "copy-handoff-script"
     public static let deleteActionID = "delete"
 
@@ -163,7 +175,8 @@ public enum ThreadRowMenuActions {
     /// The Home row's long-press menu.
     ///
     /// Four sections, matching the web sidebar: what the thread is doing
-    /// (pin, settle, snooze), what it is called (rename, regenerate), what you
+    /// (pin, settle, snooze), what it is called and how it settles (rename,
+    /// regenerate, auto-settle behavior), what you
     /// can take away from it (the copy submenu), and what removes it. Snooze
     /// opens the shared preset submenu (``SnoozePresets``); `now` anchors the
     /// preset wake times and their labels.
@@ -243,6 +256,33 @@ public enum ThreadRowMenuActions {
             regenerating: context.isRegeneratingTitle,
             after: renameActionID
         )
+
+        // A setting rather than a verb, so it sits with the naming section
+        // instead of beside Settle, with the current choice checked. Disabled
+        // keeps a long-running thread out of Settled however quiet it gets.
+        if !context.isArchived, context.offersParking, context.settlementSupported,
+            context.autoSettleSupported
+        {
+            actions.append(
+                ThreadRowMenuAction(
+                    id: autoSettleActionID,
+                    title: "Auto-settle behavior",
+                    symbol: "timer",
+                    children: [
+                        ThreadRowMenuAction(
+                            id: autoSettleEnabledActionID,
+                            title: "Enabled",
+                            checked: context.autoSettleEnabled
+                        ),
+                        ThreadRowMenuAction(
+                            id: autoSettleDisabledActionID,
+                            title: "Disabled",
+                            checked: !context.autoSettleEnabled
+                        ),
+                    ]
+                )
+            )
+        }
 
         actions.append(copySubmenu(context))
 

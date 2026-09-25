@@ -431,6 +431,20 @@ public final class FeatureRootModel {
         return succeeded
     }
 
+    /// A per-thread setting, not a lifecycle move, so it offers no Undo: the
+    /// same menu flips it back. Re-sending the current choice keeps the stamp.
+    @discardableResult
+    public func setAutoSettle(_ id: String, enabled: Bool) async -> Bool {
+        let environment = currentEnvironmentIdentity
+        return await perform(failureTitle: "Couldn't Update Auto-Settle") {
+            try await client.setThreadAutoSettle(id: id, enabled: enabled)
+            guard currentEnvironmentIdentity == environment else { return }
+            mutateThread(id: id) {
+                $0.autoSettleDisabledAt = enabled ? nil : ($0.autoSettleDisabledAt ?? .now)
+            }
+        }
+    }
+
     /// `orderKey` re-pins at a known slot; undoing an unpin passes the one the
     /// thread held.
     @discardableResult

@@ -2,7 +2,7 @@
 
 Open **Usage** from the sidebar or the command palette, or press `mod+u` on web and
 desktop when the terminal is not focused. Customize `usage.open` in
-**Settings → Keybindings**.
+**Settings → Keybindings**. On iPad with a hardware keyboard, ⌘U opens **Settings → Usage**.
 
 The Usage page combines Codex, Claude Code, and Grok Build activity from your connected
 environments. It reads the providers' local session history and shows API-equivalent token cost,
@@ -69,7 +69,7 @@ one. This spends a banked credit and cannot be undone. The action requires permi
 the selected environment. A failed attempt can be retried with the same attempt ID. If redemption
 succeeds but its follow-up report fails, refresh the limits to confirm their current state.
 Claude resets are not available when the server runs on macOS, where Claude keeps its login in the
-Keychain. iPhone and iPad currently show reset credits for Codex accounts only.
+Keychain.
 
 ## Quota hubs
 

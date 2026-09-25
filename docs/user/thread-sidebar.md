@@ -152,10 +152,10 @@ a stack is not finished until every visible linked request is terminal. A merge 
 your latest engagement does not settle resumed work again. Manually reopen any settled thread to
 bring it back to the active list. Automatic settlement retains its pin and ordering metadata.
 
-On web and desktop, to keep one thread out of **Settled** no matter how long it sits idle, open its
-menu, choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
-**Enabled** to return to the usual rules. Manual settle, snooze, and archive still work while it is
-disabled.
+To keep one thread out of **Settled** no matter how long it sits idle, open its menu, choose
+**Auto-settle behavior**, and pick **Disabled**. On iOS, long-press the thread on Home to open the
+menu. The current option is checked. Pick **Enabled** to return to the usual rules. Manual settle,
+snooze, and archive still work while it is disabled.
 
 Pull requests created or opened through a thread’s Git actions are automatically linked to that
 thread. They appear in its pull-request collection, including requests targeting an upstream
@@ -164,8 +164,8 @@ thread to attach to.
 
 Open **Linked pull requests** from a thread’s link or stack badge to review its full collection
 beside the conversation. The panel shows checks, reviews, conflicts and stack order from the
-latest saved host state. Open individual requests in separate tabs, copy their links, or unlink
-them from the row menu. The right-panel launcher opens this collection even before a request
+latest saved host state. Rows name the repository when the thread links requests from more than
+one. Open individual requests in separate tabs, copy their links, or unlink them from the row menu. The right-panel launcher opens this collection even before a request
 has been linked.
 
 Thread and source-control preferences are shared across connected machines. On native iOS,

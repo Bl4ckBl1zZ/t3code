@@ -25,6 +25,8 @@ struct FeatureEnvironmentLimits: Sendable {
 }
 
 enum FeatureUsageLimitsMerge {
+    static let redeemableDrivers: Set<String> = ["codex", "claudeAgent"]
+
     static func date(_ value: String?) -> Date? {
         guard let value else { return nil }
         let formatter = ISO8601DateFormatter()
@@ -43,7 +45,10 @@ enum FeatureUsageLimitsMerge {
                 let email = provider.auth.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let identity = email.flatMap { $0.isEmpty ? nil : $0 } ?? "instance:\(environment.id):\(provider.instanceId)"
                 let key = "\(provider.driver):\(identity)"
-                let resetTarget: FeatureLimitAccount.ResetTarget? = provider.driver == "codex" && provider.usageLimits?.resetCredits != nil
+                // Codex and Claude redeem banked resets through the owning
+                // instance; servers only report credits where redemption works.
+                let resetTarget: FeatureLimitAccount.ResetTarget? = FeatureUsageLimitsMerge.redeemableDrivers.contains(provider.driver)
+                    && provider.usageLimits?.resetCredits != nil
                     ? .init(environmentID: environment.id, instanceID: provider.instanceId) : nil
                 if var account = accounts[key] {
                     if !account.environments.contains(environment.label) { account.environments.append(environment.label) }

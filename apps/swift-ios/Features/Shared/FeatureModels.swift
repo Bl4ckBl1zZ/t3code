@@ -265,6 +265,11 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// ``canShelveSettled``.
     public var supportsSettlement: Bool?
     public var serverAutoSettlement: Bool? = nil
+    /// Set while the user has turned automatic settlement off for this thread.
+    public var autoSettleDisabledAt: Date? = nil
+    /// Whether the environment accepts the per-thread auto-settle switch.
+    /// Absence hides the switch rather than sending a field the server drops.
+    public var supportsAutoSettleOptOut: Bool? = nil
     public var supportsSnooze: Bool?
     /// `main` marks the thread the T3 Work inbox pins to the top as the current
     /// main line of work. Absent means an ordinary thread. The inbox's Main
@@ -351,6 +356,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         supportsActiveOrder: Bool? = nil,
         supportsSettlement: Bool? = nil,
         serverAutoSettlement: Bool? = nil,
+        autoSettleDisabledAt: Date? = nil,
+        supportsAutoSettleOptOut: Bool? = nil,
         supportsSnooze: Bool? = nil,
         workInboxRole: String? = nil,
         relationshipToParent: String? = nil,
@@ -405,6 +412,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.supportsActiveOrder = supportsActiveOrder
         self.supportsSettlement = supportsSettlement
         self.serverAutoSettlement = serverAutoSettlement
+        self.autoSettleDisabledAt = autoSettleDisabledAt
+        self.supportsAutoSettleOptOut = supportsAutoSettleOptOut
         self.supportsSnooze = supportsSnooze
         self.workInboxRole = workInboxRole
         self.relationshipToParent = relationshipToParent

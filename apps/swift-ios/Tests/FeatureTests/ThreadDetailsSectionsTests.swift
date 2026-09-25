@@ -671,9 +671,25 @@ final class ThreadDetailsSectionsTests: XCTestCase {
             ),
             "#413"
         )
+        XCTAssertEqual(
+            ThreadLinkedPullRequestPresentation.identityLine(
+                FeaturePullRequestLine(link: link, depth: 0, chainSize: 1, isNativeStack: false),
+                showsRepository: true
+            ),
+            "#413 · o/r"
+        )
         XCTAssertEqual(ThreadLinkedPullRequestPresentation.linkedValue([]), "None")
         XCTAssertEqual(ThreadLinkedPullRequestPresentation.linkedValue([link]), "#413")
         XCTAssertEqual(ThreadLinkedPullRequestPresentation.linkedValue([link, link]), "2")
+    }
+
+    func testLinkedRowsNameTheRepositoryOnlyWhenRequestsSpanSeveral() {
+        let fork = FeatureLinkedPullRequest(projectID: "p", repository: "me/t3code", number: 12, url: "https://h/me/t3code/pull/12")
+        let sameRepo = FeatureLinkedPullRequest(projectID: "p", repository: "ME/t3code", number: 13, url: "https://h/me/t3code/pull/13")
+        let upstream = FeatureLinkedPullRequest(projectID: "p", repository: "org/t3code", number: 9, url: "https://h/org/t3code/pull/9")
+        XCTAssertFalse(ThreadLinkedPullRequestPresentation.showsRepository([fork]))
+        XCTAssertFalse(ThreadLinkedPullRequestPresentation.showsRepository([fork, sameRepo]))
+        XCTAssertTrue(ThreadLinkedPullRequestPresentation.showsRepository([fork, upstream]))
     }
 
     // MARK: - Pull request pickers

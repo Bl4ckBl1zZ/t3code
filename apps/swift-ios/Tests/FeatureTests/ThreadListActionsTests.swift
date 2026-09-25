@@ -154,6 +154,49 @@ final class ThreadListActionsTests: XCTestCase {
         XCTAssertEqual(actions.map(\.id), ["pin", "rename", "copy", "archive", "delete"])
     }
 
+    func testAutoSettleIsASettingWithTheCurrentChoiceChecked() {
+        let actions = ThreadRowMenuActions.homeRowActions(
+            ThreadRowMenuContext(
+                autoSettleSupported: true,
+                autoSettleEnabled: false,
+                titleRegenerationSupported: true
+            )
+        )
+
+        // It groups with naming, not the lifecycle verbs, and stays out of
+        // the medium-button row.
+        XCTAssertEqual(
+            ThreadRowMenu.sections(actions).map { $0.map(\.id) },
+            [
+                ["pin", "settle", "snooze"],
+                ["rename", "regenerate-title", "auto-settle"],
+                ["copy"],
+                ["archive", "delete"],
+            ]
+        )
+        let submenu = actions.first { $0.id == ThreadRowMenuActions.autoSettleActionID }
+        XCTAssertEqual(submenu?.children.map(\.id), ["auto-settle:enabled", "auto-settle:disabled"])
+        XCTAssertEqual(submenu?.children.map(\.checked), [false, true])
+    }
+
+    func testAutoSettleIsOmittedWhereNothingWouldAutoSettle() {
+        // Older servers, Chat rows, the Work Main thread and archived rows
+        // never settle automatically, so there is no choice to offer.
+        let contexts = [
+            ThreadRowMenuContext(autoSettleSupported: false),
+            ThreadRowMenuContext(offersParking: false, autoSettleSupported: true),
+            ThreadRowMenuContext(settlementSupported: false, autoSettleSupported: true),
+            ThreadRowMenuContext(isArchived: true, autoSettleSupported: true),
+        ]
+        for context in contexts {
+            XCTAssertFalse(
+                ThreadRowMenuActions.homeRowActions(context).contains {
+                    $0.id == ThreadRowMenuActions.autoSettleActionID
+                }
+            )
+        }
+    }
+
     func testSnoozeOpensTheSharedPresetSubmenu() {
         let now = Date(timeIntervalSince1970: 1_777_777_777)
         let actions = ThreadRowMenuActions.homeRowActions(ThreadRowMenuContext(), now: now)

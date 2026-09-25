@@ -931,6 +931,8 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public var pinOrderKey: String? = nil
     public let workInboxRole: String?
     public let timelineClearedAt: OrchestrationV2Timestamp?
+    /// See `OrchestrationV2ThreadShell.autoSettleDisabledAt`.
+    public var autoSettleDisabledAt: OrchestrationV2Timestamp? = nil
     public let snoozedUntil: OrchestrationV2Timestamp?
     public let snoozedAt: OrchestrationV2Timestamp?
     public let lastVisitedAt: OrchestrationV2Timestamp?
@@ -1396,6 +1398,10 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     public var pinOrderKey: String? = nil
     public var workInboxRole: String?
     public var timelineClearedAt: OrchestrationV2Timestamp?
+    /// Set while the user has turned automatic settlement off for this
+    /// thread. Manual settle, snooze and archive still work; only the user
+    /// clears it. Absent on servers that predate the switch.
+    public var autoSettleDisabledAt: OrchestrationV2Timestamp? = nil
     public var snoozedUntil: OrchestrationV2Timestamp?
     public var snoozedAt: OrchestrationV2Timestamp?
     /// Absent on servers predating server-side visited tracking; clients fall

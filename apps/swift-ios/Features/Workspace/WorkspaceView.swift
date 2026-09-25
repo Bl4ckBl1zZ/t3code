@@ -64,7 +64,8 @@ public struct WorkspaceView: View {
     @State private var editingProjectIcon: FeatureProject?
     @State private var showingSettings = false
     /// Connection problems open Settings on Servers rather than its root.
-    @State private var settingsOpensServers = false
+    /// The page Settings opens on: Servers from the connection banner, Usage from ⌘U.
+    @State private var settingsInitialRoute: SettingsRoute?
     @State private var showingHermesSetup = false
     @State private var showingPullRequests = false
     @State private var showingArrangement = false
@@ -147,7 +148,22 @@ public struct WorkspaceView: View {
     }
 
     public var body: some View {
-        lifecycle(dialogs(sheets(homeTabs)))
+        lifecycle(dialogs(sheets(homeTabs.background { keyboardShortcuts })))
+    }
+
+    /// Home-wide shortcuts for the iPad command overlay, matching web's
+    /// `mod+u`. Hidden buttons, because toolbar menu items only register
+    /// while their menu is open.
+    private var keyboardShortcuts: some View {
+        Button("Usage") {
+            settingsInitialRoute = .usage
+            showingSettings = true
+        }
+        .keyboardShortcut("u", modifiers: .command)
+        .disabled(showingSettings)
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
     }
 
     // MARK: - Tabs
@@ -341,6 +357,9 @@ public struct WorkspaceView: View {
             onDropFiles: { thread, providers in receiveThreadFileDrop(thread, providers: providers, in: tab) },
             onCustomSnooze: { customSnoozeTargets = CustomSnoozeTargets(threadIDs: [$0.id], isBatch: false) },
             onSnoozeRequest: { snoozeRequestThread = $0 },
+            onSetAutoSettle: { thread, enabled in
+                Task { await model.setAutoSettle(thread.id, enabled: enabled) }
+            },
             contentMatches: isSearchingHere ? currentContentMatches : [:],
             isSearchingContent: isSearchingHere && isSearchingContent,
             generatingHandoffIDs: generatingHandoffIDs,
@@ -843,8 +862,8 @@ public struct WorkspaceView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingSettings, onDismiss: { settingsOpensServers = false }) {
-                SettingsView(model: model, initialRoute: settingsOpensServers ? .servers : nil)
+            .sheet(isPresented: $showingSettings, onDismiss: { settingsInitialRoute = nil }) {
+                SettingsView(model: model, initialRoute: settingsInitialRoute)
             }
             .sheet(isPresented: $showingArrangement) {
                 ActiveThreadArrangementSheet(model: model, workspace: workspace, projectID: activeProjectFilterID)
@@ -1193,7 +1212,7 @@ public struct WorkspaceView: View {
     }
 
     private func openServerSettings() {
-        settingsOpensServers = true
+        settingsInitialRoute = .servers
         showingSettings = true
     }
 
