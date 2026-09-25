@@ -418,9 +418,7 @@ function makeClaudeSessionForkFrame(
   };
 }
 
-export function makeReplayQueryRunner(
-  transcript: ClaudeAgentSdkReplayTranscript,
-): ClaudeQueryRunner {
+function makeReplayQueryRunner(transcript: ClaudeAgentSdkReplayTranscript): ClaudeQueryRunner {
   let cursor = 0;
   let failure: ClaudeAgentSdkReplayError | null = null;
   let cursorAdvanced = makeCursorSignal();
@@ -993,7 +991,7 @@ async function recordMessagesUntilTurnResult(input: {
   }
 }
 
-export async function recordMessagesUntilTurnResultAndFinalize(input: {
+async function recordMessagesUntilTurnResultAndFinalize(input: {
   readonly iterator: AsyncIterator<SDKMessage>;
   readonly entries: Array<ProviderReplayEntry>;
   readonly scenario: string;
@@ -1923,7 +1921,7 @@ async function recordClaudeForkSessionQuery(input: {
   }
 }
 
-export async function recordInterruptedClaudeQuery(input: {
+async function recordInterruptedClaudeQuery(input: {
   readonly scenario: string;
   readonly prompt: string;
   readonly modelSelection: ModelSelection;
