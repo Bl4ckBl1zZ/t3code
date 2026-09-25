@@ -645,6 +645,7 @@ struct FeatureComposerView: View {
         // at content height, and the lineLimit ceiling above keeps a pasted
         // wall of text to seven lines that scroll within the field.
         .fixedSize(horizontal: false, vertical: true)
+        .composerImagePaste(appendPastedImages)
         .focused(focused)
         // Return is always editing input. Sending is the button or ⌘↩.
         .submitLabel(.return)
@@ -1005,6 +1006,16 @@ struct FeatureComposerView: View {
                 await prepareImage(data, ordinal: firstOrdinal + offset, generation: generation)
             }
         }
+    }
+
+    /// Pasted images join the draft the way camera shots do, so a paste reads
+    /// "Image 3.jpg" in the strip.
+    private func appendPastedImages(_ datas: [Data]) {
+        guard !isSending, !isStashing, !voice.state.isBusy else { return }
+        if datas.count > remainingAttachmentSlots {
+            fileDropError = "A message can contain up to 8 attachments. Extra images were not added."
+        }
+        appendImageData(datas)
     }
 
     private func prepareImage(_ data: Data, ordinal: Int, generation: UUID) async {
