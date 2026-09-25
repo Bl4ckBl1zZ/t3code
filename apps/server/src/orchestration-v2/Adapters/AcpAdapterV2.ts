@@ -996,10 +996,38 @@ function acpWorkspaceWriteAllowsMutation(
   return true;
 }
 
+function isAcpReadKind(toolKind: string): boolean {
+  return toolKind === "read" || toolKind === "search" || toolKind === "think";
+}
+
+/**
+ * Reads follow the sandbox alone and never ask. Approval policy governs writes
+ * and commands, as it does for Codex and Claude, and every sandbox T3 knows
+ * lets the agent read. That includes no explicit sandbox, since the strictest
+ * runtime mode (approval-required) implies a read-only one. Unknown sandbox
+ * types still fail closed.
+ */
+function acpReadDisposition(runtimePolicy: ProviderAdapterV2RuntimePolicy): "allow" | "deny" {
+  switch (unknownRecord(runtimePolicy.sandboxPolicy)?.type) {
+    case undefined:
+    case "readOnly":
+    case "workspaceWrite":
+    case "dangerFullAccess":
+    case "externalSandbox":
+      return "allow";
+    default:
+      return "deny";
+  }
+}
+
 export function acpPermissionDisposition(
   runtimePolicy: ProviderAdapterV2RuntimePolicy,
   request: EffectAcpSchema.RequestPermissionRequest,
 ): AcpPermissionDisposition {
+  const toolKind = request.toolCall.kind ?? "other";
+  if (isAcpReadKind(toolKind)) {
+    return acpReadDisposition(runtimePolicy);
+  }
   const approvalPolicy = runtimePolicy.approvalPolicy;
   const requiresApproval =
     approvalPolicy === undefined
@@ -1011,16 +1039,10 @@ export function acpPermissionDisposition(
 
   const sandboxPolicy = unknownRecord(runtimePolicy.sandboxPolicy);
   const sandboxType = sandboxPolicy?.type;
-  const toolKind = request.toolCall.kind ?? "other";
   switch (sandboxType) {
     case "readOnly":
-      return toolKind === "read" || toolKind === "search" || toolKind === "think"
-        ? "allow"
-        : "deny";
+      return "deny";
     case "workspaceWrite":
-      if (toolKind === "read" || toolKind === "search" || toolKind === "think") {
-        return "allow";
-      }
       if (toolKind === "edit" || toolKind === "delete" || toolKind === "move") {
         return acpWorkspaceWriteAllowsMutation(runtimePolicy, sandboxPolicy ?? {}, request)
           ? "allow"

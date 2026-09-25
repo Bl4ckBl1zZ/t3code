@@ -386,9 +386,16 @@ describe("ACP permission policy", () => {
     assert.equal(
       acpPermissionDisposition(
         runtimePolicy({ runtimeMode: "approval-required" }),
-        permissionRequest("read"),
+        permissionRequest("edit"),
       ),
       "ask",
+    );
+    assert.equal(
+      acpPermissionDisposition(
+        runtimePolicy({ runtimeMode: "approval-required" }),
+        permissionRequest("read"),
+      ),
+      "allow",
     );
   });
 });

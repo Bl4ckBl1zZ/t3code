@@ -167,6 +167,37 @@ describe("acpPermissionDisposition", () => {
     assert.equal(acpPermissionDisposition(policy, permissionRequest("execute")), "deny");
   });
 
+  it("auto-allows read-kind permission requests under on-request approval", () => {
+    for (const runtimePolicy of [
+      { ...policy, approvalPolicy: "on-request" },
+      { ...policy, approvalPolicy: "on-request", sandboxPolicy: { type: "readOnly" } },
+      ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        cwd,
+      }),
+    ] satisfies ReadonlyArray<ProviderAdapterV2RuntimePolicy>) {
+      for (const kind of ["read", "search", "think"] as const) {
+        assert.equal(acpPermissionDisposition(runtimePolicy, permissionRequest(kind)), "allow");
+      }
+      for (const kind of ["edit", "delete", "move", "execute", "fetch", "other"] as const) {
+        assert.equal(acpPermissionDisposition(runtimePolicy, permissionRequest(kind)), "ask");
+      }
+    }
+  });
+
+  it("denies reads under a sandbox type it does not recognize", () => {
+    for (const approvalPolicy of ["never", "on-request"] as const) {
+      assert.equal(
+        acpPermissionDisposition(
+          { ...policy, approvalPolicy, sandboxPolicy: { type: "futureSandbox" } },
+          permissionRequest("read"),
+        ),
+        "deny",
+      );
+    }
+  });
+
   it.effect("denies mutations through workspace symlinks that escape the writable roots", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
