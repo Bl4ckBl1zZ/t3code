@@ -3594,7 +3594,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           description: "Sleep then echo done token",
           subagent_type: "general-purpose",
           task_type: "local_agent",
-          prompt: "Run the shell command, then return exactly RESUME_DONE.",
+          prompt: "Continue and return the token.",
           uuid: "00000000-0000-4000-8000-000000000405",
           session_id: WAKE_NATIVE_SESSION,
         });
@@ -3754,6 +3754,30 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         // resumed lifecycle.
         assert.equal(reopened?.runId, "run-attempt-claude-wake-8c");
         assert.notEqual(reopened?.runId, subagentEvents()[0]?.subagent.runId);
+        // The child thread opens each run with its own prompt: the launch
+        // task, then the SendMessage text that resumed it.
+        const childPrompts = new Map<string, { ordinal: number; text: string }>();
+        for (const event of harness.events) {
+          if (
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "user_message" &&
+            event.turnItem.threadId === reopened?.childThreadId
+          ) {
+            childPrompts.set(event.turnItem.id, {
+              ordinal: event.turnItem.ordinal,
+              text: event.turnItem.text,
+            });
+          }
+        }
+        assert.deepEqual(
+          [...childPrompts.values()]
+            .toSorted((left, right) => left.ordinal - right.ordinal)
+            .map((prompt) => prompt.text),
+          [
+            "Run the shell command, then return exactly RESUME_DONE.",
+            "Continue and return the token.",
+          ],
+        );
         yield* Queue.offer(
           harness.sdkMessages,
           makeResultFrame({
