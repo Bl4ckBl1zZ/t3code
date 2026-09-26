@@ -1,5 +1,6 @@
 import {
   Agent,
+  createAgentPlatform,
   type AgentMessage,
   type AgentOptions,
   type InteractionUpdate,
@@ -295,6 +296,36 @@ export function makeCursorAgentSdkProtocolLogger(input: {
       .pipe(Effect.ignore);
 }
 
+/**
+ * The Cursor SDK decides once per process whether local sandboxing works, and
+ * caches the answer the first time any run starts. Only sandboxed runs point
+ * it at its `cursorsandbox` helper first, so after an unsandboxed (Full access)
+ * run it caches "unsupported" and rejects every later sandboxed run until the
+ * server restarts. Warming a bare sandboxed executor before the first
+ * unsandboxed agent opens lets the SDK find the helper and cache the real
+ * answer. Warming is best effort: on a machine without sandbox support it
+ * fails, the SDK caches "unsupported", and sandboxed runs report that as
+ * before.
+ */
+let cursorSandboxSupportPrime: Promise<void> | undefined;
+
+function primeCursorSandboxSupport(options: AgentOptions): Promise<void> {
+  cursorSandboxSupportPrime ??= (async () => {
+    const cwd = typeof options.local?.cwd === "string" ? options.local.cwd : undefined;
+    const platform = await createAgentPlatform(cwd === undefined ? {} : { workspaceRef: cwd });
+    const release = await platform.prewarmLocalWorkspace({
+      ...(options.apiKey === undefined ? {} : { apiKey: options.apiKey }),
+      local: {
+        ...(cwd === undefined ? {} : { cwd }),
+        settingSources: [],
+        sandboxOptions: { enabled: true },
+      },
+    });
+    await release();
+  })().catch(() => undefined);
+  return cursorSandboxSupportPrime;
+}
+
 export const cursorAgentSdkRunnerLiveLayer: Layer.Layer<
   CursorAgentSdkRunner,
   never,
@@ -306,6 +337,9 @@ export const cursorAgentSdkRunnerLiveLayer: Layer.Layer<
 
     return CursorAgentSdkRunner.of({
       open: Effect.fn("CursorAgentSdkRunner.open")(function* (input) {
+        if (input.options.local?.sandboxOptions?.enabled === false) {
+          yield* Effect.promise(() => primeCursorSandboxSupport(input.options));
+        }
         const protocolLogger = makeCursorAgentSdkProtocolLogger({
           nativeEventLogger,
           threadId: input.threadId,
