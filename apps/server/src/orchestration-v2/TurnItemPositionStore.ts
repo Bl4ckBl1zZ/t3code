@@ -99,12 +99,15 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
           // its producer — a legacy import carrying its original order, or a
           // rollback marker aimed past the run it discarded. Allocating a
           // fresh slot from the runless band would drag it to the top of the
-          // thread, so record the producer's ordinal instead.
+          // thread, so record the producer's ordinal instead. When another item
+          // already holds that ordinal (a producer restarted its count, like a
+          // Claude subagent resumed after a server restart), the item takes the
+          // next free runless slot instead.
           if (item.runId === null && item.ordinal > 0) {
             yield* sql`
               INSERT INTO orchestration_v2_turn_item_positions (thread_id, turn_item_id, ordinal)
               VALUES (${item.threadId}, ${item.id}, ${item.ordinal})
-              ON CONFLICT(thread_id, turn_item_id) DO NOTHING
+              ON CONFLICT DO NOTHING
             `.pipe(
               Effect.mapError(
                 (cause) =>
