@@ -3692,6 +3692,111 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("closes a deferred root turn's reply when its prompt returns", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          deferFinalizeForBackgroundWork: true,
+          // A background subagent keeps the root turn open after its prompt returns.
+          extractSubagentUpdate: (toolCall) =>
+            toolCall.toolCallId !== "tool-call-generic-1"
+              ? undefined
+              : {
+                  nativeTaskId: "task-generic-1",
+                  prompt: "background subagent",
+                  title: "background subagent",
+                  model: null,
+                  status: "running",
+                  childSessionId: null,
+                  result: null,
+                },
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: {
+              T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1",
+              T3_ACP_GENERIC_TOOL_REPLY_TEXT: "started a background subagent",
+            },
+            protocolEvents,
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-deferred-reply-closes");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-deferred-reply"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      yield* Stream.fromQueue(protocolEvents).pipe(
+        Stream.filter(
+          (event) =>
+            event.direction === "incoming" &&
+            event.stage === "raw" &&
+            typeof event.payload === "string" &&
+            event.payload.includes('"stopReason"'),
+        ),
+        Stream.runHead,
+      );
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      const collected = Array.from(yield* Queue.takeAll(events));
+      assert.isFalse(
+        collected.some((event) => event.type === "turn.terminal"),
+        "the running subagent holds the root turn open",
+      );
+      const replies = collected.flatMap((event) =>
+        event.type === "message.updated" && event.message.role === "assistant"
+          ? [event.message]
+          : [],
+      );
+      assert.isAbove(replies.length, 0);
+      assert.isFalse(replies.at(-1)!.streaming, "the reply the agent finished stops streaming");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect(
     "preserveRuntimeOnSettledInterrupt keeps the process alive and carries subagents through a settled steering interrupt",
     () =>

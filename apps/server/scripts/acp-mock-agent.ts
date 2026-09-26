@@ -21,6 +21,8 @@ const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
+// With generic tool placeholders, the reply text the agent sends after the tool.
+const genericToolReplyText = process.env.T3_ACP_GENERIC_TOOL_REPLY_TEXT;
 const emitPostSettleMonitorFlow = process.env.T3_ACP_EMIT_POST_SETTLE_MONITOR_FLOW === "1";
 const emitInTurnTaskOutputThenLateDuplicate =
   process.env.T3_ACP_EMIT_IN_TURN_TASKOUTPUT_THEN_LATE_DUPLICATE === "1";
@@ -1303,6 +1305,16 @@ const program = Effect.gen(function* () {
             },
           },
         });
+
+        if (genericToolReplyText !== undefined) {
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: genericToolReplyText },
+            },
+          });
+        }
 
         return { stopReason: "end_turn" };
       }
