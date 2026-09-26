@@ -18,6 +18,8 @@ import { messageSteeringMidToolInput } from "./message_steering_mid_tool/input.t
 import { assertMultiTurnClaudeOutput } from "./multi_turn/claude_output.ts";
 import { assertMultiTurnOutput } from "./multi_turn/codex_output.ts";
 import { multiTurnInput } from "./multi_turn/input.ts";
+import { openCodeRunningChildApprovalInput } from "./opencode_running_child_approval/input.ts";
+import { assertOpenCodeRunningChildApprovalOutput } from "./opencode_running_child_approval/output.ts";
 import { openCodeSubagentInput } from "./opencode_subagent/input.ts";
 import { assertOpenCodeSubagentOutput } from "./opencode_subagent/output.ts";
 import { assertPlanQuestionsOutput } from "./plan_questions/codex_output.ts";
@@ -396,6 +398,21 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./subagent_v2_nested/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
         assertOutput: assertSubagentV2NestedOutput,
+      },
+    ],
+  },
+  {
+    name: "opencode_running_child_approval",
+    buildInput: openCodeRunningChildApprovalInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("opencode"),
+        transcriptFile: new URL(
+          "./opencode_running_child_approval/opencode_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: OPENCODE_MODEL_SELECTION,
+        assertOutput: assertOpenCodeRunningChildApprovalOutput,
       },
     ],
   },

@@ -242,6 +242,7 @@ interface ActiveOpenCodeTurn {
 interface OpenCodeSubagentContext {
   readonly nativeItemId: string;
   readonly nodeId: OrchestrationV2Subagent["id"];
+  readonly parentState: OpenCodeThreadState;
   readonly parentTurn: ActiveOpenCodeTurn;
   readonly prompt: string;
   readonly title: string | null;
@@ -267,12 +268,36 @@ interface OpenCodeThreadState {
   nextChildTurnOrdinal: number;
 }
 
+interface OpenCodeRequestOwner {
+  readonly state: OpenCodeThreadState;
+  readonly turn: ActiveOpenCodeTurn;
+  /** The subagent on the owner's thread that leads to the asking session. */
+  readonly subagent: OpenCodeSubagentContext | null;
+}
+
+/**
+ * The top-level thread and active turn that own a session's requests, walking
+ * up through (possibly nested) subagents.
+ */
+function topLevelRequestOwner(state: OpenCodeThreadState): OpenCodeRequestOwner | undefined {
+  let owner = state;
+  let subagent: OpenCodeSubagentContext | null = null;
+  while (owner.parentSubagent !== null) {
+    subagent = owner.parentSubagent;
+    owner = subagent.parentState;
+  }
+  return owner.activeTurn === null ? undefined : { state: owner, turn: owner.activeTurn, subagent };
+}
+
 interface PendingOpenCodeRequest {
   readonly requestId: RuntimeRequestId;
   readonly nativeRequestId: string;
+  /** The session that asked, which may be a subagent's. */
+  readonly nativeSessionId: string;
   readonly turn: ActiveOpenCodeTurn;
   readonly state: OpenCodeThreadState;
   readonly nodeId: OrchestrationV2ExecutionNode["id"];
+  readonly parentNodeId: OrchestrationV2ExecutionNode["id"];
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly requestKind: OpenCodePermissionRequestKind | "user_input";
   readonly createdAt: DateTime.Utc;
@@ -1088,6 +1113,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             context = {
               nativeItemId: part.id,
               nodeId,
+              parentState: state,
               parentTurn: turn,
               prompt,
               title,
@@ -1594,14 +1620,14 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
         };
 
         const emitRuntimeRequest = Effect.fnUntraced(function* (
-          state: OpenCodeThreadState,
-          turn: ActiveOpenCodeTurn,
+          owner: OpenCodeRequestOwner,
           nativeRequestId: string,
           request:
             | { readonly type: "permission"; readonly value: PermissionRequest }
             | { readonly type: "question"; readonly value: QuestionRequest },
         ) {
           if (pendingRequestsByNativeId.has(nativeRequestId)) return;
+          const { state, turn, subagent } = owner;
           const now = yield* DateTime.now;
           const requestId = yield* idAllocator.allocate.runtimeRequest({
             driver: OPENCODE_PROVIDER,
@@ -1610,9 +1636,12 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           });
           const nodeId = idAllocator.derive.approvalNode({ requestId });
           const turnItemId = idAllocator.derive.approvalTurnItem({ requestId });
+          // The tool call belongs to the asking session's turn, not the owner's.
           const permissionToolName =
             request.type === "permission" && request.value.tool !== undefined
-              ? Array.from(turn.parts.values()).find(
+              ? Array.from(
+                  (threads.get(request.value.sessionID)?.activeTurn ?? turn).parts.values(),
+                ).find(
                   (part): part is ToolPart =>
                     part.type === "tool" && part.callID === request.value.tool?.callID,
                 )?.tool
@@ -1626,9 +1655,11 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           const pending: PendingOpenCodeRequest = {
             requestId,
             nativeRequestId,
+            nativeSessionId: request.value.sessionID,
             turn,
             state,
             nodeId,
+            parentNodeId: subagent?.nodeId ?? turn.rootNodeId,
             turnItemId,
             requestKind,
             createdAt: now,
@@ -1660,7 +1691,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               id: nodeId,
               threadId: turn.threadId,
               runId: turn.runId,
-              parentNodeId: turn.rootNodeId,
+              parentNodeId: pending.parentNodeId,
               rootNodeId: turn.rootNodeId,
               kind: request.type === "question" ? "user_input_request" : "approval_request",
               status: "waiting",
@@ -1717,7 +1748,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               id: pending.nodeId,
               threadId: pending.turn.threadId,
               runId: pending.turn.runId,
-              parentNodeId: pending.turn.rootNodeId,
+              parentNodeId: pending.parentNodeId,
               rootNodeId: pending.turn.rootNodeId,
               kind: pending.question === undefined ? "approval_request" : "user_input_request",
               status: status === "resolved" ? "completed" : "cancelled",
@@ -1749,6 +1780,22 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           if (!hasOtherPending) yield* updateProviderSession("running", null);
         });
 
+        /** Every request is asked on the top-level thread and its active turn,
+         *  under the subagent that leads to the asking session, because native
+         *  subagent threads are hidden from the sidebar. */
+        const routeRuntimeRequest = Effect.fnUntraced(function* (
+          nativeRequestId: string,
+          sessionId: string,
+          request:
+            | { readonly type: "permission"; readonly value: PermissionRequest }
+            | { readonly type: "question"; readonly value: QuestionRequest },
+        ) {
+          const state = threads.get(sessionId);
+          const owner = state === undefined ? undefined : topLevelRequestOwner(state);
+          if (owner === undefined) return;
+          yield* emitRuntimeRequest(owner, nativeRequestId, request);
+        });
+
         const finalizeTurn = Effect.fnUntraced(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
@@ -1767,7 +1814,10 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             }
           }
           for (const pending of Array.from(pendingRequests.values())) {
-            if (pending.turn.providerTurnId === turn.providerTurnId) {
+            if (
+              pending.turn.providerTurnId === turn.providerTurnId ||
+              pending.nativeSessionId === state.nativeSessionId
+            ) {
               yield* resolveRuntimeRequest(pending.nativeRequestId, "cancelled");
             }
           }
@@ -2092,26 +2142,18 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               }
               return;
             }
-            case "permission.asked": {
-              const state = threads.get(event.properties.sessionID);
-              if (state?.activeTurn !== null && state?.activeTurn !== undefined) {
-                yield* emitRuntimeRequest(state, state.activeTurn, event.properties.id, {
-                  type: "permission",
-                  value: event.properties,
-                });
-              }
+            case "permission.asked":
+              yield* routeRuntimeRequest(event.properties.id, event.properties.sessionID, {
+                type: "permission",
+                value: event.properties,
+              });
               return;
-            }
-            case "question.asked": {
-              const state = threads.get(event.properties.sessionID);
-              if (state?.activeTurn !== null && state?.activeTurn !== undefined) {
-                yield* emitRuntimeRequest(state, state.activeTurn, event.properties.id, {
-                  type: "question",
-                  value: event.properties,
-                });
-              }
+            case "question.asked":
+              yield* routeRuntimeRequest(event.properties.id, event.properties.sessionID, {
+                type: "question",
+                value: event.properties,
+              });
               return;
-            }
             case "permission.replied":
               yield* resolveRuntimeRequest(event.properties.requestID, "resolved");
               return;
