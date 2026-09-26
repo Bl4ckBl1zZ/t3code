@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   GrokSettings,
   ProjectId,
+  type ProviderApprovalDecision,
   ProviderInstanceId,
   ProviderSessionId,
   type RuntimeMode,
@@ -473,6 +474,45 @@ describe("Grok permission prompts", () => {
       disposition?.(runtimePolicy({ runtimeMode: "approval-required" }), permissionRequest("edit")),
       "ask",
     );
+  });
+});
+
+describe("Grok session approvals", () => {
+  const flavor = makeGrokAcpAdapterFlavor({
+    makeRuntime: () => Effect.never,
+  } as unknown as GrokAdapterV2Options);
+  const options = (request: EffectAcpSchema.RequestPermissionRequest) =>
+    flavor.approvalOptions?.(request).map((option) => option.decision);
+  const select = (
+    request: EffectAcpSchema.RequestPermissionRequest,
+    decision: ProviderApprovalDecision,
+  ) => flavor.selectPermissionOption?.(request, decision);
+  const editPrompt: EffectAcpSchema.RequestPermissionRequest = {
+    ...permissionRequest("edit"),
+    options: [
+      { optionId: "allow-once", name: "Yes", kind: "allow_once" },
+      {
+        optionId: "allow-edits-session",
+        name: "Yes, allow all edits during this session",
+        kind: "allow_always",
+      },
+      { optionId: "reject-once", name: "No", kind: "reject_once" },
+    ],
+  };
+  // Grok saves a bash prompt's `always-allow` for the whole project.
+  const bashPrompt = permissionRequest("execute");
+
+  it("offers a session choice only where Grok's answer lasts for the session", () => {
+    assert.deepEqual(options(editPrompt), ["cancel", "decline", "acceptForSession", "accept"]);
+    assert.deepEqual(options(bashPrompt), ["cancel", "decline", "accept"]);
+  });
+
+  it("never answers with a project-wide grant, whatever the client sends", () => {
+    assert.equal(select(editPrompt, "acceptForSession"), "allow-edits-session");
+    assert.equal(select(bashPrompt, "acceptForSession"), "allow-once");
+    assert.equal(select(bashPrompt, "acceptAlways"), "allow-once");
+    assert.equal(select(bashPrompt, "decline"), "reject-once");
+    assert.isUndefined(select(bashPrompt, "cancel"));
   });
 });
 

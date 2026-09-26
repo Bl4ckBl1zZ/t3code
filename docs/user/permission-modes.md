@@ -26,10 +26,9 @@ unattended until it finishes or asks a question of its own.
 Approvals appear inline in the conversation. Approve or reject one and the agent continues from
 there.
 
-Grok offers no **Auto-accept edits**. A Grok thread already set to it runs in **Supervised**.
-
-For Grok, **Always allow this session** remembers the matching command or tool input. Other
-actions still ask for approval. It does not change the thread to **Full access**.
+Grok offers no **Auto-accept edits**. A Grok thread already set to it runs in **Supervised**. Grok
+file-change approvals offer **Allow all edits this session**. Its command approvals have no
+session-wide choice, because Grok would remember that command for the whole project.
 
 ## Choosing a Mode
 

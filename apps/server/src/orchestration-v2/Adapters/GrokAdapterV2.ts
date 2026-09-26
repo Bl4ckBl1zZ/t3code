@@ -20,6 +20,8 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import { ServerConfig } from "../../config.ts";
 import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.ts";
 import {
+  grokApprovalOptions,
+  selectGrokPermissionOption,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
 } from "../../provider/acp/GrokAcpSupport.ts";
@@ -212,6 +214,8 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
     // what its classifier blocked, so every prompt it sends goes to the user.
     permissionDisposition: (policy, request) =>
       grokLaunchRuntimeMode(policy) === "auto" ? "ask" : acpPermissionDisposition(policy, request),
+    approvalOptions: grokApprovalOptions,
+    selectPermissionOption: selectGrokPermissionOption,
     promptFailure: (cause) =>
       makeProviderFailure({
         cause,

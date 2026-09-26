@@ -1,5 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type GrokSettings, ProviderDriverKind, type RuntimeMode } from "@t3tools/contracts";
+import {
+  type GrokSettings,
+  type ProviderApprovalDecision,
+  type ProviderApprovalOption,
+  ProviderDriverKind,
+  type RuntimeMode,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -107,6 +113,68 @@ export function grokAcpRuntimeProcessOwnership(
  * no per-command persistent grants).
  */
 export const GROK_ACP_INITIALIZE_META = { clientType: "extension" } as const;
+
+/**
+ * Grok's only session-scoped `allow_always` answer: "Yes, allow all edits
+ * during this session" on an edit prompt. Its bash, monitor and MCP
+ * `always-allow` rows instead save a grant for the whole project that outlives
+ * the session (grok-build `crates/codegen/xai-grok-workspace/src/permission/`
+ * `prompter.rs` `ALLOW_EDITS_SESSION_OPTION_ID`, `grants.rs`
+ * `record_prompt_outcome`).
+ */
+const GROK_ALLOW_EDITS_SESSION_OPTION_ID = "allow-edits-session";
+
+/**
+ * The approval choices a Grok permission prompt can honor. The session choice
+ * appears only where Grok's answer lasts for the session.
+ */
+export function grokApprovalOptions(
+  request: EffectAcpSchema.RequestPermissionRequest,
+): ReadonlyArray<ProviderApprovalOption> {
+  const has = (kind: EffectAcpSchema.PermissionOption["kind"], optionId?: string) =>
+    request.options.some(
+      (option) =>
+        option.kind === kind && (optionId === undefined || option.optionId.trim() === optionId),
+    );
+  return [
+    { decision: "cancel", label: "Cancel" },
+    ...(has("reject_once") ? [{ decision: "decline", label: "Decline" } as const] : []),
+    ...(has("allow_always", GROK_ALLOW_EDITS_SESSION_OPTION_ID)
+      ? [{ decision: "acceptForSession", label: "Allow all edits this session" } as const]
+      : []),
+    ...(has("allow_once") ? [{ decision: "accept", label: "Approve" } as const] : []),
+  ];
+}
+
+/**
+ * The Grok option a user's approval selects. A session approval picks only
+ * Grok's session-scoped edit option; on a prompt whose `allow_always` would
+ * save a project-wide grant it approves once, even when a client answers with
+ * a choice the card did not offer. No answer saves a project-wide grant.
+ */
+export function selectGrokPermissionOption(
+  request: EffectAcpSchema.RequestPermissionRequest,
+  decision: ProviderApprovalDecision,
+): string | undefined {
+  const find = (kind: EffectAcpSchema.PermissionOption["kind"], optionId?: string) =>
+    request.options
+      .find(
+        (option) =>
+          option.kind === kind && (optionId === undefined || option.optionId.trim() === optionId),
+      )
+      ?.optionId.trim() || undefined;
+  switch (decision) {
+    case "cancel":
+      return undefined;
+    case "decline":
+      return find("reject_once");
+    case "acceptForSession":
+      return find("allow_always", GROK_ALLOW_EDITS_SESSION_OPTION_ID) ?? find("allow_once");
+    case "accept":
+    case "acceptAlways":
+      return find("allow_once");
+  }
+}
 
 export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
