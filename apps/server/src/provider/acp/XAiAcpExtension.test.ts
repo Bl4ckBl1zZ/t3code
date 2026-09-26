@@ -423,6 +423,25 @@ describe("XAiAcpExtension", () => {
     expect(extractXAiMonitorTaskId(toolCall)).toBe("019f44a5-87d1-7640-8e35-6a4667ffc873");
   });
 
+  it("keeps a background shell command running until its task completes", () => {
+    // Grok completes the tool call with a start acknowledgement while the
+    // process keeps running; only x.ai/task_completed ends it.
+    const toolCall = {
+      toolCallId: "call-bash-bg",
+      title: "bash",
+      status: "completed" as const,
+      data: {
+        rawInput: { command: "for i in 1 2 3; do sleep 8; echo tock $i; done" },
+        rawOutput: {
+          type: "BackgroundTaskStarted",
+          task_id: "00000000-0000-4000-8000-000000000002",
+        },
+      },
+    };
+    expect(normalizeXAiAcpToolCallState(toolCall).status).toBe("inProgress");
+    expect(extractXAiMonitorTaskId(toolCall)).toBe("00000000-0000-4000-8000-000000000002");
+  });
+
   it("tracks text Monitor ACKs with generic titles and description-only input", () => {
     const toolCall = {
       toolCallId: "call-mon-generic-text",
