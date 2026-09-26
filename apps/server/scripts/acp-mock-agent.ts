@@ -42,6 +42,9 @@ const emitPlanThenHang = process.env.T3_ACP_EMIT_PLAN_THEN_HANG === "1";
 const emitActiveToolThenHang = process.env.T3_ACP_EMIT_ACTIVE_TOOL_THEN_HANG === "1";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
 const hangPromptForever = process.env.T3_ACP_HANG_PROMPT_FOREVER === "1";
+// Advertises the session mode as a `category: "mode"` config option under this
+// id, the way agents that name their mode picker differently do.
+const modeConfigOptionId = process.env.T3_ACP_MODE_CONFIG_OPTION_ID;
 // Sends fs/write_text_file for this path, then fs/read_text_file, at the start of
 // each prompt whatever the client advertised, and appends each outcome as a JSON
 // line to T3_ACP_CLIENT_FS_PROBE_LOG_PATH.
@@ -267,6 +270,18 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   }
 
   return [
+    ...(modeConfigOptionId === undefined
+      ? []
+      : [
+          {
+            id: modeConfigOptionId,
+            name: "Permission mode",
+            category: "mode",
+            type: "select" as const,
+            currentValue: currentModeId,
+            options: availableModes.map((mode) => ({ value: mode.id, name: mode.name })),
+          },
+        ]),
     {
       id: "model",
       name: "Model",
@@ -535,7 +550,10 @@ const program = Effect.gen(function* () {
           },
         );
       }
-      if (request.configId === "mode" && typeof request.value === "string") {
+      if (
+        (request.configId === "mode" || request.configId === modeConfigOptionId) &&
+        typeof request.value === "string"
+      ) {
         currentModeId = request.value;
       }
       if (request.configId === "model" && typeof request.value === "string") {
@@ -553,6 +571,13 @@ const program = Effect.gen(function* () {
       return {
         configOptions: configOptions(),
       };
+    }),
+  );
+
+  yield* agent.handleSetSessionMode((request) =>
+    Effect.sync(() => {
+      currentModeId = request.modeId;
+      return {};
     }),
   );
 

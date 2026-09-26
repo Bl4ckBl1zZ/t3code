@@ -2361,18 +2361,42 @@ export const make = (
               ),
             ),
       ...(options.ownDetachedProcessGroup === true ? { terminateProcessGroup } : {}),
+      // A session's mode is its `category: "mode"` config option, whatever the
+      // agent names it. Agents that only advertise `modes` (gemini-cli) take
+      // `session/set_mode` instead.
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
-          Effect.flatMap((modeState) => {
-            if (modeState?.currentModeId === modeId) {
-              return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
-            }
-            return setConfigOption("mode", modeId).pipe(
-              Effect.tap(() => updateCurrentModeId(modeId)),
-              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
-            );
-          }),
-        ),
+        Effect.gen(function* () {
+          const modeState = yield* Ref.get(modeStateRef);
+          if (modeState?.currentModeId === modeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const configOptions = yield* Ref.get(configOptionsRef);
+          // An option literally named "mode" keeps working for agents that do
+          // not tag it with the mode category.
+          const modeConfigOption =
+            configOptions?.find(
+              (option) => option.category === "mode" && option.type === "select",
+            ) ?? configOptions?.find((option) => option.id === "mode");
+          if (modeConfigOption === undefined && modeState !== undefined) {
+            const started = yield* getStartedState;
+            const payload = { sessionId: started.sessionId, modeId };
+            yield* runLoggedRequest("session/set_mode", payload, acp.agent.setSessionMode(payload));
+            yield* updateCurrentModeId(modeId);
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const response = yield* setConfigOption(modeConfigOption?.id ?? "mode", modeId);
+          // The agent answers with its config options, so the mode it reports
+          // is the mode it runs in, even when it kept another one.
+          const reported = response.configOptions?.find(
+            (option) => option.category === "mode" && option.type === "select",
+          );
+          yield* updateCurrentModeId(
+            reported?.type === "select" && typeof reported.currentValue === "string"
+              ? reported.currentValue
+              : modeId,
+          );
+          return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+        }),
       setConfigOption,
       setModel: (model) =>
         getStartedState.pipe(

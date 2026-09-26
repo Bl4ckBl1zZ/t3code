@@ -1505,6 +1505,85 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("selects plan mode on agents that name or advertise their mode differently", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const openInPlanMode = Effect.fn("openInPlanMode")(function* (
+        name: string,
+        environment: Readonly<Record<string, string>>,
+      ) {
+        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+        const instanceId = ProviderInstanceId.make(`acp-test-mode-${name}`);
+        const adapter = makeAcpAdapterV2({
+          crypto: yield* Crypto.Crypto,
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              protocolEvents,
+              environment,
+            }),
+          },
+          fileSystem,
+          idAllocator,
+          serverConfig,
+        });
+        yield* adapter
+          .openSession({
+            threadId: ThreadId.make(`thread-acp-mode-${name}`),
+            providerSessionId: ProviderSessionId.make(`provider-session-acp-mode-${name}`),
+            modelSelection: { instanceId, model: "default" },
+            runtimePolicy: ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "approval-required",
+              interactionMode: "plan",
+              cwd: process.cwd(),
+            }),
+          })
+          .pipe(Effect.scoped);
+        return Array.from(yield* Queue.takeAll(protocolEvents)).flatMap((event) => {
+          if (event.direction !== "outgoing") return [];
+          const method = rawProtocolMethod(event);
+          return method === "session/set_mode" || method === "session/set_config_option"
+            ? [{ method, params: rawProtocolRequest(event)?.params }]
+            : [];
+        });
+      });
+
+      // The mock advertises `modes` (ask, architect, code) and no mode option.
+      assert.deepEqual(yield* openInPlanMode("modes-only", {}), [
+        {
+          method: "session/set_mode",
+          params: { sessionId: "mock-session-1", modeId: "architect" },
+        },
+      ]);
+      assert.deepEqual(
+        yield* openInPlanMode("named-option", {
+          T3_ACP_MODE_CONFIG_OPTION_ID: "permission-mode",
+        }),
+        [
+          {
+            method: "session/set_config_option",
+            params: {
+              sessionId: "mock-session-1",
+              configId: "permission-mode",
+              value: "architect",
+            },
+          },
+        ],
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("terminalizes an empty successful foreground Bash tool when the turn completes", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
