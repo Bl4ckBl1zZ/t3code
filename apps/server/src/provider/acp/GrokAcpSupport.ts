@@ -99,6 +99,15 @@ export function grokAcpRuntimeProcessOwnership(
   };
 }
 
+/**
+ * Grok's Auto mode asks the client about an action its classifier blocks only
+ * when the client declares a type that can show a prompt; the default
+ * (`generic`) gets a silent denial instead. `extension` is the prompting type
+ * that keeps the permission options T3 already maps (no always-approve row,
+ * no per-command persistent grants).
+ */
+export const GROK_ACP_INITIALIZE_META = { clientType: "extension" } as const;
+
 export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
 ): Effect.Effect<
@@ -123,6 +132,7 @@ export const makeGrokAcpRuntime = (
         // Current Grok treats Ctrl+C cancellation as a barrier against stale
         // background-task wake prompts until the next genuine user turn.
         cancelMeta: { ...input.cancelMeta, cancelTrigger: "ctrl_c" },
+        initializeMeta: GROK_ACP_INITIALIZE_META,
         ...grokAcpRuntimeProcessOwnership(processGroupPlatform),
       }).pipe(
         Layer.provide(

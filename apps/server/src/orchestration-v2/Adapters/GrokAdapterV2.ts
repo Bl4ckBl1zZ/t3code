@@ -53,6 +53,7 @@ import {
 } from "../ProviderAdapterDriver.ts";
 import {
   AcpProviderCapabilitiesV2,
+  acpPermissionDisposition,
   makeAcpAdapterV2,
   type AcpAdapterV2ExtensionContext,
   type AcpAdapterV2Flavor,
@@ -207,6 +208,10 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
           childProcessSpawner: options.childProcessSpawner,
           runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
         })),
+    // In its Auto mode Grok decides routine actions itself and only asks about
+    // what its classifier blocked, so every prompt it sends goes to the user.
+    permissionDisposition: (policy, request) =>
+      grokLaunchRuntimeMode(policy) === "auto" ? "ask" : acpPermissionDisposition(policy, request),
     promptFailure: (cause) =>
       makeProviderFailure({
         cause,

@@ -250,6 +250,15 @@ export interface AcpAdapterV2Flavor {
     request: EffectAcpSchema.RequestPermissionRequest,
     answers: ProviderUserInputAnswers,
   ) => EffectAcpSchema.RequestPermissionResponse | undefined;
+  /**
+   * Replaces T3's runtime-policy answer to a permission request. Grok's Auto
+   * mode only asks about what its own classifier refused, so those must reach
+   * the user instead of being approved by T3's policy.
+   */
+  readonly permissionDisposition?: (
+    policy: ProviderAdapterV2RuntimePolicy,
+    request: EffectAcpSchema.RequestPermissionRequest,
+  ) => AcpPermissionDisposition;
   readonly approvalOptions?: (
     request: EffectAcpSchema.RequestPermissionRequest,
   ) => ReadonlyArray<ProviderApprovalOption>;
@@ -4222,7 +4231,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 handlerGeneration,
                 Effect.gen(function* () {
                   const context = yield* activeContext;
-                  const disposition = acpPermissionDisposition(context.input.runtimePolicy, params);
+                  const disposition = (flavor.permissionDisposition ?? acpPermissionDisposition)(
+                    context.input.runtimePolicy,
+                    params,
+                  );
                   if (disposition === "allow") {
                     const optionId = selectAutoApprovedPermissionOption(params);
                     return {
