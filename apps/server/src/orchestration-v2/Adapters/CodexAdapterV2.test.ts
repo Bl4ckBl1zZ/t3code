@@ -63,6 +63,7 @@ import {
   resolveCodexRollbackTurnCount,
 } from "./CodexAdapterV2.ts";
 import { makeReplayServerConfig } from "./CodexAdapterV2.testkit.ts";
+import { buildCodexAdditionalContext } from "../../provider/CodexDeveloperInstructions.ts";
 
 describe("CodexAdapterV2 assistant message streaming", () => {
   it.effect("makes accumulated assistant text visible after the bounded flush interval", () =>
@@ -330,7 +331,7 @@ describe("CodexAdapterV2 runtime policy", () => {
     }),
   );
 
-  it.effect("adds default-mode developer instructions when the T3 MCP server is attached", () =>
+  it.effect("sends the T3 blocks as additional context when the T3 MCP server is attached", () =>
     Effect.gen(function* () {
       const params = yield* buildCodexTurnStartParams({
         nativeThreadId: "native-orchestration-instructions",
@@ -348,14 +349,42 @@ describe("CodexAdapterV2 runtime policy", () => {
       });
 
       assert.equal(params.collaborationMode?.mode, "default");
-      assert.include(
-        params.collaborationMode?.settings.developer_instructions ?? "",
-        "use `delegate_task`",
-      );
-      assert.include(
-        params.collaborationMode?.settings.developer_instructions ?? "",
-        "structured object, never as JSON text",
-      );
+      // Newer models' catalogs replace Default mode's developer instructions,
+      // so the T3 blocks must not ride them.
+      const developerInstructions = params.collaborationMode?.settings.developer_instructions ?? "";
+      assert.notInclude(developerInstructions, "delegate_task");
+      assert.notInclude(developerInstructions, "preview_status");
+      const orchestration = params.additionalContext?.t3_code_orchestration;
+      assert.equal(orchestration?.kind, "application");
+      assert.include(orchestration?.value ?? "", "use `delegate_task`");
+      assert.include(orchestration?.value ?? "", "structured object, never as JSON text");
+      assert.include(params.additionalContext?.t3_code_tools?.value ?? "", "preview_status");
+    }),
+  );
+
+  it.effect("keeps every T3 context entry under Codex's per-entry cap", () =>
+    Effect.gen(function* () {
+      const params = yield* buildCodexTurnStartParams({
+        nativeThreadId: "native-context-cap",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: null,
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+        hasT3Mcp: true,
+      });
+
+      const entries = Object.values(params.additionalContext ?? {});
+      assert.isAbove(entries.length, 0);
+      for (const entry of entries) {
+        // Codex estimates 4 bytes per token and truncates the middle of values over 1,000 tokens.
+        assert.isBelow(Buffer.byteLength(entry.value), 4_000);
+      }
     }),
   );
 
@@ -377,11 +406,14 @@ describe("CodexAdapterV2 runtime policy", () => {
         hasBrowserTools: false,
       });
 
-      const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
-      assert.notInclude(instructions, "preview_status");
-      assert.notInclude(instructions, "Do not switch to global browser skills");
+      const context = Object.values(params.additionalContext ?? {})
+        .map((entry) => entry.value)
+        .join("\n");
+      assert.isUndefined(params.additionalContext?.t3_code_tools);
+      assert.notInclude(context, "preview_status");
+      assert.notInclude(context, "Do not switch to global browser skills");
       // Orchestration survives: only browser access was withheld.
-      assert.include(instructions, "use `delegate_task`");
+      assert.include(context, "use `delegate_task`");
     }),
   );
 
@@ -403,6 +435,7 @@ describe("CodexAdapterV2 runtime policy", () => {
       });
 
       assert.isUndefined(params.collaborationMode);
+      assert.isUndefined(params.additionalContext);
     }),
   );
 
@@ -428,10 +461,7 @@ describe("CodexAdapterV2 runtime policy", () => {
         params.collaborationMode?.settings.developer_instructions ?? "",
         "request_user_input",
       );
-      assert.include(
-        params.collaborationMode?.settings.developer_instructions ?? "",
-        "preview_status",
-      );
+      assert.include(params.additionalContext?.t3_code_tools?.value ?? "", "preview_status");
     }),
   );
 
@@ -454,6 +484,7 @@ describe("CodexAdapterV2 runtime policy", () => {
 
       assert.equal(params.collaborationMode?.mode, "plan");
       assert.notProperty(params.collaborationMode?.settings, "developer_instructions");
+      assert.isUndefined(params.additionalContext);
     }),
   );
 
@@ -1345,6 +1376,114 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         assert.equal((yield* Deferred.await(receipt)).primary?.usedPercent, 42);
         yield* harness.awaitTerminal;
+      }),
+    ).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("restores the T3 context after the root thread compacts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const nativeThreadId = "compaction-thread";
+        const nativeTurnId = "compaction-turn";
+        const scenario = "compaction-restore";
+        const additionalContext = buildCodexAdditionalContext(true);
+        const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Hello." });
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...preamble.map((entry): CodexReplay.CodexAppServerReplayEntry => {
+              if (entry.type !== "expect_outbound" || entry.label !== "turn/start") return entry;
+              const frame = entry.frame as { readonly params: Record<string, unknown> };
+              return {
+                ...entry,
+                frame: {
+                  ...frame,
+                  params: {
+                    ...frame.params,
+                    collaborationMode: {
+                      mode: "default",
+                      settings: {
+                        model: "gpt-5.4",
+                        reasoning_effort: "medium",
+                        developer_instructions: "<ignored>",
+                      },
+                    },
+                    additionalContext,
+                  },
+                },
+              };
+            }),
+            {
+              type: "emit_inbound",
+              label: "compaction",
+              frame: {
+                method: "item/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622465500,
+                  item: { type: "contextCompaction", id: "compaction-item" },
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "restore context",
+              frame: {
+                id: 4,
+                method: "thread/inject_items",
+                params: {
+                  threadId: nativeThreadId,
+                  items: Object.entries(additionalContext).map(([key, entry]) => ({
+                    type: "message",
+                    role: "developer",
+                    content: [{ type: "input_text", text: `<${key}>${entry.value}</${key}>` }],
+                  })),
+                },
+              },
+            },
+            { type: "emit_inbound", label: "restore context", frame: { id: 4, result: {} } },
+            {
+              type: "emit_inbound",
+              label: "turn completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const threadId = ThreadId.make(`thread-${scenario}`);
+        McpProviderSession.setMcpProviderSession({
+          environmentId: EnvironmentId.make("environment-codex-compaction"),
+          threadId,
+          providerSessionId: "mcp-session-codex-compaction",
+          providerInstanceId: CODEX_DEFAULT_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer compaction-token",
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+        );
+        const harness = yield* makeCodexReplayHarness(transcript);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("compaction-attempt"),
+            text: "Hello.",
+          }),
+        );
+        yield* harness.awaitTerminal;
+        assert.isTrue(
+          harness.events.some(
+            (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+          ),
+        );
       }),
     ).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );

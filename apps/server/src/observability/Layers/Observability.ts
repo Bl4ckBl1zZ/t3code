@@ -59,8 +59,9 @@ export const ObservabilityLive = Layer.unwrap(
                 exportInterval: `${traces.exportIntervalMs} millis`,
                 headers: traces.headers,
                 resource: {
-                  serviceName: config.otlpServiceName,
+                  serviceName: "t3code-server",
                   attributes: {
+                    "service.namespace": "t3code",
                     "service.runtime": "t3-server",
                     "service.mode": config.mode,
                   },
@@ -91,8 +92,9 @@ export const ObservabilityLive = Layer.unwrap(
             exportInterval: `${metrics.exportIntervalMs} millis`,
             headers: metrics.headers,
             resource: {
-              serviceName: config.otlpServiceName,
+              serviceName: "t3code-server",
               attributes: {
+                "service.namespace": "t3code",
                 "service.runtime": "t3-server",
                 "service.mode": config.mode,
               },

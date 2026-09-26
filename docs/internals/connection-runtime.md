@@ -117,6 +117,14 @@ Finite requests, durable subscriptions, and commands are separate APIs:
   shell and thread state factories (`createEnvironmentShellAtoms`,
   `createEnvironmentThreadStateAtoms`).
 - Web and mobile own their Atom runtimes, React hooks, and feature composition.
+- The desktop app adds one thread consumer: a
+  [keep-alive](../../apps/web/src/state/threads.ts) mounts every thread whose
+  latest run is preparing, starting, or running, in each catalog environment.
+  Opening a running thread then needs no replay. The shell and detail streams
+  are independent, so the shell can report a stop before the detail loads or
+  catches up. A stopped thread stays mounted until its own stream is live and
+  shows the stop, and the stream then closes and saves the settled state. Web
+  and mobile do not keep threads alive.
 
 The Promise bridge exists only at the React/Atom boundary. Runtime and business
 logic remain Effect-native.

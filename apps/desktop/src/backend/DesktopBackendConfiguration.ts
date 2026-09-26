@@ -87,16 +87,31 @@ const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_TAILSCALE_SERVE_PORT",
 ] as const;
 
-// Sensitive env vars that the WSL backend needs but Windows process.env won't
-// forward across the wsl.exe boundary without WSLENV. The dev-server URL is
-// handled separately via a `--dev-url` CLI flag because WSLENV translation of
-// URL-shaped values (colons / slashes) is unreliable.
+// Env vars that the WSL backend needs but Windows process.env won't forward
+// across the wsl.exe boundary without WSLENV. The dev-server URL travels as
+// the `--dev-url` CLI flag instead.
 const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   // Otherwise the WSL server keeps exporting to endpoints from the bootstrap.
   "T3CODE_OTEL_SDK_DISABLED",
   "OTEL_SDK_DISABLED",
+  "T3CODE_OTLP_HEADERS",
+  "T3CODE_OTLP_PROTOCOL",
+  // Forwarded without a WSLENV flag, so the values arrive untranslated. The
+  // server prefers an OTEL endpoint over the bootstrap envelope, so the T3 URLs
+  // travel as variables to keep winning inside the distro as they do on Windows.
+  "T3CODE_OTLP_TRACES_URL",
+  "T3CODE_OTLP_METRICS_URL",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
 ] as const;
 
 const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -507,7 +522,16 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
 
     return {
       executablePath: process.execPath,
-      args: [environment.backendEntryPath, "--bootstrap-fd", "3"],
+      // Packaged builds only, so a dev instance never shares the cache with the
+      // prod app it is often run from. `--require` rather than NODE_COMPILE_CACHE,
+      // so the setting does not leak into the provider and terminal processes
+      // the backend starts.
+      args: [
+        ...(environment.isPackaged ? ["--require", environment.compileCachePath] : []),
+        environment.backendEntryPath,
+        "--bootstrap-fd",
+        "3",
+      ],
       entryPath: environment.backendEntryPath,
       cwd: environment.backendCwd,
       env: {
@@ -690,10 +714,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   };
 
   // Forward the dev-server URL as an explicit CLI flag so the WSL backend's
-  // config resolution lands in dev/ instead of userdata/. Inheriting through
-  // WSLENV is unreliable in practice (URL-shaped values with colons /
-  // slashes get translated unpredictably depending on flags), and the
-  // packaged build leaves devServerUrl as None anyway.
+  // config resolution lands in dev/ instead of userdata/. The packaged build
+  // leaves devServerUrl as None.
   const devUrlArgs = Option.match(environment.devServerUrl, {
     onNone: () => [] as ReadonlyArray<string>,
     onSome: (url) => ["--dev-url", url.href],

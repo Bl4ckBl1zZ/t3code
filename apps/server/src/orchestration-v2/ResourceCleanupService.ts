@@ -22,6 +22,8 @@ export class ResourceCleanupError extends Schema.TaggedErrorClass<ResourceCleanu
 
 export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupTerminals: (threadId: string) => Effect.Effect<void, ResourceCleanupError>;
+  /** Closes the thread's idle shells. Terminals that run a command stay open. */
+  readonly closeIdleTerminals: (threadId: string) => Effect.Effect<void>;
   readonly cleanupAttachments: (input: {
     readonly attachmentIds: ReadonlyArray<string>;
     readonly threadId: string;
@@ -30,6 +32,7 @@ export class ResourceCleanupService extends Context.Reference<{
 }>("t3/orchestration-v2/ResourceCleanupService", {
   defaultValue: () => ({
     cleanupTerminals: () => Effect.void,
+    closeIdleTerminals: () => Effect.void,
     cleanupAttachments: () => Effect.void,
   }),
 }) {}
@@ -49,6 +52,7 @@ export const live = Layer.effect(
               (cause) => new ResourceCleanupError({ operation: "terminal", threadId, cause }),
             ),
           ),
+      closeIdleTerminals: (threadId: string) => terminals.closeIdle({ threadId }),
       cleanupAttachments: (input) =>
         Effect.forEach(
           input.attachmentIds,
