@@ -82,7 +82,11 @@ import {
   subagentResultForRun,
   subagentThreadTitle,
 } from "./SubagentProjection.ts";
-import { ThreadForkServiceV2 } from "./ThreadForkService.ts";
+import {
+  forkableSourceRunStatusError,
+  isForkableSourceRunStatus,
+  ThreadForkServiceV2,
+} from "./ThreadForkService.ts";
 import { selectMissingTurnItems } from "./TurnItemIdentity.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedErrorClass<OrchestratorDispatchError>()(
@@ -2418,11 +2422,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `No stable source run was found for fork source ${command.sourcePoint.type}.`,
       });
     }
-    if (sourceRun.status !== "completed") {
+    if (!isForkableSourceRunStatus(sourceRun.status)) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: `Fork source run ${sourceRun.id} is ${sourceRun.status}; only completed runs are supported.`,
+        cause: forkableSourceRunStatusError(sourceRun),
       });
     }
     const sourceProviderThread = providerThreadForRun(sourceProjection, sourceRun);
@@ -4196,7 +4200,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
       const forkExecution =
-        pendingForkTransfer === undefined
+        pendingForkTransfer === undefined || sourceRun === null
           ? null
           : yield* enforceCommandPolicy(command)(
               commandPolicy.decideForkExecution({
@@ -4207,6 +4211,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 sameProvider:
                   pendingForkTransfer.sourceProviderInstanceId === modelSelection.instanceId,
                 hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
+                sourceRunStatus: sourceRun.status,
                 fromSpecificTurn: sourceRun !== null,
               }),
             );
