@@ -47,7 +47,6 @@ export interface ServerDerivedPaths {
    */
   readonly browserArtifactsDir: string;
   readonly logsDir: string;
-  readonly serverLogPath: string;
   readonly serverTracePath: string;
   readonly providerLogsDir: string;
   readonly providerEventLogPath: string;
@@ -83,7 +82,6 @@ export class ServerConfig extends Context.Service<
      */
     readonly otlpTracesExport: SignalExport;
     readonly otlpMetricsExport: SignalExport;
-    readonly otlpServiceName: string;
     readonly otelEnvironment: OtelEnvironment.OtelEnvironment;
     readonly mode: RuntimeMode;
     readonly port: number;
@@ -144,7 +142,6 @@ export const deriveServerPaths = Effect.fn(function* (
     attachmentsDir,
     browserArtifactsDir,
     logsDir,
-    serverLogPath: join(logsDir, "server.log"),
     serverTracePath: join(logsDir, "server.trace.ndjson"),
     providerLogsDir,
     providerEventLogPath: join(providerLogsDir, "events.log"),
@@ -214,7 +211,6 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpMetricsUrl: undefined,
     otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
-    otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     cwd,
     baseDir,

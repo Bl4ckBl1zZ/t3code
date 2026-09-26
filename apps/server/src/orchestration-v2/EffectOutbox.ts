@@ -86,6 +86,10 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("terminal.cleanup"),
   }),
+  /** Closes the thread's shells that wait at an idle prompt; see `TerminalManager.closeIdle`. */
+  Schema.Struct({
+    type: Schema.Literal("terminal.close-idle"),
+  }),
   Schema.Struct({
     type: Schema.Literal("attachment.cleanup"),
     attachmentIds: Schema.Array(Schema.String),
@@ -103,6 +107,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "provider-thread.rollback",
   "checkpoint.capture",
   "terminal.cleanup",
+  "terminal.close-idle",
   "attachment.cleanup",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 

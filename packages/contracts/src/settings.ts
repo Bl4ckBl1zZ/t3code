@@ -277,6 +277,10 @@ export const DEFAULT_BROWSER_RECORDING_FRAME_RATE: BrowserRecordingFrameRate = 3
 
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
+/** Maximum width of the chat timeline and composer on wide screens. */
+export const ChatWidth = Schema.Literals(["comfortable", "wide", "full"]);
+export type ChatWidth = typeof ChatWidth.Type;
+
 export const NotificationMode = Schema.Literals([
   "off",
   "notifications",
@@ -303,6 +307,7 @@ export const ClientSettingsSchema = Schema.Struct({
   diffColorScheme: DiffColorScheme.pipe(
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
+  chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
   // Timelines fold a settled turn behind "Worked for …" and keep only the last
   // entry of a work group, which reads well for a finished turn but hides the
   // step-by-step stream a CLI shows. Turning this on keeps both open.
@@ -1669,6 +1674,7 @@ export const ClientSettingsPatch = Schema.Struct({
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
+  chatWidth: Schema.optionalKey(ChatWidth),
   alwaysExpandActivity: Schema.optionalKey(Schema.Boolean),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   composerCollapseOnScroll: Schema.optionalKey(Schema.Boolean),

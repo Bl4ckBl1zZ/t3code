@@ -1,5 +1,10 @@
 import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
-import { makeLocalFileTracer, makeTraceSink } from "@t3tools/shared/observability";
+import {
+  DEFAULT_SIGNAL_EXPORT,
+  makeLocalFileTracer,
+  makeTraceSink,
+  otlpSerializationLayer,
+} from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import * as Context from "effect/Context";
@@ -339,17 +344,28 @@ const readPersistedOtlpTracesUrl: Effect.Effect<
   return Option.fromNullishOr(parsed.otlpTracesUrl);
 });
 
-const resolveOtlpTracesUrl = Effect.gen(function* () {
+/**
+ * Resolved as the server resolves it: `T3CODE_OTLP_TRACES_URL`, then the
+ * standard OTEL endpoint variables with their own headers and protocol, then
+ * persisted Settings.
+ */
+const resolveOtlpTracesEndpoint = Effect.gen(function* () {
   const otel = yield* OtelEnvironment.load;
   if (otel.disabled) {
-    return Option.none<string>();
+    return undefined;
   }
 
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  if (Option.isSome(environment.otlpTracesUrl)) {
-    return environment.otlpTracesUrl;
-  }
-  return yield* readPersistedOtlpTracesUrl;
+  const persisted = yield* readPersistedOtlpTracesUrl;
+  return OtelEnvironment.resolveSignalEndpoint(
+    otel,
+    "traces",
+    {
+      url: Option.getOrUndefined(environment.otlpTracesUrl),
+      export: { ...DEFAULT_SIGNAL_EXPORT, exportIntervalMs: environment.otlpExportIntervalMs },
+    },
+    Option.getOrUndefined(persisted),
+  );
 });
 
 const writeDevelopmentConsoleOutput = (
@@ -577,7 +593,7 @@ const desktopLoggerLayer = Layer.mergeAll(
 const tracerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    const otlpTracesUrl = yield* resolveOtlpTracesUrl;
+    const otlpTraces = yield* resolveOtlpTracesEndpoint;
     const tracePath = environment.path.join(environment.logDir, "desktop.trace.ndjson");
     const sink = yield* makeTraceSink({
       filePath: tracePath,
@@ -585,19 +601,22 @@ const tracerLayer = Layer.unwrap(
       maxFiles: DESKTOP_LOG_FILE_MAX_FILES,
       batchWindowMs: DESKTOP_TRACE_BATCH_WINDOW_MS,
     });
-    const delegate = Option.isNone(otlpTracesUrl)
-      ? undefined
-      : yield* OtlpTracer.make({
-          url: otlpTracesUrl.value,
-          exportInterval: `${environment.otlpExportIntervalMs} millis`,
-          resource: {
-            serviceName: "desktop",
-            attributes: {
-              "service.runtime": "desktop",
-              "service.mode": environment.isDevelopment ? "development" : "packaged",
+    const delegate =
+      otlpTraces === undefined
+        ? undefined
+        : yield* OtlpTracer.make({
+            url: otlpTraces.url,
+            exportInterval: `${otlpTraces.export.exportIntervalMs} millis`,
+            headers: otlpTraces.export.headers,
+            resource: {
+              serviceName: "t3code-desktop",
+              attributes: {
+                "service.namespace": "t3code",
+                "service.runtime": "desktop",
+                "service.mode": environment.isDevelopment ? "development" : "packaged",
+              },
             },
-          },
-        });
+          }).pipe(Effect.provide(otlpSerializationLayer(otlpTraces.export.protocol)));
     const tracer = yield* makeLocalFileTracer({
       filePath: tracePath,
       maxBytes: DESKTOP_LOG_FILE_MAX_BYTES,

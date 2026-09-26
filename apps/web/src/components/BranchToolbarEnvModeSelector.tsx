@@ -83,13 +83,18 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           <FolderGitIcon
             className={displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3"}
           />
+        ) : effectiveEnvMode === "worktree" ? (
+          <FolderGit2Icon
+            className={displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3"}
+          />
         ) : (
           <FolderIcon
             className={displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3"}
           />
         )}
         <span className="min-w-0 flex-1 truncate">
-          {workspaceDisplayName ?? resolveLockedWorkspaceLabel(activeWorktreePath)}
+          {workspaceDisplayName ??
+            resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)}
         </span>
         {displayMode === "panel" ? (
           <span className="shrink-0 text-[10px] font-normal text-muted-foreground/70">

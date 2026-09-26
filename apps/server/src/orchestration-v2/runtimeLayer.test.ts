@@ -222,7 +222,7 @@ const TestProviderInstanceRegistry = Layer.succeed(ProviderInstanceRegistry, {
 
 const TestLayer = Layer.merge(OrchestrationV2LayerLive, OrchestrationV2EventSinkLayerLive).pipe(
   Layer.provide(mcpSessionRegistryTestLayer),
-  Layer.provide(SqlitePersistenceMemory),
+  Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provide(CheckpointStoreTestLayer),
   Layer.provide(ServerConfigLayer),
   Layer.provide(ServerSettingsService.layerTest()),
@@ -611,6 +611,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
   it.effect("settle detaches the thread's live provider session", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
+      const sql = yield* SqlClient.SqlClient;
       const eventSink = yield* EventSinkV2;
       const now = yield* DateTime.now;
       const threadId = ThreadId.make("runtime-layer-settle-detach-thread");
@@ -674,10 +675,15 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(projection.thread.settledOverride, "settled");
       assert.lengthOf(projection.providerSessions, 0);
-      // Settled threads stay reachable, so unlike archive/delete no terminal
-      // cleanup effect is produced (asserted implicitly: settle succeeds and
-      // the thread is not archived).
+      // Settled threads stay reachable, so unlike archive/delete the thread's
+      // terminals are not cleaned up: only its idle shells close.
       assert.isNull(projection.thread.archivedAt);
+      const effectIds = (yield* sql<{ readonly effect_id: string }>`
+        SELECT effect_id FROM orchestration_v2_effect_outbox
+        WHERE command_id = ${"runtime-layer-settle-detach-settle"}
+      `).map((row) => row.effect_id);
+      assert.include(effectIds, "effect:runtime-layer-settle-detach-settle:terminal.close-idle");
+      assert.notInclude(effectIds, "effect:runtime-layer-settle-detach-settle:terminal.cleanup");
     }),
   );
 

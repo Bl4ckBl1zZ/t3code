@@ -1,6 +1,14 @@
 import type { ProviderInteractionMode } from "@t3tools/contracts";
+import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 
-import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "./T3OrchestrationInstructions.ts";
+import {
+  T3_CHAT_PRESENTATION_INSTRUCTIONS,
+  T3_HTML_EMBED_INSTRUCTIONS,
+} from "./T3ChatPresentationInstructions.ts";
+import {
+  T3_CODE_ORCHESTRATION_CORE_INSTRUCTIONS,
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+} from "./T3OrchestrationInstructions.ts";
 
 const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
@@ -23,9 +31,7 @@ Do not switch to global browser skills, Chrome, Node REPL browser automation, st
 const browserToolInstructions = (browserToolsAvailable: boolean): string =>
   browserToolsAvailable ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "";
 
-export const codexPlanModeDeveloperInstructions = (
-  browserToolsAvailable: boolean,
-): string => `<collaboration_mode># Plan Mode (Conversational)
+const CODEX_PLAN_MODE_PROMPT = `# Plan Mode (Conversational)
 
 You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed-intent- and implementation-wise-so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
 
@@ -152,13 +158,9 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 
-If the user stays in Plan mode and asks for revisions after a prior \`<proposed_plan>\`, any new \`<proposed_plan>\` must be a complete replacement. If the user indicates that the prior plan is not acceptable but does not provide enough information to produce a complete replacement, address the concern and continue planning without producing a \`<proposed_plan>\` block. If the follow-up neither requires changes nor calls the plan into question (e.g. clarifying question), answer it before the block, then reproduce the prior \`<proposed_plan>\` unchanged.
-${browserToolInstructions(browserToolsAvailable)}
-</collaboration_mode>`;
+If the user stays in Plan mode and asks for revisions after a prior \`<proposed_plan>\`, any new \`<proposed_plan>\` must be a complete replacement. If the user indicates that the prior plan is not acceptable but does not provide enough information to produce a complete replacement, address the concern and continue planning without producing a \`<proposed_plan>\` block. If the follow-up neither requires changes nor calls the plan into question (e.g. clarifying question), answer it before the block, then reproduce the prior \`<proposed_plan>\` unchanged.`;
 
-export const codexDefaultModeDeveloperInstructions = (
-  browserToolsAvailable: boolean,
-): string => `<collaboration_mode># Collaboration Mode: Default
+const CODEX_DEFAULT_MODE_PROMPT = `# Collaboration Mode: Default
 
 You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
 
@@ -168,7 +170,50 @@ Your active mode changes only when new developer instructions with a different \
 
 Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
 
-In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.`;
+
+/** Mode prompt for `turn/start.collaborationMode.settings.developer_instructions`. */
+export function codexModeDeveloperInstructions(interactionMode: ProviderInteractionMode): string {
+  const prompt = interactionMode === "plan" ? CODEX_PLAN_MODE_PROMPT : CODEX_DEFAULT_MODE_PROMPT;
+  return `<collaboration_mode>${prompt}
+</collaboration_mode>`;
+}
+
+/**
+ * T3 Code context for `turn/start.additionalContext`. Codex renders each entry
+ * as a `<key>value</key>` developer message and resends it only when the value
+ * changes.
+ *
+ * This must stay out of the collaboration mode: when the model catalog ships
+ * its own text for a mode, as newer models do, Codex uses that text and drops
+ * the client's `developer_instructions` entirely. Codex also truncates the
+ * middle of any entry over 1,000 tokens (it estimates 4 bytes per token), so
+ * each block gets its own key.
+ */
+export function buildCodexAdditionalContext(
+  /** Whether this turn's MCP credential grants the `preview` capability. */
+  browserToolsAvailable: boolean,
+): Record<string, V2TurnStartParams__AdditionalContextEntry> {
+  const entry = (value: string): V2TurnStartParams__AdditionalContextEntry => ({
+    kind: "application",
+    value: value.trim(),
+  });
+  return {
+    t3_code_orchestration: entry(T3_CODE_ORCHESTRATION_CORE_INSTRUCTIONS),
+    t3_code_presentation: entry(T3_CHAT_PRESENTATION_INSTRUCTIONS),
+    t3_code_html_embeds: entry(T3_HTML_EMBED_INSTRUCTIONS),
+    ...(browserToolsAvailable ? { t3_code_tools: entry(T3_CODE_BROWSER_TOOL_INSTRUCTIONS) } : {}),
+  };
+}
+
+/** The retired V1 `CodexSessionRuntime` still embeds the T3 blocks in the mode prompt. */
+export const codexPlanModeDeveloperInstructions = (browserToolsAvailable: boolean): string =>
+  `<collaboration_mode>${CODEX_PLAN_MODE_PROMPT}
+${browserToolInstructions(browserToolsAvailable)}
+</collaboration_mode>`;
+
+export const codexDefaultModeDeveloperInstructions = (browserToolsAvailable: boolean): string =>
+  `<collaboration_mode>${CODEX_DEFAULT_MODE_PROMPT}
 ${browserToolInstructions(browserToolsAvailable)}
 ${T3_CODE_ORCHESTRATION_INSTRUCTIONS}
 </collaboration_mode>`;

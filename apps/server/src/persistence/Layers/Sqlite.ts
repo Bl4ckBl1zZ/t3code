@@ -30,6 +30,9 @@ const makeRuntimeSqliteLayer = Effect.fn("makeRuntimeSqliteLayer")(function* (
   return clientModule.layer(config);
 }, Layer.unwrap);
 
+// Size the -wal file is cut back to on the first commit after a WAL reset.
+export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
+
 const setup = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -48,6 +51,9 @@ const setup = Layer.effectDiscard(
     // trade here: projections are rebuildable from the event log, and a run
     // interrupted by power loss is re-run rather than resumed mid-turn.
     yield* sql`PRAGMA synchronous = NORMAL;`;
+    // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
+    // largest size until the last connection closes.
+    yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
     yield* runMigrations();
   }),
 );
@@ -65,7 +71,7 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
       filename: dbPath,
       spanAttributes: {
         "db.name": path.basename(dbPath),
-        "service.name": "t3-server",
+        "service.name": "t3code-server",
       },
     }),
   );

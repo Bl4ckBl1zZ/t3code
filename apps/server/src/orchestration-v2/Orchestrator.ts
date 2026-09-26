@@ -2065,8 +2065,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // fleets) after it lands. Commands are decided serially against the
     // current projection, and settle is rejected while runs are active or
     // runtime requests are pending, so this can never race a re-engagement
-    // the way a separate post-settle stop command could. Terminals stay up:
-    // a settled thread remains reachable and may be un-settled.
+    // the way a separate post-settle stop command could. Only idle shells
+    // close (below): a settled thread remains reachable and may be un-settled.
     const detachSessionIds = new Set(
       command.type === "thread.archive" ||
         command.type === "thread.delete" ||
@@ -2152,6 +2152,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }),
         { concurrency: 1, discard: true },
       );
+    }
+
+    // Idle shells close so they stop holding the worktree, keeping their
+    // output. A terminal that runs a command (a dev server, an editor) stays
+    // for the user to close.
+    if (command.type === "thread.settle") {
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:terminal.close-idle`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: { type: "terminal.close-idle" },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
     }
 
     if (command.type === "thread.archive" || command.type === "thread.delete") {

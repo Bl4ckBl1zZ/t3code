@@ -39,6 +39,7 @@ import {
   KEY_ENTER_COMMAND,
   KEY_ESCAPE_COMMAND,
   KEY_TAB_COMMAND,
+  COMMAND_PRIORITY_CRITICAL,
   COMMAND_PRIORITY_HIGH,
   COMMAND_PRIORITY_LOW,
   KEY_BACKSPACE_COMMAND,
@@ -1112,6 +1113,58 @@ function ComposerInlineTokenArrowPlugin() {
   return null;
 }
 
+/** The citation chip directly before a collapsed caret, if any. */
+function $citationBeforeCollapsedCaret(): ComposerCitationNode | null {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection) || !selection.isCollapsed()) return null;
+  const { anchor } = selection;
+  const node = anchor.getNode();
+  const before =
+    anchor.type === "element"
+      ? $isElementNode(node)
+        ? node.getChildAtIndex(anchor.offset - 1)
+        : null
+      : anchor.offset === 0
+        ? node.getPreviousSibling()
+        : null;
+  return before instanceof ComposerCitationNode ? before : null;
+}
+
+/**
+ * Shift+Tab from just after a citation reaches its comment button, which
+ * native tab order skips because the chip lives inside the editor. Runs ahead
+ * of the composer's own Shift+Tab (the interaction mode toggle).
+ */
+function ComposerCitationTabPlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(
+    () =>
+      editor.registerCommand(
+        KEY_TAB_COMMAND,
+        (event) => {
+          if (!event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return false;
+          const citationKey = editor
+            .getEditorState()
+            .read(() => $citationBeforeCollapsedCaret()?.getKey() ?? null);
+          if (citationKey === null) return false;
+          const commentButton = editor
+            .getElementByKey(citationKey)
+            ?.querySelector<HTMLElement>("[data-citation-comment-trigger]");
+          if (!commentButton) return false;
+          event.preventDefault();
+          event.stopPropagation();
+          commentButton.focus();
+          return true;
+        },
+        COMMAND_PRIORITY_CRITICAL,
+      ),
+    [editor],
+  );
+
+  return null;
+}
+
 function ComposerHomeEndKeyPlugin() {
   const [editor] = useLexicalComposerContext();
 
@@ -1954,6 +2007,7 @@ function ComposerPromptEditorInner({
           <ComposerSurroundSelectionPlugin terminalContexts={terminalContexts} skills={skills} />
           <ComposerHomeEndKeyPlugin />
           <ComposerInlineTokenArrowPlugin />
+          <ComposerCitationTabPlugin />
           <ComposerInlineTokenSelectionNormalizePlugin />
           <ComposerInlineTokenBackspacePlugin />
           <ComposerInlineTokenPastePlugin />
