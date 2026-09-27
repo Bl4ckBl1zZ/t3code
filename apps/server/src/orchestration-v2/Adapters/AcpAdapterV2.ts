@@ -1197,6 +1197,9 @@ interface ActiveAcpTurn {
   readonly nativeTurnId: string;
   readonly startedAt: DateTime.Utc;
   readonly completed: Deferred.Deferred<void, never>;
+  // Root item ordinals allocated in this turn. A subagent keeps its own
+  // ordinal on the subagent, which carries over into later turns.
+  readonly itemOrdinals: Map<string, number>;
   readonly assistant: ActiveTextStream;
   readonly reasoning: ActiveTextStream;
   readonly tools: Map<string, AcpToolCallState>;
@@ -1508,8 +1511,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const emitNativeResponseLifecycle =
           options.testHooks?.onNativeResponseLifecycle ?? (() => Effect.void);
         const nextElicitationOrdinal = yield* Ref.make(0);
-        const itemOrdinals = yield* Ref.make(new Map<string, number>());
-        const nextItemOrdinalsByTurn = yield* Ref.make(new Map<string, number>());
         const providerTurns = yield* Ref.make(new Map<string, OrchestrationV2ProviderTurn>());
         const snapshot = yield* Ref.make<SnapshotMessageState>({
           order: [],
@@ -1977,26 +1978,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             : Scope.close(runtimeScope, Exit.void).pipe(Effect.ignore),
         );
 
-        const resolveItemOrdinal = Effect.fnUntraced(function* (
-          context: ActiveAcpTurn,
-          nativeItemId: string,
-        ) {
-          const existing = (yield* Ref.get(itemOrdinals)).get(nativeItemId);
-          if (existing !== undefined) return existing;
-          const nextWithinTurn = yield* Ref.modify(nextItemOrdinalsByTurn, (current) => {
-            const next = (current.get(context.nativeTurnId) ?? 0) + 1;
-            const updated = new Map(current);
-            updated.set(context.nativeTurnId, next);
-            return [next, updated] as const;
+        const resolveItemOrdinal = (context: ActiveAcpTurn, nativeItemId: string) =>
+          Effect.sync(() => {
+            const existing = context.itemOrdinals.get(nativeItemId);
+            if (existing !== undefined) return existing;
+            const ordinal = context.input.providerTurnOrdinal * 100 + context.itemOrdinals.size + 1;
+            context.itemOrdinals.set(nativeItemId, ordinal);
+            return ordinal;
           });
-          const ordinal = context.input.providerTurnOrdinal * 100 + nextWithinTurn;
-          yield* Ref.update(itemOrdinals, (current) => {
-            const updated = new Map(current);
-            updated.set(nativeItemId, ordinal);
-            return updated;
-          });
-          return ordinal;
-        });
 
         const rememberSnapshotMessage = (message: OrchestrationV2ConversationMessage) =>
           Ref.update(snapshot, (current) => {
@@ -5088,6 +5077,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               nativeTurnId,
               startedAt,
               completed,
+              itemOrdinals: new Map(),
               assistant: { current: null, nextSegment: 0 },
               reasoning: { current: null, nextSegment: 0 },
               tools: new Map(),
