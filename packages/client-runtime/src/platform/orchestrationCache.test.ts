@@ -3,19 +3,24 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  OrchestrationProjectShell,
+  OrchestrationV2ThreadShell,
   RuntimeRequestId,
   type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
+import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { FastCheck } from "effect/testing";
 
 import {
   ORCHESTRATION_CACHE_SCHEMA_VERSION,
   StoredOrchestrationShellSnapshot,
   StoredOrchestrationThreadSnapshot,
   decodeOrDiscardOrchestrationCache,
+  stringifyStoredShellSnapshot,
 } from "./orchestrationCache.ts";
 import {
   v2Now,
@@ -34,6 +39,7 @@ const encodeStoredShellSnapshotJson = Schema.encodeSync(StoredShellSnapshotJson)
 const decodeStoredShellSnapshotJson = Schema.decodeUnknownSync(StoredShellSnapshotJson);
 const encodeStoredThreadSnapshotJson = Schema.encodeSync(StoredThreadSnapshotJson);
 const decodeStoredThreadSnapshotJson = Schema.decodeUnknownSync(StoredThreadSnapshotJson);
+const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 class TestCacheDecodeError extends Schema.TaggedErrorClass<TestCacheDecodeError>()(
   "TestCacheDecodeError",
@@ -113,6 +119,43 @@ describe("orchestration cache envelopes", () => {
       );
       expect(thread.snapshot.projection).toEqual(v2Projection);
       expect(thread.snapshot.snapshotSequence).toBe(4);
+    }),
+  );
+
+  it.effect("stringifies a generated shell snapshot exactly like the Schema encoding", () =>
+    Effect.gen(function* () {
+      // A generated value can differ from one a client decoded (for example
+      // untrimmed strings). One encode and decode yields a value a client can
+      // hold; values that fail are dropped.
+      const sampleDecoded = <S extends Schema.Constraint>(schema: S) =>
+        Effect.forEach(FastCheck.sample(Schema.toArbitrary(schema), 300), (value) =>
+          Schema.encodeEffect(schema)(value).pipe(
+            Effect.flatMap(Schema.decodeEffect(schema)),
+            Effect.option,
+          ),
+        ).pipe(Effect.map(Arr.getSomes));
+      const threads = yield* sampleDecoded(OrchestrationV2ThreadShell);
+      const projects = yield* sampleDecoded(OrchestrationProjectShell);
+      const snapshot: OrchestrationV2ShellSnapshot = {
+        ...v2ShellSnapshot,
+        projects,
+        threads: threads.filter((_, index) => index % 2 === 0),
+        archivedThreads: threads.filter((_, index) => index % 2 === 1),
+      };
+
+      expect(threads.length).toBeGreaterThan(0);
+      expect(projects.length).toBeGreaterThan(0);
+      const stringified = yield* stringifyStoredShellSnapshot(environmentId, snapshot);
+      // Parsed, so key order does not matter.
+      expect(parseJson(stringified)).toEqual(
+        parseJson(
+          encodeStoredShellSnapshotJson({
+            schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
+            environmentId,
+            snapshot,
+          }),
+        ),
+      );
     }),
   );
 

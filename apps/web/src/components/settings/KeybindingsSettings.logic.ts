@@ -12,6 +12,31 @@ import {
 } from "@t3tools/shared/keybindings";
 
 import { isMacPlatform } from "../../lib/utils";
+import { METRIC_OPTIONS, WINDOW_OPTIONS } from "../usage/usageShortcuts";
+
+const USAGE_PAGE_COMMANDS: ReadonlyArray<KeybindingCommand> = [
+  ...METRIC_OPTIONS,
+  ...WINDOW_OPTIONS,
+].map((option) => option.command);
+
+/**
+ * Orders commands by `text`, keeping the Usage page's shortcuts together in
+ * the order the page shows them, at the position of its first command.
+ */
+function compareCommands(
+  left: KeybindingCommand,
+  right: KeybindingCommand,
+  text: (command: KeybindingCommand) => string,
+): number {
+  const leftIndex = USAGE_PAGE_COMMANDS.indexOf(left);
+  const rightIndex = USAGE_PAGE_COMMANDS.indexOf(right);
+  const groupCommand = METRIC_OPTIONS[0].command;
+  return (
+    text(leftIndex === -1 ? left : groupCommand).localeCompare(
+      text(rightIndex === -1 ? right : groupCommand),
+    ) || leftIndex - rightIndex
+  );
+}
 
 export type KeybindingSource = "Default" | "Custom" | "Project";
 
@@ -203,7 +228,7 @@ export function buildKeybindingRows(
   });
 
   rowsWithConflicts.sort((left, right) => {
-    const commandCompare = left.command.localeCompare(right.command);
+    const commandCompare = compareCommands(left.command, right.command, String);
     if (commandCompare !== 0) return commandCompare;
     return left.key.localeCompare(right.key);
   });
@@ -275,12 +300,14 @@ export function buildKeybindingCommandOptions(
   for (const binding of keybindings) {
     commands.add(binding.command);
   }
-  return [...commands].toSorted((left, right) =>
-    commandLabel(left).localeCompare(commandLabel(right)),
-  );
+  return [...commands].toSorted((left, right) => compareCommands(left, right, commandLabel));
 }
 
 export function commandLabel(command: KeybindingCommand): string {
+  const usageMetric = METRIC_OPTIONS.find((option) => option.command === command);
+  if (usageMetric) return `Usage: ${usageMetric.label}`;
+  const usagePeriod = WINDOW_OPTIONS.find((option) => option.command === command);
+  if (usagePeriod) return `Usage: Period: ${usagePeriod.label}`;
   const raw = String(command);
   if (raw.startsWith("script.") && raw.endsWith(".run")) {
     return `Run Script: ${titleCaseCommandSegment(raw.slice("script.".length, -".run".length))}`;

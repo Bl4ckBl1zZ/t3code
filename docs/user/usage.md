@@ -18,6 +18,9 @@ headline and chart, and refreshing rescans selected environments. The environmen
 explains unavailable or incompatible servers; totals appear as machines answer. Your selected
 usage view, metric and time range are remembered.
 
+When your app and server support different providers, usage totals may cover only the providers
+your app understands. Update the app to include newly supported providers.
+
 ## Subscription limits
 
 Open **Limits** from Usage (or **Settings → Usage Limits** on iPhone and iPad) to see Codex and Claude subscription windows,
@@ -84,3 +87,11 @@ Hub accounts contribute to the same account comparisons and pooled bars. A known
 also configured locally is counted once, using its freshest report. Failed hubs show an error;
 refresh to try again. Hub accounts report quota but cannot run tasks. Eligible Codex hub
 accounts also support **Use reset**, with confirmation before spending a credit.
+
+## Keyboard shortcuts
+
+On web and desktop, while on Usage and not typing in a field, press `C`, `T`, or `L` for Cost,
+Tokens, or Limits. Use `Ctrl+Shift+1/2/3/4` (`Cmd+Shift+1/2/3/4` on macOS) for the past 24 hours,
+7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits. macOS keeps `Cmd+Shift+3` and
+`Cmd+Shift+4` for screenshots by default, so rebind those periods if you need them. Press `Escape`
+to return to the previous page. Customize these shortcuts in **Settings → Keybindings**.

@@ -167,7 +167,7 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
 );
 
 const IMAGE_MIME_TYPES = new Set(["image/bmp", "image/jpeg", "image/png", "image/webp"]);
-// Formats the bundled SDK's Audio type accepts. Anything else is rejected up front.
+// Formats the bundled SDK's Audio type accepts. Other audio goes by file path.
 const AUDIO_MIME_TYPES = new Set([
   "audio/aac",
   "audio/flac",
@@ -241,10 +241,16 @@ const TEXT_FILE_EXTENSIONS = new Set([
   ".ini",
   ".conf",
 ]);
-export const ANTIGRAVITY_MAX_TEXT_ATTACHMENT_BYTES = 1024 * 1024;
+const ANTIGRAVITY_MAX_TEXT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = PROVIDER_SEND_TURN_MAX_FILE_BYTES;
 
-/** Sends uploads as native ACP content instead of workspace path hints. */
+/**
+ * Builds the ACP prompt from the attachments the turn still carries inline:
+ * images, plus any upload whose copy into the workspace failed, since those
+ * are not named in the turn text. Supported uploads go as native ACP content.
+ * Other files, and native candidates over their limits, are named by their
+ * saved path in the text block for the agent to inspect with its tools.
+ */
 export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(function* (input: {
   readonly input: string | undefined;
   readonly attachments: ReadonlyArray<ChatAttachment> | undefined;
@@ -256,9 +262,8 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
 > {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const blocks: Array<EffectAcpSchema.ContentBlock> = [];
-  const text = input.input?.trim();
-  if (text) blocks.push({ type: "text", text });
+  const nativeBlocks: Array<EffectAcpSchema.ContentBlock> = [];
+  const pathLines: Array<string> = [];
   let totalBytes = 0;
 
   for (const attachment of input.attachments ?? []) {
@@ -272,7 +277,7 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
       (mimeType.startsWith("text/") ||
         TEXT_MIME_TYPES.has(mimeType) ||
         TEXT_FILE_EXTENSIONS.has(path.extname(attachment.name).toLowerCase()));
-    if (!image && !audio && !pdf && !textFile) {
+    if (attachment.type === "image" && !image) {
       return yield* EffectAcpErrors.AcpRequestError.invalidParams(
         `Antigravity does not support '${attachment.name}' (${attachment.mimeType}). Attach a BMP, JPEG, PNG, WebP, PDF, audio, or text file.`,
       );
@@ -295,18 +300,36 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
           ),
         ),
       );
+    if (info.type !== "File") {
+      return yield* EffectAcpErrors.AcpRequestError.invalidParams(
+        `Could not read attachment '${attachment.name}'.`,
+      );
+    }
     const size = Number(info.size);
     const limit = image
       ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
       : audio
         ? ANTIGRAVITY_MAX_AUDIO_ATTACHMENT_BYTES
         : pdf
-          ? PROVIDER_SEND_TURN_MAX_FILE_BYTES
+          ? MAX_TOTAL_ATTACHMENT_BYTES
           : ANTIGRAVITY_MAX_TEXT_ATTACHMENT_BYTES;
+    // Only images must go natively. Anything else without a native form here,
+    // or past its native limit or the remaining budget, is left on disk.
+    if (
+      attachment.type !== "image" &&
+      (!(audio || pdf || textFile) ||
+        size > limit ||
+        totalBytes + size > MAX_TOTAL_ATTACHMENT_BYTES)
+    ) {
+      pathLines.push(
+        `[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`,
+      );
+      continue;
+    }
     totalBytes += size;
-    if (info.type !== "File" || size > limit || totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+    if (size > limit || totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
       return yield* EffectAcpErrors.AcpRequestError.invalidParams(
-        `Attachment '${attachment.name}' is too large. Antigravity accepts text files up to 1 MiB, images up to 10 MiB, audio up to 20 MiB, and 50 MiB total attachments.`,
+        `Image '${attachment.name}' is too large. Antigravity accepts images up to 10 MiB and 50 MiB of native attachments per message.`,
       );
     }
     const uri = yield* path.toFileUrl(attachmentPath).pipe(
@@ -316,7 +339,7 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
       ),
     );
     if (pdf) {
-      blocks.push({ type: "resource_link", uri, name: attachment.name, mimeType });
+      nativeBlocks.push({ type: "resource_link", uri, name: attachment.name, mimeType });
       continue;
     }
     const bytes = yield* fileSystem.stream(attachmentPath, { bytesToRead: limit + 1 }).pipe(
@@ -335,9 +358,9 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
       );
     }
     if (image) {
-      blocks.push({ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType });
+      nativeBlocks.push({ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType });
     } else if (audio) {
-      blocks.push({ type: "audio", data: Buffer.from(bytes).toString("base64"), mimeType });
+      nativeBlocks.push({ type: "audio", data: Buffer.from(bytes).toString("base64"), mimeType });
     } else {
       const decoded = yield* Effect.try({
         try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
@@ -351,9 +374,14 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
           `Attachment '${attachment.name}' contains binary data.`,
         );
       }
-      blocks.push({ type: "resource", resource: { uri, mimeType, text: decoded } });
+      nativeBlocks.push({ type: "resource", resource: { uri, mimeType, text: decoded } });
     }
   }
+  const text = [input.input?.trim() ?? "", ...pathLines]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+  const blocks: ReadonlyArray<EffectAcpSchema.ContentBlock> =
+    text.length > 0 ? [{ type: "text", text }, ...nativeBlocks] : nativeBlocks;
   if (blocks.length === 0) {
     return yield* EffectAcpErrors.AcpRequestError.invalidParams(
       "A turn requires text or supported attachments.",

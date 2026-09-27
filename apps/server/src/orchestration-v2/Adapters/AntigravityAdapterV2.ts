@@ -118,6 +118,8 @@ export function makeAntigravityAdapterV2(options: AntigravityAdapterV2Options) {
               const runtime = yield* options.makeRuntime({ ...input, clientFileSystem: true });
               const subagentBatches = new Set<string>();
               const mcpTools = new Set<string>();
+              // The attachments dir lets the agent read uploads that
+              // buildAntigravityPrompt names by path instead of sending natively.
               const allowedRoots = [input.cwd, options.serverConfig.attachmentsDir];
               yield* runtime.handleReadTextFile((request) =>
                 readAntigravityClientTextFile({

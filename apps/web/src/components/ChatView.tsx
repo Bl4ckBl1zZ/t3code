@@ -2551,71 +2551,46 @@ function ChatViewContent(props: ChatViewProps) {
       unavailableConnection !== null &&
       (unavailableConnection.phase === "connecting" ||
         unavailableConnection.phase === "reconnecting");
-    // Reconnecting to a version-skewed server with no update in flight
-    // usually means the server is restarting mid-update and a refresh wiped
-    // the in-memory update state. Fold the reconnect and version banners
-    // into one calm line instead of stacking "Failed to connect" on
-    // "versions differ". A failed update never folds: its error and retry
-    // action must stay visible.
-    const reconnectingThroughVersionSkew =
-      serverUpdateState.status === "idle" && environmentReconnecting && versionMismatch !== null;
     // While an update runs, transient connect blips are expected (the server
     // restarts) and the update banner already shows progress. Hard failure
     // phases still surface so the Reconnect action stays reachable.
     const suppressUnavailableBanner =
-      environmentReconnecting &&
-      (updateRunning || (!reconnectingThroughVersionSkew && !reconnectWarningGraceElapsed));
+      environmentReconnecting && (updateRunning || !reconnectWarningGraceElapsed);
     if (activeEnvironmentUnavailableState && unavailableConnection && !suppressUnavailableBanner) {
-      if (reconnectingThroughVersionSkew) {
-        items.push({
-          id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
-          variant: "default",
-          icon: (
-            <span
-              className="size-1.5 animate-status-pulse rounded-full bg-foreground"
-              aria-hidden="true"
-            />
-          ),
-          title: `${unavailableConnection.phase === "connecting" ? "Connecting" : "Reconnecting"} to ${activeEnvironmentUnavailableState.label}`,
-          description: "It may be finishing an update. One moment.",
-        });
-      } else {
-        items.push({
-          id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
-          variant: unavailableConnection.phase === "error" ? "error" : "warning",
-          icon: <WifiOffIcon />,
-          title: `${activeEnvironmentUnavailableState.label}: ${connectionStatusTitle(unavailableConnection)}`,
-          description:
-            unavailableConnection.error ??
-            "Reconnect this environment before sending messages or running actions.",
-          actions: (
-            <>
-              <Button
-                size="xs"
-                disabled={environmentReconnecting}
-                onClick={() =>
-                  void handleReconnectActiveEnvironment(
-                    activeEnvironmentUnavailableState.environmentId,
-                  )
-                }
-              >
-                {environmentReconnecting ? "Reconnecting..." : "Reconnect"}
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => void navigate({ to: "/settings/connections" })}
-              >
-                Connections
-              </Button>
-            </>
-          ),
-        });
-      }
+      items.push({
+        id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
+        variant: unavailableConnection.phase === "error" ? "error" : "warning",
+        icon: <WifiOffIcon />,
+        title: `${activeEnvironmentUnavailableState.label}: ${connectionStatusTitle(unavailableConnection)}`,
+        description:
+          unavailableConnection.error ??
+          "Reconnect this environment before sending messages or running actions.",
+        actions: (
+          <>
+            <Button
+              size="xs"
+              disabled={environmentReconnecting}
+              onClick={() =>
+                void handleReconnectActiveEnvironment(
+                  activeEnvironmentUnavailableState.environmentId,
+                )
+              }
+            >
+              {environmentReconnecting ? "Reconnecting..." : "Reconnect"}
+            </Button>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => void navigate({ to: "/settings/connections" })}
+            >
+              Connections
+            </Button>
+          </>
+        ),
+      });
     }
     if (
       serverUpdateEnvironmentId &&
-      !reconnectingThroughVersionSkew &&
       (serverUpdateState.status !== "idle" ||
         (showVersionMismatchBanner && versionMismatch && versionMismatchDismissKey))
     ) {

@@ -11,6 +11,7 @@ import {
   StoredOrchestrationThreadSnapshot,
   decodeOrDiscardOrchestrationCache,
   registerConnectionInCatalog,
+  stringifyStoredShellSnapshot,
   removeCatalogValue,
   removeConnectionFromCatalog,
   replaceCatalogValue,
@@ -60,7 +61,6 @@ const ConnectionCatalogDocumentJson = Schema.fromJsonString(ConnectionCatalogDoc
 const decodeConnectionCatalogDocument = Schema.decodeUnknownEffect(ConnectionCatalogDocumentJson);
 const encodeConnectionCatalogDocument = Schema.encodeEffect(ConnectionCatalogDocumentJson);
 const decodeStoredShellSnapshot = Schema.decodeUnknownEffect(StoredShellSnapshotJson);
-const encodeStoredShellSnapshot = Schema.encodeEffect(StoredShellSnapshotJson);
 const decodeStoredThreadSnapshot = Schema.decodeUnknownEffect(StoredThreadSnapshotJson);
 const encodeStoredThreadSnapshot = Schema.encodeEffect(StoredThreadSnapshotJson);
 const decodeStoredServerConfig = Schema.decodeUnknownEffect(StoredServerConfigJson);
@@ -155,7 +155,9 @@ function writeDatabaseValue(
 ) {
   return Effect.callback<void, ConnectionTransientError>((resume) => {
     const transaction = database.transaction(storeName, "readwrite");
-    transaction.addEventListener("error", () => {
+    // Every failed write fires "abort". A failed commit, such as
+    // QuotaExceededError, fires only "abort" and no "error".
+    transaction.addEventListener("abort", () => {
       resume(
         Effect.fail(catalogError("write", transaction.error ?? "Unknown IndexedDB write error")),
       );
@@ -461,11 +463,7 @@ export const connectionStorageLayer = Layer.effectContext(
         ),
       saveShell: (environmentId, snapshot) =>
         Effect.gen(function* () {
-          const encoded = yield* encodeStoredShellSnapshot({
-            schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
-            environmentId,
-            snapshot,
-          }).pipe(Effect.mapError((cause) => persistenceError("save-shell", cause)));
+          const encoded = yield* stringifyStoredShellSnapshot(environmentId, snapshot);
           yield* writeDatabaseValue(database, SHELL_STORE_NAME, environmentId, encoded);
         }).pipe(
           Effect.mapError((cause) =>

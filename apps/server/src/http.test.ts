@@ -1,20 +1,35 @@
-import { expect, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import { describe } from "vite-plus/test";
+import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { AuthOrchestrationOperateScope, AuthSessionId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { HttpServerResponse } from "effect/unstable/http";
+import * as Tracer from "effect/Tracer";
+import {
+  HttpBody,
+  HttpClient,
+  HttpClientResponse,
+  HttpRouter,
+  HttpServerResponse,
+} from "effect/unstable/http";
+import { OtlpSerialization } from "effect/unstable/observability";
 
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ServerConfig from "./config.ts";
 import {
   assetResponseHeaders,
   assetFileResponse,
   downloadContentDisposition,
   isLoopbackHostname,
+  otlpTracesProxyRouteLayer,
   resolveDevRedirectUrl,
+  untracedRequestsLayer,
 } from "./http.ts";
+import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 
 const fileResponseLayer = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
 
@@ -94,6 +109,82 @@ describe("video asset byte ranges", () => {
       expect(empty.status).toBe(416);
       expect(empty.headers.get("content-range")).toBe("bytes */0");
     }).pipe(Effect.provide(fileResponseLayer)),
+  );
+});
+
+describe("renderer trace proxy", () => {
+  it.effect("does not trace browser OTLP trace exports on the server", () =>
+    Effect.gen(function* () {
+      const spanNames: Array<string> = [];
+      const forwardedUrls: Array<string> = [];
+      const tracedRoute = HttpRouter.add("GET", "/traced", HttpServerResponse.empty());
+      yield* HttpRouter.serve(
+        // Same order as makeRoutesLayer: untracedRequestsLayer last.
+        Layer.mergeAll(otlpTracesProxyRouteLayer, tracedRoute, untracedRequestsLayer),
+        { disableListenLog: true, disableLogger: true },
+      ).pipe(
+        Layer.provide([
+          Layer.mock(EnvironmentAuth.EnvironmentAuth)({
+            authenticateHttpRequest: () =>
+              Effect.succeed({
+                sessionId: AuthSessionId.make("session-trace-proxy"),
+                subject: "renderer",
+                method: "browser-session-cookie",
+                scopes: [AuthOrchestrationOperateScope],
+              }),
+          }),
+          Layer.succeed(BrowserTraceCollector.BrowserTraceCollector, { record: () => Effect.void }),
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.sync(() => {
+                forwardedUrls.push(request.url);
+                return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }));
+              }),
+            ),
+          ),
+          OtlpSerialization.layerJson,
+          Layer.effect(
+            ServerConfig.ServerConfig,
+            ServerConfig.ServerConfig.pipe(
+              Effect.map((base) => ({ ...base, otlpTracesUrl: "http://collector.test/v1/traces" })),
+            ),
+          ).pipe(
+            Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-trace-proxy-" })),
+          ),
+        ]),
+        Layer.build,
+        Effect.provideService(
+          Tracer.Tracer,
+          Tracer.make({
+            span: (options) => {
+              spanNames.push(options.name);
+              return new Tracer.NativeSpan(options);
+            },
+          }),
+        ),
+      );
+      spanNames.length = 0;
+
+      // The query string must not bring back the HTTP server span.
+      for (const url of ["/api/observability/v1/traces", "/api/observability/v1/traces?x=1"]) {
+        const response = yield* HttpClient.post(url, {
+          headers: { "content-type": "application/json" },
+          body: yield* HttpBody.json({ resourceSpans: [] }),
+        });
+        assert.equal(response.status, 204);
+      }
+
+      assert.deepEqual(forwardedUrls, [
+        "http://collector.test/v1/traces",
+        "http://collector.test/v1/traces",
+      ]);
+      assert.deepEqual(spanNames, []);
+
+      // Other routes keep their HTTP server span.
+      assert.equal((yield* HttpClient.get("/traced")).status, 204);
+      assert.include(spanNames, "http.server GET");
+    }).pipe(Effect.provide(Layer.mergeAll(NodeHttpServer.layerTest, NodeServices.layer))),
   );
 });
 

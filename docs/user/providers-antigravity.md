@@ -20,6 +20,14 @@ refreshes that catalog. Workspace commands and skills follow the selected projec
 worktree. Native questions require one of the offered choices; permission prompts show
 any warning attached to a persistent approval.
 
+Antigravity sees BMP, JPEG, PNG, and WebP images directly, up to 10 MB each. A message
+with another image format, such as GIF, is rejected. Other files are saved into your
+project for the agent to read by path, as described in [attachments](./attachments.md).
+If a file could not be saved there, Antigravity receives PDFs, text files, and supported
+audio directly, within 1 MB per text file, 20 MB per audio clip, and 50 MB of direct
+attachments per message. Other files, and files over those limits, are passed as a file
+path for the agent to inspect with its tools.
+
 Sign out from the account's setup screen or send `/logout` in an Antigravity thread.
 Signing out stops that account's active sessions. Other provider accounts remain separate.
 Removing the managed runtime requires its sessions to be stopped; it does not delete your

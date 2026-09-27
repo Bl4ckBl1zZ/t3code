@@ -128,6 +128,7 @@ import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../
 import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
+import { useEscapeToGoBack } from "../hooks/useNavigateBack";
 import {
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
@@ -314,6 +315,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
 });
 
 function PullRequestsRouteView() {
+  useEscapeToGoBack();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const search = Route.useSearch();
   const sort = search.sort ?? "ready";
@@ -1602,8 +1604,9 @@ function PullRequestsRouteView() {
       });
       if (command === "rightPanel.toggle") toggleRightPanelFromShortcut(event);
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    // Let panel shortcuts consume Escape before page navigation at window.
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
   }, [keybindings]);
 
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host

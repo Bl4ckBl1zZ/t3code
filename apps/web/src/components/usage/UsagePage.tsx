@@ -7,7 +7,8 @@ import {
   type UsagePagePreferences,
 } from "./usagePagePreferences";
 import type { EnvironmentId, UsageProviderKind } from "@t3tools/contracts";
-import { useMemo, useRef, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import {
   isModelCostUnknown,
@@ -15,8 +16,13 @@ import {
   type HourlyTotals,
 } from "@t3tools/shared/usageMerge";
 
+import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { isElectron } from "../../env";
+import { useEscapeToGoBack } from "../../hooks/useNavigateBack";
+import { shortcutLabelForCommand } from "../../keybindings";
 import { cn } from "../../lib/utils";
+import { isModelPickerOpen } from "../../modelPickerVisibility";
+import { primaryServerKeybindingsAtom } from "../../state/server";
 import { useUsage } from "../../state/usage";
 import {
   enumerateDays,
@@ -46,13 +52,13 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { sortModelsByTokens } from "./usageBreakdown";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
+import { METRIC_OPTIONS, WINDOW_OPTIONS, resolveUsageShortcut } from "./usageShortcuts";
 
-const WINDOW_OPTIONS = [
-  { days: 1, label: "Past 24h" },
-  { days: 7, label: "7 days" },
-  { days: 30, label: "30 days" },
-  { days: 90, label: "90 days" },
-] as const;
+// Limits is its own view here, reached from a button rather than the metric toggle.
+const [COST_OPTION, TOKENS_OPTION, LIMITS_OPTION] = METRIC_OPTIONS;
+const CHART_METRIC_OPTIONS = [COST_OPTION, TOKENS_OPTION];
+
+type UsageShortcutOption = (typeof METRIC_OPTIONS)[number] | (typeof WINDOW_OPTIONS)[number];
 
 export function UsagePage() {
   const [preferences, setPreferences] = useState(readUsagePagePreferences);
@@ -62,6 +68,37 @@ export function UsagePage() {
     setPreferences(next);
     saveUsagePagePreferences(next);
   };
+  useEscapeToGoBack();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const onUsageKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (
+      event.defaultPrevented ||
+      event.repeat ||
+      event.isComposing ||
+      isCommandPaletteOpen() ||
+      isModelPickerOpen()
+    )
+      return;
+
+    const command = resolveUsageShortcut(event, keybindings);
+    const metricOption = METRIC_OPTIONS.find((option) => option.command === command);
+    const periodOption = WINDOW_OPTIONS.find((option) => option.command === command);
+    if (!metricOption && !periodOption) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (metricOption) updatePreferences({ ...preferences, metric: metricOption.value });
+    // Limits has no time range, so period shortcuts do nothing there.
+    if (periodOption && preferences.metric !== "limits") {
+      updatePreferences({ ...preferences, windowDays: periodOption.days });
+    }
+  });
+
+  useEffect(() => {
+    window.addEventListener("keydown", onUsageKeyDown, true);
+    return () => window.removeEventListener("keydown", onUsageKeyDown, true);
+  }, []);
+
   return preferences.metric === "limits" ? (
     <UsageLimits
       selected={selectedEnvironmentIds}
@@ -94,6 +131,13 @@ function UsageHistoryPage({
 }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshingRef = useRef(false);
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const shortcutTitle = (option: UsageShortcutOption) => {
+    const shortcut = shortcutLabelForCommand(keybindings, option.command, {
+      context: { usagePageOpen: true },
+    });
+    return shortcut ? `${option.label} (${shortcut})` : option.label;
+  };
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: preferences.windowDays,
     window: makeWindow(
@@ -102,6 +146,18 @@ function UsageHistoryPage({
       preferences.windowDays === 1 ? "hour" : "day",
     ),
   }));
+  // The saved period is the source of truth: toggles and page shortcuts both
+  // change it, and the window is rebuilt from the current time when it moves.
+  if (windowSelection.days !== preferences.windowDays) {
+    setWindowSelection({
+      days: preferences.windowDays,
+      window: makeWindow(
+        preferences.windowDays,
+        undefined,
+        preferences.windowDays === 1 ? "hour" : "day",
+      ),
+    });
+  }
   const metric = preferences.metric === "tokens" ? "tokens" : "cost";
   const setMetric = (metric: UsageChartMetric) => updatePreferences({ ...preferences, metric });
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
@@ -142,10 +198,6 @@ function UsageHistoryPage({
   const selectWindow = (days: number) => {
     if (days !== 1 && days !== 7 && days !== 30 && days !== 90) return;
     updatePreferences({ ...preferences, windowDays: days });
-    setWindowSelection({
-      days,
-      window: makeWindow(days, undefined, days === 1 ? "hour" : "day"),
-    });
   };
   const refreshWindow = () => {
     if (refreshingRef.current) return;
@@ -190,9 +242,9 @@ function UsageHistoryPage({
             if (value === "cost" || value === "tokens") setMetric(value);
           }}
         >
-          {(["cost", "tokens"] as const).map((option) => (
-            <Toggle key={option} value={option}>
-              {option === "cost" ? "Cost" : "Tokens"}
+          {CHART_METRIC_OPTIONS.map((option) => (
+            <Toggle key={option.value} value={option.value} title={shortcutTitle(option)}>
+              {option.label}
             </Toggle>
           ))}
         </ToggleGroup>
@@ -206,13 +258,18 @@ function UsageHistoryPage({
           }}
         >
           {WINDOW_OPTIONS.map((option) => (
-            <Toggle key={option.days} value={String(option.days)}>
+            <Toggle key={option.days} value={String(option.days)} title={shortcutTitle(option)}>
               {option.label}
             </Toggle>
           ))}
         </ToggleGroup>
-        <Button size="sm" variant="ghost" onClick={onShowLimits}>
-          Limits
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onShowLimits}
+          title={shortcutTitle(LIMITS_OPTION)}
+        >
+          {LIMITS_OPTION.label}
         </Button>
         <Button
           disabled={isRefreshing}
@@ -241,8 +298,11 @@ function UsageHistoryPage({
             <SelectValue>{metric === "cost" ? "Cost" : "Tokens"}</SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
-            <SelectItem value="cost">Cost</SelectItem>
-            <SelectItem value="tokens">Tokens</SelectItem>
+            {CHART_METRIC_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value} title={shortcutTitle(option)}>
+                {option.label}
+              </SelectItem>
+            ))}
           </SelectPopup>
         </Select>
         <Select value={String(windowDays)} onValueChange={(value) => selectWindow(Number(value))}>
@@ -258,14 +318,23 @@ function UsageHistoryPage({
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             {WINDOW_OPTIONS.map((option) => (
-              <SelectItem key={option.days} value={String(option.days)}>
+              <SelectItem
+                key={option.days}
+                value={String(option.days)}
+                title={shortcutTitle(option)}
+              >
                 {option.label}
               </SelectItem>
             ))}
           </SelectPopup>
         </Select>
-        <Button size="sm" variant="ghost" onClick={onShowLimits}>
-          Limits
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onShowLimits}
+          title={shortcutTitle(LIMITS_OPTION)}
+        >
+          {LIMITS_OPTION.label}
         </Button>
         <Button
           disabled={isRefreshing}
@@ -295,7 +364,7 @@ function UsageHistoryPage({
             showUsageStatus
             isPartial={isPartial}
             duplicateSources={merged.duplicateSources}
-            staleEnvironments={merged.staleEnvironments}
+            contractMismatches={merged.contractMismatches}
           />
         </div>
         <ScrollArea className="min-h-0 flex-1">
