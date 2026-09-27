@@ -1,5 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CheckpointId,
+  CheckpointScopeId,
   CommandId,
   ProviderSessionId,
   ProviderThreadId,
@@ -149,7 +151,11 @@ function makeExecutorLayer(input: {
     ),
     Layer.succeed(
       CheckpointRollbackServiceV2,
-      CheckpointRollbackServiceV2.of({ execute: () => Effect.void }),
+      CheckpointRollbackServiceV2.of({
+        execute: () => Effect.void,
+        recordPermanentFailure: (failure) =>
+          record(`rollback-failed:${failure.threadId}:${failure.requestId}`),
+      }),
     ),
     Layer.succeed(
       RuntimeRequestServiceV2,
@@ -791,6 +797,44 @@ it.effect("routes exhausted restart effects to permanent start failure handling"
     }).pipe(Effect.provide(makeExecutorLayer({ events })));
 
     assert.deepEqual(yield* Ref.get(events), ["fail-permanently"]);
+  }),
+);
+
+it.effect("records an exhausted rollback so waiting clients stop and show why", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const timestamp = DateTime.formatIso(now);
+    const events = yield* Ref.make<ReadonlyArray<string>>([]);
+    const commandId = CommandId.make("command:rollback-exhausted");
+
+    yield* Effect.gen(function* () {
+      const executor = yield* OrchestrationEffectExecutorV2;
+      yield* executor.handlePermanentFailure?.(
+        {
+          id: "effect:rollback-exhausted",
+          commandId,
+          threadId,
+          request: {
+            type: "provider-thread.rollback",
+            providerThreadId,
+            checkpointId: CheckpointId.make("checkpoint:rollback-exhausted"),
+            scopeId: CheckpointScopeId.make("checkpoint-scope:rollback-exhausted"),
+          },
+          status: "running",
+          attemptCount: 5,
+          availableAt: timestamp,
+          leaseOwner: "test-worker",
+          leaseExpiresAt: timestamp,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          completedAt: null,
+          lastError: null,
+        },
+        "simulated provider failure",
+      );
+    }).pipe(Effect.provide(makeExecutorLayer({ events })));
+
+    assert.deepEqual(yield* Ref.get(events), [`rollback-failed:${threadId}:${commandId}`]);
   }),
 );
 

@@ -1,6 +1,7 @@
 import {
   CheckpointId,
   CheckpointScopeId,
+  type CommandId,
   type OrchestrationV2DomainEvent,
   ProviderThreadId,
   ThreadId,
@@ -18,6 +19,9 @@ import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import type { ProviderAdapterV2RollbackTarget } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+
+export const ROLLBACK_FAILED_MESSAGE =
+  "The provider could not roll back this conversation. Try again; if it keeps failing, check the provider and server logs.";
 
 export class CheckpointRollbackExecutionError extends Schema.TaggedErrorClass<CheckpointRollbackExecutionError>()(
   "CheckpointRollbackExecutionError",
@@ -43,7 +47,7 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedErrorClass<Ch
       case "provider-turn-unavailable":
         return `Provider turn for rollback target ${this.checkpointId} is unavailable on provider thread ${this.providerThreadId}.`;
       case "unexpected-failure":
-        return `Failed to execute rollback target ${this.checkpointId} on provider thread ${this.providerThreadId} for thread ${this.threadId}.`;
+        return ROLLBACK_FAILED_MESSAGE;
     }
   }
 }
@@ -57,6 +61,28 @@ export interface CheckpointRollbackServiceV2Shape {
     readonly checkpointId: CheckpointId;
     readonly scopeId: CheckpointScopeId;
   }) => Effect.Effect<void, CheckpointRollbackExecutionError>;
+  /**
+   * Records that the rollback requested by `requestId` failed after every
+   * retry, so clients waiting on it stop and show `cause`'s reason. The next
+   * rollback of the thread clears it.
+   */
+  readonly recordPermanentFailure: (input: {
+    readonly threadId: ThreadId;
+    readonly requestId: CommandId;
+    readonly cause?: unknown;
+  }) => Effect.Effect<void, unknown>;
+}
+
+/** The rollback error a failed attempt carries, however deeply the worker wrapped it. */
+function rollbackFailureMessage(cause: unknown): string {
+  const seen = new Set<unknown>();
+  let current = cause;
+  while (typeof current === "object" && current !== null && !seen.has(current)) {
+    seen.add(current);
+    if (isCheckpointRollbackExecutionError(current)) return current.message;
+    current = Reflect.get(current, "cause");
+  }
+  return ROLLBACK_FAILED_MESSAGE;
 }
 
 export class CheckpointRollbackServiceV2 extends Context.Service<
@@ -324,7 +350,37 @@ export const layer: Layer.Layer<
       yield* eventSink.write({ events });
     });
 
+    const recordPermanentFailure: CheckpointRollbackServiceV2Shape["recordPermanentFailure"] = (
+      input,
+    ) =>
+      Effect.gen(function* () {
+        const { thread } = yield* projections.getThreadRecords(input.threadId, []);
+        if (thread.deletedAt !== null) return;
+        const now = yield* DateTime.now;
+        const id = yield* ids.allocate.event({ threadId: input.threadId });
+        yield* eventSink.write({
+          events: [
+            {
+              id,
+              type: "thread.metadata-updated",
+              threadId: input.threadId,
+              providerInstanceId: thread.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                ...thread,
+                rollbackFailure: {
+                  requestId: input.requestId,
+                  message: rollbackFailureMessage(input.cause),
+                },
+                updatedAt: now,
+              },
+            },
+          ],
+        });
+      });
+
     return CheckpointRollbackServiceV2.of({
+      recordPermanentFailure,
       execute: (input) =>
         execute(input).pipe(
           Effect.mapError((cause) =>

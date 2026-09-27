@@ -258,7 +258,7 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
@@ -1624,6 +1624,9 @@ function ChatViewContent(props: ChatViewProps) {
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [pendingCheckpointRestore, setPendingCheckpointRestore] =
     useState<PendingCheckpointRestore | null>(null);
+  // Rollbacks this view dispatched. The server records one that failed after
+  // every retry on the thread; only those this view asked for become an error.
+  const dispatchedRollbackRequestIdsRef = useRef(new Set<string>());
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
     null,
   );
@@ -6465,9 +6468,12 @@ function ChatViewContent(props: ChatViewProps) {
 
     setIsRevertingCheckpoint(true);
     setThreadError(activeThread.id, null);
+    const commandId = newCommandId();
+    dispatchedRollbackRequestIdsRef.current.add(commandId);
     const result = await revertThreadCheckpoint({
       environmentId,
       input: {
+        commandId,
         threadId: activeThread.id,
         ...(pending.kind === "checkpoint"
           ? { checkpointId: pending.checkpointId, scopeId: pending.scopeId }
@@ -6491,6 +6497,14 @@ function ChatViewContent(props: ChatViewProps) {
     revertThreadCheckpoint,
     setThreadError,
   ]);
+
+  const rollbackFailure = serverProjection?.thread.rollbackFailure ?? null;
+  const activeThreadIdForRollbackFailure = activeThread?.id;
+  useEffect(() => {
+    if (rollbackFailure === null || activeThreadIdForRollbackFailure === undefined) return;
+    if (!dispatchedRollbackRequestIdsRef.current.delete(rollbackFailure.requestId)) return;
+    setThreadError(activeThreadIdForRollbackFailure, rollbackFailure.message);
+  }, [activeThreadIdForRollbackFailure, rollbackFailure, setThreadError]);
 
   const handleRollbackCheckpoint = onRollbackCheckpoint;
 

@@ -347,6 +347,25 @@ export const executorLayer: Layer.Layer<
                     }),
                 ),
               );
+          case "provider-thread.rollback":
+            // The last failed attempt tells waiting clients why, instead of
+            // leaving them to time out.
+            return checkpointRollback
+              .recordPermanentFailure({
+                threadId: effect.threadId,
+                requestId: effect.commandId,
+                ...(cause === undefined ? {} : { cause }),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
           default:
             return Effect.void;
         }

@@ -2,6 +2,7 @@ import { assert, it, vi } from "@effect/vitest";
 import {
   CheckpointId,
   CheckpointScopeId,
+  CommandId,
   type OrchestrationV2ThreadProjection,
   ProviderInstanceId,
   ProviderSessionId,
@@ -14,9 +15,12 @@ import * as Layer from "effect/Layer";
 import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import {
+  CheckpointRollbackExecutionError,
   CheckpointRollbackServiceV2,
   layer as checkpointRollbackServiceLayer,
+  ROLLBACK_FAILED_MESSAGE,
 } from "./CheckpointRollbackService.ts";
+import { OrchestrationEffectExecutionError } from "./EffectWorker.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
 import { ProjectionStoreReadError, ProjectionStoreV2 } from "./ProjectionStore.ts";
@@ -471,3 +475,78 @@ it.effect.each([{ targetOrdinal: 0 }, { targetOrdinal: 1 }])(
     }).pipe(Effect.provide(testLayer));
   },
 );
+
+it.effect("records a rollback that failed for good with the reason the client shows", () => {
+  const threadId = ThreadId.make("thread:rollback-failure");
+  const providerThreadId = ProviderThreadId.make("provider-thread:rollback-failure");
+  const checkpointId = CheckpointId.make("checkpoint:rollback-failure");
+  const requestId = CommandId.make("command:rollback-failure");
+  const thread = {
+    id: threadId,
+    providerInstanceId: ProviderInstanceId.make("provider_rollback_failure"),
+    rollbackFailure: null,
+    deletedAt: null,
+  };
+  const written: Array<{ readonly events: ReadonlyArray<unknown> }> = [];
+  const testLayer = checkpointRollbackServiceLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(CheckpointServiceV2)({}),
+        Layer.mock(EventSinkV2)({
+          write: ((input: { readonly events: ReadonlyArray<unknown> }) => {
+            written.push(input);
+            return Effect.succeed([]);
+          }) as never,
+        }),
+        idAllocatorLayer,
+        Layer.mock(ProjectionStoreV2)({
+          getThreadRecords: (() => Effect.succeed({ thread })) as never,
+        }),
+        Layer.mock(ProviderSessionManagerV2)({}),
+        Layer.mock(RuntimePolicyV2)({}),
+      ),
+    ),
+  );
+  const recorded = () =>
+    written
+      .flatMap((batch) => batch.events)
+      .map(
+        (event) =>
+          (
+            event as {
+              readonly type: string;
+              readonly payload: { readonly rollbackFailure: unknown };
+            }
+          ).payload.rollbackFailure,
+      );
+
+  return Effect.gen(function* () {
+    const service = yield* CheckpointRollbackServiceV2;
+    // The worker hands over its own wrapper; the structured reason inside it
+    // is what the user reads.
+    yield* service.recordPermanentFailure({
+      threadId,
+      requestId,
+      cause: new OrchestrationEffectExecutionError({
+        effectId: "effect:rollback-failure",
+        effectType: "provider-thread.rollback",
+        cause: new CheckpointRollbackExecutionError({
+          reason: "active-provider-changed",
+          threadId,
+          providerThreadId,
+          checkpointId,
+        }),
+      }),
+    });
+    // A failure with no structured reason falls back to the generic message.
+    yield* service.recordPermanentFailure({ threadId, requestId });
+
+    assert.deepEqual(recorded(), [
+      {
+        requestId,
+        message: `Active provider changed before rollback target ${checkpointId} could execute on thread ${threadId}.`,
+      },
+      { requestId, message: ROLLBACK_FAILED_MESSAGE },
+    ]);
+  }).pipe(Effect.provide(testLayer));
+});
