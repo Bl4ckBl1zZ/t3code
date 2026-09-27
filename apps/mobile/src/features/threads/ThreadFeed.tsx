@@ -153,7 +153,11 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
-import { RELATED_THREAD_ROWS_CLASS, ThreadLifecycleRow } from "./ThreadLifecycleRow";
+import {
+  RELATED_THREAD_ROWS_CLASS,
+  SubagentLifecycleGroup,
+  ThreadLifecycleRow,
+} from "./ThreadLifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { formatOrchestrationV2TimelineDayLabel } from "@t3tools/shared/orchestrationV2Timeline";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
@@ -1160,7 +1164,14 @@ function renderFeedEntry(
   }
 
   if (entry.type === "lifecycle-group") {
-    return <LifecycleGroup entries={entry.entries} environmentId={props.environmentId} />;
+    return (
+      <LifecycleGroup
+        entries={entry.entries}
+        environmentId={props.environmentId}
+        expanded={props.expandedWorkGroups[entry.id] ?? false}
+        onToggle={() => props.onToggleWorkGroup(entry.id)}
+      />
+    );
   }
 
   if (entry.type === "run-fold") {
@@ -1494,7 +1505,25 @@ function renderFeedEntry(
 function LifecycleGroup(props: {
   readonly entries: ReadonlyArray<Extract<ThreadFeedEntry, { type: "lifecycle" }>>;
   readonly environmentId: EnvironmentId;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
 }) {
+  // A run made only of subagents folds into one card; a mix with created
+  // threads keeps the stacked list.
+  const subagents = props.entries.flatMap((entry) =>
+    entry.row.item.type === "subagent" ? [entry.row.item] : [],
+  );
+  if (subagents.length === props.entries.length) {
+    return (
+      <SubagentLifecycleGroup
+        entries={props.entries}
+        items={subagents}
+        environmentId={props.environmentId}
+        expanded={props.expanded}
+        onToggle={props.onToggle}
+      />
+    );
+  }
   return (
     <View className={RELATED_THREAD_ROWS_CLASS}>
       {props.entries.map((entry) => (
