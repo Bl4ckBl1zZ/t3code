@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 
 import {
   buildKeybindingRows,
@@ -138,6 +139,30 @@ describe("KeybindingsSettings.logic", () => {
     expect(commandLabel("commandPalette.toggle")).toBe("Command Palette: Toggle");
     expect(commandLabel("themeEditor.toggle")).toBe("Theme Editor: Toggle");
     expect(commandLabel("script.setup-db.run")).toBe("Run Script: Setup Db");
+    expect(commandLabel("usage.tokens")).toBe("Usage: Tokens");
+    expect(commandLabel("usage.period.day")).toBe("Usage: Period: Past 24h");
+  });
+
+  it("orders Usage bindings and command choices like the page, whatever the input order", () => {
+    const expected = [
+      "usage.cost",
+      "usage.tokens",
+      "usage.limits",
+      "usage.period.day",
+      "usage.period.week",
+      "usage.period.month",
+      "usage.period.quarter",
+      "usage.open",
+    ];
+    for (const bindings of [
+      DEFAULT_RESOLVED_KEYBINDINGS,
+      DEFAULT_RESOLVED_KEYBINDINGS.toReversed(),
+    ]) {
+      expect(buildKeybindingRows(bindings, "usage").map((row) => row.command)).toEqual(expected);
+      expect(
+        buildKeybindingCommandOptions(bindings).filter((command) => command.startsWith("usage.")),
+      ).toEqual(expected);
+    }
   });
 
   it("builds known when variable options from defaults without frontend labels", () => {

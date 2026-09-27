@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationV2ThreadShell,
+  type OrchestrationV2ThreadShellSnapshot,
   type Project,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -13,6 +14,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
@@ -187,4 +190,117 @@ describe("AgentAwarenessRelay.publishThread", () => {
       }),
     ),
   );
+});
+
+describe("startup catch-up", () => {
+  // An unlinked relay with publishing off. `link` writes the link secrets and
+  // `enablePublishing` the opt-in. Counts link checks (relay URL reads) and
+  // catch-up publishes (shell snapshot reads).
+  function makeUnlinkedRelay() {
+    const secrets = makeMemorySecretStore();
+    const counts = { linkChecks: 0, catchUpPublishes: 0 };
+    const countingStore = {
+      ...secrets,
+      get: (name: string) =>
+        Effect.suspend(() => {
+          if (name === RELAY_URL_SECRET) counts.linkChecks += 1;
+          return secrets.get(name);
+        }),
+    } satisfies ServerSecretStore.ServerSecretStore["Service"];
+    const encode = (value: string) => new TextEncoder().encode(value);
+
+    const layer = AgentAwarenessRelay.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(ServerSecretStore.ServerSecretStore, countingStore),
+          Layer.succeed(ServerEnvironment.ServerEnvironment, {
+            getEnvironmentId: Effect.succeed(environmentId),
+            getDescriptor: Effect.die("unused descriptor"),
+          }),
+          Layer.succeed(ThreadManagement.ThreadManagementService, {
+            streamDomainEvents: Stream.never,
+            getShellSnapshot: () =>
+              Effect.sync(() => {
+                counts.catchUpPublishes += 1;
+                return {
+                  schemaVersion: 1,
+                  snapshotSequence: 1,
+                  threads: [],
+                  archivedThreads: [],
+                } satisfies OrchestrationV2ThreadShellSnapshot;
+              }),
+          } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+          Layer.succeed(ProjectService.ProjectService, {
+            snapshot: Effect.succeed({ projects: [], updatedAt: "2026-05-25T00:00:00.000Z" }),
+          } as unknown as ProjectService.ProjectService["Service"]),
+        ),
+      ),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    const link = Effect.all(
+      [
+        secrets.set(RELAY_URL_SECRET, encode("https://relay.example.test")),
+        secrets.set(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, encode("relay-credential")),
+      ],
+      { discard: true },
+    );
+    const enablePublishing = secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("true"));
+    return { counts, layer, link, enablePublishing };
+  }
+
+  it.effect("checks an unlinked environment once a minute and still catches up once linked", () => {
+    const { counts, layer, link, enablePublishing } = makeUnlinkedRelay();
+    return Effect.gen(function* () {
+      const relay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+      yield* enablePublishing;
+      yield* relay.start();
+
+      // Get past the backoff ramp, then count checks in a steady window.
+      yield* TestClock.adjust("10 minutes");
+      const checksBeforeWindow = counts.linkChecks;
+      yield* TestClock.adjust("10 minutes");
+      expect(counts.linkChecks - checksBeforeWindow).toBe(10);
+      expect(counts.catchUpPublishes).toBe(0);
+
+      yield* link;
+      yield* TestClock.adjust("1 minute");
+      expect(counts.catchUpPublishes).toBe(1);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
+
+  it.effect("publishes at once when this process links while the check is backed off", () => {
+    const { counts, layer, link, enablePublishing } = makeUnlinkedRelay();
+    return Effect.gen(function* () {
+      const relay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+      yield* enablePublishing;
+      yield* relay.start();
+
+      // Backed off to 60 s: the next check is still seconds away.
+      yield* TestClock.adjust("10 minutes");
+      yield* link;
+      yield* TestClock.adjust("1 second");
+      expect(counts.catchUpPublishes).toBe(0);
+
+      yield* relay.requestCatchUp();
+      yield* TestClock.adjust("1 second");
+      expect(counts.catchUpPublishes).toBe(1);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
+
+  it.effect("catches up within 5 s when another process enables publishing on a link", () => {
+    const { counts, layer, link, enablePublishing } = makeUnlinkedRelay();
+    return Effect.gen(function* () {
+      const relay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+      yield* link;
+      yield* relay.start();
+
+      yield* TestClock.adjust("10 minutes");
+      expect(counts.catchUpPublishes).toBe(0);
+
+      // `t3 connect publish` writes the opt-in without waking this process.
+      yield* enablePublishing;
+      yield* TestClock.adjust("5 seconds");
+      expect(counts.catchUpPublishes).toBe(1);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  });
 });

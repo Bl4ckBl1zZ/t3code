@@ -1,6 +1,6 @@
 import { RotateCcwIcon } from "lucide-react";
 import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
@@ -9,6 +9,7 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { useNavigateToMainApp } from "../components/sidebar/mainAppLocation";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { isElectron } from "../env";
+import { useEscapeToGoBack } from "../hooks/useNavigateBack";
 
 function RestoreDefaultsButton({ onRestored }: { onRestored: () => void }) {
   const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
@@ -29,30 +30,10 @@ function RestoreDefaultsButton({ onRestored }: { onRestored: () => void }) {
 function SettingsContentLayout() {
   const location = useLocation();
   const navigateToMainApp = useNavigateToMainApp();
+  useEscapeToGoBack(navigateToMainApp);
   const [restoreSignal, setRestoreSignal] = useState(0);
   const showRestoreDefaults = location.pathname === "/settings/general";
   const handleRestored = () => setRestoreSignal((value) => value + 1);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-
-        const activeElement = document.activeElement;
-        if (activeElement instanceof HTMLElement) {
-          activeElement.blur();
-        }
-
-        void navigateToMainApp();
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [navigateToMainApp]);
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">

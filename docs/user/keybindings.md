@@ -92,7 +92,7 @@ but the new thread does not reuse the worktree created for the thread that just 
 
 A `when` expression is evaluated against context keys describing the current UI state. The keys
 the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`,
-`modelPickerOpen`, `editableFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
+`modelPickerOpen`, `usagePageOpen`, `editableFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
 field, the composer, or another editor has the keyboard. The default `mod+1`…`mod+9` thread and model jumps
 are limited to `isDesktop`, so a browser keeps those keys for switching tabs. The set is open and grows over time, so treat that as the current list rather
 than a fixed one. Any key the running app does not supply evaluates to `false`.
