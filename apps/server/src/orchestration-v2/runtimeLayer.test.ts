@@ -1356,15 +1356,14 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
             ? {
                 answers: { q: "Use this spec" },
                 attachmentsByQuestionId: {
-                  q: [
-                    {
-                      type: "file" as const,
-                      id: "spec_file",
-                      name: "spec.txt",
-                      mimeType: "text/plain",
-                      sizeBytes: 4,
-                    },
-                  ],
+                  // More than the old eight-attachment limit.
+                  q: Array.from({ length: 9 }, (_, index) => ({
+                    type: "file" as const,
+                    id: index === 0 ? "spec_file" : `spec_file_${index}`,
+                    name: index === 0 ? "spec.txt" : `spec-${index}.txt`,
+                    mimeType: "text/plain",
+                    sizeBytes: 4,
+                  })),
                 },
               }
             : { dismiss: true }),
@@ -1377,6 +1376,43 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
             "pending",
           );
           return;
+        }
+        if (action === "answer") {
+          // Answers share the message rule: up to 100 files, images up to 80 MiB in total.
+          const image = {
+            type: "image" as const,
+            id: "budget_image",
+            name: "shot.png",
+            mimeType: "image/png",
+            sizeBytes: 10 * 1024 * 1024,
+          };
+          const overCount = yield* orchestrator
+            .dispatch({
+              ...command,
+              commandId: CommandId.make("question-respond-over-count"),
+              attachmentsByQuestionId: {
+                q: Array.from({ length: 101 }, () => ({
+                  ...image,
+                  type: "file" as const,
+                  mimeType: "text/plain",
+                  sizeBytes: 4,
+                })),
+              },
+            })
+            .pipe(Effect.flip);
+          assert.include(String(overCount.cause), "up to 100");
+          const overBudget = yield* orchestrator
+            .dispatch({
+              ...command,
+              commandId: CommandId.make("question-respond-over-budget"),
+              attachmentsByQuestionId: { q: Array.from({ length: 9 }, () => image) },
+            })
+            .pipe(Effect.flip);
+          assert.include(String(overBudget.cause), "80 MiB");
+          assert.equal(
+            (yield* orchestrator.getThreadProjection(threadId)).runtimeRequests[0]?.status,
+            "pending",
+          );
         }
         yield* orchestrator.dispatch(command);
         const projection = yield* orchestrator.getThreadProjection(threadId);

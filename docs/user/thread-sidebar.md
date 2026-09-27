@@ -160,7 +160,7 @@ already have synced positions, update those servers before reordering the sectio
 
 On iPad, drag files from another app onto a thread row to open its composer with those files.
 Existing text and attachments stay in place, and the message remains unsent. Preparation uses
-the same file-size and eight-attachment limits as the composer. If you leave while files are
+the same file-size and attachment limits as the composer. If you leave while files are
 being prepared, return to that thread to finish adding the pending files during this app session.
 Archived rows and batch-selection mode do not accept drops.
 

@@ -16,6 +16,7 @@ import {
 import {
   type ChatAttachment,
   CommandId,
+  getProviderAttachmentLimitError,
   isProviderNativeSubagentThread,
   MessageId,
   type ModelSelection,
@@ -5689,8 +5690,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const questionAttachments = command.attachmentsByQuestionId ?? {};
       const attachments = Object.values(questionAttachments).flat();
+      const attachmentLimitError = getProviderAttachmentLimitError(attachments);
+      if (attachmentLimitError !== undefined) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: attachmentLimitError,
+        });
+      }
       if (
-        attachments.length > 8 ||
         (command.dismiss === true && !isMessageResponse) ||
         ((attachments.length > 0 || isMessageResponse) &&
           questionItem?.type !== "user_input_request") ||

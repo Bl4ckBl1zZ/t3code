@@ -1,7 +1,6 @@
 import { subscribeHermesWorkChanges } from "./hermes/HermesWorkChanges.ts";
 import { HermesWorkSetupService } from "./hermes/HermesWorkSetupService.ts";
 import { HermesWorkModelAuth } from "./hermes/HermesWorkModelAuth.ts";
-import type { SnapShotSource } from "@t3tools/contracts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import { consumeInstanceResetCredit } from "./provider/consumeResetCredit.ts";
@@ -10,11 +9,8 @@ import { withCreatedPullRequestLink } from "./git/linkCreatedPullRequest.ts";
 import { AgentSessionScanner } from "./project/AgentSessionScanner.ts";
 import { AgentSessionImporter } from "./project/AgentSessionImporter.ts";
 import * as DateTime from "effect/DateTime";
-import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
-import * as Encoding from "effect/Encoding";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -45,7 +41,6 @@ import {
   type OrchestrationV2Command,
   type GitActionProgressEvent,
   type GitManagerServiceError,
-  type MessageId,
   OrchestrationGetFullThreadDiffError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
@@ -78,9 +73,6 @@ import {
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
-  type ChatAttachment,
-  ChatAttachmentId,
-  PersistChatAttachmentsError,
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
@@ -160,15 +152,8 @@ import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
-import {
-  attachmentRelativePath,
-  createDeterministicAttachmentId,
-  parseThreadSegmentFromAttachmentId,
-  planAttachmentClaim,
-  resolveAttachmentPath,
-  PENDING_ATTACHMENT_THREAD_SEGMENT,
-} from "./attachmentStore.ts";
-import { parseBase64DataUrl } from "./imageMime.ts";
+import { persistChatAttachments } from "./assets/ChatAttachmentPersistence.ts";
+import * as AttachmentClaims from "./orchestration-v2/AttachmentClaims.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
@@ -274,197 +259,6 @@ export const bypassOwnedProviderCachesForRefresh = Effect.fn(
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
-
-const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(function* (input: {
-  readonly threadId: ThreadId;
-  readonly messageId: MessageId;
-  readonly attachments: ReadonlyArray<{
-    readonly type: "image" | "file" | "pdf" | "video";
-    readonly name: string;
-    readonly mimeType: string;
-    readonly sizeBytes: number;
-    readonly dataUrl: string;
-    readonly role?: "upload" | "preview-annotation" | undefined;
-    readonly source?: SnapShotSource | undefined;
-  }>;
-}) {
-  const config = yield* ServerConfig.ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  return yield* Effect.forEach(
-    input.attachments.map((attachment, index) => ({ attachment, index })),
-    Effect.fn("ws.assets.persistChatAttachment")(function* ({ attachment, index }) {
-      const parsed = parseBase64DataUrl(attachment.dataUrl);
-      if (parsed === null || parsed.mimeType !== attachment.mimeType.toLowerCase()) {
-        return yield* new PersistChatAttachmentsError({
-          message: `Attachment ${attachment.name} has an invalid payload.`,
-        });
-      }
-      const bytes = yield* Effect.fromResult(Encoding.decodeBase64(parsed.base64)).pipe(
-        Effect.mapError(
-          (cause) =>
-            new PersistChatAttachmentsError({
-              message: `Attachment ${attachment.name} is not valid base64.`,
-              cause,
-            }),
-        ),
-      );
-      if (bytes.byteLength !== attachment.sizeBytes) {
-        return yield* new PersistChatAttachmentsError({
-          message: `Attachment ${attachment.name} size does not match its payload.`,
-        });
-      }
-      const rawId = createDeterministicAttachmentId(input.threadId, `${input.messageId}:${index}`);
-      if (rawId === null) {
-        return yield* new PersistChatAttachmentsError({
-          message: "Could not allocate an attachment identifier.",
-        });
-      }
-      const persisted = {
-        type: attachment.type,
-        id: ChatAttachmentId.make(rawId),
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        sizeBytes: attachment.sizeBytes,
-        ...(attachment.role === undefined ? {} : { role: attachment.role }),
-        ...(attachment.type === "image" && attachment.source ? { source: attachment.source } : {}),
-      };
-      const relativePath = attachmentRelativePath(persisted);
-      if (relativePath === null) {
-        return yield* new PersistChatAttachmentsError({
-          message: `Unsupported attachment type for ${attachment.name}.`,
-        });
-      }
-      yield* fileSystem.writeFile(path.join(config.attachmentsDir, relativePath), bytes).pipe(
-        Effect.mapError(
-          (cause) =>
-            new PersistChatAttachmentsError({
-              message: `Could not persist attachment ${attachment.name}.`,
-              cause,
-            }),
-        ),
-      );
-      return persisted;
-    }),
-    { concurrency: 2 },
-  );
-});
-
-class PendingAttachmentClaimError extends Data.TaggedError("PendingAttachmentClaimError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
-
-const isPendingAttachmentId = (attachment: ChatAttachment) =>
-  parseThreadSegmentFromAttachmentId(attachment.id) === PENDING_ATTACHMENT_THREAD_SEGMENT;
-
-/**
- * Move attachments the client uploaded ahead of the turn out of the shared
- * pending area and into the thread that is about to reference them, rewriting
- * each id to its claimed one.
- *
- * The pending copy is left in place: a dispatch that fails after this point
- * calls `releaseClaimedAttachments`, and the client can retry the same upload
- * against a different thread.
- */
-const claimPendingAttachments = Effect.fn("ws.attachments.claimPending")(function* (input: {
-  readonly threadId: ThreadId;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-}) {
-  if (!input.attachments.some(isPendingAttachmentId)) {
-    return { attachments: input.attachments, claimedPaths: [] as ReadonlyArray<string> };
-  }
-
-  const config = yield* ServerConfig.ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const claimedPaths: Array<string> = [];
-
-  const attachments = yield* Effect.forEach(
-    input.attachments,
-    Effect.fn("ws.attachments.claimPendingAttachment")(function* (attachment) {
-      if (!isPendingAttachmentId(attachment)) return attachment;
-
-      const claim = planAttachmentClaim({
-        attachmentsDir: config.attachmentsDir,
-        threadId: input.threadId,
-        attachmentId: attachment.id,
-      });
-      if (!claim.ok) {
-        return yield* new PendingAttachmentClaimError({
-          message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
-        });
-      }
-
-      const info = yield* fileSystem.stat(claim.currentPath).pipe(
-        Effect.mapError(
-          (cause) =>
-            new PendingAttachmentClaimError({
-              message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
-              cause,
-            }),
-        ),
-      );
-      if (Number(info.size) !== attachment.sizeBytes) {
-        return yield* new PendingAttachmentClaimError({
-          message: `Attachment '${attachment.name}' cannot be sent: stored size does not match.`,
-        });
-      }
-
-      const claimed = {
-        ...attachment,
-        id: ChatAttachmentId.make(claim.finalId),
-        mimeType: attachment.mimeType.toLowerCase(),
-      };
-      // The claimed path is derived from the id alone; the type/mime decide the
-      // extension, so a mismatch here means the declared type does not describe
-      // what was uploaded.
-      if (
-        resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment: claimed }) !==
-        claim.finalPath
-      ) {
-        return yield* new PendingAttachmentClaimError({
-          message: `Attachment '${attachment.name}' cannot be sent: file type does not match the upload.`,
-        });
-      }
-
-      yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
-        Effect.mapError(
-          (cause) =>
-            new PendingAttachmentClaimError({
-              message: `Failed to claim attachment '${attachment.name}' for this thread.`,
-              cause,
-            }),
-        ),
-      );
-      claimedPaths.push(claim.finalPath);
-      return claimed;
-    }),
-    { concurrency: 1 },
-  ).pipe(Effect.tapError(() => releaseClaimedAttachments(claimedPaths)));
-
-  return { attachments, claimedPaths: claimedPaths as ReadonlyArray<string> };
-});
-
-const releaseClaimedAttachments = Effect.fn("ws.attachments.releaseClaimed")(function* (
-  claimedPaths: ReadonlyArray<string>,
-) {
-  if (claimedPaths.length === 0) return;
-  const fileSystem = yield* FileSystem.FileSystem;
-  yield* Effect.forEach(
-    claimedPaths,
-    (claimedPath) =>
-      fileSystem.remove(claimedPath, { force: true }).pipe(
-        Effect.tapError((cause) =>
-          Effect.logWarning("Failed to remove an unclaimed attachment copy.", {
-            claimedPath,
-            cause,
-          }),
-        ),
-        Effect.orElseSucceed(() => undefined),
-      ),
-    { concurrency: 1 },
-  );
-});
 
 function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesError): {
   readonly failure: ProjectEntriesFailure;
@@ -1478,7 +1272,7 @@ const makeWsRpcLayer = (
               // before sending; those live outside any thread until now.
               const claim =
                 command.type === "message.dispatch"
-                  ? yield* claimPendingAttachments({
+                  ? yield* AttachmentClaims.claimPendingAttachments({
                       threadId: command.threadId,
                       attachments: command.attachments,
                     })
@@ -1495,7 +1289,11 @@ const makeWsRpcLayer = (
                     }),
                   ),
                 )
-                .pipe(Effect.tapError(() => releaseClaimedAttachments(claim?.claimedPaths ?? [])));
+                .pipe(
+                  Effect.tapError(() =>
+                    AttachmentClaims.releaseClaimedAttachments(claim?.claimedPaths ?? []),
+                  ),
+                );
             }).pipe(
               Effect.tap(() => recordClientCommandAnalytics(command)),
               Effect.map((result) => ({ sequence: result.sequence })),
@@ -1600,6 +1398,9 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.launchThread,
             Effect.gen(function* () {
+              yield* AttachmentClaims.validateAttachmentLimits(
+                input.initialMessage?.attachments ?? [],
+              );
               // launch allocates the thread id, so a pending upload can only be
               // claimed once the caller has named one. Callers that let the
               // server pick the id must send the attachment with the follow-up
@@ -1607,7 +1408,7 @@ const makeWsRpcLayer = (
               const claim =
                 input.threadId === undefined || input.initialMessage === undefined
                   ? null
-                  : yield* claimPendingAttachments({
+                  : yield* AttachmentClaims.claimPendingAttachments({
                       threadId: input.threadId,
                       attachments: input.initialMessage.attachments,
                     });
@@ -1643,7 +1444,11 @@ const makeWsRpcLayer = (
                     creationSource: input.creationSource ?? "web",
                   }),
                 )
-                .pipe(Effect.tapError(() => releaseClaimedAttachments(claim?.claimedPaths ?? [])));
+                .pipe(
+                  Effect.tapError(() =>
+                    AttachmentClaims.releaseClaimedAttachments(claim?.claimedPaths ?? []),
+                  ),
+                );
             }).pipe(
               Effect.tap(() =>
                 input.initialMessage === undefined
@@ -1662,7 +1467,11 @@ const makeWsRpcLayer = (
                   new OrchestrationV2ThreadLaunchError({
                     commandId: input.commandId,
                     projectId: input.projectId,
-                    message: "Failed to launch thread",
+                    // Attachment rejections are the user's to fix, so say why.
+                    message:
+                      cause._tag === "AttachmentClaimError"
+                        ? cause.message
+                        : "Failed to launch thread",
                     cause,
                   }),
               ),
