@@ -304,7 +304,7 @@ export function ThreadRelationshipsPanel(props: {
           );
           const relationshipContent = (
             <>
-              <span className="relative -mx-0.5 grid size-4 shrink-0 place-items-center">
+              <span className="relative grid size-4 shrink-0 place-items-center">
                 {showOrb ? (
                   <AgentOrb seed={threadId} size={16} state={relationshipOrbState(edge.status)} />
                 ) : (
@@ -321,7 +321,7 @@ export function ThreadRelationshipsPanel(props: {
                 )}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-medium leading-4 text-foreground/85">
+                <span className="block truncate text-left text-[13px] font-medium leading-4 text-foreground/85">
                   {threadTitle}
                 </span>
               </span>
