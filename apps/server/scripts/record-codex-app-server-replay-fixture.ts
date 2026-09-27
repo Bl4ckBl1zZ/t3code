@@ -1,4 +1,5 @@
 import { CODEX_THREAD_CONFIG } from "../src/orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { revertCodexThread } from "../src/provider/CodexThreadRevert.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
@@ -1211,10 +1212,7 @@ function runReplaySession({
 
       for (const [stepIndex, step] of run.steps.entries()) {
         if (step.type === "rollback") {
-          yield* client.request("thread/rollback", {
-            threadId: activeThreadId,
-            numTurns: step.numTurns,
-          });
+          yield* revertCodexThread(client, activeThreadId, step.numTurns);
           continue;
         }
         if (step.type === "fork") {
