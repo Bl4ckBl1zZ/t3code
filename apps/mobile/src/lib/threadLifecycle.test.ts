@@ -227,6 +227,11 @@ describe("resolveLifecyclePresentation", () => {
       status: "running",
       orbState: "active",
     });
+    expect(resolveLifecyclePresentation(item({ ...base, status: "idle" }), [])).toMatchObject({
+      detail: "all done",
+      status: null,
+      orbState: "done",
+    });
     expect(resolveLifecyclePresentation(item({ ...base, status: "cancelled" }), [])).toMatchObject({
       detail: "all done",
       status: "stopped",

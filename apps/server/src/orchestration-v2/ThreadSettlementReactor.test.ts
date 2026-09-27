@@ -6,6 +6,7 @@ import {
   type OrchestrationV2ThreadShell,
   type OrchestrationV2Command,
   type Project,
+  type PullRequestSummary,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Stream from "effect/Stream";
@@ -166,20 +167,34 @@ it.effect("skips the branch recheck when a terminal link would settle nothing", 
       workspaceRoot: "/repo",
       updatedAt: "1970-01-01T00:00:00Z",
     } as unknown as Project;
-    const h = harness(thread);
-    h.summary.mockImplementation(() =>
-      Effect.succeed({ state: "merged", mergedAt: "1970-01-02T00:00:00.000Z", closedAt: null }),
+    const summary = vi.fn(() =>
+      Effect.succeed<PullRequestSummary>({
+        provider: "github",
+        projectId: thread.projectId,
+        repository: "org/repo",
+        number: 1,
+        title: "Feature",
+        url: "https://github.com/org/repo/pull/1",
+        state: "merged",
+        headBranch: "feature",
+        baseBranch: "main",
+        mergedAt: "1970-01-02T00:00:00.000Z",
+        closedAt: null,
+        updatedAt: "1970-01-02T00:00:00.000Z",
+      }),
     );
-    const layer = Layer.merge(
+    const h = harness(thread);
+    const layer = Layer.mergeAll(
       h.layer,
       Layer.mock(ProjectService)({
         snapshot: Effect.succeed({ projects: [project], updatedAt: project.updatedAt }),
       }),
+      Layer.mock(PullRequestService)({ summary }),
     );
     const reactor = yield* make.pipe(Effect.provide(layer));
     yield* reactor.requestSweep;
     yield* reactor.drain;
-    expect(h.summary).toHaveBeenCalledTimes(1);
+    expect(summary).toHaveBeenCalledTimes(1);
     expect(h.branch).not.toHaveBeenCalled();
     expect(h.dispatch).not.toHaveBeenCalled();
   }).pipe(Effect.scoped),

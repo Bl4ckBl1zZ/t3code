@@ -57,6 +57,7 @@ describe("workingSubagentsFromTimeline", () => {
       subagentEntry("d", "failed"),
       subagentEntry("e", "waiting"),
       subagentEntry("f", "cancelled"),
+      subagentEntry("g", "idle"),
     ]);
     expect(working.map((item) => item.id)).toEqual(["a", "c", "e"]);
   });

@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import {
+  isOrchestrationV2WorkActive,
   orchestrationV2TurnItemStatusIsTerminal,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
@@ -232,7 +233,7 @@ export function SubagentRow(props: {
   const { item } = props;
   // Once a subagent stops, its last streamed result says more than the stale
   // progress line; while it runs, live progress comes first.
-  const active = !orchestrationV2TurnItemStatusIsTerminal(item.status);
+  const active = isOrchestrationV2WorkActive(item.status);
   const streamedResult = item.result?.trim() ? item.result : null;
   const detail = active
     ? (item.progress ?? streamedResult ?? item.prompt)
@@ -244,7 +245,13 @@ export function SubagentRow(props: {
         // Seed by child thread id when it exists so the relationships panel
         // (which only knows thread ids) resolves the same color.
         seed: subagentOrbSeed(item),
-        state: active ? "active" : item.status === "failed" ? "failed" : "done",
+        state: active
+          ? "active"
+          : item.status === "failed"
+            ? "failed"
+            : item.status === "idle"
+              ? "idle"
+              : "done",
       }}
       title={subagentDisplayTitle(item.title ?? "Subagent")}
       detail={detail}
@@ -258,8 +265,8 @@ export function SubagentRow(props: {
 /**
  * The 16px slot that ends a timeline row, drawn as the tool row draws it:
  * pulsing dots while the item is in flight, an alert once it failed, a dash
- * when it stopped short. Success draws nothing and only names the outcome for
- * screen readers. `destructive` matches a row whose heading is already red.
+ * when it stopped short. Success and idle (waiting for its next input, neither
+ * running nor finished) draw nothing and only name the state for screen readers. `destructive` matches a row whose heading is already red.
  */
 export function TimelineRowStatusSlot(props: {
   readonly status: OrchestrationV2TurnItem["status"];
@@ -267,7 +274,7 @@ export function TimelineRowStatusSlot(props: {
 }) {
   const { status } = props;
   const label = `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
-  if (status === "completed") {
+  if (status === "completed" || status === "idle") {
     return (
       // role is required for the label to be exposed: ARIA ignores aria-label
       // on a generic, role-less element.
