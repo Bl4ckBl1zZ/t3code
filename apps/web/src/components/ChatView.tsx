@@ -195,12 +195,13 @@ import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { useElementWidth } from "../hooks/useElementWidth";
 import { usePreviewPanelInlineSize } from "../hooks/usePreviewPanelInlineSize";
 import {
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
-  resolveThreadPanelPresentation,
+  type ThreadPanelPresentation,
 } from "../rightPanelLayout";
+import { PopoverCreateHandle } from "./ui/popover";
+import { ChatCanvas } from "./chat/ChatCanvas";
 import {
   pullRequestSurface,
   selectActiveRightPanel,
@@ -1646,7 +1647,6 @@ function ChatViewContent(props: ChatViewProps) {
     useState<Record<string, number>>({});
   const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const isMobileViewport = useMediaQuery("max-sm");
-  const [workspaceLayoutRef, workspaceLayoutWidth] = useElementWidth<HTMLDivElement>();
   const previewPanelInlineSize = usePreviewPanelInlineSize();
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
@@ -2077,11 +2077,10 @@ function ChatViewContent(props: ChatViewProps) {
   const rightPanelMaximized =
     canMaximizeRightPanel && maximizedRightPanelThreadKey === routeThreadKey;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
-  const threadPanelPresentation = resolveThreadPanelPresentation(
-    workspaceLayoutWidth,
-    inlineRightPanelOwnsTitleBar ? previewPanelInlineSize.width : 0,
-    rightPanelMaximized,
-  );
+  // The details card reports where it fits: inline in the chat canvas' margin, or a popover.
+  const [threadPanelPresentation, setThreadPanelPresentation] =
+    useState<ThreadPanelPresentation>("inline");
+  const [threadPanelPopoverHandle] = useState(PopoverCreateHandle);
   const threadPanelOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(
       state.threadPanelVisibilityByThreadKey,
@@ -2089,7 +2088,6 @@ function ChatViewContent(props: ChatViewProps) {
       threadPanelPresentation,
     ),
   );
-  const inlineThreadPanelOpen = threadPanelOpen && threadPanelPresentation === "inline";
 
   useEffect(() => {
     if (!activeThreadRef) return;
@@ -4670,10 +4668,6 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().toggleThreadPanel(activeThreadRef, threadPanelPresentation);
   }, [activeThreadRef, threadPanelPresentation]);
-  const closeThreadPanelPopover = useCallback(() => {
-    if (!activeThreadRef) return;
-    useRightPanelStore.getState().setThreadPanelOpen(activeThreadRef, "popover", false);
-  }, [activeThreadRef]);
   const toggleRightPanelMaximized = useCallback(() => {
     if (!canMaximizeRightPanel) return;
     setMaximizedRightPanelThreadKey((threadKey) =>
@@ -8254,7 +8248,10 @@ function ChatViewContent(props: ChatViewProps) {
       </Suspense>
     ) : null
   ) : null;
-  const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
+  const threadDetailsPanelProps: ThreadDetailsPanelProps = {
+    anchor: threadPanelPopoverAnchorRef,
+    handle: threadPanelPopoverHandle,
+    onPresentationChange: setThreadPanelPresentation,
     environmentId: activeThread.environmentId,
     environmentConnection: activeEnvironment?.connection ?? null,
     threadId: activeThread.id,
@@ -8317,18 +8314,7 @@ function ChatViewContent(props: ChatViewProps) {
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
     threadPanelOpen,
     threadPanelPresentation,
-    threadPanelPopoverAnchor: threadPanelPopoverAnchorRef,
-    ...(threadPanelPresentation === "popover"
-      ? {
-          threadPanelPopoverContent: (
-            <ThreadDetailsPanel
-              mode="popover"
-              onClose={closeThreadPanelPopover}
-              {...threadDetailsPanelProps}
-            />
-          ),
-        }
-      : {}),
+    threadPanelPopoverHandle,
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
     threadPanelHasAttention:
       activeEnvironmentUnavailableState !== null || showVersionMismatchBanner,
@@ -8388,10 +8374,7 @@ function ChatViewContent(props: ChatViewProps) {
     addFolders: (folders) => composerRef.current?.addDroppedFolders(folders),
   });
   return (
-    <div
-      ref={workspaceLayoutRef}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
-    >
+    <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
       {rightPanelPresent && !shouldUsePlanSidebarSheet ? panelLayoutControls : null}
       <div
         className={cn(
@@ -8472,13 +8455,9 @@ function ChatViewContent(props: ChatViewProps) {
           }}
         />
         {/* Main content area with optional plan sidebar */}
-        <div
-          className="relative flex min-h-0 min-w-0 flex-1"
-          data-thread-details-inline-reserved={inlineThreadPanelOpen ? "true" : undefined}
-        >
+        <div className="relative flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}
-          <div
-            className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+          <ChatCanvas
             data-chat-workspace-drop-target="true"
             onDragEnter={workspaceFileDropHandlers.onDragEnter}
             onDragOver={workspaceFileDropHandlers.onDragOver}
@@ -8939,11 +8918,10 @@ function ChatViewContent(props: ChatViewProps) {
                 onPrepared={handlePreparedPullRequestThread}
               />
             ) : null}
-          </div>
+
+            <ThreadDetailsPanel {...threadDetailsPanelProps} />
+          </ChatCanvas>
           {/* end chat column */}
-          {inlineThreadPanelOpen ? (
-            <ThreadDetailsPanel mode="inline" {...threadDetailsPanelProps} />
-          ) : null}
         </div>
         {/* end horizontal flex container */}
 

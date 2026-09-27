@@ -112,6 +112,8 @@ interface GitActionsControlProps {
   activeThreadRef: ScopedThreadRef | null;
   draftId?: DraftId;
   displayMode?: "toolbar" | "panel";
+  /** Folded thread details: keep only an in-flight action, not the resting controls. */
+  compact?: boolean;
   onOpenChanges?: () => void;
   /**
    * Opens the thread's own change request beside it. Absent when the thread has no project to
@@ -1035,6 +1037,7 @@ export default function GitActionsControl({
   activeThreadRef,
   draftId,
   displayMode = "toolbar",
+  compact = false,
   onOpenChanges,
   onOpenPullRequest,
 }: GitActionsControlProps) {
@@ -1651,7 +1654,7 @@ export default function GitActionsControl({
             {initAction.isPending ? "Initializing..." : "Initialize Git"}
           </span>
         </Button>
-      ) : (
+      ) : compact && !gitActionProgress ? null : (
         <ActionGroup
           role="group"
           aria-label="Git actions"

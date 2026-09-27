@@ -274,6 +274,12 @@ subagent; hover one for its model, status and progress.
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. Their composer is replaced by the subagent's status.
 
+On web and desktop, the thread details card floats in the space beside the conversation when the
+window leaves room for it, without narrowing the conversation. When it does not, the details button
+in the header opens the same card as a popover. On a short window the card folds what cannot fit:
+first section headings, the environment and workspace pickers, ports, background tasks,
+automations and lineage, then the editor picker, keeping scripts and in-progress Git actions.
+
 On web and desktop, a thread's subagents are listed in the thread details card under **Lineage**
 (or **Subagents** when the thread has no other relatives). Click a subagent to open its thread.
 Hover it to see its model, status, workflow phase progress and token usage. A workflow subagent
