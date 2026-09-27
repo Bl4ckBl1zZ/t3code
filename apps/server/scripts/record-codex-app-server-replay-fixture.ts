@@ -31,7 +31,9 @@ import {
   SUBAGENT_CONTINUE_PARENT_PROMPT,
   SUBAGENT_CONTINUE_PROMPT,
   SUBAGENT_PROMPT,
+  SUBAGENT_V2_APPROVAL_PROMPT,
   SUBAGENT_V2_PROMPT,
+  SUBAGENT_V2_NESTED_APPROVAL_PROMPT,
   SUBAGENT_V2_NESTED_PROMPT,
   THREAD_ROLLBACK_AFTER_PROMPT,
   THREAD_ROLLBACK_FIRST_PROMPT,
@@ -86,7 +88,9 @@ const SCENARIO_NAMES = [
   "subagent",
   "subagent_continue",
   "subagent_v2",
+  "subagent_v2_approval",
   "subagent_v2_nested",
+  "subagent_v2_nested_approval",
   "multi_turn",
   "queued_turn",
   "provider_thread_resume",
@@ -468,6 +472,31 @@ function scenarios(): ReadonlyArray<ReplayScenario> {
       ],
     },
     {
+      name: "subagent_v2_approval",
+      fileName: "subagent_v2_approval.ndjson",
+      description:
+        "One root turn in approval-required mode whose multi-agent v2 subagent runs a command that needs approval.",
+      runs: [
+        {
+          name: "spawn-v2-subagent-needing-approval",
+          description:
+            "The child inherits the root's approval policy, so its write asks the client for approval on the child's native thread and turn.",
+          // The adapter's approval-required turn defaults.
+          turnDefaults: {
+            approvalPolicy: "untrusted",
+            sandboxPolicy: { type: "readOnly" },
+          },
+          steps: [
+            {
+              type: "turn",
+              label: "spawn-v2-subagent-needing-approval",
+              prompt: SUBAGENT_V2_APPROVAL_PROMPT,
+            },
+          ],
+        },
+      ],
+    },
+    {
       name: "subagent_v2_nested",
       fileName: "subagent_v2_nested.ndjson",
       description:
@@ -482,6 +511,31 @@ function scenarios(): ReadonlyArray<ReplayScenario> {
               type: "turn",
               label: "spawn-nested-v2-subagents",
               prompt: SUBAGENT_V2_NESTED_PROMPT,
+            },
+          ],
+        },
+      ],
+    },
+    {
+      name: "subagent_v2_nested_approval",
+      fileName: "subagent_v2_nested_approval.ndjson",
+      description:
+        "One root turn in approval-required mode whose multi-agent v2 subagent spawns a subagent that runs a command that needs approval.",
+      runs: [
+        {
+          name: "spawn-nested-v2-subagent-needing-approval",
+          description:
+            "Depth 2 lets the first child spawn once. The grandchild inherits the root's approval policy, so its write asks the client for approval on the grandchild's native thread and turn.",
+          threadConfig: { "agents.max_depth": 2 },
+          turnDefaults: {
+            approvalPolicy: "untrusted",
+            sandboxPolicy: { type: "readOnly" },
+          },
+          steps: [
+            {
+              type: "turn",
+              label: "spawn-nested-v2-subagent-needing-approval",
+              prompt: SUBAGENT_V2_NESTED_APPROVAL_PROMPT,
             },
           ],
         },
