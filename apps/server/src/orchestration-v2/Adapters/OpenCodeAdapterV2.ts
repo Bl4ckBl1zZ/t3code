@@ -9,6 +9,7 @@ import type {
   Todo as OpenCodeTodo,
   ToolPart,
 } from "@opencode-ai/sdk/v2";
+import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
@@ -114,7 +115,7 @@ const DEFAULT_OPENCODE_SETTINGS = Schema.decodeSync(OpenCodeSettingsSchema)({});
  * message is the best native turn correlation point, and session idle is the
  * authoritative terminal signal.
  */
-export const OpenCodeProviderCapabilitiesV2 = {
+const OpenCodeProviderCapabilitiesV2 = {
   sessions: {
     // The current adapter owns one directory-bound client/server per session.
     // Keep it isolated until its runtime is made safe for cross-thread pooling.
@@ -242,6 +243,7 @@ interface ActiveOpenCodeTurn {
 interface OpenCodeSubagentContext {
   readonly nativeItemId: string;
   readonly nodeId: OrchestrationV2Subagent["id"];
+  readonly parentState: OpenCodeThreadState;
   readonly parentTurn: ActiveOpenCodeTurn;
   readonly prompt: string;
   readonly title: string | null;
@@ -267,12 +269,36 @@ interface OpenCodeThreadState {
   nextChildTurnOrdinal: number;
 }
 
+interface OpenCodeRequestOwner {
+  readonly state: OpenCodeThreadState;
+  readonly turn: ActiveOpenCodeTurn;
+  /** The subagent on the owner's thread that leads to the asking session. */
+  readonly subagent: OpenCodeSubagentContext | null;
+}
+
+/**
+ * The top-level thread and active turn that own a session's requests, walking
+ * up through (possibly nested) subagents.
+ */
+function topLevelRequestOwner(state: OpenCodeThreadState): OpenCodeRequestOwner | undefined {
+  let owner = state;
+  let subagent: OpenCodeSubagentContext | null = null;
+  while (owner.parentSubagent !== null) {
+    subagent = owner.parentSubagent;
+    owner = subagent.parentState;
+  }
+  return owner.activeTurn === null ? undefined : { state: owner, turn: owner.activeTurn, subagent };
+}
+
 interface PendingOpenCodeRequest {
   readonly requestId: RuntimeRequestId;
   readonly nativeRequestId: string;
+  /** The session that asked, which may be a subagent's. */
+  readonly nativeSessionId: string;
   readonly turn: ActiveOpenCodeTurn;
   readonly state: OpenCodeThreadState;
   readonly nodeId: OrchestrationV2ExecutionNode["id"];
+  readonly parentNodeId: OrchestrationV2ExecutionNode["id"];
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly requestKind: OpenCodePermissionRequestKind | "user_input";
   readonly createdAt: DateTime.Utc;
@@ -470,8 +496,10 @@ export function openCodeToolProjectionKind(
   if (normalized.includes("web") || normalized === "codesearch" || normalized === "code_search") {
     return "web_search";
   }
+  if (normalized === "read") {
+    return "dynamic_tool";
+  }
   if (
-    normalized === "read" ||
     normalized.includes("glob") ||
     normalized.includes("grep") ||
     normalized.includes("search") ||
@@ -1088,6 +1116,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             context = {
               nativeItemId: part.id,
               nodeId,
+              parentState: state,
               parentTurn: turn,
               prompt,
               title,
@@ -1391,12 +1420,14 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                   }),
             };
           } else if (projectionKind === "file_search") {
+            const pattern = recordString(input, "pattern", "query", "path", "filePath");
             turnItem = {
               ...base,
+              title:
+                formatSearchToolLabel({ input, ...(pattern === undefined ? {} : { pattern }) }) ??
+                base.title,
               type: "file_search",
-              ...(recordString(input, "pattern", "query", "path", "filePath") === undefined
-                ? {}
-                : { pattern: recordString(input, "pattern", "query", "path", "filePath")! }),
+              ...(pattern === undefined ? {} : { pattern }),
             };
           } else if (projectionKind === "web_search") {
             const pattern = recordString(input, "query", "url", "pattern");
@@ -1406,8 +1437,13 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               ...(pattern === undefined ? {} : { patterns: [pattern] }),
             };
           } else {
+            const readPath = recordString(input, "filePath", "path", "file");
             turnItem = {
               ...base,
+              title:
+                part.tool.toLowerCase() === "read" && readPath !== undefined
+                  ? formatReadToolLabel(readPath)
+                  : base.title,
               type: "dynamic_tool",
               toolName: part.tool,
               input,
@@ -1594,14 +1630,14 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
         };
 
         const emitRuntimeRequest = Effect.fnUntraced(function* (
-          state: OpenCodeThreadState,
-          turn: ActiveOpenCodeTurn,
+          owner: OpenCodeRequestOwner,
           nativeRequestId: string,
           request:
             | { readonly type: "permission"; readonly value: PermissionRequest }
             | { readonly type: "question"; readonly value: QuestionRequest },
         ) {
           if (pendingRequestsByNativeId.has(nativeRequestId)) return;
+          const { state, turn, subagent } = owner;
           const now = yield* DateTime.now;
           const requestId = yield* idAllocator.allocate.runtimeRequest({
             driver: OPENCODE_PROVIDER,
@@ -1610,9 +1646,12 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           });
           const nodeId = idAllocator.derive.approvalNode({ requestId });
           const turnItemId = idAllocator.derive.approvalTurnItem({ requestId });
+          // The tool call belongs to the asking session's turn, not the owner's.
           const permissionToolName =
             request.type === "permission" && request.value.tool !== undefined
-              ? Array.from(turn.parts.values()).find(
+              ? Array.from(
+                  (threads.get(request.value.sessionID)?.activeTurn ?? turn).parts.values(),
+                ).find(
                   (part): part is ToolPart =>
                     part.type === "tool" && part.callID === request.value.tool?.callID,
                 )?.tool
@@ -1626,9 +1665,11 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           const pending: PendingOpenCodeRequest = {
             requestId,
             nativeRequestId,
+            nativeSessionId: request.value.sessionID,
             turn,
             state,
             nodeId,
+            parentNodeId: subagent?.nodeId ?? turn.rootNodeId,
             turnItemId,
             requestKind,
             createdAt: now,
@@ -1660,7 +1701,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               id: nodeId,
               threadId: turn.threadId,
               runId: turn.runId,
-              parentNodeId: turn.rootNodeId,
+              parentNodeId: pending.parentNodeId,
               rootNodeId: turn.rootNodeId,
               kind: request.type === "question" ? "user_input_request" : "approval_request",
               status: "waiting",
@@ -1717,7 +1758,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               id: pending.nodeId,
               threadId: pending.turn.threadId,
               runId: pending.turn.runId,
-              parentNodeId: pending.turn.rootNodeId,
+              parentNodeId: pending.parentNodeId,
               rootNodeId: pending.turn.rootNodeId,
               kind: pending.question === undefined ? "approval_request" : "user_input_request",
               status: status === "resolved" ? "completed" : "cancelled",
@@ -1749,6 +1790,22 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           if (!hasOtherPending) yield* updateProviderSession("running", null);
         });
 
+        /** Every request is asked on the top-level thread and its active turn,
+         *  under the subagent that leads to the asking session, because native
+         *  subagent threads are hidden from the sidebar. */
+        const routeRuntimeRequest = Effect.fnUntraced(function* (
+          nativeRequestId: string,
+          sessionId: string,
+          request:
+            | { readonly type: "permission"; readonly value: PermissionRequest }
+            | { readonly type: "question"; readonly value: QuestionRequest },
+        ) {
+          const state = threads.get(sessionId);
+          const owner = state === undefined ? undefined : topLevelRequestOwner(state);
+          if (owner === undefined) return;
+          yield* emitRuntimeRequest(owner, nativeRequestId, request);
+        });
+
         const finalizeTurn = Effect.fnUntraced(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
@@ -1767,7 +1824,10 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             }
           }
           for (const pending of Array.from(pendingRequests.values())) {
-            if (pending.turn.providerTurnId === turn.providerTurnId) {
+            if (
+              pending.turn.providerTurnId === turn.providerTurnId ||
+              pending.nativeSessionId === state.nativeSessionId
+            ) {
               yield* resolveRuntimeRequest(pending.nativeRequestId, "cancelled");
             }
           }
@@ -2092,26 +2152,18 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               }
               return;
             }
-            case "permission.asked": {
-              const state = threads.get(event.properties.sessionID);
-              if (state?.activeTurn !== null && state?.activeTurn !== undefined) {
-                yield* emitRuntimeRequest(state, state.activeTurn, event.properties.id, {
-                  type: "permission",
-                  value: event.properties,
-                });
-              }
+            case "permission.asked":
+              yield* routeRuntimeRequest(event.properties.id, event.properties.sessionID, {
+                type: "permission",
+                value: event.properties,
+              });
               return;
-            }
-            case "question.asked": {
-              const state = threads.get(event.properties.sessionID);
-              if (state?.activeTurn !== null && state?.activeTurn !== undefined) {
-                yield* emitRuntimeRequest(state, state.activeTurn, event.properties.id, {
-                  type: "question",
-                  value: event.properties,
-                });
-              }
+            case "question.asked":
+              yield* routeRuntimeRequest(event.properties.id, event.properties.sessionID, {
+                type: "question",
+                value: event.properties,
+              });
               return;
-            }
             case "permission.replied":
               yield* resolveRuntimeRequest(event.properties.requestID, "resolved");
               return;
@@ -2361,26 +2413,26 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           events: Stream.fromEffectRepeat(Queue.take(events)),
           ensureThread: (threadInput) =>
             Effect.gen(function* () {
-              if (threadInput.existingProviderThread !== undefined) {
+              // Only a row that already carries a native session can be
+              // resumed; a placeholder without one still needs session.create.
+              if (threadInput.existingProviderThread?.nativeThreadRef != null) {
                 return yield* runtimeSession.resumeThread({
                   providerThread: threadInput.existingProviderThread,
                 });
               }
+              // No title: OpenCode generates one from the first prompt only when
+              // session.create leaves it unset (SessionPrompt.ensureTitle).
               const response = yield* sdkCall(
                 "session.create",
-                {
-                  title: `T3 Code ${threadInput.threadId}`,
-                  permission: openCodePermissionRules(threadInput.runtimePolicy),
-                },
+                { permission: openCodePermissionRules(threadInput.runtimePolicy) },
                 () =>
                   client.session.create({
-                    title: `T3 Code ${threadInput.threadId}`,
                     permission: openCodePermissionRules(threadInput.runtimePolicy),
                   }),
               );
               const nativeSession = unwrapData("session.create", response);
               const createdAt = yield* DateTime.now;
-              const providerThread = makeProviderThread({
+              const created = makeProviderThread({
                 idAllocator,
                 providerInstanceId: options.instanceId,
                 providerSessionId: input.providerSessionId,
@@ -2388,6 +2440,21 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                 nativeSession,
                 now: createdAt,
               });
+              const existing = threadInput.existingProviderThread;
+              // Bind the new native session to the caller's row when one was
+              // handed over: a second live row per app thread would make
+              // `activeProviderThreadId` flap between the two on every update.
+              const providerThread =
+                existing === undefined
+                  ? created
+                  : {
+                      ...existing,
+                      providerSessionId: input.providerSessionId,
+                      nativeThreadRef: created.nativeThreadRef,
+                      nativeConversationHeadRef: created.nativeConversationHeadRef,
+                      status: created.status,
+                      updatedAt: created.updatedAt,
+                    };
               registerThread(nativeSession, providerThread, null);
               return providerThread;
             }).pipe(

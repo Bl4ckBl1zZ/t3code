@@ -46,6 +46,7 @@ import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppea
 import { SettingsHermesWorkRouteScreen } from "./features/settings/SettingsHermesWorkRouteScreen";
 import { SettingsAutomationsRouteScreen } from "./features/settings/SettingsAutomationsRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
+import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
@@ -193,6 +194,11 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Client Storage",
       },
+    }),
+    SettingsProviderAccounts: createNativeStackScreen({
+      screen: SettingsProviderAccountsRouteScreen,
+      linking: "provider-accounts",
+      options: { title: "Provider accounts" },
     }),
     SettingsIntegrations: createNativeStackScreen({
       screen: SettingsIntegrationsRouteScreen,

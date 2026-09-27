@@ -1692,7 +1692,6 @@ function PullRequestsRouteView() {
       rightPanelOpen={rightPanelState.isOpen}
       rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
       rightPanelUnavailableLabel="Select a pull request first"
-      liveAgentCount={0}
       onToggleTerminal={() => undefined}
       onToggleRightPanel={toggleRightPanel}
     />
@@ -2026,14 +2025,11 @@ function PullRequestsRouteView() {
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
-            onAddAgents={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
-            agentsAvailable={false}
-            liveAgentCount={0}
             pullRequestStatuses={pullRequestTabStatuses}
           >
             <PullRequestDetailPanel

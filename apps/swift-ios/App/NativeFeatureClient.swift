@@ -1838,6 +1838,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 .projection
                 .activeRunID
         }
+        // A settled turn whose background work runs on: Stop ends that work.
+        if resolved == nil {
+            let projection: OrchestrationV2ThreadProjection? =
+                if activeThreadID == route.uiID, let cached = activeRawThread {
+                    cached
+                } else {
+                    try? await route.client.threadSnapshot(id: route.wireID).projection
+                }
+            resolved = projection?.backgroundWorkStopRunID
+        }
         guard let runID = resolved else { return }
         _ = try await route.client.interrupt(threadID: route.wireID, runID: runID)
         try? await refresh(client: route.client)
@@ -1874,6 +1884,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             throw NativeFeatureClientError.inputRequestNotFound
         }
         let route = try threadRoute(for: request.threadID)
+        // One set of answers shares a single message's attachment limits.
+        if let message = ComposerAttachments.limitError(for: attachments.values.flatMap { $0 }) {
+            throw NativeFeatureClientError.attachmentLimit(message)
+        }
         var persisted: [String: JSONValue] = [:]
         for (questionID, files) in attachments where !files.isEmpty {
             persisted[questionID] = .array(try await route.client.persistAttachments(
@@ -4833,6 +4847,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
 
         return FeatureThreadWorkflow(
+            backgroundWorkStopRunID: projection.backgroundWorkStopRunID,
             appThreadID: projection.thread.id,
             activeProviderThreadID: projection.thread.activeProviderThreadId,
             runs: runs,
@@ -4843,7 +4858,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             queuedMessageAttachmentCounts: queuedMessageAttachmentCounts,
             thread: relationshipShell(projection.thread, environment: environment, runs: runs),
             subagents: subagents,
-            transfers: transfers
+            transfers: transfers,
+            providerSubagentStatus: ProviderSubagentStatus.resolve(
+                nodes: projection.nodes,
+                parseDate: parseValidDate
+            )
         )
     }
 
@@ -5106,6 +5125,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
+            creationSource: thread.creationSource,
             isRegeneratingTitle: thread.titleRegeneration != nil,
             supportsTitleRegeneration: environment.descriptor?.capabilities
                 .threadTitleRegeneration,
@@ -5277,6 +5297,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             // both lists rather than showing it beside the work that spawned it.
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
+            creationSource: thread.creationSource,
             isRegeneratingTitle: thread.titleRegeneration != nil,
             supportsTitleRegeneration: environment.descriptor?.capabilities
                 .threadTitleRegeneration,
@@ -5778,6 +5799,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         case "cursor": "Cursor"
         case "grok": "Grok"
         case "opencode": "OpenCode"
+        case "pi": "Pi"
         default: id
         }
     }
@@ -5986,8 +6008,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func makeUploadAttachments(
         _ attachments: [FeatureUploadAttachment]
     ) throws -> [UploadChatAttachment] {
-        guard attachments.count <= 8 else {
-            throw NativeFeatureClientError.tooManyAttachments
+        if let message = ComposerAttachments.limitError(for: attachments) {
+            throw NativeFeatureClientError.attachmentLimit(message)
         }
         return try attachments.map {
             try UploadChatAttachment(
@@ -6217,6 +6239,26 @@ extension OrchestrationV2ThreadProjection {
                 || $0.status == "running"
                 || $0.status == "waiting"
         }?.id
+    }
+
+    /// The run Stop targets once the turn has settled but its background work —
+    /// live background commands or delegated agents — keeps running. Mirrors
+    /// contracts' `orchestrationV2BackgroundWorkStopRunId`, including the
+    /// providers that can end work after a turn settles.
+    var backgroundWorkStopRunID: String? {
+        guard let latest = runs.last(where: { $0.status != "queued" }),
+              !["preparing", "starting", "running", "rolled_back"].contains(latest.status),
+              let driver = providerThreads.first(where: { $0.id == latest.providerThreadId })?.driver,
+              driver == "codex" || driver == "claudeAgent"
+        else { return nil }
+        let hasLiveBackgroundCommand = turnItems.contains { item in
+            guard case let .commandExecution(_, _, _, liveness) = item.payload else { return false }
+            return liveness.background == true && !item.status.isTerminal
+        }
+        let hasActiveAgent = subagents.contains {
+            $0.status == "pending" || $0.status == "running" || $0.status == "waiting"
+        }
+        return hasLiveBackgroundCommand || hasActiveAgent ? latest.id : nil
     }
 
     /// Replaces an item in place, preserving transcript order. An item that is
@@ -6585,7 +6627,7 @@ private enum NativeFeatureClientError: LocalizedError {
     case branchRequired
     case deviceSessionNotFound
     case missingScope(String)
-    case tooManyAttachments
+    case attachmentLimit(String)
     case crossEnvironmentMerge
     case repositoryIdentityUnavailable
 
@@ -6602,7 +6644,7 @@ private enum NativeFeatureClientError: LocalizedError {
         case .branchRequired: "Choose a base branch for the new worktree."
         case .deviceSessionNotFound: "That device session is no longer active."
         case .missingScope: "This connection does not have permission to manage devices."
-        case .tooManyAttachments: "You can attach up to 8 images per message."
+        case let .attachmentLimit(message): message
         case .crossEnvironmentMerge:
             "These threads are on different environments and cannot be merged."
         case .repositoryIdentityUnavailable:

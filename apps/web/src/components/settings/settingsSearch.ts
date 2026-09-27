@@ -248,6 +248,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "snooze-limited-threads",
+    title: "Snooze limited threads",
+    to: "/settings/general",
+    searchTerms: ["usage quota rate limit reset wake recover continue"],
+  },
+  {
+    id: "auto-resume-limited-threads",
+    title: "Auto-resume limited threads",
+    to: "/settings/general",
+    searchTerms: ["usage quota rate limit reset recover continue"],
+  },
+  {
     id: "time-format",
     title: "Time format",
     to: "/settings/general",
@@ -449,6 +461,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "source-control",
     title: "Source control",
     to: "/settings/source-control",
+  },
+  {
+    id: "worktree-branch-naming",
+    title: "Worktree branch naming",
+    to: "/settings/source-control",
+    searchTerms: ["static semantic prefix custom prompt instructions feat fix refactor chore"],
   },
   {
     id: "remote-environments",

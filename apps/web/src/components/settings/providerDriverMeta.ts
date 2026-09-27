@@ -10,6 +10,7 @@ import {
   OpenAI,
   OpenClawIcon,
   OpenCodeIcon,
+  PiAgentIcon,
 } from "../Icons";
 
 import {
@@ -31,6 +32,7 @@ const icons: Record<string, Icon> = {
   openclaw: OpenClawIcon,
   acpRegistry: ACPRegistryIcon,
   opencode: OpenCodeIcon,
+  pi: PiAgentIcon,
 };
 export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] =
   PROVIDER_SETTINGS_DEFINITIONS.map((definition) => ({

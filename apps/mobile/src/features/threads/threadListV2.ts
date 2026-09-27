@@ -36,6 +36,7 @@ export type ThreadListV2Status =
   | "working"
   | "background"
   | "failed"
+  | "limited"
   | "ready";
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 
@@ -207,7 +208,7 @@ export function resolveThreadListV2Status(
     return "working";
   }
   if (thread.runtime?.status === "failed") {
-    return "failed";
+    return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   // The state between working and ready: the turn settled, but a delegated
   // agent or a detached command is still running and will wake the thread.
@@ -228,7 +229,7 @@ export function resolveThreadListV2Status(
  * underneath. `null` for a resting thread, which leaves the row as title + age
  * rather than badging "Ready" on everything idle.
  */
-export type WorkInboxBadge = "needs-you" | "working" | "failed" | "done";
+export type WorkInboxBadge = "needs-you" | "working" | "failed" | "limited" | "done";
 
 export function resolveWorkInboxBadge(input: {
   readonly status: ThreadListV2Status;
@@ -244,6 +245,8 @@ export function resolveWorkInboxBadge(input: {
       return "working";
     case "failed":
       return "failed";
+    case "limited":
+      return "limited";
     case "ready":
       return input.hasUnseenCompletion ? "done" : null;
   }

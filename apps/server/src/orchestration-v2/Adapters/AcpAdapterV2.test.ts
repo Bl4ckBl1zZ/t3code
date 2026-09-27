@@ -78,6 +78,7 @@ import {
   acpPostSettleWakeEvidence,
   acpPostSettleWakeShouldBuffer,
   acpProjectedCommandExitCode,
+  acpToolCallDiffPatch,
   makeAcpAdapterV2,
   type AcpAdapterV2ExtensionContext,
   type AcpAdapterV2Flavor,
@@ -165,6 +166,37 @@ describe("acpPermissionDisposition", () => {
   it("keeps non-mutating workspace permissions and denials unchanged", () => {
     assert.equal(acpPermissionDisposition(policy, permissionRequest("read")), "allow");
     assert.equal(acpPermissionDisposition(policy, permissionRequest("execute")), "deny");
+  });
+
+  it("auto-allows read-kind permission requests under on-request approval", () => {
+    for (const runtimePolicy of [
+      { ...policy, approvalPolicy: "on-request" },
+      { ...policy, approvalPolicy: "on-request", sandboxPolicy: { type: "readOnly" } },
+      ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        cwd,
+      }),
+    ] satisfies ReadonlyArray<ProviderAdapterV2RuntimePolicy>) {
+      for (const kind of ["read", "search", "think"] as const) {
+        assert.equal(acpPermissionDisposition(runtimePolicy, permissionRequest(kind)), "allow");
+      }
+      for (const kind of ["edit", "delete", "move", "execute", "fetch", "other"] as const) {
+        assert.equal(acpPermissionDisposition(runtimePolicy, permissionRequest(kind)), "ask");
+      }
+    }
+  });
+
+  it("denies reads under a sandbox type it does not recognize", () => {
+    for (const approvalPolicy of ["never", "on-request"] as const) {
+      assert.equal(
+        acpPermissionDisposition(
+          { ...policy, approvalPolicy, sandboxPolicy: { type: "futureSandbox" } },
+          permissionRequest("read"),
+        ),
+        "deny",
+      );
+    }
   });
 
   it.effect("denies mutations through workspace symlinks that escape the writable roots", () =>
@@ -281,6 +313,57 @@ describe("acpProjectedCommandExitCode", () => {
     assert.equal(acpProjectedCommandExitCode("completed", failedOutput), 1);
     assert.equal(acpProjectedCommandExitCode("failed", failedOutput), 1);
     assert.equal(acpProjectedCommandExitCode("completed", {}), undefined);
+  });
+});
+
+describe("acpToolCallDiffPatch", () => {
+  it("builds a patch per file from ACP v1 oldText/newText, with /dev/null for a new file", () => {
+    assert.equal(
+      acpToolCallDiffPatch([
+        { type: "diff", path: "/repo/new.txt", oldText: null, newText: "hello\n" },
+        { type: "diff", path: "/repo/a.ts", oldText: "a\nb\nc\n", newText: "a\nB\nc\n" },
+        { type: "diff", path: "/repo/same.ts", oldText: "x\n", newText: "x\n" },
+      ]),
+      [
+        "--- /dev/null",
+        "+++ /repo/new.txt",
+        "@@ -0,0 +1,1 @@",
+        "+hello",
+        "",
+        "--- /repo/a.ts",
+        "+++ /repo/a.ts",
+        "@@ -1,3 +1,3 @@",
+        " a",
+        "-b",
+        "+B",
+        " c",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps the ACP v2 patch text as sent", () => {
+    const text = "diff --git a/repo/a.ts b/repo/a.ts\n";
+    assert.equal(
+      acpToolCallDiffPatch([
+        {
+          type: "diff",
+          changes: [{ operation: "modify", path: "/repo/a.ts" }],
+          patch: { format: "git_patch", text },
+        },
+      ]),
+      text,
+    );
+  });
+
+  it("drops the patch for a rewrite too large to diff cheaply", () => {
+    const lines = (prefix: string) =>
+      Array.from({ length: 2_000 }, (_, index) => `${prefix} ${index}`).join("\n");
+    assert.isUndefined(
+      acpToolCallDiffPatch([
+        { type: "diff", path: "/repo/big.ts", oldText: lines("old"), newText: lines("new") },
+      ]),
+    );
   });
 });
 
@@ -1422,6 +1505,85 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("selects plan mode on agents that name or advertise their mode differently", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const openInPlanMode = Effect.fn("openInPlanMode")(function* (
+        name: string,
+        environment: Readonly<Record<string, string>>,
+      ) {
+        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+        const instanceId = ProviderInstanceId.make(`acp-test-mode-${name}`);
+        const adapter = makeAcpAdapterV2({
+          crypto: yield* Crypto.Crypto,
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              protocolEvents,
+              environment,
+            }),
+          },
+          fileSystem,
+          idAllocator,
+          serverConfig,
+        });
+        yield* adapter
+          .openSession({
+            threadId: ThreadId.make(`thread-acp-mode-${name}`),
+            providerSessionId: ProviderSessionId.make(`provider-session-acp-mode-${name}`),
+            modelSelection: { instanceId, model: "default" },
+            runtimePolicy: ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "approval-required",
+              interactionMode: "plan",
+              cwd: process.cwd(),
+            }),
+          })
+          .pipe(Effect.scoped);
+        return Array.from(yield* Queue.takeAll(protocolEvents)).flatMap((event) => {
+          if (event.direction !== "outgoing") return [];
+          const method = rawProtocolMethod(event);
+          return method === "session/set_mode" || method === "session/set_config_option"
+            ? [{ method, params: rawProtocolRequest(event)?.params }]
+            : [];
+        });
+      });
+
+      // The mock advertises `modes` (ask, architect, code) and no mode option.
+      assert.deepEqual(yield* openInPlanMode("modes-only", {}), [
+        {
+          method: "session/set_mode",
+          params: { sessionId: "mock-session-1", modeId: "architect" },
+        },
+      ]);
+      assert.deepEqual(
+        yield* openInPlanMode("named-option", {
+          T3_ACP_MODE_CONFIG_OPTION_ID: "permission-mode",
+        }),
+        [
+          {
+            method: "session/set_config_option",
+            params: {
+              sessionId: "mock-session-1",
+              configId: "permission-mode",
+              value: "architect",
+            },
+          },
+        ],
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("terminalizes an empty successful foreground Bash tool when the turn completes", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1662,6 +1824,76 @@ describe("AcpAdapterV2", () => {
         ),
       );
       assert.equal(terminal.type, "turn.terminal");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("auto-approves a permission request with the agent's allow-once option", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const tempDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-auto-approve-" });
+      const requestLogPath = path.join(tempDir, "requests.ndjson");
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: {
+              T3_ACP_EMIT_TOOL_CALLS: "1",
+              T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+            },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-auto-approve-once");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-auto-approve-once"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
+      );
+      yield* runtime.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+      );
+
+      // The policy approves this one request; the agent's allow-always could
+      // outlive the session (Grok saves it for the whole project).
+      const answers = (yield* fileSystem.readFileString(requestLogPath))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { result?: { outcome?: unknown } })
+        .flatMap((message) => (message.result?.outcome === undefined ? [] : [message.result]));
+      assert.deepEqual(answers, [{ outcome: { outcome: "selected", optionId: "allow-once" } }]);
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
@@ -3188,6 +3420,451 @@ describe("AcpAdapterV2", () => {
         assert.equal(carriedItemStatus, "completed");
         assert.equal(secondTerminalStatus, "completed");
       }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect(
+    "answers fs requests method-not-found when the flavor does not opt into client fs",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocatorV2;
+        const path = yield* Path.Path;
+        const serverConfig = yield* ServerConfig;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const workspace = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-acp-no-client-fs-",
+        });
+        const probePath = path.join(workspace, "planted.txt");
+        const probeLogPath = path.join(workspace, "fs-probe.jsonl");
+        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+        const instanceId = ProviderInstanceId.make("acp-test-no-client-fs");
+        const adapter = makeAcpAdapterV2({
+          crypto: yield* Crypto.Crypto,
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              protocolEvents,
+              environment: {
+                T3_ACP_CLIENT_FS_PROBE_PATH: probePath,
+                T3_ACP_CLIENT_FS_PROBE_LOG_PATH: probeLogPath,
+              },
+            }),
+          },
+          fileSystem,
+          idAllocator,
+          serverConfig,
+        });
+        const threadId = ThreadId.make("thread-acp-no-client-fs");
+        const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: workspace,
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-no-client-fs"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+
+        const initialize = Option.getOrThrow(
+          yield* Stream.fromQueue(protocolEvents).pipe(
+            Stream.filter(
+              (event) =>
+                event.direction === "outgoing" && rawProtocolMethod(event) === "initialize",
+            ),
+            Stream.runHead,
+          ),
+        );
+        assert.deepInclude(
+          (rawProtocolRequest(initialize)?.params as { clientCapabilities?: unknown })
+            ?.clientCapabilities,
+          { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        );
+        const outcomes = (yield* fileSystem.readFileString(probeLogPath))
+          .trim()
+          .split("\n")
+          .map((line) => Option.getOrThrow(decodeUnknownJson(line)));
+        assert.deepEqual(outcomes, [
+          { method: "fs/write_text_file", errorCode: -32601 },
+          { method: "fs/read_text_file", errorCode: -32601 },
+        ]);
+        assert.isFalse(yield* fileSystem.exists(probePath));
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("serves flavor client file requests under the policy of the turn in progress", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      // effect-acp keeps the last handler registered per method; so does this.
+      let readTextFile: Parameters<RuntimeService["handleReadTextFile"]>[0] | undefined;
+      const servedCwds: Array<string | null> = [];
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          clientFileSystem: {
+            readTextFile: (_request, cwd) =>
+              Effect.sync(() => {
+                servedCwds.push(cwd);
+                return { content: "" };
+              }),
+            writeTextFile: () => Effect.succeed({}),
+          },
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_HANG_PROMPT_FOREVER: "1" },
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleReadTextFile: (handler) =>
+                Effect.sync(() => {
+                  readTextFile = handler;
+                }).pipe(Effect.andThen(runtime.handleReadTextFile(handler))),
+            }),
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const policyFor = (cwd: string | null) =>
+        ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd,
+        });
+      const read = Effect.suspend(() =>
+        readTextFile === undefined
+          ? Effect.die("the flavor's client file system must be wired")
+          : readTextFile({ sessionId: "mock-session-1", path: "/any/file.txt" }),
+      );
+
+      // A session without a workspace passes no cwd, not the server's.
+      const noWorkspaceThreadId = ThreadId.make("thread-acp-client-fs-no-workspace");
+      yield* adapter
+        .openSession({
+          threadId: noWorkspaceThreadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-client-fs-none"),
+          modelSelection: { instanceId, model: "default" },
+          runtimePolicy: policyFor(null),
+        })
+        .pipe(Effect.andThen(read), Effect.scoped);
+      assert.deepEqual(servedCwds, [null]);
+
+      const workspaceA = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-fs-a-" });
+      const workspaceB = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-fs-b-" });
+      const threadId = ThreadId.make("thread-acp-client-fs-workspace-change");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-client-fs"),
+        modelSelection,
+        runtimePolicy: policyFor(workspaceA),
+      });
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: policyFor(workspaceA),
+      });
+      yield* read;
+      // The session opened for A now runs a turn for B.
+      yield* session
+        .startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy: policyFor(workspaceB),
+            now: yield* DateTime.now,
+          }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* session.events.pipe(
+        Stream.filter((event) => event.type === "provider_turn.updated"),
+        Stream.runHead,
+      );
+      yield* read;
+      assert.deepEqual(servedCwds, [null, workspaceA, workspaceB]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("finishes a settled root's carryover subagent from its structured end", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const childSessionId = "019f44a6-4820-7402-925d-bc862ee711dd";
+      let finishSubagent: AcpAdapterV2ExtensionContext["finishSubagent"] | undefined;
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          enablePostSettleContinuation: true,
+          // The spawn tool reports a background subagent that keeps running.
+          extractSubagentUpdate: (toolCall) =>
+            toolCall.toolCallId !== "tool-call-generic-1"
+              ? undefined
+              : {
+                  nativeTaskId: "task-generic-1",
+                  prompt: "background subagent",
+                  title: "background subagent",
+                  model: null,
+                  status: "running",
+                  childSessionId,
+                  result: null,
+                },
+          registerExtensions: (context) =>
+            Effect.sync(() => {
+              finishSubagent = context.finishSubagent;
+            }),
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
+            protocolEvents,
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        continuationRequests: { offer: () => Effect.void },
+      });
+      const threadId = ThreadId.make("thread-acp-carryover-subagent-finished");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-carryover-finished"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver: ACP_TEST_DRIVER,
+        nativeTurnId: "mock-session-1:turn:1",
+      });
+      let rootStatus: string | null = null;
+      while (rootStatus === null) {
+        const event = yield* Queue.take(events);
+        if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
+          rootStatus = event.status;
+        }
+      }
+      // The root completed with the subagent still running: it is carryover.
+      assert.equal(rootStatus, "completed");
+      assert.isDefined(finishSubagent);
+      const subagentStatuses = Effect.gen(function* () {
+        // Adapter events reach this queue through the events stream fiber.
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        const statuses: Array<[string, string | null]> = [];
+        let polled = yield* Queue.poll(events);
+        while (Option.isSome(polled)) {
+          const event = polled.value;
+          if (event.type === "turn_item.updated" && event.turnItem.type === "subagent") {
+            statuses.push([event.turnItem.status, event.turnItem.result]);
+          }
+          polled = yield* Queue.poll(events);
+        }
+        return statuses;
+      });
+      yield* subagentStatuses;
+
+      // A nested subagent reports to its own parent session, not the root.
+      yield* finishSubagent!({
+        sessionId: "some-other-session",
+        childSessionId,
+        status: "completed",
+        result: "WRONG_PARENT",
+      });
+      assert.deepEqual(yield* subagentStatuses, [], "non-root notices must be dropped");
+
+      yield* finishSubagent!({
+        sessionId: "mock-session-1",
+        childSessionId,
+        status: "failed",
+        result: "tool crashed",
+      });
+      assert.deepEqual(
+        yield* subagentStatuses,
+        [["failed", "tool crashed"]],
+        "the completed root still owns the run, so the carryover end projects at once",
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("closes a deferred root turn's reply when its prompt returns", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          deferFinalizeForBackgroundWork: true,
+          // A background subagent keeps the root turn open after its prompt returns.
+          extractSubagentUpdate: (toolCall) =>
+            toolCall.toolCallId !== "tool-call-generic-1"
+              ? undefined
+              : {
+                  nativeTaskId: "task-generic-1",
+                  prompt: "background subagent",
+                  title: "background subagent",
+                  model: null,
+                  status: "running",
+                  childSessionId: null,
+                  result: null,
+                },
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: {
+              T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1",
+              T3_ACP_GENERIC_TOOL_REPLY_TEXT: "started a background subagent",
+            },
+            protocolEvents,
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-deferred-reply-closes");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-deferred-reply"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      yield* Stream.fromQueue(protocolEvents).pipe(
+        Stream.filter(
+          (event) =>
+            event.direction === "incoming" &&
+            event.stage === "raw" &&
+            typeof event.payload === "string" &&
+            event.payload.includes('"stopReason"'),
+        ),
+        Stream.runHead,
+      );
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      const collected = Array.from(yield* Queue.takeAll(events));
+      assert.isFalse(
+        collected.some((event) => event.type === "turn.terminal"),
+        "the running subagent holds the root turn open",
+      );
+      const replies = collected.flatMap((event) =>
+        event.type === "message.updated" && event.message.role === "assistant"
+          ? [event.message]
+          : [],
+      );
+      assert.isAbove(replies.length, 0);
+      assert.isFalse(replies.at(-1)!.streaming, "the reply the agent finished stops streaming");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.effect(

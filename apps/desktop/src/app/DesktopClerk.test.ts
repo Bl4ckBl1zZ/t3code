@@ -28,8 +28,15 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
 
-const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
+const makeDesktopClerkLayer = (
+  isDevelopment = true,
+  events: string[] = [],
+  fileSystemLayer: Layer.Layer<FileSystem.FileSystem> = FileSystem.layerNoop({
+    exists: () => Effect.succeed(false),
+  }),
+) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/t3-state",
     isDevelopment,
@@ -51,7 +58,7 @@ const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
       Layer.mergeAll(
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, environment),
         Layer.succeed(ElectronApp.ElectronApp, electronApp),
-        FileSystem.layerNoop({ exists: () => Effect.succeed(false) }),
+        fileSystemLayer,
       ),
     ),
   );
@@ -104,6 +111,41 @@ describe("DesktopClerk", () => {
       createClerkBridgeMock.mockClear();
     });
   });
+
+  it.each([
+    {
+      name: "packaged",
+      isDevelopment: false,
+      userData: "/tmp/app-data/t3code",
+    },
+    {
+      name: "development",
+      isDevelopment: true,
+      userData: "/tmp/app-data/t3code-dev",
+    },
+  ])(
+    "creates the bridge before startup can yield to the event loop ($name)",
+    ({ isDevelopment, userData }) => {
+      const events: string[] = [];
+      storageMock.mockReturnValue(storageAdapter);
+      createClerkBridgeMock.mockImplementation(() => {
+        events.push("createClerkBridge");
+        return { cleanup: vi.fn(), isPrimaryInstance: true };
+      });
+      // runSync throws if the layer ever suspends, which would let Electron emit
+      // ready before the bridge exists. main.ts provides the same FileSystem.
+      // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- The assertion IS that the layer builds synchronously; it.effect would mask a regression to async.
+      Effect.runSync(
+        Effect.scoped(
+          Layer.build(
+            makeDesktopClerkLayer(isDevelopment, events, DesktopPreReadyFileSystem.layer),
+          ),
+        ),
+      );
+
+      assert.deepEqual(events, [`setPath:userData:${userData}`, "createClerkBridge"]);
+    },
+  );
 
   it.effect("preserves bridge initialization failures", () => {
     const cause = new Error("bridge initialization failed");

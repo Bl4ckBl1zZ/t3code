@@ -1,15 +1,4 @@
 export const RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 980px)";
-export const THREAD_PANEL_INLINE_MIN_WIDTH = 1_104;
 
+/** Where the thread details card currently lives; the card reports it (see ThreadDetailsCard). */
 export type ThreadPanelPresentation = "inline" | "popover";
-
-export function resolveThreadPanelPresentation(
-  workspaceWidth: number | null,
-  occupiedRightPanelWidth: number,
-  rightPanelMaximized: boolean,
-): ThreadPanelPresentation {
-  if (workspaceWidth === null) return "inline";
-
-  const chatPaneWidth = rightPanelMaximized ? 0 : workspaceWidth - occupiedRightPanelWidth;
-  return chatPaneWidth < THREAD_PANEL_INLINE_MIN_WIDTH ? "popover" : "inline";
-}

@@ -343,6 +343,32 @@ export const ThreadTitleRegeneration = Schema.Struct({
 });
 export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
 
+/** A user's choice about continuing a thread the provider stopped on a usage limit. */
+export const OrchestrationV2LimitRecovery = Schema.Struct({
+  requestId: Schema.optional(CommandId),
+  runId: RunId,
+  resetAt: IsoDateTime,
+  autoResume: Schema.Boolean,
+  snooze: Schema.optional(Schema.Boolean),
+});
+export type OrchestrationV2LimitRecovery = typeof OrchestrationV2LimitRecovery.Type;
+
+/** A choice update preserves omitted options for this same run and reset. */
+export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
+  runId: RunId,
+  resetAt: IsoDateTime,
+  autoResume: Schema.optional(Schema.Boolean),
+  snooze: Schema.optional(Schema.Boolean),
+}).check(
+  Schema.makeFilter(
+    (update) =>
+      update.autoResume !== undefined ||
+      update.snooze !== undefined ||
+      "A recovery update must include autoResume or snooze.",
+  ),
+);
+export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -411,6 +437,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -423,9 +450,29 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /** Latest rollback that failed after every retry; cleared when the next rollback starts. */
+  rollbackFailure: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        requestId: CommandId,
+        message: TrimmedNonEmptyString,
+      }),
+    ),
+  ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
+
+/**
+ * A subagent the provider spawned on its own (Claude's Agent tool, Codex or
+ * Cursor native subagents). The provider owns its conversation, so it cannot
+ * take messages; T3 delegate_task children (`creationSource: "mcp"`) can.
+ */
+export function isProviderNativeSubagentThread(
+  thread: Pick<OrchestrationV2AppThread, "lineage" | "creationSource">,
+): boolean {
+  return thread.lineage.relationshipToParent === "subagent" && thread.creationSource === "provider";
+}
 
 export const OrchestrationV2RunStatus = Schema.Literals([
   "preparing",
@@ -777,6 +824,13 @@ export const OrchestrationV2Subagent = Schema.Struct({
 });
 export type OrchestrationV2Subagent = typeof OrchestrationV2Subagent.Type;
 
+/** Idle work is resumable, but does not keep a turn or its subscription alive. */
+export function isOrchestrationV2WorkActive(
+  status: OrchestrationV2ExecutionNode["status"],
+): boolean {
+  return status === "pending" || status === "running" || status === "waiting";
+}
+
 export const OrchestrationV2CheckpointScope = Schema.Struct({
   id: CheckpointScopeId,
   threadId: ThreadId,
@@ -1002,6 +1056,8 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
+  // The sending agent's thread in this environment, separate from the receiving thread.
+  senderThreadId: Schema.optional(ThreadId),
   id: MessageId,
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
@@ -1145,6 +1201,7 @@ export function orchestrationV2TurnItemStatusIsTerminal(
 }
 
 export const OrchestrationV2ProviderFailureClass = Schema.Literals([
+  "usage_limit",
   "provider_error",
   "transport_error",
   "permission_error",
@@ -1168,6 +1225,8 @@ export const OrchestrationV2ProviderFailure = Schema.Struct({
   message: OrchestrationV2ProviderFailureMessage,
   code: Schema.NullOr(OrchestrationV2ProviderFailureCode),
   retryable: Schema.NullOr(Schema.Boolean),
+  /** Reported reset time; absent when the provider cannot name one. */
+  resetAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type OrchestrationV2ProviderFailure = typeof OrchestrationV2ProviderFailure.Type;
 
@@ -1310,6 +1369,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     type: Schema.Literal("user_message"),
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
+    senderThreadId: Schema.optional(ThreadId),
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
@@ -1595,6 +1655,58 @@ export function orchestrationV2ActiveAgentCount(
   ).length;
 }
 
+/**
+ * Providers whose runtime can end a thread's background work after the turn
+ * that started it has settled. Codex terminates the retained background
+ * terminals; Claude closes the CLI process that owns the tasks. Other
+ * providers only stop work inside a running turn.
+ */
+const SETTLED_BACKGROUND_WORK_STOP_DRIVERS: ReadonlySet<string> = new Set(["codex", "claudeAgent"]);
+
+/**
+ * The run a Stop targets once a thread's turn has settled but its background
+ * work — live background commands or delegated agents — keeps running. Stop
+ * interrupts that settled run, which asks the provider to end the work.
+ *
+ * Null while a run is still in flight (Stop targets that run instead), when
+ * nothing runs on, or when the provider cannot stop work after a turn settles.
+ */
+export function orchestrationV2BackgroundWorkStopRunId(projection: {
+  readonly runs: ReadonlyArray<{
+    readonly id: RunId;
+    readonly status: OrchestrationV2RunStatus;
+    readonly providerThreadId: ProviderThreadId | null;
+  }>;
+  readonly providerThreads: ReadonlyArray<{
+    readonly id: ProviderThreadId;
+    readonly driver: ProviderDriverKind;
+  }>;
+  readonly turnItems: Parameters<typeof orchestrationV2BackgroundProcessCount>[0];
+  readonly subagents: Parameters<typeof orchestrationV2ActiveAgentCount>[0];
+}): RunId | null {
+  // Queued runs have not started, so the work belongs to the last one that did.
+  const latestRun = projection.runs.findLast((run) => run.status !== "queued");
+  if (
+    latestRun === undefined ||
+    latestRun.status === "preparing" ||
+    latestRun.status === "starting" ||
+    latestRun.status === "running" ||
+    latestRun.status === "rolled_back"
+  ) {
+    return null;
+  }
+  const driver = projection.providerThreads.find(
+    (providerThread) => providerThread.id === latestRun.providerThreadId,
+  )?.driver;
+  if (driver === undefined || !SETTLED_BACKGROUND_WORK_STOP_DRIVERS.has(driver)) {
+    return null;
+  }
+  const backgroundWork =
+    orchestrationV2BackgroundProcessCount(projection.turnItems) +
+    orchestrationV2ActiveAgentCount(projection.subagents);
+  return backgroundWork > 0 ? latestRun.id : null;
+}
+
 export const OrchestrationV2ProjectedTurnItem = Schema.Struct({
   position: NonNegativeInt,
   visibility: Schema.Literals(["local", "inherited", "synthetic"]),
@@ -1851,6 +1963,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   activityRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   status: OrchestrationV2ShellThreadStatus,
   lastError: Schema.optional(Schema.NullOr(Schema.String)),
+  lastErrorClass: Schema.optional(Schema.NullOr(OrchestrationV2ProviderFailureClass)),
+  usageLimitResetAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pendingRuntimeRequest: Schema.NullOr(OrchestrationV2PendingRuntimeRequestSummary),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -1901,6 +2015,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   /**
    * Omitted by servers that predate server-side visited tracking; clients fall
    * back to their local visited state when the field is absent.
@@ -2157,6 +2272,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     type: Schema.Literal("user_message"),
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
+    senderThreadId: Schema.optional(ThreadId),
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
@@ -2691,6 +2807,7 @@ export const OrchestrationV2Command = Schema.Union([
     branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Absent leaves the link alone; null unlinks. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
     /** Atomic collection edits; older clients keep using the single-link field. */
@@ -2755,6 +2872,7 @@ export const OrchestrationV2Command = Schema.Union([
     // Attributes the message to the schedule that fired it, so the timeline can
     // say so without the prompt carrying a synthetic prefix the agent reads.
     scheduledTaskId: Schema.optional(ScheduledTaskId),
+    senderThreadId: Schema.optional(ThreadId),
     commandId: CommandId,
     threadId: ThreadId,
     messageId: MessageId,
@@ -2762,6 +2880,8 @@ export const OrchestrationV2Command = Schema.Union([
     attachments: Schema.Array(ChatAttachment),
     modelSelection: Schema.optional(ModelSelection),
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
+    usageLimitContinuationOfRunId: Schema.optional(RunId),
+    usageLimitRecoveryRequestId: Schema.optional(CommandId),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
         parentRunId: RunId,

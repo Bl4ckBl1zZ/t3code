@@ -21,7 +21,10 @@ import {
   resolveTimelineMinimapPreview,
   type TimelineMinimapItem,
 } from "./timelineMinimapItems";
-import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
+import {
+  isOrchestrationV2WorkActive,
+  orchestrationV2CommandExecutionIsLiveInBackground,
+} from "@t3tools/contracts";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import type { AssistantCitation } from "@t3tools/contracts";
@@ -110,7 +113,7 @@ import {
   XIcon,
   ZapIcon,
 } from "lucide-react";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { MessageAttachmentPlacement } from "./MessageAttachmentPlacement";
 import { MessageFileAttachmentTile } from "./MessageFileAttachmentTile";
@@ -165,7 +168,11 @@ import { extractLeadingMessageReply } from "~/lib/messageReply";
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
-import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
+import {
+  formatChatTimestampTooltip,
+  formatDayAwareTimestamp,
+  formatUpcomingTimestamp,
+} from "../../timestampFormat";
 import {
   isBackgroundProcessItem,
   resolveBackgroundProcessView,
@@ -183,6 +190,14 @@ import {
   V2LifecycleRow,
   type HandoffTimelineRun,
 } from "./V2LifecycleRow";
+import {
+  subagentGroupTiming,
+  summarizeSubagentStatuses,
+} from "@t3tools/client-runtime/state/subagent-display";
+import { AgentElapsed } from "./AgentElapsed";
+import { AgentOrb } from "./AgentOrb";
+import { subagentOrbSeed, type SubagentTurnItem } from "./SubagentsStatusBadge.logic";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 import {
@@ -284,6 +299,8 @@ interface MessagesTimelineProps {
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   onRunShellCommand?: ((command: string) => void) | undefined;
   isWorking: boolean;
+  /** The live work belongs to a runless root turn (a provider-native subagent). */
+  runlessWorkActive?: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   listRef: React.RefObject<LegendListRef | null>;
@@ -344,6 +361,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRunShellCommand,
   isWorking,
   workingActivityText = null,
+  runlessWorkActive = false,
   isPreparingWorktree = false,
   activeTurnInProgress,
   activeTurnStartedAt,
@@ -467,6 +485,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         expandedAttemptIds,
         alwaysExpandActivity,
         isWorking,
+        runlessWorkActive,
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
@@ -479,6 +498,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedAttemptIds,
       alwaysExpandActivity,
       isWorking,
+      runlessWorkActive,
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
@@ -1359,7 +1379,18 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           className="ms-1 text-[11px] text-muted-foreground/70"
           data-user-message-attribution="agent"
         >
-          Sent by another agent
+          {row.message.senderThreadId ? (
+            <InlineButton
+              onClick={() => {
+                if (row.message.senderThreadId) ctx.onOpenThread(row.message.senderThreadId);
+              }}
+              aria-label="Open sending thread"
+            >
+              Sent by another agent
+            </InlineButton>
+          ) : (
+            "Sent by another agent"
+          )}
         </p>
       ) : null}
       <div
@@ -1593,10 +1624,12 @@ function TimelineRowTimestamp({
   createdAt,
   timestampFormat,
   className,
+  alwaysVisible = false,
 }: {
   createdAt: string;
   timestampFormat: TimestampFormat;
   className?: string;
+  alwaysVisible?: boolean;
 }) {
   return (
     <Tooltip>
@@ -1605,6 +1638,7 @@ function TimelineRowTimestamp({
           <span
             className={cn(
               "pointer-events-none absolute me-1 shrink-0 whitespace-nowrap rounded-md text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:pointer-events-auto group-hover/timeline-row:static group-hover/timeline-row:opacity-100 group-focus-within/timeline-row:pointer-events-auto group-focus-within/timeline-row:static group-focus-within/timeline-row:opacity-100",
+              alwaysVisible && "pointer-events-auto static opacity-100",
               className,
             )}
           />
@@ -1986,7 +2020,7 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
         tone:
           item.status === "completed"
             ? "success"
-            : item.status === "running"
+            : item.status === "running" || item.failure.class === "usage_limit"
               ? "warning"
               : "danger",
         icon: CircleAlertIcon,
@@ -2069,7 +2103,14 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
 
 // A run of consecutive related-thread rows (subagents, created threads) stacks
 // as tightly as a list of tool calls instead of spacing out like separate events.
+// A run made only of subagents folds into one collapsible card instead.
 function V2EventGroupTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event-group" }> }) {
+  const subagents = row.events.flatMap((event) =>
+    event.projectedItem.item.type === "subagent" ? [event.projectedItem.item] : [],
+  );
+  if (subagents.length === row.events.length) {
+    return <V2SubagentGroup row={row} subagents={subagents} />;
+  }
   return (
     <div className="space-y-px" data-v2-event-group data-v2-event-group-count={row.events.length}>
       {row.events.map((event) => (
@@ -2078,6 +2119,101 @@ function V2EventGroupTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "e
     </div>
   );
 }
+
+const SUBAGENT_GROUP_VISIBLE_ORBS = 3;
+
+const V2SubagentGroup = memo(function V2SubagentGroup({
+  row,
+  subagents,
+}: {
+  row: Extract<TimelineRow, { kind: "event-group" }>;
+  subagents: ReadonlyArray<SubagentTurnItem>;
+}) {
+  // Survives the virtualizer recycling this row, like the work groups do.
+  const [expanded, toggleExpanded] = useWorkHistoryExpansion(`subagent-group:${row.id}`, false);
+  const label = `${subagents.length} subagents`;
+  const statusSummary = summarizeSubagentStatuses(subagents.map(({ status }) => status));
+  const active = subagents.some(({ status }) => isOrchestrationV2WorkActive(status));
+  const failed = subagents.some(({ status }) => status === "failed");
+  return (
+    <Collapsible
+      open={expanded}
+      onOpenChange={(open) => {
+        if (open !== expanded) toggleExpanded();
+      }}
+      data-subagent-group
+    >
+      <CollapsibleTrigger
+        aria-label={label}
+        aria-description={statusSummary}
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2.5 rounded-md px-0.5 py-1 text-left transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+          expanded || active ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        <span className="flex shrink-0 items-center -space-x-1" aria-hidden>
+          {subagents.slice(0, SUBAGENT_GROUP_VISIBLE_ORBS).map((item) => (
+            <AgentOrb
+              key={item.id}
+              seed={subagentOrbSeed(item)}
+              size={16}
+              state={
+                isOrchestrationV2WorkActive(item.status)
+                  ? "active"
+                  : item.status === "failed"
+                    ? "failed"
+                    : item.status === "idle"
+                      ? "idle"
+                      : "done"
+              }
+              className="ring-1 ring-background"
+            />
+          ))}
+          {subagents.length > SUBAGENT_GROUP_VISIBLE_ORBS ? (
+            <span className="ps-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+              +{subagents.length - SUBAGENT_GROUP_VISIBLE_ORBS}
+            </span>
+          ) : null}
+        </span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[12px] leading-5">
+          <span className="shrink-0 font-medium text-foreground/82">{label}</span>
+          <span
+            className={cn(
+              "min-w-0 truncate text-[11px]",
+              active ? "text-info" : failed ? "text-destructive" : "text-muted-foreground/70",
+            )}
+          >
+            {statusSummary}
+          </span>
+        </span>
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/80">
+          <AgentElapsed agent={subagentGroupTiming(subagents)} />
+        </span>
+        <ChevronDownIcon
+          aria-hidden
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-180",
+          )}
+        />
+      </CollapsibleTrigger>
+      {/* Virtualized rows must settle before disclosure scroll anchoring resumes. */}
+      <CollapsiblePanel animate={false}>
+        {expanded ? (
+          <div
+            className="mt-1 space-y-px rounded-lg border border-border/60 bg-card/30 p-1"
+            data-v2-event-group
+            data-v2-event-group-count={row.events.length}
+          >
+            {row.events.map((event) => (
+              <V2EventTimelineRow key={event.id} row={event} />
+            ))}
+          </div>
+        ) : null}
+      </CollapsiblePanel>
+    </Collapsible>
+  );
+});
 
 const V2_EVENT_TONE_ICON_CLASS: Record<V2EventTone, string> = {
   muted: "text-muted-foreground/65",
@@ -2093,6 +2229,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
     return (
       <V2LifecycleRow
         item={item}
+        environmentId={ctx.activeThreadEnvironmentId}
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}
@@ -3445,18 +3582,29 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const backgroundView =
     backgroundItem === null ? null : resolveBackgroundProcessView(backgroundItem, Date.now());
   const iconConfig = workToneIcon(workEntry.tone);
-  const showWarningIndicator = false;
-  const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
   const item = workEntry.projectedItem?.item;
+  // A provider stopping on a usage limit is a warning to wait or switch, not a failed call.
+  const showWarningIndicator =
+    item?.type === "error" && item.failure.class === "usage_limit" && item.status !== "completed";
+  const entryIconName = showWarningIndicator ? "circle-alert" : workEntryIconName(workEntry);
+  // A failed turn's error stays readable in the transcript: wrap it, keep its
+  // time visible, and tell the user when a usage limit resets.
+  const failedError = item?.type === "error" && item.status === "failed" ? item : null;
+  const usageLimitResetTime =
+    failedError?.failure.class === "usage_limit" && failedError.failure.resetAt
+      ? formatUpcomingTimestamp(failedError.failure.resetAt, ctx.timestampFormat)
+      : null;
   const toolPresentation = resolveTimelineToolPresentation(
     item?.type === "dynamic_tool" ? item.toolName : (workEntry.toolTitle ?? workEntry.label),
     workEntry.toolLifecycleStatus,
     item?.type === "dynamic_tool" ? item.input : undefined,
   );
   const heading =
-    backgroundView !== null
-      ? backgroundProcessHeading(backgroundView)
-      : (toolPresentation?.displayName ?? toolWorkEntryHeading(workEntry));
+    failedError?.failure.class === "usage_limit"
+      ? `Usage limit reached.${usageLimitResetTime ? ` Retry after ${usageLimitResetTime}.` : ""}`
+      : backgroundView !== null
+        ? backgroundProcessHeading(backgroundView)
+        : (toolPresentation?.displayName ?? toolWorkEntryHeading(workEntry));
   const rawPreview =
     backgroundView !== null ? backgroundView.command : workEntryPreview(workEntry, workspaceRoot);
   const preview =
@@ -3469,14 +3617,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
   const canExpand = expandedBody !== null || workEntry.projectedItem !== undefined;
   const showFailedIndicator =
-    backgroundView !== null
+    !showWarningIndicator &&
+    (backgroundView !== null
       ? backgroundView.outcome?.tone === "danger"
-      : workEntryIndicatesToolFailure(workEntry);
+      : workEntryIndicatesToolFailure(workEntry));
   const showDestructiveRowStyle = showFailedIndicator && !workLogEntryIsToolLike(workEntry);
   const iconWrapperClass = cn(
     "flex size-5 shrink-0 items-center justify-center",
     showWarningIndicator
-      ? "text-destructive"
+      ? "text-warning"
       : showDestructiveRowStyle
         ? "text-destructive"
         : workEntry.tone === "tool" || showFailedIndicator
@@ -3561,7 +3710,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <p className="flex min-w-0 w-full items-baseline gap-1.5 text-[12px] leading-5">
               <span
                 className={cn(
-                  "min-w-0 shrink truncate",
+                  "min-w-0 shrink",
+                  failedError ? "whitespace-normal break-words" : "truncate",
                   headingClass,
                   shimmerText && "live-tool-shine",
                 )}
@@ -3605,6 +3755,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <TimelineRowTimestamp
               createdAt={workEntry.createdAt}
               timestampFormat={ctx.timestampFormat}
+              alwaysVisible={failedError !== null}
             />
             <span
               className="flex size-4 shrink-0 items-center justify-center"

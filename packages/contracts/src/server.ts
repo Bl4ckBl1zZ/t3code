@@ -217,7 +217,11 @@ export const ServerProvider = Schema.Struct({
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
   setup: Schema.optional(
-    Schema.Struct({ canAuthenticate: Schema.Boolean, canInstall: Schema.Boolean }),
+    Schema.Struct({
+      canAuthenticate: Schema.Boolean,
+      canInstall: Schema.Boolean,
+      documentationUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
+    }),
   ),
   nativeSessions: Schema.optional(
     Schema.Struct({

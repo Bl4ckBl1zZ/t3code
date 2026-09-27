@@ -740,7 +740,17 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.autoDeleteSettledAfterDays
         ? ["Auto-delete settled threads"]
         : []),
+      ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
+        ? ["Auto-resume limited threads"]
+        : []),
+      ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
+        ? ["Snooze limited threads"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
+      ...(settings.persistComposerContextStrip !==
+      DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
+        ? ["Composer context"]
+        : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
         ? ["Default diff file state"]
@@ -858,6 +868,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleOnMerge,
       settings.autoDeleteSettledAfterDays,
+      settings.autoResumeLimitedThreads,
+      settings.snoozeLimitedThreads,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.persistComposerContextStrip,
@@ -960,6 +972,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoDeleteSettledAfterDays: DEFAULT_UNIFIED_SETTINGS.autoDeleteSettledAfterDays,
+      autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
+      snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
@@ -2475,6 +2489,59 @@ export function GeneralSettingsPanel() {
                 });
               }}
               aria-label="Project grouping"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("auto-resume-limited-threads")}
+          description="Resume usage-limit stops at the reported reset time. Each thread can cancel its scheduled continuation."
+          resetAction={
+            settings.autoResumeLimitedThreads !==
+            DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads ? (
+              <SettingResetButton
+                label="auto-resume limited threads"
+                onClick={() =>
+                  updateSettings({
+                    autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.autoResumeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
+              }
+              aria-label="Auto-resume limited threads"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("snooze-limited-threads")}
+          description="Snooze usage-limit stops until the reported reset time. Combine with auto-resume to continue when they wake."
+          resetAction={
+            settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads ? (
+              <SettingResetButton
+                label="snooze limited threads"
+                onClick={() =>
+                  updateSettings({
+                    snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.snoozeLimitedThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ snoozeLimitedThreads: Boolean(checked) })
+              }
+              aria-label="Snooze limited threads"
             />
           }
         />

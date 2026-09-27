@@ -216,7 +216,7 @@ enum T3IncomingShareStore {
     /// Matches `NSExtensionActivationSupportsImageWithMaxCount` /
     /// `...MovieWithMaxCount` / `...FileWithMaxCount` in Extensions/Share/Info.plist
     /// and `PROVIDER_SEND_TURN_MAX_ATTACHMENTS` in the contract.
-    static let maximumAttachmentCount = 8
+    static let maximumAttachmentCount = 100
     // The share extension is a separate module and cannot see
     // `ComposerAttachments`, so the two contract caps are restated here.
     // ExtensionContractTests asserts they agree, the same way it pins the app

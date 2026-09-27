@@ -8,6 +8,7 @@ import {
   HermesSettings,
   OpenClawSettings,
   OpenCodeSettings,
+  PiSettings,
   ProviderDriverKind,
   type ProviderInstanceConfig,
 } from "@t3tools/contracts";
@@ -73,7 +74,7 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
       {
         name: "CURSOR_API_KEY",
         label: "Cursor API key",
-        description: "Required by the Cursor Agent SDK.",
+        description: "Optional. Overrides browser sign-in for this provider.",
         placeholder: "Paste API key",
         sensitive: true,
       },
@@ -142,6 +143,12 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
     value: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
     settingsSchema: AntigravitySettings,
+  },
+  {
+    value: ProviderDriverKind.make("pi"),
+    label: "Pi",
+    badgeLabel: "Early Access",
+    settingsSchema: PiSettings,
   },
   {
     value: ProviderDriverKind.make("opencode"),

@@ -93,9 +93,9 @@ final class IncomingShareAttachmentTests: XCTestCase {
 
     // MARK: - Caps
 
-    func testTheExtensionAcceptsEightOfEachAndTheContractCaps() {
+    func testTheExtensionAcceptsTheContractCountAndCaps() {
         // Matches supportsImage/Movie/FileWithMaxCount in Extensions/Share/Info.plist.
-        XCTAssertEqual(T3IncomingShareStore.maximumAttachmentCount, 8)
+        XCTAssertEqual(T3IncomingShareStore.maximumAttachmentCount, 100)
         XCTAssertEqual(
             T3IncomingShareStore.maximumAttachmentCount,
             PlatformIncomingSharePipeline.maximumAttachmentCount

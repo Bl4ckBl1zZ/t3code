@@ -32,6 +32,13 @@ On iOS, use **Set up agents** in the model picker, or **Install or sign in** in
 an account's settings. Setup stays on the selected task's machine. Older servers
 show that an update is required instead of opening an unscoped terminal.
 
+Accounts that sign in inside T3 Code, such as Cursor and Antigravity, show an **Account**
+row in their settings with **Sign in**, **Change account**, and **Sign out**. Sign-in runs on
+the account's environment, so it also works from another device. Changing or removing the
+sign-in stops that account's running threads and keeps their history. In the Android app,
+**Settings → Provider accounts** lists these accounts for each connected environment; the
+native iOS app does not offer in-app provider sign-in yet. Other agents keep using their own CLI login.
+
 Model lists can refresh between app releases. New models may carry a **New** label,
 and models that require a newer agent version appear after that agent is updated.
 If a refresh fails, the previous catalog stays available. Custom model names remain

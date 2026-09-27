@@ -94,6 +94,8 @@ function workRowSymbolName(icon: ThreadFeedActivity["icon"]): AppSymbolName {
       return { ios: "eye", android: "visibility" };
     case "globe":
       return { ios: "globe", android: "public" };
+    case "search":
+      return { ios: "magnifyingglass", android: "search" };
     case "hammer":
       return { ios: "hammer", android: "construction" };
     case "message":
@@ -361,11 +363,28 @@ function ChangedFilesSummaryCard(props: {
   );
 }
 
+const FAILURE_TIME_FORMAT: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+};
+
+/** A provider stopping on a usage limit reads as a warning, not a failure. */
+function isUsageLimitRow(row: ThreadFeedActivity): boolean {
+  const item = row.projectedItem.item;
+  return (
+    item.type === "error" && item.failure.class === "usage_limit" && item.status !== "completed"
+  );
+}
+
 function WorkRowIcon(props: {
   readonly row: ThreadFeedActivity;
   readonly iconSubtleColor: import("react-native").ColorValue;
 }) {
-  const iconIsDestructive = props.row.icon === "alert" || props.row.icon === "warning";
+  const isUsageLimit = isUsageLimitRow(props.row);
+  const iconIsDestructive =
+    !isUsageLimit && (props.row.icon === "alert" || props.row.icon === "warning");
   if (props.row.logo === "t3-code") {
     return (
       <Image
@@ -391,7 +410,7 @@ function WorkRowIcon(props: {
       }
       size={14}
       weight="medium"
-      tintColor={iconIsDestructive ? "#e11d48" : props.iconSubtleColor}
+      tintColor={isUsageLimit ? "#d97706" : iconIsDestructive ? "#e11d48" : props.iconSubtleColor}
       type="monochrome"
     />
   );
@@ -502,7 +521,9 @@ export function ThreadWorkLog(props: {
             backgroundOutcome === null || backgroundOutcome.tone === "success"
               ? rowText
               : `${rowText}, ${backgroundOutcome.label}`;
-          const textIsDestructive = row.icon === "alert" || row.icon === "warning";
+          const textIsUsageLimit = isUsageLimitRow(row);
+          const textIsDestructive =
+            !textIsUsageLimit && (row.icon === "alert" || row.icon === "warning");
           const dynamicToolPath =
             item.type === "dynamic_tool" ? dynamicToolInputPreview(item.input) : null;
           const filePath =
@@ -542,6 +563,68 @@ export function ThreadWorkLog(props: {
                   threadId={props.currentThreadId}
                   workspaceRoot={props.workspaceRoot}
                 />
+              </Animated.View>
+            );
+          }
+
+          // A failed turn's error stays readable in place: the full message
+          // wraps under the label, and a usage limit says when to retry.
+          if (item.type === "error" && item.status === "failed") {
+            const warning = item.failure.class === "usage_limit";
+            const resetTime = item.failure.resetAt
+              ? new Date(item.failure.resetAt).toLocaleString(undefined, FAILURE_TIME_FORMAT)
+              : null;
+            const label = warning
+              ? `Usage limit reached.${resetTime ? ` Retry after ${resetTime}.` : ""}`
+              : row.summary;
+            const timestamp = new Date(row.createdAt);
+            return (
+              <Animated.View
+                key={row.id}
+                {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
+              >
+                <Pressable
+                  accessibilityLabel={warning ? label : `${row.summary}: ${item.failure.message}`}
+                  accessibilityHint="Long press to copy."
+                  hitSlop={4}
+                  onLongPress={() => props.onCopyRow(row.id, row.getCopyText())}
+                  style={({ pressed }) => ({
+                    backgroundColor: pressed ? pressedBackground : "transparent",
+                  })}
+                  className="rounded-md px-0.5 py-0.5"
+                >
+                  <View className="min-h-9 flex-row items-center gap-1.5">
+                    <View className="h-5 w-5 shrink-0 items-center justify-center">
+                      <WorkRowIcon row={row} iconSubtleColor={props.iconSubtleColor} />
+                    </View>
+                    <Text
+                      className={cn(
+                        "min-w-0 flex-1 font-t3-medium text-xs",
+                        warning
+                          ? "text-amber-600 dark:text-amber-400"
+                          : "text-rose-600 dark:text-rose-400",
+                      )}
+                    >
+                      {label}
+                    </Text>
+                    {props.copiedRowId === row.id ? (
+                      <Text className="pr-1 font-t3-medium text-3xs text-emerald-600 dark:text-emerald-400">
+                        Copied
+                      </Text>
+                    ) : null}
+                    <Text
+                      accessibilityLabel={timestamp.toLocaleString()}
+                      className="shrink-0 text-2xs text-foreground-muted"
+                    >
+                      {timestamp.toLocaleString(undefined, FAILURE_TIME_FORMAT)}
+                    </Text>
+                  </View>
+                  {!warning ? (
+                    <Text selectable className="ml-7 pb-1 text-xs text-foreground">
+                      {item.failure.message}
+                    </Text>
+                  ) : null}
+                </Pressable>
               </Animated.View>
             );
           }
@@ -596,6 +679,7 @@ export function ThreadWorkLog(props: {
                         className={cn(
                           "font-t3-medium text-foreground",
                           textIsDestructive && "text-rose-600 dark:text-rose-400",
+                          textIsUsageLimit && "text-amber-600 dark:text-amber-400",
                         )}
                       >
                         {row.summary}

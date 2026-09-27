@@ -987,6 +987,39 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
+export const PiSettings = makeProviderSettingsSchema(
+  {
+    // Disabled by default while Pi support is Early Access.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("pi").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Pi coding agent binary.",
+        providerSettingsForm: { placeholder: "pi", clearWhenEmpty: "omit" },
+      }),
+    ),
+    launchArgs: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description: "Additional CLI arguments passed to pi --mode rpc on session start.",
+        providerSettingsForm: { clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "launchArgs"],
+  },
+);
+export type PiSettings = typeof PiSettings.Type;
+
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
     // Off by default (like Cursor and Grok): the binding is not yet stable
@@ -1193,6 +1226,15 @@ export const SourceControlWritingStyleSettings = Schema.Struct({
 });
 export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyleSettings.Type;
 
+export const BranchNamingMode = Schema.Literals(["static", "semantic", "custom"]);
+export type BranchNamingMode = typeof BranchNamingMode.Type;
+
+export interface BranchNamingOptions {
+  mode: BranchNamingMode;
+  prefix: string;
+  instructions: string;
+}
+
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 export const DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL = Duration.minutes(5);
 
@@ -1257,6 +1299,9 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Continue a thread the provider stopped on a usage limit once the limit resets.
+  snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Days a thread stays settled before the server deletes it together with its
   // worktree and local branch. Null (the default) never deletes.
   autoDeleteSettledAfterDays: Schema.NullOr(AutoDeleteSettledAfterDays).pipe(
@@ -1354,6 +1399,11 @@ export const ServerSettings = Schema.Struct({
       }),
     ),
   ),
+  branchNamingMode: BranchNamingMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("static" as const)),
+  ),
+  branchNamePrefix: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("t3code"))),
+  branchNameInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   sourceControlWritingStyle: SourceControlWritingStyleSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1374,6 +1424,7 @@ export const ServerSettings = Schema.Struct({
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     hermes: HermesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
@@ -1560,6 +1611,13 @@ const AntigravitySettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
+const PiSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  launchArgs: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
 const OpenCodeSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
@@ -1586,6 +1644,8 @@ export const ServerSettingsPatch = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
+  autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   autoDeleteSettledAfterDays: Schema.optionalKey(Schema.NullOr(AutoDeleteSettledAfterDays)),
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
@@ -1622,6 +1682,9 @@ export const ServerSettingsPatch = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  branchNamingMode: Schema.optionalKey(BranchNamingMode),
+  branchNamePrefix: Schema.optionalKey(TrimmedString),
+  branchNameInstructions: Schema.optionalKey(TrimmedString),
   sourceControlWritingStyle: Schema.optionalKey(
     Schema.Struct({
       mode: Schema.optionalKey(SourceControlWritingStyleMode),
@@ -1644,6 +1707,7 @@ export const ServerSettingsPatch = Schema.Struct({
       grok: Schema.optionalKey(GrokSettingsPatch),
       hermes: Schema.optionalKey(HermesSettingsPatch),
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
+      pi: Schema.optionalKey(PiSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
     }),
   ),

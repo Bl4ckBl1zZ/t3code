@@ -112,8 +112,10 @@ Examples:
 - Precedence is across commands, not only within the same command. A later rule for a different
   command can take a key away from an earlier one.
 
-`thread.stop` interrupts the running turn in the focused thread. It has no default
-shortcut; assign one in **Settings → Keybindings**.
+`thread.stop` interrupts the running turn in the focused thread. Once the turn has
+finished, it stops the background commands and agents the turn left running in Codex
+and Claude conversations. It has no default shortcut; assign one in
+**Settings → Keybindings**.
 
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
 bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive

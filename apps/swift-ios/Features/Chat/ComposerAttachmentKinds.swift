@@ -45,6 +45,35 @@ public enum ComposerAttachments {
         kind == .image ? maximumImageBytes : maximumFileBytes
     }
 
+    /// `PROVIDER_SEND_TURN_MAX_ATTACHMENTS` from the contract.
+    public static let maximumAttachmentCount = 100
+    /// The contract's per-message image total; other files only count toward
+    /// `maximumAttachmentCount`.
+    public static let maximumTotalImageBytes = 80 * 1024 * 1024
+
+    /// Mirrors `getProviderAttachmentLimitError` from the contract, message for
+    /// message, so the phone refuses a batch with the words the server would use.
+    /// Each item's wire type comes from `classify`, so only images draw on the
+    /// image total.
+    public static func limitError(
+        for items: [(name: String, mimeType: String, byteCount: Int)]
+    ) -> String? {
+        if items.count > maximumAttachmentCount {
+            return "You can attach up to \(maximumAttachmentCount) files per message or question response."
+        }
+        let imageBytes = items.reduce(0) { total, item in
+            classify(mimeType: item.mimeType, name: item.name) == .image ? total + item.byteCount : total
+        }
+        if imageBytes > maximumTotalImageBytes {
+            return "Images can total up to 80 MiB per message or question response. Use smaller images or send fewer at once."
+        }
+        return nil
+    }
+
+    public static func limitError(for attachments: [FeatureUploadAttachment]) -> String? {
+        limitError(for: attachments.map { ($0.name, $0.mimeType, $0.data.count) })
+    }
+
     /// `PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES` from the contract: the
     /// raster formats a provider can actually read on a turn.
     ///

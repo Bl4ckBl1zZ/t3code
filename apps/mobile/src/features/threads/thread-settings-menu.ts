@@ -63,6 +63,8 @@ export function buildThreadSettingsMenu(input: {
   readonly selectedModel: ModelSelection | null;
   readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly runtimeMode: RuntimeMode;
+  /** Runtime modes the thread's provider supports; absent offers all of them. */
+  readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode> | undefined;
 }): ThreadSettingsMenu {
   const events = new Map<string, ThreadSettingsMenuEvent>();
   const actions: MenuAction[] = [];
@@ -180,20 +182,28 @@ export function buildThreadSettingsMenu(input: {
     });
   }
 
-  const runtimeLabel = RUNTIME_MODE_CHOICES.find(
-    (choice) => choice.mode === input.runtimeMode,
-  )?.label;
+  const supportedRuntimeModes = input.supportedRuntimeModes;
+  const supportedRuntimeChoices =
+    supportedRuntimeModes === undefined || supportedRuntimeModes.length === 0
+      ? []
+      : RUNTIME_MODE_CHOICES.filter((choice) => supportedRuntimeModes.includes(choice.mode));
+  const runtimeChoices =
+    supportedRuntimeChoices.length > 0 ? supportedRuntimeChoices : RUNTIME_MODE_CHOICES;
+  // A carried-in mode the provider does not offer runs as its first offered one.
+  const currentRuntimeChoice =
+    runtimeChoices.find((choice) => choice.mode === input.runtimeMode) ??
+    (supportedRuntimeChoices.length > 0 ? runtimeChoices[0] : undefined);
   actions.push({
     id: "runtime",
     title: "Runtime",
-    ...(runtimeLabel === undefined ? {} : { subtitle: runtimeLabel }),
-    subactions: RUNTIME_MODE_CHOICES.map((choice): MenuAction => {
+    ...(currentRuntimeChoice === undefined ? {} : { subtitle: currentRuntimeChoice.label }),
+    subactions: runtimeChoices.map((choice): MenuAction => {
       const id = `runtime:${choice.mode}`;
       events.set(id, { type: "set-runtime", mode: choice.mode });
       return {
         id,
         title: choice.label,
-        state: choice.mode === input.runtimeMode ? "on" : "off",
+        state: choice.mode === currentRuntimeChoice?.mode ? "on" : "off",
       };
     }),
   });

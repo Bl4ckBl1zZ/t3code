@@ -157,7 +157,7 @@ const make = Effect.gen(function* () {
       return yield* failure("thread_not_found", `Calling thread ${scope.threadId} was not found.`);
     }
     const parent = yield* threadManagement
-      .getThreadProjection(scope.threadId)
+      .getThreadRecords(scope.threadId, [])
       .pipe(
         Effect.mapError((error) =>
           failure(
@@ -171,7 +171,7 @@ const make = Effect.gen(function* () {
       threadId === scope.threadId
         ? parent
         : yield* threadManagement
-            .getProjectThread({ projectId: parent.thread.projectId, threadId })
+            .getProjectThreadRecords({ projectId: parent.thread.projectId, threadId }, [])
             .pipe(Effect.mapError(threadLookupFailure));
     const requestKey =
       input.clientRequestId === undefined

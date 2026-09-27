@@ -10,7 +10,8 @@ composers.
 
 You can attach images up to 10 MB. On servers that support file uploads, you can also
 attach videos, text files, PDFs, ZIP archives, and other files. Each file can be up to the limit advertised
-by the server, capped at 50 MB. Each message can contain up to eight attachments in total. Files
+by the server, capped at 50 MB. Each message can contain up to 100 attachments, with at most 80 MiB
+of images in total. Files
 upload directly to the environment, where your agent can read, copy, or edit them by their file path.
 
 On web and desktop, use the paperclip beside the voice and send controls to attach files.
@@ -106,11 +107,17 @@ open the stack. Interacting with the attached banner or composer does not open t
 Messages you queue behind a running turn sit above the composer and send in order once the agent
 finishes. If the server restarts while messages are still waiting, the queue pauses instead of
 sending: the agent that was working is gone, and you may not want the next message going to a
-fresh one unread. Your messages, their order and their attachments are all kept.
+fresh one unread. The queue also pauses when a turn fails, since the same provider would likely
+fail the next message too. A message queued for a different provider still sends. Your messages,
+their order and their attachments are all kept.
 
-A paused queue says **Paused when the server restarted** above its rows. Edit, reorder or remove
-whatever you want first, then choose **Resume** to start the message at the top and let the rest
-follow. Nothing sends until you do.
+A paused queue says **Paused** above its rows. Edit, reorder or remove whatever you want first,
+then choose **Resume** to start the message at the top and let the rest follow. Nothing sends
+until you do.
+
+When a usage limit stops the thread, queued messages wait instead of running into the same limit,
+and the queue cannot be resumed while the limit holds. They send after the next turn on the thread
+finishes, such as a continuation at the reset time or a message you send yourself.
 
 ## Prompt stash
 
@@ -261,7 +268,26 @@ Completed web conversations keep the final response visible. Expand **Worked for
 interim responses and completed tools. Subagents, forks, threads the agent created and
 commands still running remain visible outside that fold.
 
-On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same eight-attachment limit applies to the picker and dropped files.
+When a turn starts several subagents in a row, the web timeline shows them as one card that counts
+how many are working, done or failed and how long the group has run. Expand it to see each
+subagent; hover one for its model, status and progress.
+
+Subagent threads started by the agent can't take messages; message the parent
+thread instead. Their composer is replaced by the subagent's status.
+
+On web and desktop, the thread details card floats in the space beside the conversation when the
+window leaves room for it, without narrowing the conversation. When it does not, the details button
+in the header opens the same card as a popover. On a short window the card folds what cannot fit:
+first section headings, the environment and workspace pickers, ports, background tasks,
+automations and lineage, then the editor picker, keeping scripts and in-progress Git actions.
+
+On web and desktop, a thread's subagents are listed in the thread details card under **Lineage**
+(or **Subagents** when the thread has no other relatives). Click a subagent to open its thread.
+Hover it to see its model, status, workflow phase progress and token usage. A workflow subagent
+shows its phase count beside its name, and when the run reported a script or a session, the menu
+beside the row can view the workflow script or open the run session.
+
+On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same 100-attachment limit applies to the picker and dropped files.
 
 If you choose another panel while a turn is working, its arriving plan will not replace your choice. A later turn can open its plan again when automatic plan opening is enabled.
 

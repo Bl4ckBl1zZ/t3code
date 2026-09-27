@@ -51,11 +51,15 @@ const hermesRuntimeModeOptions: ReadonlyArray<RuntimeModeOption> = HERMES_RUNTIM
  * The access picker a thread gets. Hermes is given the modes it actually
  * distinguishes, with copy that names what its own gate does; a mode it does
  * not offer still has to render, since a thread can carry one in from wherever
- * it was created.
+ * it was created. Other providers offer the modes their snapshot lists as
+ * supported (all of them when it lists none); a carried-in mode outside that
+ * set shows as the first supported one, which is the mode the server runs it
+ * in.
  */
 export function resolveRuntimeModePicker(
   driverKind: ProviderDriverKind,
   runtimeMode: RuntimeMode,
+  supportedRuntimeModes?: ReadonlyArray<RuntimeMode>,
 ): { options: ReadonlyArray<RuntimeModeOption>; selected: RuntimeModeOption } {
   if (driverKind === HERMES_DRIVER_KIND) {
     const selectedMode = hermesRuntimeModeChoice(runtimeMode).mode;
@@ -63,6 +67,13 @@ export function resolveRuntimeModePicker(
       options: hermesRuntimeModeOptions,
       selected: hermesRuntimeModeOptions.find((option) => option.mode === selectedMode)!,
     };
+  }
+  if (supportedRuntimeModes !== undefined && supportedRuntimeModes.length > 0) {
+    const options = defaultRuntimeModeOptions.filter((option) =>
+      supportedRuntimeModes.includes(option.mode),
+    );
+    const selected = options.find((option) => option.mode === runtimeMode) ?? options[0];
+    if (selected !== undefined) return { options, selected };
   }
   return {
     options: defaultRuntimeModeOptions,

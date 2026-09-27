@@ -6,10 +6,14 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2ThreadProjection,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   RunId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -316,5 +320,72 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
     expect(error).toBeInstanceOf(ThreadManagementThreadNotFoundError);
     expect(error).toMatchObject({ projectId, threadId });
     expect("cause" in error).toBe(false);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("interrupts a settled run whose background work still runs", () => {
+  const projectId = ProjectId.make("project:thread-management:settled-stop");
+  const threadId = ThreadId.make("thread:thread-management:settled-stop");
+  const runId = RunId.make("run:thread-management:settled-stop");
+  const providerThreadId = ProviderThreadId.make("provider-thread:thread-management:settled-stop");
+  const now = DateTime.makeUnsafe("2026-09-27T00:00:00.000Z");
+  const records = (background: boolean) =>
+    ({
+      thread: { id: threadId, projectId, deletedAt: null },
+      runs: [{ id: runId, status: "completed", providerThreadId, ordinal: 1 }],
+      providerTurns: [],
+      providerThreads: [{ id: providerThreadId, driver: ProviderDriverKind.make("claudeAgent") }],
+      subagents: [],
+      turnItems: [
+        {
+          id: TurnItemId.make("turn-item:thread-management:settled-stop"),
+          runId,
+          type: "command_execution",
+          status: background ? "running" : "completed",
+          background: true,
+          startedAt: now,
+        },
+      ],
+    }) as unknown as OrchestrationV2ThreadProjection;
+  let background = true;
+  const dispatched: Array<OrchestrationV2Command> = [];
+  const testLayer = layer.pipe(
+    Layer.provide(
+      Layer.mock(OrchestratorV2)({
+        getThreadRecords: () => Effect.succeed(records(background)),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length, storedEvents: [] };
+          }),
+      }),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService;
+    const stopped = yield* service.interruptThread({
+      projectId,
+      commandId: CommandId.make("command:thread-management:settled-stop"),
+      threadId,
+    });
+    expect(stopped.type).toBe("interrupt_requested");
+    expect(dispatched).toMatchObject([{ type: "run.interrupt", threadId, runId }]);
+
+    background = false;
+    const explicit = yield* service.interruptThread({
+      projectId,
+      commandId: CommandId.make("command:thread-management:settled-stop-2"),
+      threadId,
+      runId,
+    });
+    expect(explicit.type).toBe("already_terminal");
+    const implicit = yield* service.interruptThread({
+      projectId,
+      commandId: CommandId.make("command:thread-management:settled-stop-3"),
+      threadId,
+    });
+    expect(implicit.type).toBe("no_active_run");
+    expect(dispatched).toHaveLength(1);
   }).pipe(Effect.provide(testLayer));
 });

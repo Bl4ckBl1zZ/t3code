@@ -1,3 +1,8 @@
+import type {
+  ProjectionRecordField,
+  ProjectionRecordFilter,
+  ProjectionRecords,
+} from "./ProjectionStore.ts";
 import {
   type ChatAttachment,
   type CommandId,
@@ -12,6 +17,7 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
+  orchestrationV2BackgroundWorkStopRunId,
   ProjectId,
   RunId,
   type ScheduledTaskId,
@@ -103,6 +109,7 @@ export interface ThreadManagementSendInput {
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
+  readonly senderThreadId?: ThreadId;
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly modelSelection?: ModelSelection;
@@ -115,7 +122,10 @@ export interface ThreadManagementSendInput {
 
 export interface ThreadManagementSendResult {
   readonly dispatch: OrchestratorV2DispatchResult;
-  readonly projection: OrchestrationV2ThreadProjection;
+  readonly projection: Pick<
+    OrchestrationV2ThreadProjection,
+    "thread" | "runs" | "messages" | "turnItems"
+  >;
   readonly message: OrchestrationV2ConversationMessage;
   readonly run: OrchestrationV2Run;
   /** Null for queued sends: the user turn item materializes when the queued turn starts. */
@@ -274,10 +284,20 @@ export interface ThreadManagementServiceShape {
   readonly dispatch: (
     command: OrchestrationV2Command,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
+  readonly getMessageCount: OrchestratorV2["Service"]["getMessageCount"];
+  readonly getThreadRecords: OrchestratorV2["Service"]["getThreadRecords"];
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
   readonly getThreadSnapshot: OrchestratorV2["Service"]["getThreadSnapshot"];
+  readonly getProjectThreadRecords: <K extends ProjectionRecordField>(
+    input: { readonly projectId: ProjectId; readonly threadId: ThreadId },
+    fields: ReadonlyArray<K>,
+    filter?: ProjectionRecordFilter,
+  ) => Effect.Effect<
+    ProjectionRecords<K>,
+    ThreadManagementProjectionLoadError | ThreadManagementThreadNotFoundError
+  >;
   readonly getProjectThread: (input: {
     readonly projectId: ProjectId;
     readonly threadId: ThreadId;
@@ -332,13 +352,13 @@ export function isTerminalRunStatus(
 }
 
 export function latestRun(
-  projection: OrchestrationV2ThreadProjection,
+  projection: Pick<OrchestrationV2ThreadProjection, "runs">,
 ): OrchestrationV2Run | undefined {
   return projection.runs.toSorted((left, right) => right.ordinal - left.ordinal)[0];
 }
 
 export function latestActiveRun(
-  projection: OrchestrationV2ThreadProjection,
+  projection: Pick<OrchestrationV2ThreadProjection, "runs">,
 ): OrchestrationV2Run | undefined {
   return projection.runs
     .filter(isActiveRun)
@@ -346,7 +366,7 @@ export function latestActiveRun(
 }
 
 export function latestSteerableRun(
-  projection: OrchestrationV2ThreadProjection,
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "providerTurns">,
 ): OrchestrationV2Run | undefined {
   return projection.runs
     .filter(
@@ -442,6 +462,34 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const getProjectThreadRecords: ThreadManagementServiceShape["getProjectThreadRecords"] = (
+    input,
+    fields,
+    filter,
+  ) =>
+    ensureProjectionTranscript(input.threadId)
+      .pipe(Effect.andThen(orchestrator.getThreadRecords(input.threadId, fields, filter)))
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadManagementProjectionLoadError({
+              projectId: input.projectId,
+              threadId: input.threadId,
+              cause,
+            }),
+        ),
+        Effect.flatMap((projection) =>
+          projection.thread.projectId === input.projectId && projection.thread.deletedAt === null
+            ? Effect.succeed(projection)
+            : Effect.fail(
+                new ThreadManagementThreadNotFoundError({
+                  projectId: input.projectId,
+                  threadId: input.threadId,
+                }),
+              ),
+        ),
+      );
+
   const listProjectThreads: ThreadManagementServiceShape["listProjectThreads"] = (input) =>
     orchestrator.getShellSnapshot().pipe(
       Effect.mapError(
@@ -468,7 +516,7 @@ const make = Effect.gen(function* () {
 
   const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
     Effect.gen(function* () {
-      const target = yield* getProjectThread(input);
+      const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
       if (target.thread.archivedAt !== null) {
         return yield* new ThreadManagementThreadArchivedError({
           threadId: input.threadId,
@@ -503,6 +551,7 @@ const make = Effect.gen(function* () {
         commandId: input.commandId,
         threadId: input.threadId,
         messageId: input.messageId,
+        ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
         text: input.text,
         attachments: input.attachments,
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
@@ -511,7 +560,10 @@ const make = Effect.gen(function* () {
         createdBy: input.createdBy,
         creationSource: input.creationSource,
       });
-      const projection = yield* getProjectThread(input);
+      const projection = yield* getProjectThreadRecords(input, ["runs", "messages", "turnItems"], {
+        messageIds: [input.messageId],
+        turnItemTypes: ["user_message"],
+      });
       const message = projection.messages.find((candidate) => candidate.id === input.messageId);
       const run =
         message?.runId === null || message?.runId === undefined
@@ -551,7 +603,7 @@ const make = Effect.gen(function* () {
 
   const waitForThread: ThreadManagementServiceShape["waitForThread"] = (input) =>
     Effect.gen(function* () {
-      const target = yield* getProjectThread(input);
+      const target = yield* getProjectThreadRecords(input, ["runs"]);
       const selectedRun =
         input.runId === undefined
           ? latestRun(target)
@@ -571,7 +623,9 @@ const make = Effect.gen(function* () {
 
       const wait = Effect.gen(function* () {
         while (true) {
-          const current = yield* getProjectThread(input);
+          const current = yield* getProjectThreadRecords(input, ["runs"], {
+            runIds: [selectedRun.id],
+          });
           const run = current.runs.find((candidate) => candidate.id === selectedRun.id);
           if (run === undefined) {
             return yield* new ThreadManagementRunNotFoundError({
@@ -587,7 +641,7 @@ const make = Effect.gen(function* () {
       if (Option.isSome(waited)) {
         return { threadId: input.threadId, run: waited.value, timedOut: false };
       }
-      const current = yield* getProjectThread(input);
+      const current = yield* getProjectThreadRecords(input, ["runs"], { runIds: [selectedRun.id] });
       const run = current.runs.find((candidate) => candidate.id === selectedRun.id);
       if (run === undefined) {
         return yield* new ThreadManagementRunNotFoundError({
@@ -600,7 +654,7 @@ const make = Effect.gen(function* () {
 
   const interruptThread: ThreadManagementServiceShape["interruptThread"] = (input) =>
     Effect.gen(function* () {
-      const target = yield* getProjectThread(input);
+      const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
       const explicitRun =
         input.runId === undefined
           ? undefined
@@ -611,7 +665,28 @@ const make = Effect.gen(function* () {
           runId: input.runId,
         });
       }
-      if (explicitRun !== undefined && isTerminalRunStatus(explicitRun.status)) {
+      const activeRun = latestActiveRun(target);
+      // A settled run whose background work runs on is still Stop's target:
+      // interrupting it asks the provider to end that work.
+      const backgroundWorkRun =
+        activeRun === undefined
+          ? yield* getProjectThreadRecords(input, [
+              "runs",
+              "providerThreads",
+              "turnItems",
+              "subagents",
+            ]).pipe(
+              Effect.map((records) => {
+                const runId = orchestrationV2BackgroundWorkStopRunId(records);
+                return records.runs.find((candidate) => candidate.id === runId);
+              }),
+            )
+          : undefined;
+      if (
+        explicitRun !== undefined &&
+        isTerminalRunStatus(explicitRun.status) &&
+        backgroundWorkRun?.id !== explicitRun.id
+      ) {
         return {
           type: "already_terminal",
           run: explicitRun as OrchestrationV2Run & {
@@ -619,7 +694,7 @@ const make = Effect.gen(function* () {
           },
         } as const;
       }
-      const interruptibleRun = latestActiveRun(target);
+      const interruptibleRun = activeRun ?? backgroundWorkRun;
       if (interruptibleRun === undefined) {
         if (input.runId === undefined) {
           return { type: "no_active_run" } as const;
@@ -648,8 +723,17 @@ const make = Effect.gen(function* () {
   return ThreadManagementService.of({
     ensureLegacyTranscript,
     dispatch,
+    getMessageCount: (threadId) =>
+      ensureProjectionTranscript(threadId).pipe(
+        Effect.andThen(orchestrator.getMessageCount(threadId)),
+      ),
+    getThreadRecords: (threadId, fields, filter) =>
+      ensureProjectionTranscript(threadId).pipe(
+        Effect.andThen(orchestrator.getThreadRecords(threadId, fields, filter)),
+      ),
     getThreadProjection,
     getThreadSnapshot,
+    getProjectThreadRecords,
     getProjectThread,
     getShellSnapshot: orchestrator.getShellSnapshot,
     getThreadShell: orchestrator.getThreadShell,

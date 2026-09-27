@@ -1,3 +1,4 @@
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -61,6 +62,10 @@ const providerInstanceRegistryLayer = ProviderInstanceRegistryHydrationLive.pipe
     Layer.mergeAll(
       serverConfigLayer.pipe(Layer.provide(NodeServices.layer)),
       serverSettingsLayer,
+      ServerSecretStore.layer.pipe(
+        Layer.provide(serverConfigLayer),
+        Layer.provide(NodeServices.layer),
+      ),
       NodeServices.layer,
       FetchHttpClient.layer,
       OpenCodeRuntimeLive.pipe(Layer.provide(NodeServices.layer)),
@@ -197,6 +202,68 @@ describe.runIf(process.env.T3_CURSOR_LIVE_ORCHESTRATOR === "1")(
           );
           assert.include(targetProjection.contextHandoffs[0]?.summaryText ?? "", marker);
           assert.include(assistantText(targetProjection), marker);
+        }).pipe(Effect.provide(liveLayer), Effect.scoped),
+      360_000,
+    );
+
+    it.live(
+      "runs a sandboxed thread after a full access thread in the same server",
+      () =>
+        Effect.gen(function* () {
+          yield* runEffectWorkerDaemonWithOptions({ concurrency: 2 }).pipe(Effect.forkScoped);
+          const orchestrator = yield* OrchestratorV2;
+          const projectId = ProjectId.make("project:cursor-live-sandbox-after-full-access");
+
+          const runThread = Effect.fn("CursorOrchestratorV2Live.runThread")(function* (input: {
+            readonly name: string;
+            readonly runtimeMode: "full-access" | "approval-required";
+          }) {
+            const threadId = ThreadId.make(`thread:cursor-live-sandbox:${input.name}`);
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`command:cursor-live-sandbox:${input.name}:create`),
+              threadId,
+              projectId,
+              title: `Cursor live sandbox ${input.name}`,
+              modelSelection: CURSOR_MODEL_SELECTION,
+              runtimeMode: input.runtimeMode,
+              interactionMode: "default",
+              branch: null,
+              worktreePath: process.cwd(),
+            });
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`command:cursor-live-sandbox:${input.name}:message`),
+              threadId,
+              messageId: MessageId.make(`message:cursor-live-sandbox:${input.name}`),
+              text: "Respond with exactly: OK. Do not use any tools.",
+              attachments: [],
+              modelSelection: CURSOR_MODEL_SELECTION,
+              dispatchMode: { type: "start_immediately" },
+            });
+            return yield* waitForIdle(threadId);
+          });
+
+          // The SDK decides once per process whether local sandboxing works.
+          // The unsandboxed thread must run first to catch a wrong verdict.
+          const fullAccess = yield* runThread({ name: "full-access", runtimeMode: "full-access" });
+          const supervised = yield* runThread({
+            name: "supervised",
+            runtimeMode: "approval-required",
+          });
+
+          assert.deepEqual(
+            fullAccess.runs.map((run) => run.status),
+            ["completed"],
+          );
+          assert.deepEqual(
+            supervised.runs.map((run) => run.status),
+            ["completed"],
+          );
         }).pipe(Effect.provide(liveLayer), Effect.scoped),
       360_000,
     );

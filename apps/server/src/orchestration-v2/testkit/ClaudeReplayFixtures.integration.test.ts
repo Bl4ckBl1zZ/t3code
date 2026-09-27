@@ -1,20 +1,27 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import type { ProviderReplayTranscript } from "@t3tools/contracts";
+import {
+  CommandId,
+  isProviderNativeSubagentThread,
+  MessageId,
+  ProviderDriverKind,
+  type ProviderReplayTranscript,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import { classifyClaudeNativeTool } from "../Adapters/ClaudeAdapterV2.ts";
-import {
-  ClaudeOrchestratorReplayHarness,
-  recordClaudeAgentSdkReplayTranscript,
-  replayClaudeAgentSdkTranscript,
-} from "../Adapters/ClaudeAdapterV2.testkit.ts";
+import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
+import { layer as idAllocatorLayer } from "../IdAllocator.ts";
+import { OrchestratorV2 } from "../Orchestrator.ts";
+import { userFacingDispatchErrorMessage } from "../UserFacingErrors.ts";
+import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
+import { subagentInput } from "./fixtures/subagent/input.ts";
+import { runOrchestratorV2Scenario } from "./OrchestratorScenario.ts";
+import { makeOrchestratorV2ProviderReplayLayer } from "./ProviderReplayHarness.ts";
+import { CLAUDE_MODEL_SELECTION, materializeFixtureInput } from "./fixtures/shared.ts";
 import {
-  MULTI_TURN_FIRST_PROMPT,
-  MULTI_TURN_SECOND_PROMPT,
-  SIMPLE_PROMPT,
   THREAD_FORK_NATIVE_CONTINUE_FORK_MARKER,
   THREAD_FORK_NATIVE_CONTINUE_RECALL,
   THREAD_FORK_NATIVE_CONTINUE_SOURCE_MARKER,
@@ -26,7 +33,6 @@ import {
   THREAD_MERGE_BACK_SIBLINGS_SOURCE_MARKER,
   THREAD_MERGE_BACK_SOURCE_MARKER,
 } from "./fixtures/shared.ts";
-import { checkpointWorkspace } from "./ReplayFixtureWorkspace.ts";
 import { decodeProviderReplayNdjson } from "./ReplayTranscriptNdjson.ts";
 
 const readTranscript = Effect.fn("readClaudeReplayFixture")(function* (file: URL) {
@@ -34,15 +40,6 @@ const readTranscript = Effect.fn("readClaudeReplayFixture")(function* (file: URL
   const text = yield* fs.readFileString(decodeURIComponent(file.pathname));
   return yield* decodeProviderReplayNdjson(text);
 }, Effect.provide(NodeServices.layer));
-
-function claudeFixture(name: string) {
-  const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find((entry) => entry.name === name);
-  const provider = fixture?.providers.find((entry) => entry.driver === "claudeAgent");
-  if (fixture === undefined || provider === undefined) {
-    throw new Error(`Missing ${name}/claudeAgent replay fixture.`);
-  }
-  return { fixture, provider };
-}
 
 function readClaudeTranscriptFixture(path: string) {
   return readTranscript(new URL(`./fixtures/${path}/claude_transcript.ndjson`, import.meta.url));
@@ -137,6 +134,65 @@ function claudeToolUseNamesFromTranscript(
 }
 
 describe("Claude Agent SDK replay fixtures", () => {
+  it.effect("refuses messages to a native subagent thread without touching it", () =>
+    Effect.gen(function* () {
+      const raw = yield* readClaudeTranscriptFixture("subagent");
+      const transcript = yield* ClaudeOrchestratorReplayHarness.decodeTranscript(raw);
+      const materialized = yield* materializeFixtureInput({
+        scenario: "subagent",
+        fixtureInput: subagentInput(),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: CLAUDE_MODEL_SELECTION,
+      }).pipe(Effect.provide(idAllocatorLayer), provideDeterministicTestRuntime);
+      const scenario = {
+        name: "subagent/claudeAgent:read-only-child",
+        transcript,
+        commands: materialized.commands,
+        steps: materialized.steps,
+        projectionThreadIds: materialized.projectionThreadIds,
+      };
+      yield* Effect.gen(function* () {
+        const result = yield* runOrchestratorV2Scenario(scenario);
+        const orchestrator = yield* OrchestratorV2;
+        const child = [...result.projections.values()].find((projection) =>
+          isProviderNativeSubagentThread(projection.thread),
+        );
+        assert.isDefined(child);
+        const before = yield* orchestrator.getThreadEventSequence(child.thread.id);
+
+        const refused = yield* orchestrator
+          .dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("command:subagent:message-native-child"),
+            threadId: child.thread.id,
+            messageId: MessageId.make("message:subagent:message-native-child"),
+            text: "Also check the tests.",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+          })
+          .pipe(Effect.flip);
+        assert.equal(refused._tag, "OrchestratorSubagentThreadReadOnlyError");
+        // The wire error carries this text to the web toast and mobile outbox.
+        assert.equal(
+          userFacingDispatchErrorMessage(refused),
+          "This subagent is run by its provider and cannot take messages. Message the parent thread instead.",
+        );
+        assert.equal(yield* orchestrator.getThreadEventSequence(child.thread.id), before);
+        const after = yield* orchestrator.getThreadProjection(child.thread.id);
+        assert.lengthOf(after.runs, 0);
+        assert.deepEqual(after.messages, child.messages);
+      }).pipe(
+        Effect.provide(
+          makeOrchestratorV2ProviderReplayLayer(scenario, ClaudeOrchestratorReplayHarness),
+        ),
+        provideDeterministicTestRuntime,
+        Effect.scoped,
+      );
+    }),
+  );
+
   it.effect("classifies every Claude fixture tool use through the native tool table", () =>
     Effect.gen(function* () {
       const unknownToolNames = new Set<string>();
@@ -317,83 +373,6 @@ describe("Claude Agent SDK replay fixtures", () => {
       assert.include(forkLocalRollbackFinalText, "fork local source alpha");
       assert.include(forkLocalRollbackFinalText, "fork local first");
       assert.notInclude(forkLocalRollbackFinalText, "fork local second");
-    }),
-  );
-
-  it.skipIf(process.env.T3_RECORD_CLAUDE_AGENT_SDK_FIXTURE !== "1")(
-    "records simple from real Claude Code query() output",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { fixture, provider } = claudeFixture("simple");
-
-          const workspace = yield* checkpointWorkspace("claude-simple-record");
-          const transcript = yield* Effect.promise(() =>
-            recordClaudeAgentSdkReplayTranscript({
-              scenario: fixture.name,
-              prompts: [SIMPLE_PROMPT],
-              modelSelection: provider.modelSelection,
-              cwd: workspace,
-            }),
-          );
-
-          assert.equal(transcript.provider, "claudeAgent");
-          assert.equal(transcript.protocol, "claude-agent-sdk.query");
-          assert.isAtLeast(transcript.entries.length, 3);
-        }),
-      ),
-  );
-
-  it.effect("replays simple as typed Claude Agent SDK query messages", () =>
-    Effect.gen(function* () {
-      const { provider } = claudeFixture("simple");
-
-      const rawTranscript = yield* readTranscript(provider.transcriptFile);
-      const transcript = yield* ClaudeOrchestratorReplayHarness.decodeTranscript(rawTranscript);
-
-      const messages = yield* Effect.promise(() =>
-        replayClaudeAgentSdkTranscript({
-          transcript,
-          prompts: [SIMPLE_PROMPT],
-          modelSelection: provider.modelSelection,
-        }),
-      );
-
-      assert.include(
-        messages
-          .filter((message) => message.type === "assistant")
-          .flatMap((message) =>
-            message.message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])),
-          )
-          .join(""),
-        "fixture simple ok",
-      );
-    }),
-  );
-
-  it.effect("replays multi_turn as typed Claude Agent SDK query messages", () =>
-    Effect.gen(function* () {
-      const { provider } = claudeFixture("multi_turn");
-
-      const rawTranscript = yield* readTranscript(provider.transcriptFile);
-      const transcript = yield* ClaudeOrchestratorReplayHarness.decodeTranscript(rawTranscript);
-
-      const messages = yield* Effect.promise(() =>
-        replayClaudeAgentSdkTranscript({
-          transcript,
-          prompts: [MULTI_TURN_FIRST_PROMPT, MULTI_TURN_SECOND_PROMPT],
-          modelSelection: provider.modelSelection,
-        }),
-      );
-
-      const assistantText = messages
-        .filter((message) => message.type === "assistant")
-        .flatMap((message) =>
-          message.message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])),
-        )
-        .join("\n");
-      assert.include(assistantText, "first fixture turn complete");
-      assert.include(assistantText, "second fixture turn complete");
     }),
   );
 });

@@ -12,7 +12,12 @@ function isInsideRoot(path: Path.Path, root: string, candidate: string): boolean
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-/** Resolves an agent-supplied path and rejects anything outside the session roots. */
+/**
+ * Resolves an agent-supplied path and rejects anything outside the session
+ * roots. Symlinks resolve before the check, including the final component, so
+ * a link inside the workspace cannot read or write through to a file outside
+ * it. A dangling link on the path is rejected rather than written through.
+ */
 const resolveClientFilePath = Effect.fn("AntigravityAdapter.resolveClientFilePath")(
   function* (input: {
     readonly fileSystem: FileSystem.FileSystem;
@@ -22,6 +27,9 @@ const resolveClientFilePath = Effect.fn("AntigravityAdapter.resolveClientFilePat
   }) {
     const { path } = input;
     const resolved = path.resolve(input.requestPath);
+    const outside = EffectAcpErrors.AcpRequestError.invalidParams(
+      `Path '${input.requestPath}' is outside the session workspace.`,
+    );
     // Resolve the closest existing ancestor as well as an existing leaf. A new
     // nested file can still be reached through a symlink above its parent.
     let ancestor = resolved;
@@ -36,6 +44,13 @@ const resolveClientFilePath = Effect.fn("AntigravityAdapter.resolveClientFilePat
           ),
         ))
     ) {
+      // `exists` follows links, so a dangling one reads as missing. Writing
+      // through it would create its target, wherever that is.
+      const danglingLink = yield* input.fileSystem.readLink(ancestor).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      if (danglingLink) return yield* outside;
       const parent = path.dirname(ancestor);
       if (parent === ancestor) break;
       ancestor = parent;
@@ -54,9 +69,7 @@ const resolveClientFilePath = Effect.fn("AntigravityAdapter.resolveClientFilePat
       input.fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root)),
     );
     if (!roots.some((root) => isInsideRoot(path, root, real))) {
-      return yield* EffectAcpErrors.AcpRequestError.invalidParams(
-        `Path '${input.requestPath}' is outside the session workspace.`,
-      );
+      return yield* outside;
     }
     return real;
   },

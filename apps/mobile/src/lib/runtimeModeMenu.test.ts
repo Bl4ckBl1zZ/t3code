@@ -14,6 +14,17 @@ describe("runtimeModeMenu", () => {
     expect(menu.selected.title).toBe("Approve actions");
   });
 
+  it("offers only the modes a provider supports, reading an unsupported one as the first", () => {
+    const supportedRuntimeModes = ["approval-required", "auto", "full-access"] as const;
+    const menu = runtimeModeMenu({
+      isHermes: false,
+      runtimeMode: "auto-accept-edits",
+      supportedRuntimeModes,
+    });
+    expect(menu.options.map((option) => option.mode)).toEqual(supportedRuntimeModes);
+    expect(menu.selected.mode).toBe("approval-required");
+  });
+
   it("offers a T3 Work thread the two modes Hermes distinguishes", () => {
     const menu = runtimeModeMenu({ isHermes: true, runtimeMode: "full-access" });
     expect(menu.options.map((option) => option.title)).toEqual([

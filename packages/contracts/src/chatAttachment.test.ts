@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import {
   ChatAttachment,
+  getProviderAttachmentLimitError,
   isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./chatAttachment.ts";
@@ -73,5 +74,31 @@ it("accepts 50 MB uploaded file references while keeping the 10 MB image cap", (
       name: "photo.png",
       sizeBytes: 11 * 1024 * 1024,
     }),
+  );
+});
+
+it("getProviderAttachmentLimitError caps the count and the image total, not file bytes", () => {
+  const image = { type: "image", mimeType: "image/png", sizeBytes: 10 * 1024 * 1024 } as const;
+  const pdf = { type: "pdf", mimeType: "application/pdf", sizeBytes: 50 * 1024 * 1024 } as const;
+  const file = { type: "file", mimeType: "text/plain", sizeBytes: 1 } as const;
+
+  assert.strictEqual(
+    getProviderAttachmentLimitError(Array.from({ length: 100 }, () => file)),
+    undefined,
+  );
+  assert.include(
+    getProviderAttachmentLimitError(Array.from({ length: 101 }, () => file)),
+    "up to 100 files",
+  );
+  assert.strictEqual(
+    getProviderAttachmentLimitError([...Array.from({ length: 8 }, () => image), pdf, pdf]),
+    undefined,
+  );
+  assert.include(
+    getProviderAttachmentLimitError([
+      ...Array.from({ length: 8 }, () => image),
+      { ...image, sizeBytes: 1 },
+    ]),
+    "80 MiB",
   );
 });

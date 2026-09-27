@@ -89,7 +89,7 @@ struct FeatureImageAttachmentPicker: View {
         isPresentingSource: Binding<Bool> = .constant(false),
         requestedSource: Binding<FeatureAttachmentSource?> = .constant(nil),
         showsControl: Bool = true,
-        maximumCount: Int = 8,
+        maximumCount: Int = ComposerAttachments.maximumAttachmentCount,
         isEnabled: Bool = true
     ) {
         _attachments = attachments

@@ -98,13 +98,7 @@ const scenarioExpectations = {
   },
   tool_call_restricted_granular: {
     outgoing: ["initialize", "initialized", "thread/start", "turn/start"],
-    incoming: [
-      "item/fileChange/requestApproval",
-      "serverRequest/resolved",
-      "item/fileChange/outputDelta",
-      "turn/diff/updated",
-      "turn/completed",
-    ],
+    incoming: ["item/fileChange/requestApproval", "serverRequest/resolved", "turn/completed"],
     turnStartCount: 1,
     turnCompletedCount: 1,
     approvalRequestCount: 1,
@@ -117,54 +111,49 @@ const scenarioExpectations = {
     approvalRequestCount: 0,
   },
   subagent_continue: {
-    outgoing: [
-      "initialize",
-      "initialized",
-      "thread/start",
-      "turn/start/spawn",
-      "turn/start/continue",
-    ],
-    incoming: [
-      "turn/started/root-1",
-      "turn/completed/child-1",
-      "turn/completed/root-1",
-      "turn/started/root-2",
-      "turn/completed/child-2",
-      "turn/completed/root-2",
-    ],
-    turnStartCount: 0,
-    turnCompletedCount: 0,
+    outgoing: ["initialize", "initialized", "thread/start", "turn/start"],
+    incoming: ["turn/started", "item/completed", "turn/completed"],
+    turnStartCount: 2,
+    turnCompletedCount: 4,
     approvalRequestCount: 0,
   },
   subagent_v2: {
     outgoing: ["initialize", "initialized", "thread/start", "turn/start"],
-    incoming: [
-      "turn/started",
-      "item/completed/subAgentActivity-started",
-      "turn/started/child",
-      "item/completed/child-answer",
-      "turn/completed",
-    ],
+    incoming: ["turn/started", "item/completed", "item/agentMessage/delta", "turn/completed"],
     turnStartCount: 1,
     turnCompletedCount: 2,
     approvalRequestCount: 0,
   },
-  subagent_v2_nested: {
+  subagent_v2_approval: {
     outgoing: ["initialize", "initialized", "thread/start", "turn/start"],
     incoming: [
-      "turn/started",
-      "item/completed/root-subagent",
-      "turn/started/child",
-      "item/completed/child-subagent",
-      "turn/started/grandchild",
-      "item/completed/grandchild-subagent",
-      "turn/started/leaf",
-      "item/completed/leaf-answer",
+      "item/commandExecution/requestApproval",
+      "serverRequest/resolved",
+      "item/completed",
       "turn/completed",
     ],
     turnStartCount: 1,
+    turnCompletedCount: 2,
+    approvalRequestCount: 1,
+  },
+  subagent_v2_nested: {
+    outgoing: ["initialize", "initialized", "thread/start", "turn/start"],
+    incoming: ["turn/started", "item/completed", "item/agentMessage/delta", "turn/completed"],
+    turnStartCount: 1,
     turnCompletedCount: 4,
     approvalRequestCount: 0,
+  },
+  subagent_v2_nested_approval: {
+    outgoing: ["initialize", "initialized", "thread/start", "turn/start"],
+    incoming: [
+      "item/commandExecution/requestApproval",
+      "serverRequest/resolved",
+      "item/completed",
+      "turn/completed",
+    ],
+    turnStartCount: 1,
+    turnCompletedCount: 3,
+    approvalRequestCount: 1,
   },
   multi_turn: {
     outgoing: ["initialize", "initialized", "thread/start", "turn/start"],
@@ -194,7 +183,7 @@ const scenarioExpectations = {
   },
   proposed_plan: {
     outgoing: ["initialize", "initialized", "thread/start", "turn/start"],
-    incoming: ["turn/started", "turn/completed", "item/agentMessage/delta"],
+    incoming: ["turn/started", "turn/completed", "item/plan/delta"],
     turnStartCount: 1,
     turnCompletedCount: 1,
     approvalRequestCount: 0,
@@ -242,8 +231,32 @@ const scenarioExpectations = {
     approvalRequestCount: 0,
   },
   thread_rollback: {
-    outgoing: ["initialize", "initialized", "thread/start", "turn/start", "thread/rollback"],
+    outgoing: [
+      "initialize",
+      "initialized",
+      "thread/start",
+      "turn/start",
+      "thread/read",
+      "thread/turns/list",
+      "thread/revert",
+    ],
     incoming: ["turn/started", "turn/completed", "item/agentMessage/delta"],
+    turnStartCount: 3,
+    turnCompletedCount: 3,
+    approvalRequestCount: 0,
+  },
+  thread_rollback_after_restart: {
+    outgoing: [
+      "initialize",
+      "initialized",
+      "thread/start",
+      "turn/start",
+      "thread/read",
+      "thread/resume",
+      "thread/turns/list",
+      "thread/revert",
+    ],
+    incoming: ["turn/started", "turn/completed", "item/agentMessage/delta", "thread/reverted"],
     turnStartCount: 3,
     turnCompletedCount: 3,
     approvalRequestCount: 0,
@@ -430,9 +443,9 @@ function assertProviderThreadResumeSemantics(transcript: ProviderReplayTranscrip
     findProtocolEntry(transcript, "expect_outbound", "thread/resume").frame,
     ["params", "threadId"],
   );
+  const resumeRequest = findProtocolEntry(transcript, "expect_outbound", "thread/resume").frame;
   const resumedThreadFrame = findProtocolEntry(transcript, "emit_inbound", "thread/resume").frame;
   const resumedThreadId = readString(resumedThreadFrame, ["result", "thread", "id"]);
-  const resumedTurns = readArray(resumedThreadFrame, ["result", "thread", "turns"]);
   const secondTurnThreadId = readString(
     findProtocolEntry(transcript, "expect_outbound", "turn/start", 1).frame,
     ["params", "threadId"],
@@ -455,20 +468,10 @@ function assertProviderThreadResumeSemantics(transcript: ProviderReplayTranscrip
     startThreadId,
     "turn after resume must run on the resumed provider thread",
   );
-  assert.isAtLeast(resumedTurns.length, 1, "thread/resume response must include prior turns");
-
-  const resumedFirstTurnItems = readArray(resumedTurns[0], ["items"]);
-  const resumedFirstTurnAgentText = resumedFirstTurnItems
-    .filter(isRecord)
-    .filter((item) => item.type === "agentMessage")
-    .map((item) => item.text)
-    .find((text): text is string => typeof text === "string");
-
-  assert.equal(
-    resumedFirstTurnAgentText,
-    PROVIDER_THREAD_RESUME_FIRST_FINAL,
-    "thread/resume response must hydrate the prior assistant answer",
-  );
+  // The adapter resumes with excludeTurns, so history reaches the model, not the response.
+  assert.equal(readPath(resumeRequest, ["params", "excludeTurns"]), true);
+  assert.lengthOf(readArray(resumedThreadFrame, ["result", "thread", "turns"]), 0);
+  assert.equal(texts[0], PROVIDER_THREAD_RESUME_FIRST_FINAL);
   assert.include(
     secondFinalText,
     PROVIDER_THREAD_RESUME_FIRST_FINAL,
@@ -640,6 +643,48 @@ function assertSiblingMergeBackSemantics(transcript: ProviderReplayTranscript) {
   assert.equal(finalText, THREAD_MERGE_BACK_SIBLINGS_RECALL);
 }
 
+/**
+ * Codex announces a v2 child with the parent's `subAgentActivity(started)`
+ * before the child's first `turn/started`; the adapter registers children
+ * from that activity.
+ */
+function assertSubagentActivityPrecedesChildTurns(transcript: ProviderReplayTranscript) {
+  if (transcript.scenario !== "subagent_v2" && transcript.scenario !== "subagent_v2_nested") {
+    return;
+  }
+
+  const announcedChildren = new Set<string>();
+  const startedChildren = new Set<string>();
+  const rootThreadId = readString(
+    findProtocolEntry(transcript, "emit_inbound", "thread/start").frame,
+    ["result", "thread", "id"],
+  );
+  for (const entry of transcript.entries) {
+    if (entry.type !== "emit_inbound") continue;
+    const method = readPath(entry.frame, ["method"]);
+    if (method === "item/started") {
+      const item = readPath(entry.frame, ["params", "item"]);
+      if (isRecord(item) && item.type === "subAgentActivity" && item.kind === "started") {
+        announcedChildren.add(readString(item, ["agentThreadId"]));
+      }
+    }
+    if (method === "turn/started") {
+      const threadId = readString(entry.frame, ["params", "threadId"]);
+      if (threadId === rootThreadId) continue;
+      assert.isTrue(
+        announcedChildren.has(threadId),
+        `${transcript.scenario}: child ${threadId} started a turn before its subAgentActivity`,
+      );
+      startedChildren.add(threadId);
+    }
+  }
+  assert.equal(
+    startedChildren.size,
+    transcript.scenario === "subagent_v2" ? 1 : 3,
+    `${transcript.scenario}: unexpected number of child turns`,
+  );
+}
+
 describe("Codex replay fixtures", () => {
   it.effect("loads every current Codex fixture as a codex app-server replay transcript", () =>
     Effect.gen(function* () {
@@ -667,6 +712,7 @@ describe("Codex replay fixtures", () => {
         assertSiblingForkSemantics(transcript);
         assertMergeBackSemantics(transcript);
         assertSiblingMergeBackSemantics(transcript);
+        assertSubagentActivityPrecedesChildTurns(transcript);
       }
     }),
   );

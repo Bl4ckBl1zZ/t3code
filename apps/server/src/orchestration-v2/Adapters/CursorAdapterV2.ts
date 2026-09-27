@@ -5,11 +5,14 @@ import type {
   McpServerConfig,
   RunResult,
   SDKUserMessage,
+  SettingSource,
   ToolCall,
 } from "@cursor/sdk";
+import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import {
   CursorSettings,
+  isOrchestrationV2WorkActive,
   defaultInstanceIdForDriver,
   type ChatAttachment,
   type ModelSelection,
@@ -299,6 +302,22 @@ function nativeThreadId(providerThread: OrchestrationV2ProviderThread): string {
   return id;
 }
 
+/**
+ * Every Cursor settings layer the Cursor CLI loads: project and user rules,
+ * skills, hooks, and MCP servers, team and MDM admin policy, and account
+ * plugins. The SDK loads none of them when `settingSources` is omitted.
+ * Sandbox policy files are read either way, and hooks can only deny or ask
+ * (which local SDK runs reject), so these layers do not loosen the sandbox or
+ * approval mode T3 sets.
+ */
+const CURSOR_AGENT_SETTING_SOURCES = [
+  "project",
+  "user",
+  "team",
+  "mdm",
+  "plugins",
+] as const satisfies ReadonlyArray<SettingSource>;
+
 export function makeCursorAgentOptions(input: {
   readonly apiKey?: string;
   readonly modelSelection: ModelSelection;
@@ -315,6 +334,7 @@ export function makeCursorAgentOptions(input: {
     local: {
       ...(input.runtimePolicy.cwd === null ? {} : { cwd: input.runtimePolicy.cwd }),
       autoReview: policy.autoReview,
+      settingSources: [...CURSOR_AGENT_SETTING_SOURCES],
       sandboxOptions: {
         enabled: policy.sandboxEnabled,
       },
@@ -413,7 +433,6 @@ function cursorToolSearchPattern(toolCall: ToolCall): string | undefined {
       return toolCall.args.pattern;
     case "semSearch":
       return toolCall.args.query;
-    case "read":
     case "ls":
       return toolCall.args.path;
     case "readLints":
@@ -432,13 +451,6 @@ function cursorToolSearchResults(toolCall: ToolCall): ReadonlyArray<{
     return [];
   }
   switch (toolCall.type) {
-    case "read":
-      return [
-        {
-          fileName: toolCall.args.path,
-          preview: toolCall.result.value.content,
-        },
-      ];
     case "glob":
       return toolCall.result.value.files.map((fileName) => ({ fileName }));
     case "grep":
@@ -762,6 +774,7 @@ interface ActiveCursorToolCall {
 
 interface ActiveCursorSubagent {
   task: OrchestrationV2Subagent;
+  toolCall: Extract<ToolCall, { readonly type: "task" }>;
   readonly callId: string;
   readonly childThreadId: ThreadId;
   readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
@@ -788,6 +801,8 @@ interface ActiveCursorTurn {
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly startedAt: DateTime.Utc;
   readonly completed: Deferred.Deferred<void, never>;
+  // Item ordinals allocated in this turn. No later turn looks items up here.
+  readonly itemOrdinals: Map<string, number>;
   readonly tools: Map<string, ActiveCursorToolCall>;
   readonly subagents: Map<string, ActiveCursorSubagent>;
   readonly assistant: ActiveCursorTextStream;
@@ -836,35 +851,21 @@ export function makeCursorAdapterV2(
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const liveAgent = yield* Ref.make<CursorLiveAgent | null>(null);
         const activeTurn = yield* Ref.make<ActiveCursorTurn | null>(null);
-        const itemOrdinals = yield* Ref.make(new Map<string, number>());
-        const nextItemOrdinalsByTurn = yield* Ref.make(new Map<string, number>());
         const planIds = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact["id"]>());
 
         const emitProviderEvent = (event: ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
 
-        const resolveItemOrdinal = Effect.fnUntraced(function* (
-          context: ActiveCursorTurn,
-          nativeItemId: string,
-        ) {
-          const existing = (yield* Ref.get(itemOrdinals)).get(nativeItemId);
-          if (existing !== undefined) {
-            return existing;
-          }
-          const nextWithinTurn = yield* Ref.modify(nextItemOrdinalsByTurn, (current) => {
-            const next = (current.get(context.run.runId) ?? 0) + 1;
-            const updated = new Map(current);
-            updated.set(context.run.runId, next);
-            return [next, updated];
+        const resolveItemOrdinal = (context: ActiveCursorTurn, nativeItemId: string) =>
+          Effect.sync(() => {
+            const existing = context.itemOrdinals.get(nativeItemId);
+            if (existing !== undefined) {
+              return existing;
+            }
+            const ordinal = context.input.providerTurnOrdinal * 100 + context.itemOrdinals.size + 1;
+            context.itemOrdinals.set(nativeItemId, ordinal);
+            return ordinal;
           });
-          const ordinal = context.input.providerTurnOrdinal * 100 + nextWithinTurn;
-          yield* Ref.update(itemOrdinals, (current) => {
-            const updated = new Map(current);
-            updated.set(nativeItemId, ordinal);
-            return updated;
-          });
-          return ordinal;
-        });
 
         const resolvePlanId = Effect.fnUntraced(function* (
           context: ActiveCursorTurn,
@@ -1093,12 +1094,16 @@ export function makeCursorAdapterV2(
         const emitToolArtifacts = Effect.fnUntraced(function* (input: {
           readonly active: ActiveCursorToolCall;
           readonly completed: boolean;
+          /** Terminal status for a tool the turn ended before Cursor completed it. */
+          readonly unfinishedStatus?: "interrupted" | "failed" | "cancelled";
         }) {
           const { active } = input;
           const toolCall = active.toolCall;
           const now = yield* DateTime.now;
           const failed = input.completed && cursorToolFailed(toolCall);
-          const status = input.completed ? (failed ? "failed" : "completed") : "running";
+          const status = !input.completed
+            ? "running"
+            : (input.unfinishedStatus ?? (failed ? "failed" : "completed"));
           const nodeId = idAllocator.derive.nodeFromProviderItem({
             driver: CURSOR_PROVIDER,
             nativeItemId: active.callId,
@@ -1201,19 +1206,34 @@ export function makeCursorAdapterV2(
                 ...(toolCall.type === "write" ? { newStr: toolCall.args.fileText } : {}),
               };
               break;
+            case "read":
+              turnItem = {
+                ...base,
+                title: formatReadToolLabel(toolCall.args.path),
+                type: "dynamic_tool",
+                toolName: "Read",
+                input: toolCall.args,
+                ...(cursorToolOutput(toolCall) === undefined
+                  ? {}
+                  : { output: cursorToolOutput(toolCall) }),
+              };
+              break;
             case "glob":
             case "grep":
-            case "read":
             case "ls":
             case "readLints":
             case "semSearch": {
               const results = cursorToolSearchResults(toolCall);
+              const pattern = cursorToolSearchPattern(toolCall);
               turnItem = {
                 ...base,
+                title:
+                  formatSearchToolLabel({
+                    input: toolCall.args,
+                    ...(pattern === undefined ? {} : { pattern }),
+                  }) ?? null,
                 type: "file_search",
-                ...(cursorToolSearchPattern(toolCall) === undefined
-                  ? {}
-                  : { pattern: cursorToolSearchPattern(toolCall) }),
+                ...(pattern === undefined ? {} : { pattern }),
                 ...(results.length === 0 ? {} : { results: [...results] }),
               };
               break;
@@ -1441,17 +1461,26 @@ export function makeCursorAdapterV2(
           readonly callId: string;
           readonly toolCall: Extract<ToolCall, { readonly type: "task" }>;
           readonly completed: boolean;
+          readonly status?: OrchestrationV2Subagent["status"];
         }) {
           const args = input.toolCall.args;
           const result =
             input.toolCall.result?.status === "success" ? input.toolCall.result.value : undefined;
           const existing = input.context.subagents.get(input.callId);
+          if (
+            existing !== undefined &&
+            !isOrchestrationV2WorkActive(existing.task.status) &&
+            !input.completed
+          )
+            return;
           const now = yield* DateTime.now;
-          const status: OrchestrationV2Subagent["status"] = input.completed
-            ? cursorToolFailed(input.toolCall)
-              ? "failed"
-              : "completed"
-            : "running";
+          const status: OrchestrationV2Subagent["status"] =
+            input.status ??
+            (input.completed
+              ? cursorToolFailed(input.toolCall)
+                ? "failed"
+                : "completed"
+              : "running");
           const resultText = [
             ...assistantTextsFromConversationSteps(result?.conversationSteps ?? []),
             ...(result?.resultSuffix === undefined ? [] : [result.resultSuffix]),
@@ -1496,7 +1525,7 @@ export function makeCursorAdapterV2(
               },
               prompt: args.prompt,
               title: args.description,
-              model: args.model ?? input.context.input.modelSelection.model,
+              model: args.model?.trim() || null,
               result: null,
               startedAt: now,
             }),
@@ -1507,11 +1536,12 @@ export function makeCursorAdapterV2(
             },
             status,
             result: resultText.length === 0 ? (existing?.task.result ?? null) : resultText,
-            completedAt: input.completed ? now : null,
+            completedAt: input.completed ? (existing?.task.completedAt ?? now) : null,
             updatedAt: now,
           };
           const subagent: ActiveCursorSubagent = {
             task,
+            toolCall: input.toolCall,
             callId: input.callId,
             childThreadId,
             childRootNodeId,
@@ -1552,6 +1582,7 @@ export function makeCursorAdapterV2(
             });
             const promptNativeId = `${nativeItemId}:prompt`;
             const promptArtifacts = makeSubagentConversationArtifacts({
+              senderThreadId: input.context.input.threadId,
               messageId: idAllocator.derive.messageFromProviderItem({
                 driver: CURSOR_PROVIDER,
                 nativeItemId: promptNativeId,
@@ -1604,7 +1635,7 @@ export function makeCursorAdapterV2(
               runtimeRequestId: null,
               checkpointScopeId: null,
               startedAt: task.startedAt,
-              completedAt: input.completed ? now : null,
+              completedAt: task.completedAt,
             },
           });
           yield* emitProviderEvent({
@@ -1625,7 +1656,7 @@ export function makeCursorAdapterV2(
               runtimeRequestId: null,
               checkpointScopeId: null,
               startedAt: task.startedAt,
-              completedAt: input.completed ? now : null,
+              completedAt: task.completedAt,
             },
           });
           yield* emitProviderEvent({
@@ -1884,10 +1915,29 @@ export function makeCursorAdapterV2(
           }
           input.context.finalized = true;
           const completedAt = yield* DateTime.now;
+          // Tools still here never got a tool-call-completed. A stopped or
+          // failed turn cut them short, so they end with the turn's status.
           for (const tool of input.context.tools.values()) {
-            yield* emitToolArtifacts({ active: tool, completed: true });
+            yield* emitToolArtifacts({
+              active: tool,
+              completed: true,
+              ...(input.status === "completed" ? {} : { unfinishedStatus: input.status }),
+            });
           }
           input.context.tools.clear();
+          // This interaction stops delivering updates at finalization. Tasks
+          // without a completion have an unknown outcome. Background launch
+          // acknowledgements have already settled their rows.
+          for (const subagent of input.context.subagents.values()) {
+            if (!isOrchestrationV2WorkActive(subagent.task.status)) continue;
+            yield* emitSubagent({
+              context: input.context,
+              callId: subagent.callId,
+              toolCall: subagent.toolCall,
+              completed: true,
+              status: input.status === "completed" ? "idle" : input.status,
+            });
+          }
           yield* completeReasoning(input.context);
           yield* completeAssistant(input.context);
           yield* emitProviderEvent({
@@ -2110,6 +2160,7 @@ export function makeCursorAdapterV2(
               providerTurnId,
               startedAt,
               completed,
+              itemOrdinals: new Map(),
               tools: new Map(),
               subagents: new Map(),
               assistant: {

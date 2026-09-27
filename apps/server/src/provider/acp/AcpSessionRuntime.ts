@@ -103,6 +103,8 @@ export interface AcpSessionRuntimeOptions {
   readonly interruptPromptOnCancel?: boolean;
   /** Optional provider metadata forwarded on `session/cancel`. */
   readonly cancelMeta?: EffectAcpSchema.CancelNotification["_meta"];
+  /** Optional provider metadata forwarded on `initialize`. */
+  readonly initializeMeta?: EffectAcpSchema.InitializeRequest["_meta"];
   readonly ownDetachedProcessGroup?: boolean;
   readonly ownDescendantProcessGroups?: boolean;
   readonly processGroupPlatform?: NodeJS.Platform;
@@ -245,21 +247,22 @@ export function wrapCommandForLinuxCgroup(
   args: ReadonlyArray<string>,
 ): { readonly command: string; readonly args: ReadonlyArray<string> } {
   return {
-    command: process.execPath,
+    command: "/bin/sh",
     args: [
-      "-e",
+      "-c",
       [
-        'const fs = require("node:fs");',
-        "try {",
-        '  fs.writeFileSync(process.argv[1] + "/cgroup.procs", String(process.pid) + "\\n");',
-        '  const actual = fs.readFileSync("/proc/self/cgroup", "utf8").split("\\n").find((line) => line.startsWith("0::"))?.slice(3);',
-        "  if (actual !== process.argv[2]) process.exit(126);",
-        "  const env = { ...process.env };",
-        "  delete env.ELECTRON_RUN_AS_NODE;",
-        "  delete env.T3_ACP_CGROUP_WRAPPER;",
-        "  process.execve(process.argv[3], process.argv.slice(3), env);",
-        "} catch { process.exit(125); }",
+        "lease_path=$1; expected=$2; shift 2",
+        'printf "%s\\n" "$$" > "$lease_path/cgroup.procs" || exit 125',
+        "actual=",
+        "while IFS= read -r line; do",
+        '  case "$line" in 0::*) [ -z "$actual" ] || exit 126; actual=${line#0::};; esac',
+        "done < /proc/self/cgroup || exit 125",
+        '[ "$actual" = "$expected" ] || exit 126',
+        "unset ELECTRON_RUN_AS_NODE T3_ACP_CGROUP_WRAPPER",
+        "trap 'exit 125' 0",
+        'exec "$@"',
       ].join("\n"),
+      "t3-acp-cgroup-wrapper",
       lease.path,
       lease.relativePath,
       command,
@@ -2021,6 +2024,7 @@ export const make = (
       protocolVersion: 1,
       clientCapabilities: initializeClientCapabilities,
       clientInfo: options.clientInfo,
+      ...(options.initializeMeta === undefined ? {} : { _meta: options.initializeMeta }),
     } satisfies EffectAcpSchema.InitializeRequest;
     const initialize = yield* Effect.cached(
       runLoggedRequest("initialize", initializePayload, acp.agent.initialize(initializePayload)),
@@ -2360,18 +2364,42 @@ export const make = (
               ),
             ),
       ...(options.ownDetachedProcessGroup === true ? { terminateProcessGroup } : {}),
+      // A session's mode is its `category: "mode"` config option, whatever the
+      // agent names it. Agents that only advertise `modes` (gemini-cli) take
+      // `session/set_mode` instead.
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
-          Effect.flatMap((modeState) => {
-            if (modeState?.currentModeId === modeId) {
-              return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
-            }
-            return setConfigOption("mode", modeId).pipe(
-              Effect.tap(() => updateCurrentModeId(modeId)),
-              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
-            );
-          }),
-        ),
+        Effect.gen(function* () {
+          const modeState = yield* Ref.get(modeStateRef);
+          if (modeState?.currentModeId === modeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const configOptions = yield* Ref.get(configOptionsRef);
+          // An option literally named "mode" keeps working for agents that do
+          // not tag it with the mode category.
+          const modeConfigOption =
+            configOptions?.find(
+              (option) => option.category === "mode" && option.type === "select",
+            ) ?? configOptions?.find((option) => option.id === "mode");
+          if (modeConfigOption === undefined && modeState !== undefined) {
+            const started = yield* getStartedState;
+            const payload = { sessionId: started.sessionId, modeId };
+            yield* runLoggedRequest("session/set_mode", payload, acp.agent.setSessionMode(payload));
+            yield* updateCurrentModeId(modeId);
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const response = yield* setConfigOption(modeConfigOption?.id ?? "mode", modeId);
+          // The agent answers with its config options, so the mode it reports
+          // is the mode it runs in, even when it kept another one.
+          const reported = response.configOptions?.find(
+            (option) => option.category === "mode" && option.type === "select",
+          );
+          yield* updateCurrentModeId(
+            reported?.type === "select" && typeof reported.currentValue === "string"
+              ? reported.currentValue
+              : modeId,
+          );
+          return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+        }),
       setConfigOption,
       setModel: (model) =>
         getStartedState.pipe(

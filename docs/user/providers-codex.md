@@ -28,6 +28,22 @@ Log in with Codex normally:
 codex login
 ```
 
+## Codex version
+
+T3 Code needs Codex 0.156 or newer. Older versions show as unsupported in Settings; update Codex
+(`npm install -g @openai/codex` or your package manager) and refresh the provider.
+
+Codex threads show the model's reasoning summaries as they stream.
+
+## Roll back and fork Codex threads
+
+Rolling back a Codex thread to an earlier checkpoint also rewinds Codex's own conversation, so the
+next message does not see the removed turns. This works after T3 Code or Codex restarts too.
+
+Threads started with an older Codex may still use Codex's older history format, which Codex 0.156
+cannot rewind. Rolling back such a thread shows an error instead; fork from the turn you want to
+keep, or start a new thread.
+
 ## Send feedback to OpenAI
 
 In an existing Codex thread, send `/feedback` or `/feedback` followed by a description of the
@@ -36,8 +52,8 @@ and share with OpenAI employees.
 
 ## Sub-agent models
 
-The web and desktop Agents panel shows each sub-agent's model and reasoning effort when Codex
-reports them. If Codex does not report either value, T3 Code leaves it out instead of using the
+The web and desktop thread details lineage shows each sub-agent's model and reasoning effort when
+Codex reports them. If Codex does not report either value, T3 Code leaves it out instead of using the
 parent agent's settings.
 
 ## Approve access to other apps

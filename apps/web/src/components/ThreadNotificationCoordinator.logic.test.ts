@@ -18,6 +18,7 @@ function thread(
     readonly archived?: boolean;
     readonly subagent?: boolean;
     readonly backgroundProcessCount?: number;
+    readonly usageLimited?: boolean;
   } = {},
 ): ThreadNotificationThread {
   const runId = RunId.make(input.run ?? "run-1");
@@ -43,7 +44,8 @@ function thread(
       activeRunId: null,
       providerInstanceId: ProviderInstanceId.make("codex"),
       providerName: null,
-      lastError: null,
+      lastError: input.usageLimited ? "Plan limit reached" : null,
+      lastErrorClass: input.usageLimited ? "usage_limit" : null,
       updatedAt: "2026-09-13T10:00:00.000Z",
     },
     hasPendingApprovals: input.approval ?? false,
@@ -116,6 +118,15 @@ describe("resolveThreadNotificationEvents", () => {
     expect(failed.events.map(({ kind, title, tone }) => ({ kind, title, tone }))).toEqual([
       { kind: "input", title: "Thread failed", tone: "error" },
     ]);
+  });
+
+  it("reports usage-limit stops as warnings, not failures", () => {
+    const running = step(new Map(), thread());
+    const limited = step(running.next, thread({ status: "failed", usageLimited: true }));
+    expect(limited.events.map(({ kind, title, tone }) => ({ kind, title, tone }))).toEqual([
+      { kind: "input", title: "Usage limit reached", tone: "warning" },
+    ]);
+    expect(step(limited.next, thread({ status: "failed", usageLimited: true })).events).toEqual([]);
   });
 
   it("ignores archived and subagent threads", () => {

@@ -10,6 +10,7 @@ const testState = vi.hoisted(() => ({
 vi.mock("../../state/entities", () => ({
   useThreadProjection: () => null,
   useThreadShells: () => testState.shells,
+  useProjects: () => [],
 }));
 vi.mock("../../state/providerEntries", () => ({
   useProviderEntryByInstanceId: () => testState.providerEntries,

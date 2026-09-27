@@ -31,6 +31,19 @@ The choices are shared with other clients connected to that machine. Background 
 background activity policy; an explicit source-control refresh also checks for a
 pull. Enabled projects are also refreshed once when the server starts. The default is off.
 
+## Worktree branch names
+
+In **Settings → Source Control → Worktree branch naming**, choose a static prefix,
+a model-selected semantic prefix such as `feat/` or `fix/`, or custom instructions
+for the complete name. The static prefix defaults to `t3code/`; a trailing slash is
+optional, and an empty prefix adds nothing. Invalid characters in a static prefix
+are replaced with hyphens. Custom instructions are appended to
+the naming prompt and can specify issue IDs, namespaces, and casing.
+
+These settings apply to automatically named new worktree branches on that machine.
+Worktree directories keep their original names. If generation fails, or a custom
+name is invalid or already taken, the temporary branch name remains.
+
 ## Project browser access
 
 In project settings, **Agent browser access** can be **On**, **Off**, or

@@ -15,12 +15,23 @@ import { assertGrokMessageSteeringOutput } from "./message_steering/grok_output.
 import { messageSteeringInput } from "./message_steering/input.ts";
 import { assertClaudeMessageSteeringMidToolOutput } from "./message_steering_mid_tool/claude_output.ts";
 import { messageSteeringMidToolInput } from "./message_steering_mid_tool/input.ts";
+import { assertPiMessageSteeringOutput } from "./message_steering/pi_output.ts";
+import { piCompactionInput } from "./pi_compaction/input.ts";
+import { assertPiCompactionOutput } from "./pi_compaction/output.ts";
+import { providerThreadResumeInput } from "./provider_thread_resume/input.ts";
+import { assertPiProviderThreadResumeOutput } from "./provider_thread_resume/pi_output.ts";
 import { assertMultiTurnClaudeOutput } from "./multi_turn/claude_output.ts";
 import { assertMultiTurnOutput } from "./multi_turn/codex_output.ts";
+import { assertPiMultiTurnOutput } from "./multi_turn/pi_output.ts";
 import { multiTurnInput } from "./multi_turn/input.ts";
+import { openCodeRunningChildApprovalInput } from "./opencode_running_child_approval/input.ts";
+import { assertOpenCodeRunningChildApprovalOutput } from "./opencode_running_child_approval/output.ts";
 import { openCodeSubagentInput } from "./opencode_subagent/input.ts";
 import { assertOpenCodeSubagentOutput } from "./opencode_subagent/output.ts";
-import { assertPlanQuestionsOutput } from "./plan_questions/codex_output.ts";
+import {
+  assertCodexPlanQuestionsOutput,
+  assertPlanQuestionsOutput,
+} from "./plan_questions/codex_output.ts";
 import { assertOpenCodePlanQuestionsOutput } from "./plan_questions/opencode_output.ts";
 import { planQuestionsInput } from "./plan_questions/input.ts";
 import { assertProposedPlanOutput } from "./proposed_plan/codex_output.ts";
@@ -30,6 +41,7 @@ import { assertQueuedTurnOutput } from "./queued_turn/codex_output.ts";
 import { queuedTurnInput } from "./queued_turn/input.ts";
 import { assertSimpleClaudeOutput } from "./simple/claude_output.ts";
 import { assertSimpleOutput } from "./simple/codex_output.ts";
+import { assertPiSimpleOutput } from "./simple/pi_output.ts";
 import { simpleInput } from "./simple/input.ts";
 import { assertSubagentOutput } from "./subagent/codex_output.ts";
 import { assertClaudeSubagentOutput } from "./subagent/claude_output.ts";
@@ -38,11 +50,23 @@ import { assertCursorSubagentOutput } from "./subagent/cursor_output.ts";
 import { assertSubagentContinueOutput } from "./subagent_continue/codex_output.ts";
 import { subagentContinueInput } from "./subagent_continue/input.ts";
 import { assertSubagentV2Output } from "./subagent_v2/codex_output.ts";
-import { subagentV2Input } from "./subagent_v2/input.ts";
+import { subagentV2Input, subagentV2NestedInput } from "./subagent_v2/input.ts";
+import { assertSubagentV2ApprovalOutput } from "./subagent_v2_approval/codex_output.ts";
+import {
+  SUBAGENT_V2_APPROVAL_POLICY,
+  subagentV2ApprovalInput,
+} from "./subagent_v2_approval/input.ts";
 import { assertSubagentV2NestedOutput } from "./subagent_v2_nested/codex_output.ts";
+import { assertSubagentV2NestedApprovalOutput } from "./subagent_v2_nested_approval/codex_output.ts";
+import { subagentV2NestedApprovalInput } from "./subagent_v2_nested_approval/input.ts";
 import { assertClaudeThreadRollbackOutput } from "./thread_rollback/claude_output.ts";
 import { assertThreadRollbackOutput } from "./thread_rollback/codex_output.ts";
 import { threadRollbackInput } from "./thread_rollback/input.ts";
+import { assertThreadRollbackAfterRestartOutput } from "./thread_rollback_after_restart/codex_output.ts";
+import { threadRollbackAfterRestartInput } from "./thread_rollback_after_restart/input.ts";
+import { assertPiThreadRollbackOutput } from "./thread_rollback/pi_output.ts";
+import { threadRollbackAfterStopInput } from "./thread_rollback_after_stop/input.ts";
+import { assertPiThreadRollbackAfterStopOutput } from "./thread_rollback_after_stop/pi_output.ts";
 import { assertTodoListOutput } from "./todo_list/codex_output.ts";
 import { assertTodoListCursorOutput } from "./todo_list/cursor_output.ts";
 import { assertTodoListGrokOutput } from "./todo_list/grok_output.ts";
@@ -66,6 +90,7 @@ import { assertTurnInterruptMidToolClaudeOutput } from "./turn_interrupt_mid_too
 import { assertTurnInterruptMidToolCodexOutput } from "./turn_interrupt_mid_tool/codex_output.ts";
 import { assertTurnInterruptMidToolCursorOutput } from "./turn_interrupt_mid_tool/cursor_output.ts";
 import { turnInterruptMidToolInput } from "./turn_interrupt_mid_tool/input.ts";
+import { assertTurnInterruptMidToolPiOutput } from "./turn_interrupt_mid_tool/pi_output.ts";
 import { assertTurnInterruptRestartClaudeOutput } from "./turn_interrupt_restart/claude_output.ts";
 import { turnInterruptRestartInput } from "./turn_interrupt_restart/input.ts";
 import { assertClaudeWebSearchOutput } from "./web_search/claude_output.ts";
@@ -78,6 +103,7 @@ import {
   CURSOR_MODEL_SELECTION,
   GROK_MODEL_SELECTION,
   OPENCODE_MODEL_SELECTION,
+  PI_MODEL_SELECTION,
   READ_ONLY_NEVER_POLICY,
   READ_ONLY_ON_REQUEST_POLICY,
   RESTRICTED_GRANULAR_POLICY,
@@ -203,6 +229,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         modelSelection: OPENCODE_MODEL_SELECTION,
         assertOutput: assertSimpleOutput,
       },
+      {
+        driver: ProviderDriverKind.make("pi"),
+        transcriptFile: new URL("./simple/pi_transcript.ndjson", import.meta.url),
+        modelSelection: PI_MODEL_SELECTION,
+        assertOutput: assertPiSimpleOutput,
+      },
     ],
   },
   {
@@ -249,7 +281,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
           "./tool_call_read_only_on_request/codex_transcript.ndjson",
           import.meta.url,
         ),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-6-luna declines the write under a read-only sandbox, so nothing asks for approval.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-6-sol" },
         runtimePolicyOverride: READ_ONLY_ON_REQUEST_POLICY,
         assertOutput: assertToolCallReadOnlyOnRequestOutput,
       },
@@ -321,7 +354,9 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
           "./tool_call_restricted_granular/codex_transcript.ndjson",
           import.meta.url,
         ),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-6 models write through the shell; gpt-5.6-terra's apply_patch raises the
+        // file-change approval this fixture covers.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-terra" },
         runtimePolicyOverride: RESTRICTED_GRANULAR_POLICY,
         assertOutput: assertToolCallRestrictedGranularOutput,
       },
@@ -344,7 +379,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent/codex_transcript.ndjson", import.meta.url),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-5.6-luna still runs multi-agent v1 (collabAgentToolCall); subagent_v2 covers v2.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-luna" },
         runtimePolicyOverride: READ_ONLY_ON_REQUEST_POLICY,
         assertOutput: assertSubagentOutput,
       },
@@ -370,7 +406,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent_continue/codex_transcript.ndjson", import.meta.url),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-5.6-luna still runs multi-agent v1 (collabAgentToolCall); subagent_v2 covers v2.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-luna" },
         assertOutput: assertSubagentContinueOutput,
       },
     ],
@@ -388,14 +425,58 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
     ],
   },
   {
+    name: "subagent_v2_approval",
+    buildInput: subagentV2ApprovalInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL("./subagent_v2_approval/codex_transcript.ndjson", import.meta.url),
+        modelSelection: CODEX_MODEL_SELECTION,
+        runtimePolicyOverride: SUBAGENT_V2_APPROVAL_POLICY,
+        assertOutput: assertSubagentV2ApprovalOutput,
+      },
+    ],
+  },
+  {
     name: "subagent_v2_nested",
-    buildInput: subagentV2Input,
+    buildInput: subagentV2NestedInput,
     providers: [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent_v2_nested/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
         assertOutput: assertSubagentV2NestedOutput,
+      },
+    ],
+  },
+  {
+    name: "subagent_v2_nested_approval",
+    buildInput: subagentV2NestedApprovalInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL(
+          "./subagent_v2_nested_approval/codex_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CODEX_MODEL_SELECTION,
+        runtimePolicyOverride: SUBAGENT_V2_APPROVAL_POLICY,
+        assertOutput: assertSubagentV2NestedApprovalOutput,
+      },
+    ],
+  },
+  {
+    name: "opencode_running_child_approval",
+    buildInput: openCodeRunningChildApprovalInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("opencode"),
+        transcriptFile: new URL(
+          "./opencode_running_child_approval/opencode_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: OPENCODE_MODEL_SELECTION,
+        assertOutput: assertOpenCodeRunningChildApprovalOutput,
       },
     ],
   },
@@ -444,6 +525,36 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./multi_turn/grok_transcript.ndjson", import.meta.url),
         modelSelection: ACP_REGISTRY_MODEL_SELECTION,
         assertOutput: assertMultiTurnOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("pi"),
+        transcriptFile: new URL("./multi_turn/pi_transcript.ndjson", import.meta.url),
+        modelSelection: PI_MODEL_SELECTION,
+        assertOutput: assertPiMultiTurnOutput,
+      },
+    ],
+  },
+  {
+    name: "pi_compaction",
+    buildInput: piCompactionInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("pi"),
+        transcriptFile: new URL("./pi_compaction/pi_transcript.ndjson", import.meta.url),
+        modelSelection: PI_MODEL_SELECTION,
+        assertOutput: assertPiCompactionOutput,
+      },
+    ],
+  },
+  {
+    name: "provider_thread_resume",
+    buildInput: providerThreadResumeInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("pi"),
+        transcriptFile: new URL("./provider_thread_resume/pi_transcript.ndjson", import.meta.url),
+        modelSelection: PI_MODEL_SELECTION,
+        assertOutput: assertPiProviderThreadResumeOutput,
       },
     ],
   },
@@ -554,7 +665,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./plan_questions/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
         runtimePolicyOverride: READ_ONLY_NEVER_POLICY,
-        assertOutput: assertPlanQuestionsOutput,
+        assertOutput: assertCodexPlanQuestionsOutput,
       },
       {
         driver: ProviderDriverKind.make("grok"),
@@ -625,6 +736,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./message_steering/grok_transcript.ndjson", import.meta.url),
         modelSelection: ACP_REGISTRY_MODEL_SELECTION,
         assertOutput: assertGrokMessageSteeringOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("pi"),
+        transcriptFile: new URL("./message_steering/pi_transcript.ndjson", import.meta.url),
+        modelSelection: PI_MODEL_SELECTION,
+        assertOutput: assertPiMessageSteeringOutput,
       },
     ],
   },
@@ -718,6 +835,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         runtimePolicyOverride: WORKSPACE_NEVER_POLICY,
         assertOutput: assertTurnInterruptMidToolCursorOutput,
       },
+      {
+        driver: ProviderDriverKind.make("pi"),
+        transcriptFile: new URL("./turn_interrupt_mid_tool/pi_transcript.ndjson", import.meta.url),
+        modelSelection: PI_MODEL_SELECTION,
+        assertOutput: assertTurnInterruptMidToolPiOutput,
+      },
     ],
   },
   {
@@ -751,6 +874,42 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./thread_rollback/claude_transcript.ndjson", import.meta.url),
         modelSelection: CLAUDE_MODEL_SELECTION,
         assertOutput: assertClaudeThreadRollbackOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("pi"),
+        transcriptFile: new URL("./thread_rollback/pi_transcript.ndjson", import.meta.url),
+        modelSelection: PI_MODEL_SELECTION,
+        assertOutput: assertPiThreadRollbackOutput,
+      },
+    ],
+  },
+  {
+    name: "thread_rollback_after_stop",
+    buildInput: threadRollbackAfterStopInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("pi"),
+        transcriptFile: new URL(
+          "./thread_rollback_after_stop/pi_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: PI_MODEL_SELECTION,
+        assertOutput: assertPiThreadRollbackAfterStopOutput,
+      },
+    ],
+  },
+  {
+    name: "thread_rollback_after_restart",
+    buildInput: threadRollbackAfterRestartInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL(
+          "./thread_rollback_after_restart/codex_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CODEX_MODEL_SELECTION,
+        assertOutput: assertThreadRollbackAfterRestartOutput,
       },
     ],
   },

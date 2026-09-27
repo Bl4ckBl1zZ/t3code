@@ -3,6 +3,7 @@ import type { EnvironmentId, T3ProjectFileScript, ThreadId } from "@t3tools/cont
 import type { DraftId } from "../../composerDraftStore";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { PopoverCreateHandle } from "../ui/popover";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
@@ -40,6 +41,10 @@ vi.mock("./ThreadRelationshipsControl", () => ({
     return props.emptyFallback ?? null;
   },
 }));
+vi.mock("./ThreadDetailsCard", () => ({
+  ThreadDetailsCard: ({ children }: { children: (density: "full") => ReactNode }) =>
+    children("full"),
+}));
 vi.mock("./ThreadBackgroundTasksPanel", () => ({
   ThreadBackgroundTasksPanel: (props: unknown) => {
     testState.backgroundTasksPanel(props);
@@ -51,7 +56,9 @@ import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./ThreadDetail
 
 function baseProps(): ThreadDetailsPanelProps {
   return {
-    mode: "popover",
+    anchor: { current: null },
+    handle: PopoverCreateHandle(),
+    onPresentationChange: vi.fn(),
     environmentId: "environment:thread-details" as EnvironmentId,
     environmentConnection: null,
     threadId: "thread:thread-details" as ThreadId,

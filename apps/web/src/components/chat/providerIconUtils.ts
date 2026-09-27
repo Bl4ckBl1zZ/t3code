@@ -9,6 +9,7 @@ import {
   OpenAI,
   OpenClawIcon,
   OpenCodeIcon,
+  PiAgentIcon,
 } from "../Icons";
 import { PROVIDER_OPTIONS } from "../../session-logic";
 
@@ -21,7 +22,22 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
   [ProviderDriverKind.make("hermes")]: HermesIcon,
   [ProviderDriverKind.make("openclaw")]: OpenClawIcon,
+  [ProviderDriverKind.make("pi")]: PiAgentIcon,
 };
+
+const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
+  [ProviderDriverKind.make("codex")]: "text-black dark:text-white",
+  [ProviderDriverKind.make("claudeAgent")]: "text-[#d97757]",
+  [ProviderDriverKind.make("cursor")]: "text-[#26251E] dark:text-[#EDECEC]",
+  [ProviderDriverKind.make("grok")]: "text-[#0F0F0F] dark:text-[#F5F5F5]",
+  [ProviderDriverKind.make("opencode")]: "text-[#211E1E] dark:text-[#F1ECEC]",
+  [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
+  [ProviderDriverKind.make("pi")]: "text-[#0F0F0F] dark:text-[#F5F5F5]",
+};
+
+export function providerTextColorClassName(driverKind: ProviderDriverKind): string | undefined {
+  return PROVIDER_TEXT_COLOR_BY_PROVIDER[driverKind];
+}
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderDriverKind;

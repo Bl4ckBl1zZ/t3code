@@ -44,7 +44,7 @@ const threadMetadataDependencies = [
 
 export const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
   description:
-    "List the V2 provider instances, models, inherited runtime settings, and app-owned orchestration features available to this T3 thread.",
+    "List the V2 provider instances and their current models from the same live catalog as the composer, including configured custom models, inherited runtime settings, and app-owned orchestration features available to this T3 thread.",
   success: OrchestratorMcpCapabilitiesResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -57,7 +57,7 @@ export const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities
 
 export const DelegateTaskTool = Tool.make("delegate_task", {
   description:
-    "Delegate one task to a T3-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Use this whenever the user asks for an agent, subagent, worker, delegated task, or parallel help—including cross-provider work. The childThreadId is backing storage, not an ordinary top-level thread. Provider, model, model options (see orchestrator_capabilities), runtime mode, and interaction mode inherit unless target overrides them. Prefer mode='async' for long work; mode='wait' blocks until completion or timeout. An async child's completion wakes this thread with a continuation message naming the task (steered into any turn in progress, otherwise starting a new turn), so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn.",
+    "Delegate one task to a T3-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Use this whenever the user asks for an agent, subagent, worker, delegated task, or parallel help—including cross-provider work. Choose providers and models from orchestrator_capabilities, which uses the same live catalog as the composer; a native subagent tool's model list is not the full set. The childThreadId is backing storage, not an ordinary top-level thread. Provider, model, model options (see orchestrator_capabilities), runtime mode, and interaction mode inherit unless target overrides them. Prefer mode='async' for long work; mode='wait' blocks until completion or timeout. An async child's completion wakes this thread with a continuation message naming the task (steered into any turn in progress, otherwise starting a new turn), so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn.",
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -232,7 +232,7 @@ export const ThreadWaitTool = Tool.make("t3_thread_wait", {
 
 export const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
   description:
-    "Request interruption of a running turn in a T3 thread in the calling project. Without runId, the newest interruptible run is selected. Terminal runs and threads without an active turn return without another side effect. clientRequestId makes retries idempotent.",
+    "Request interruption of a running turn in a T3 thread in the calling project. Without runId, the newest interruptible run is selected. A settled Codex or Claude turn whose background commands or agents still run is interruptible too; interrupting it ends that work. Other terminal runs and threads without an active turn return without another side effect. clientRequestId makes retries idempotent.",
   parameters: OrchestratorMcpThreadInterruptInput,
   success: OrchestratorMcpThreadInterruptResult,
   failure: OrchestratorMcpFailure,

@@ -97,7 +97,7 @@ export const layer: Layer.Layer<
       readonly runId: RunId;
     }) {
       const { runId } = input;
-      const projection = yield* projectionStore.getThreadProjection(input.threadId);
+      const projection = yield* projectionStore.getTurnStartContext(input.threadId, runId);
       const run = projection.runs.find((candidate) => candidate.id === runId);
       if (run === undefined) {
         return yield* new ProviderTurnStartError({ runId, cause: `Run ${runId} was not found.` });
@@ -316,8 +316,9 @@ export const layer: Layer.Layer<
       let effectiveHandoffs = handoffs;
       const loadedProviderThread = yield* Effect.gen(function* () {
         if (nativeForkTransfer !== undefined) {
-          const sourceProjection = yield* projectionStore.getThreadProjection(
+          const sourceProjection = yield* projectionStore.getThreadRecords(
             nativeForkTransfer.sourceThreadId,
+            ["runs", "providerThreads", "attempts", "providerTurns"],
           );
           const sourceRun = sourceProjection.runs.find(
             (candidate) => candidate.id === nativeForkTransfer.sourcePoint.runId,
@@ -354,11 +355,16 @@ export const layer: Layer.Layer<
               runId,
               cause: "The interrupted provider thread no longer has a saved resume reference.",
             });
+          // Hand the run's provider thread to the adapter so it adopts this
+          // row's identity when attaching native state. An adapter that mints
+          // its own row instead leaves two live rows per app thread, and
+          // `activeProviderThreadId` then flaps between them on every update.
           return yield* session.ensureThread({
             threadId: projection.thread.id,
             modelSelection: run.modelSelection,
             runtimePolicy: resolvedRuntimePolicy,
             providerSessionId,
+            existingProviderThread: providerThread,
           });
         }
         const resumed = yield* Effect.result(
@@ -374,11 +380,21 @@ export const layer: Layer.Layer<
         }
 
         if (message.restartContinuation === true) return yield* resumed.failure;
+        yield* Effect.logWarning("Provider resume failed; attempting a fresh native session", {
+          driver: session.driver,
+          providerThreadId: providerThread.id,
+          runId,
+          errorTag: resumed.failure._tag,
+        });
         const replacement = yield* session.ensureThread({
           threadId: projection.thread.id,
           modelSelection: run.modelSelection,
           runtimePolicy: resolvedRuntimePolicy,
           providerSessionId,
+          // The native ref is dropped so the adapter binds a fresh native
+          // session instead of retrying the resume that just failed, while
+          // still adopting this row's identity.
+          existingProviderThread: { ...providerThread, nativeThreadRef: null },
         });
         if (existingResumeFallback !== undefined) {
           return replacement;
@@ -399,7 +415,7 @@ export const layer: Layer.Layer<
           toProviderInstanceId: run.providerInstanceId,
           coveredRunOrdinals: { from: 1, to: Math.max(1, run.ordinal - 1) },
           strategy: "full_thread_summary",
-          items: projection.turnItems,
+          items: yield* projectionStore.getTurnStartHistory(input.threadId),
           createdAt,
           cwd: projection.thread.worktreePath,
           summaryModelSelection: run.modelSelection,
@@ -610,22 +626,19 @@ export const layer: Layer.Layer<
             Effect.catchCause(() => Effect.succeed(false)),
           ),
         hasUnpairedRunInterruptRequest: () =>
-          projectionStore.getThreadProjection(projection.thread.id).pipe(
-            Effect.map((current) => {
-              const requestId = idAllocator.derive.runSignalTurnItem({
+          projectionStore
+            .hasUnpairedRunInterruptRequest(
+              projection.thread.id,
+              idAllocator.derive.runSignalTurnItem({
                 runId: run.id,
                 signal: "interrupt-request",
-              });
-              const resultId = idAllocator.derive.runSignalTurnItem({
+              }),
+              idAllocator.derive.runSignalTurnItem({
                 runId: run.id,
                 signal: "interrupt-result",
-              });
-              const hasRequest = current.turnItems.some((item) => item.id === requestId);
-              const hasResult = current.turnItems.some((item) => item.id === resultId);
-              return hasRequest && !hasResult;
-            }),
-            Effect.catchCause(() => Effect.succeed(false)),
-          ),
+              }),
+            )
+            .pipe(Effect.catchCause(() => Effect.succeed(false))),
         captureFilesystemCheckpoint:
           session.providerSession.capabilities.checkpointing.appCanCheckpointFilesystem,
         message: {

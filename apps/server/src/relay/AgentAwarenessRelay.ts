@@ -58,7 +58,7 @@ export class AgentAwarenessRelay extends Context.Service<
   }
 >()("t3/relay/AgentAwarenessRelay") {}
 
-export function eventThreadId(event: OrchestrationV2DomainEvent): ThreadId {
+function eventThreadId(event: OrchestrationV2DomainEvent): ThreadId {
   return event.threadId;
 }
 
@@ -69,7 +69,7 @@ export function shouldPublishAgentAwarenessEvent(_event: OrchestrationV2DomainEv
   return true;
 }
 
-export function agentAwarenessPublishIdentity(state: RelayAgentActivityState | null): string {
+function agentAwarenessPublishIdentity(state: RelayAgentActivityState | null): string {
   if (state === null) {
     return "null";
   }
@@ -81,7 +81,7 @@ export function isAgentActivityPublishingEnabled(value: string | null): boolean 
   return isAgentActivityPublishingEnabledValue(value);
 }
 
-export function resolveAgentActivityPublishingStartupState(input: {
+function resolveAgentActivityPublishingStartupState(input: {
   readonly relayConfigured: boolean;
   readonly publishEnabled: boolean;
 }): "waiting-for-link" | "disabled" | "enabled" {
@@ -94,7 +94,7 @@ export function resolveAgentActivityPublishingStartupState(input: {
 const RELAY_AGENT_ACTIVITY_DETAIL_MAX_LENGTH = 160;
 const REDACTED_RELAY_AGENT_FAILURE_DETAIL = "The agent run failed.";
 
-export function sanitizeRelayAgentActivityState(
+function sanitizeRelayAgentActivityState(
   state: RelayAgentActivityState | null,
 ): RelayAgentActivityState | null {
   if (state === null) {
@@ -151,7 +151,7 @@ function deliveryStats(
   };
 }
 
-export function signRelayAgentActivityPublishProof(input: {
+function signRelayAgentActivityPublishProof(input: {
   readonly privateKey: string;
   readonly payload: RelayAgentActivityPublishProofPayload;
 }) {
@@ -187,7 +187,7 @@ const makePublishProof = Effect.fn("makePublishProof")(function* (input: {
 });
 
 // Compact, log-safe view of the fields the awareness phase ladder reads.
-export function describeThreadShellForAwareness(
+function describeThreadShellForAwareness(
   thread: Option.Option<OrchestrationV2ThreadShell>,
 ): Record<string, unknown> {
   if (Option.isNone(thread)) {
@@ -204,7 +204,7 @@ export function describeThreadShellForAwareness(
   };
 }
 
-export function resolveAgentAwarenessRelayPublishSnapshot(input: {
+function resolveAgentAwarenessRelayPublishSnapshot(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly thread: Option.Option<OrchestrationV2ThreadShell>;

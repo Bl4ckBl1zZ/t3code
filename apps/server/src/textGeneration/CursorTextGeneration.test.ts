@@ -16,7 +16,7 @@ const cursorSdkMock = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("@cursor/sdk", () => ({
+vi.mock("../provider/cursorSdk.ts", () => ({
   Agent: {
     prompt: cursorSdkMock.prompt,
   },
@@ -36,6 +36,35 @@ beforeEach(() => {
 });
 
 describe("CursorTextGeneration", () => {
+  it.effect("resolves the browser credential for every request after an account change", () =>
+    Effect.gen(function* () {
+      let apiKey = "first-browser-key";
+      const generation = yield* makeCursorTextGeneration(
+        cursorSettings,
+        {},
+        Effect.sync(() => apiKey),
+      );
+      const input = {
+        cwd: process.cwd(),
+        branch: "feature/cursor",
+        stagedSummary: "M file.ts",
+        stagedPatch: "diff",
+        modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "auto"),
+      };
+      yield* generation.generateCommitMessage(input);
+      expect(cursorSdkMock.prompt).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.objectContaining({ apiKey: "first-browser-key" }),
+      );
+      apiKey = "second-browser-key";
+      yield* generation.generateCommitMessage(input);
+      expect(cursorSdkMock.prompt).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.objectContaining({ apiKey: "second-browser-key" }),
+      );
+    }),
+  );
+
   it.effect("uses the Cursor SDK prompt API with model parameters and API key", () =>
     Effect.gen(function* () {
       const textGeneration = yield* makeCursorTextGeneration(cursorSettings, {
@@ -153,9 +182,7 @@ describe("CursorTextGeneration", () => {
         }),
       );
 
-      expect(error.detail).toBe(
-        "Cursor API key is required. Add CURSOR_API_KEY in provider settings.",
-      );
+      expect(error.detail).toBe("Sign in with Cursor or add CURSOR_API_KEY in provider settings.");
       expect(cursorSdkMock.prompt).not.toHaveBeenCalled();
     }),
   );

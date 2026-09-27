@@ -962,9 +962,14 @@ public struct OrchestrationV2RunAttempt: Codable, Equatable, Sendable, Identifia
 
 public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identifiable {
     public let id: String
+    /// Null on a provider-native subagent's root turn: the provider started
+    /// that work, so no run of this thread owns it.
+    public let runId: String?
     public let kind: String
     public let status: String
     public let runtimeRequestId: String?
+    public let startedAt: OrchestrationV2Timestamp?
+    public let completedAt: OrchestrationV2Timestamp?
 }
 
 public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Identifiable {
@@ -989,6 +994,9 @@ public struct OrchestrationV2ProviderThread: Codable, Equatable, Sendable, Ident
     /// one recovered from the provider before it was adopted).
     public let appThreadId: String?
     public let status: String
+    /// The provider driver behind this thread (`codex`, `claudeAgent`, ...).
+    /// Optional so a hand-built thread without it still decodes.
+    public var driver: String? = nil
 }
 
 public struct OrchestrationV2ProviderTurn: Codable, Equatable, Sendable, Identifiable {

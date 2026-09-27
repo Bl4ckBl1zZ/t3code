@@ -128,6 +128,12 @@ function LocalSettingsRouteScreen() {
             label="Integrations"
             target="SettingsIntegrations"
           />
+          <SettingsRow
+            icon="person.crop.circle"
+            label="Provider accounts"
+            target="SettingsProviderAccounts"
+            disabled={environmentCount === 0}
+          />
         </SettingsSection>
 
         <GeneralSettingsSection />
@@ -480,6 +486,12 @@ function ConfiguredSettingsRouteScreen() {
             icon="point.3.connected.trianglepath.dotted"
             label="Integrations"
             target="SettingsIntegrations"
+          />
+          <SettingsRow
+            icon="person.crop.circle"
+            label="Provider accounts"
+            target="SettingsProviderAccounts"
+            disabled={environmentCount === 0}
           />
           <SettingsSwitchRow
             icon="bell.badge"

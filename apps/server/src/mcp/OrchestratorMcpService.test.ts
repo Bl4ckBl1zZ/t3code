@@ -4,15 +4,22 @@ import {
   EnvironmentId,
   NodeId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   RunId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
+import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
+import {
+  ProviderAdapterRegistryLookupError,
+  ProviderAdapterRegistryV2,
+} from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
@@ -414,6 +421,11 @@ describe("OrchestratorMcpService", () => {
         assert.equal(launches[0]?.projectId, parentProjection.thread.projectId);
         assert.equal(launches[0]?.runtimeMode, "full-access");
         assert.equal(launches[0]?.createdBy, "agent");
+        // The first message is attributed to the calling thread.
+        assert.equal(
+          (launches[0]?.initialMessage as { senderThreadId?: string } | undefined)?.senderThreadId,
+          parentProjection.thread.id,
+        );
         assert.equal(result.branch, "feature/child");
         assert.equal(result.worktreePath, "/tmp/child-worktree");
         assert.equal(result.status, "queued");
@@ -470,5 +482,312 @@ describe("OrchestratorMcpService", () => {
         );
       }
     }),
+  );
+});
+
+describe("OrchestratorMcpService provider resolution", () => {
+  const parentThreadId = ThreadId.make("thread:mcp-providers-parent");
+  const childThreadId = ThreadId.make("thread:mcp-providers-child");
+  const parentRunId = RunId.make("run:mcp-providers-parent");
+  const parentNodeId = NodeId.make("node:mcp-providers-root");
+  const taskId = NodeId.make("node:mcp-providers-task");
+  const projectId = ProjectId.make("project:mcp-providers");
+  const codexInstanceId = ProviderInstanceId.make("codex");
+
+  const scope: McpInvocationScope = {
+    credentialId: "credential:mcp-providers",
+    audience: "t3-code",
+    environmentId: EnvironmentId.make("environment:mcp-providers"),
+    threadId: parentThreadId,
+    providerSessionId: "provider-session:mcp-providers",
+    providerInstanceId: codexInstanceId,
+    capabilities: new Set(["orchestration"]),
+    issuedAt: 1,
+  };
+
+  const providerSnapshot = (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly driver: ProviderDriverKind;
+    readonly model?: string;
+    readonly enabled?: boolean;
+  }): ServerProvider => ({
+    instanceId: input.instanceId,
+    driver: input.driver,
+    enabled: input.enabled ?? true,
+    installed: true,
+    version: "test",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-09-13T00:00:00.000Z",
+    models:
+      input.model === undefined
+        ? []
+        : [{ slug: input.model, name: input.model, isCustom: false, capabilities: null }],
+    slashCommands: [],
+    skills: [],
+  });
+
+  const adapterRegistryLayer = (instanceIds: ReadonlyArray<ProviderInstanceId>) =>
+    Layer.succeed(
+      ProviderAdapterRegistryV2,
+      ProviderAdapterRegistryV2.of({
+        list: () => Effect.succeed(instanceIds),
+        get: (instanceId) =>
+          instanceIds.includes(instanceId)
+            ? Effect.succeed({ instanceId } as unknown as ProviderAdapterV2Shape)
+            : Effect.fail(new ProviderAdapterRegistryLookupError({ instanceId })),
+      }),
+    );
+
+  const parentProjection = (
+    subagents: ReadonlyArray<unknown>,
+    modelSelection: {
+      readonly instanceId: ProviderInstanceId;
+      readonly model: string;
+      readonly options?: ReadonlyArray<{ readonly id: string; readonly value: unknown }>;
+    } = { instanceId: codexInstanceId, model: "gpt-5.4" },
+  ): OrchestrationV2ThreadProjection =>
+    ({
+      thread: {
+        id: parentThreadId,
+        projectId,
+        title: "MCP parent",
+        createdBy: "user",
+        creationSource: "web",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+      runs: [
+        {
+          id: parentRunId,
+          ordinal: 1,
+          status: "running",
+          rootNodeId: parentNodeId,
+          providerInstanceId: codexInstanceId,
+          modelSelection,
+        },
+      ],
+      contextTransfers: [],
+      subagents,
+    }) as unknown as OrchestrationV2ThreadProjection;
+
+  const childProjection = {
+    thread: { id: childThreadId },
+    runs: [],
+    contextTransfers: [],
+    messages: [],
+    subagents: [],
+    providerThreads: [],
+    turnItems: [],
+  } as unknown as OrchestrationV2ThreadProjection;
+
+  it.effect(
+    "inherits an available parent instance for driver-only targets and otherwise selects a healthy peer",
+    () =>
+      Effect.gen(function* () {
+        const codexAltInstanceId = ProviderInstanceId.make("codex-alt");
+        const driver = ProviderDriverKind.make("codex");
+        const claudeDriver = ProviderDriverKind.make("claudeAgent");
+        const parentModelSelection = {
+          instanceId: codexInstanceId,
+          model: "gpt-5.4",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        } as const;
+        const task = {
+          id: taskId,
+          threadId: parentThreadId,
+          runId: parentRunId,
+          parentNodeId,
+          origin: "app_owned",
+          createdBy: "agent",
+          driver,
+          providerInstanceId: codexInstanceId,
+          providerThreadId: null,
+          childThreadId,
+          nativeTaskRef: null,
+          prompt: "Summarize the diff.",
+          title: null,
+          model: "gpt-5.4",
+          status: "running",
+          result: null,
+          startedAt: null,
+          completedAt: null,
+        };
+        const cases = [
+          {
+            name: "healthy-inherited",
+            inheritedEnabled: true,
+            peerEnabled: true,
+            explicit: false,
+            selectedInstanceId: codexInstanceId,
+            candidateDriver: driver,
+          },
+          {
+            name: "unavailable-inherited-falls-back-to-healthy-peer",
+            inheritedEnabled: false,
+            peerEnabled: true,
+            explicit: false,
+            selectedInstanceId: codexAltInstanceId,
+            candidateDriver: driver,
+          },
+          {
+            name: "no-available-peer",
+            inheritedEnabled: false,
+            peerEnabled: false,
+            explicit: false,
+            selectedInstanceId: null,
+            candidateDriver: driver,
+          },
+          {
+            name: "cross-driver-no-available-candidate",
+            inheritedEnabled: false,
+            peerEnabled: false,
+            explicit: false,
+            selectedInstanceId: null,
+            candidateDriver: claudeDriver,
+          },
+          {
+            name: "explicit-unavailable",
+            inheritedEnabled: false,
+            peerEnabled: true,
+            explicit: true,
+            selectedInstanceId: null,
+            candidateDriver: driver,
+          },
+          {
+            name: "explicit-healthy",
+            inheritedEnabled: true,
+            peerEnabled: true,
+            explicit: true,
+            selectedInstanceId: codexAltInstanceId,
+            candidateDriver: driver,
+          },
+        ] as const;
+
+        for (const testCase of cases) {
+          const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+          let delegated = false;
+          const dependencies = Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(ThreadManagementService)({
+              getThreadProjection: (threadId) =>
+                Effect.succeed(
+                  threadId === parentThreadId
+                    ? parentProjection(delegated ? [task] : [], parentModelSelection)
+                    : childProjection,
+                ),
+              dispatch: (command) =>
+                Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      delegated = true;
+                    }),
+                  ),
+                  Effect.as({
+                    sequence: 1,
+                    storedEvents: [
+                      {
+                        sequence: 1,
+                        commandId: null,
+                        event: { type: "subagent.updated", payload: task },
+                      },
+                    ],
+                  } as never),
+                ),
+            }),
+            Layer.mock(ProviderRegistry)({
+              getProviders: Effect.succeed([
+                providerSnapshot({
+                  instanceId: codexInstanceId,
+                  driver,
+                  model: "gpt-5.4",
+                  enabled: testCase.inheritedEnabled,
+                }),
+                providerSnapshot({
+                  instanceId: codexAltInstanceId,
+                  driver: testCase.candidateDriver,
+                  model: "codex-alt-model",
+                  enabled: testCase.peerEnabled,
+                }),
+              ]),
+            }),
+            adapterRegistryLayer([codexInstanceId, codexAltInstanceId]),
+            Layer.mock(ScheduledTaskService)({}),
+            Layer.mock(ThreadLaunchService)({}),
+          );
+
+          yield* Effect.gen(function* () {
+            const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+            const target = testCase.explicit
+              ? ({
+                  providerInstanceId:
+                    testCase.selectedInstanceId === null
+                      ? codexInstanceId
+                      : testCase.selectedInstanceId,
+                } as const)
+              : ({ driverKind: testCase.candidateDriver } as const);
+            if (testCase.selectedInstanceId === null) {
+              const error = yield* service
+                .delegateTask(scope, {
+                  task: "Summarize the diff.",
+                  target,
+                  mode: "async",
+                  clientRequestId: `delegate-select-${testCase.name}`,
+                })
+                .pipe(Effect.flip);
+              assert.equal(error.code, "provider_unavailable", testCase.name);
+              if (testCase.name === "cross-driver-no-available-candidate") {
+                assert.isTrue(error.message.includes("driver claudeAgent"), testCase.name);
+                const threadError = yield* service
+                  .createThreads(scope, {
+                    threads: [{ prompt: "Summarize the diff.", target }],
+                    clientRequestId: `delegate-threads-${testCase.name}`,
+                  })
+                  .pipe(Effect.flip);
+                assert.equal(
+                  threadError.code,
+                  "provider_unavailable",
+                  `${testCase.name}-createThreads`,
+                );
+                assert.isTrue(
+                  threadError.message.includes("driver claudeAgent"),
+                  `${testCase.name}-createThreads`,
+                );
+              }
+              assert.deepEqual(yield* Ref.get(dispatched), [], testCase.name);
+              return;
+            }
+            const result = yield* service.delegateTask(scope, {
+              task: "Summarize the diff.",
+              target,
+              mode: "async",
+              clientRequestId: `delegate-select-${testCase.name}`,
+            });
+            assert.equal(result.status, "running", testCase.name);
+            const commands = yield* Ref.get(dispatched);
+            assert.equal(commands.length, 1, testCase.name);
+            const request = commands[0] as {
+              type: string;
+              modelSelection: {
+                instanceId: string;
+                model: string;
+                options?: ReadonlyArray<{ id: string; value: unknown }>;
+              };
+            };
+            assert.equal(request.type, "delegated_task.request", testCase.name);
+            assert.equal(
+              request.modelSelection.instanceId,
+              testCase.selectedInstanceId,
+              testCase.name,
+            );
+            if (testCase.name === "healthy-inherited") {
+              assert.deepEqual(request.modelSelection, parentModelSelection, testCase.name);
+            } else {
+              assert.equal(request.modelSelection.model, "codex-alt-model", testCase.name);
+            }
+          }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+        }
+      }),
   );
 });

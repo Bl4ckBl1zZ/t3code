@@ -4,6 +4,7 @@ import type {
   ThreadUserInputQuestion,
 } from "@t3tools/client-runtime/state/thread-requests";
 import {
+  resolveT3McpToolDefinition,
   resolveT3McpToolPresentation,
   type T3McpToolLogo,
   type T3McpToolPresentation,
@@ -20,11 +21,11 @@ import type {
   OrchestrationV2TurnItem,
   OrchestrationV2UserMessageInputIntent,
   RunAttemptId,
-  RunId,
   ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  RunId,
   orchestrationV2CommandExecutionIsLiveInBackground,
   orchestrationV2TurnItemStatusIsTerminal,
 } from "@t3tools/contracts";
@@ -36,11 +37,18 @@ import {
 } from "@t3tools/shared/backgroundProcess";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
 import {
   formatOrchestrationV2RollbackDetail,
   orchestrationV2TimelineDayKey,
   resolveOrchestrationV2ItemAttempt,
 } from "@t3tools/shared/orchestrationV2Timeline";
+import {
+  classifyToolActivity,
+  collectToolFilePaths,
+  formatReadToolLabel,
+  formatSearchToolLabel,
+} from "@t3tools/shared/toolActivity";
 import * as DateTime from "effect/DateTime";
 
 import { isV2LifecycleTimelineItem } from "./threadLifecycle";
@@ -72,6 +80,7 @@ export interface ThreadFeedActivity {
     | "edit"
     | "eye"
     | "globe"
+    | "search"
     | "hammer"
     | "message"
     | "warning"
@@ -95,6 +104,7 @@ export interface ThreadFeedMessage {
   readonly creationSource?: OrchestrationV2CreationSource;
   /** Names the schedule that sent this message, when one did. */
   readonly scheduledTaskId?: ScheduledTaskId;
+  readonly senderThreadId?: ThreadId;
   readonly visibility: OrchestrationV2ProjectedTurnItem["visibility"];
   readonly sourceThreadId: ThreadId;
   readonly createdAt: string;
@@ -305,7 +315,8 @@ function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"]
   // describes the work it is reporting on, which is what the row means.
   if (item.type === "notification") return item.outcome === "failed" ? "failure" : null;
   if (item.type === "error") {
-    if (item.status === "failed") return "failure";
+    if (item.status === "failed")
+      return item.failure.class === "usage_limit" ? "neutral" : "failure";
     return item.status === "completed" ? "success" : "neutral";
   }
   if (!itemIsToolLike(item)) return null;
@@ -337,6 +348,16 @@ function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"]
 
 function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
   if (item.type === "notification") return "zap";
+  if (item.type === "dynamic_tool") {
+    const classified = classifyToolActivity({
+      itemType: "dynamic_tool_call",
+      data: { toolName: item.toolName ?? undefined, input: item.input },
+    });
+    if (classified === "read") {
+      return "eye";
+    }
+    if (classified === "search") return "search";
+  }
   switch (item.type) {
     case "reasoning":
       return "agent";
@@ -345,7 +366,7 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "file_change":
       return "edit";
     case "file_search":
-      return "eye";
+      return "search";
     case "web_search":
       return "globe";
     case "approval_request":
@@ -367,7 +388,11 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "system_notice":
       return "warning";
     case "error":
-      return "alert";
+      return item.failure.class === "usage_limit"
+        ? item.status === "completed"
+          ? "check"
+          : "warning"
+        : "alert";
     case "checkpoint":
     case "proposed_plan":
     case "todo_list":
@@ -417,7 +442,7 @@ function itemSummary(
         ? `Changed ${item.changes.length} files`
         : `Changed ${item.fileName}`;
     case "file_search":
-      return "Searched files";
+      return item.title?.trim() || formatSearchToolLabel(item) || "Searched files";
     case "web_search":
       return "Searched the web";
     case "approval_request":
@@ -433,7 +458,7 @@ function itemSummary(
     case "run_interrupt_result":
       return "Run interrupted";
     case "error":
-      return "Provider error";
+      return item.failure.class === "usage_limit" ? "Usage limit reached" : "Provider error";
     case "compaction":
       return "Chat compacted";
     case "handoff":
@@ -444,8 +469,20 @@ function itemSummary(
       return "Thread created";
     case "subagent":
       return "Subagent";
-    case "dynamic_tool":
+    case "dynamic_tool": {
+      const classified = classifyToolActivity({
+        itemType: "dynamic_tool_call",
+        data: { toolName: item.toolName ?? undefined, input: item.input },
+      });
+      if (classified === "read") {
+        const [path] = collectToolFilePaths({ input: item.input });
+        return formatReadToolLabel(path ?? "");
+      }
+      if (classified === "search") {
+        return formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call";
+      }
       return toolPresentation?.displayName ?? item.toolName ?? "Tool call";
+    }
     case "proposed_plan":
       return "Proposed plan";
     case "todo_list":
@@ -522,8 +559,19 @@ function toFeedActivity(row: OrchestrationV2ProjectedTurnItem): ThreadFeedActivi
   const toolPresentation = itemToolPresentation(item);
   const summary = itemSummary(item, toolPresentation);
   const detail = itemPreview(item);
-  const getFullDetail = memoizeValue(() =>
-    JSON.stringify(
+  const readPaths =
+    item.type === "dynamic_tool" &&
+    classifyToolActivity({
+      itemType: "dynamic_tool_call",
+      data: { toolName: item.toolName ?? undefined, input: item.input },
+    }) === "read"
+      ? collectToolFilePaths(item)
+      : null;
+  const getFullDetail = memoizeValue(() => {
+    if (readPaths) {
+      return readPaths.join("\n") || null;
+    }
+    return JSON.stringify(
       {
         visibility: row.visibility,
         sourceThreadId: row.sourceThreadId,
@@ -532,8 +580,8 @@ function toFeedActivity(row: OrchestrationV2ProjectedTurnItem): ThreadFeedActivi
       },
       null,
       2,
-    ),
-  );
+    );
+  });
   const getCopyText = memoizeValue(() =>
     [summary, detail, getFullDetail()]
       .filter(
@@ -548,7 +596,7 @@ function toFeedActivity(row: OrchestrationV2ProjectedTurnItem): ThreadFeedActivi
     runId: item.runId,
     summary,
     detail,
-    canExpand: true,
+    canExpand: !(item.type === "error" && item.status === "failed") && (readPaths?.length ?? 1) > 0,
     getFullDetail,
     getCopyText,
     icon: itemIcon(item),
@@ -577,8 +625,37 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
   let openGroupAttemptId: string | null = null;
   let openGroupStandsAlone = false;
 
+  // A successful delegation is already represented by its durable child card.
+  // Pending, failed and unmatched calls remain visible, even with identical prompts.
+  const childrenByRun = new Map<RunId, Set<string>>();
+  for (const entry of entries) {
+    if (entry.type !== "lifecycle") continue;
+    const item = entry.row.item;
+    if (item.type !== "subagent" || item.origin !== "app_owned" || item.runId === null) continue;
+    const children = childrenByRun.get(item.runId) ?? new Set<string>();
+    children.add(item.subagentId);
+    childrenByRun.set(item.runId, children);
+  }
+
   for (const entry of entries) {
     if (isEmptyMessage(entry)) continue;
+    if (entry.type === "activity" && entry.activity.status !== "failure") {
+      const item = entry.activity.projectedItem.item;
+      if (
+        item.type === "dynamic_tool" &&
+        item.runId !== null &&
+        (item.status === "running" || item.status === "completed") &&
+        resolveT3McpToolDefinition(item.toolName)?.summaryAction === "delegate"
+      ) {
+        const output = compactDynamicToolOutput(item.output);
+        if (
+          !output?.isError &&
+          output?.taskId !== undefined &&
+          childrenByRun.get(item.runId)?.has(output.taskId)
+        )
+          continue;
+      }
+    }
     if (entry.type !== "activity") {
       grouped.push(entry);
       openGroupActivities = null;
@@ -742,32 +819,58 @@ interface ThreadFeedRunFold {
   readonly label: string;
 }
 
+export function failedFeedRunIds(
+  feed: ReadonlyArray<ThreadFeedEntry>,
+  latestRun: ThreadFeedLatestRun | null,
+) {
+  const failed = new Set<RunId>();
+  if (latestRun?.status === "failed") failed.add(latestRun.runId);
+  for (const entry of feed) {
+    if (entry.type !== "activity-group") continue;
+    for (const activity of entry.activities) {
+      const item = activity.projectedItem.item;
+      if (
+        item.type === "error" &&
+        item.status === "failed" &&
+        item.parentItemId === null &&
+        item.runId !== null
+      )
+        failed.add(item.runId);
+    }
+  }
+  return failed;
+}
+
+/**
+ * A thread without runs (a provider-native subagent) folds each prompt's
+ * response like a run; `isWorking` keeps its latest response open.
+ */
 function deriveThreadFeedRunFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestRun: ThreadFeedLatestRun | null,
+  isWorking: boolean,
 ): ReadonlyMap<string, ThreadFeedRunFold> {
   const terminalAssistantMessageIdByRun = new Map<RunId, string>();
-  for (const entry of feed) {
-    if (entry.type === "message" && entry.message.role === "assistant" && entry.message.runId) {
-      terminalAssistantMessageIdByRun.set(entry.message.runId, entry.id);
-    }
-  }
-
+  const failedRunIds = failedFeedRunIds(feed, latestRun);
   const groupsByRunId = new Map<
     RunId,
     { entries: ThreadFeedEntry[]; startBoundary: string | null }
   >();
+  // Fold state is keyed by run, so each prompt of a runless thread lends its
+  // response a stable key of its own.
+  let runlessKey: RunId | null = null;
   let pendingUserBoundary: string | null = null;
   for (const entry of feed) {
     if (entry.type === "message" && entry.message.role === "user") {
       pendingUserBoundary = entry.message.createdAt;
+      runlessKey = latestRun === null ? RunId.make(`runless:${entry.id}`) : null;
       continue;
     }
     const runId =
       entry.type === "message" && entry.message.role === "assistant"
-        ? entry.message.runId
+        ? (entry.message.runId ?? runlessKey)
         : entry.type === "activity-group"
-          ? entry.runId
+          ? (entry.runId ?? runlessKey)
           : null;
     if (!runId) continue;
     let group = groupsByRunId.get(runId);
@@ -777,6 +880,14 @@ function deriveThreadFeedRunFolds(
       groupsByRunId.set(runId, group);
     }
     group.entries.push(entry);
+    if (entry.type === "message") terminalAssistantMessageIdByRun.set(runId, entry.id);
+    if (runId !== runlessKey || entry.type !== "activity-group") continue;
+    for (const activity of entry.activities) {
+      const item = activity.projectedItem.item;
+      if (item.type === "error" && item.status === "failed" && item.parentItemId === null) {
+        failedRunIds.add(runId);
+      }
+    }
   }
 
   const activeRunId = unsettledRunId(latestRun);
@@ -784,6 +895,8 @@ function deriveThreadFeedRunFolds(
   for (const [runId, group] of groupsByRunId) {
     if (
       runId === activeRunId ||
+      (isWorking && runId === runlessKey) ||
+      failedRunIds.has(runId) ||
       group.entries.some((entry) => entry.type === "message" && entry.message.streaming)
     ) {
       continue;
@@ -843,11 +956,13 @@ function deriveThreadFeedRunFolds(
  */
 function deriveThreadFeedAttemptFolds(
   entries: ReadonlyArray<ThreadFeedEntry>,
+  unfoldedRunIds: ReadonlySet<RunId>,
 ): ReadonlyMap<string, SupersededAttemptFold> {
   const entriesByAttemptId = new Map<RunAttemptId, ThreadFeedEntry[]>();
   for (const entry of entries) {
     if (
       entry.attempt?.status !== "superseded" ||
+      unfoldedRunIds.has(entry.attempt.runId) ||
       (entry.type === "message" && entry.message.role === "user")
     ) {
       continue;
@@ -944,8 +1059,14 @@ export function deriveThreadFeedPresentation(
   const alwaysExpandActivity = options?.alwaysExpandActivity === true;
   const foldsByAnchorId = alwaysExpandActivity
     ? new Map<string, ThreadFeedRunFold>()
-    : deriveThreadFeedRunFolds(sourceFeed, latestRun);
-  const attemptFoldsByAnchorId = deriveThreadFeedAttemptFolds(sourceFeed);
+    : deriveThreadFeedRunFolds(
+        sourceFeed,
+        latestRun,
+        activeWorkStartedAt !== null && latestRun?.status !== "preparing",
+      );
+  // A failed run stays readable in place: no run, attempt, or work-group folds.
+  const failedRunIds = failedFeedRunIds(sourceFeed, latestRun);
+  const attemptFoldsByAnchorId = deriveThreadFeedAttemptFolds(sourceFeed, failedRunIds);
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
     if (!expandedRunIds.has(fold.runId)) {
@@ -991,9 +1112,13 @@ export function deriveThreadFeedPresentation(
         expanded: expandedAttemptIds.has(attemptFold.attemptId),
       });
     }
-    if (!collapsedAttemptEntryIds.has(entry.id)) {
-      appendPresentedFeedEntry(result, entry, expandedWorkGroupIds, alwaysExpandActivity);
+    if (collapsedAttemptEntryIds.has(entry.id)) continue;
+    if (entry.type === "activity-group" && entry.runId !== null && failedRunIds.has(entry.runId)) {
+      const activities = entry.activities.filter(threadFeedActivityHasRow);
+      if (activities.length > 0) result.push({ ...entry, activities });
+      continue;
     }
+    appendPresentedFeedEntry(result, entry, expandedWorkGroupIds, alwaysExpandActivity);
   }
   if (activeWorkStartedAt !== null) {
     result.push({
@@ -1224,6 +1349,9 @@ export function buildThreadFeed(
                 ...(item.scheduledTaskId === undefined
                   ? {}
                   : { scheduledTaskId: item.scheduledTaskId }),
+                ...(item.senderThreadId === undefined
+                  ? {}
+                  : { senderThreadId: item.senderThreadId }),
               }
             : {}),
           visibility: row.visibility,

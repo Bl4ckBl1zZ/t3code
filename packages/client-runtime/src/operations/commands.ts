@@ -3,6 +3,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
+  orchestrationV2BackgroundWorkStopRunId,
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
@@ -116,6 +117,7 @@ export interface ReorderPinnedThreadInput extends ThreadCommandInput {
 }
 
 export interface UpdateThreadMetadataInput extends ThreadCommandInput {
+  readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecoveryUpdate | null;
   readonly title?: string;
   readonly modelSelection?: ModelSelection;
   readonly branch?: string | null;
@@ -531,10 +533,12 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.clearTimeline !== undefined ||
       input.linkedPullRequest !== undefined ||
       input.linkPullRequest !== undefined ||
-      input.unlinkPullRequest !== undefined
+      input.unlinkPullRequest !== undefined ||
+      input.limitRecovery !== undefined
     ) {
       result = yield* dispatch({
         type: "thread.metadata.update",
+        ...(input.limitRecovery === undefined ? {} : { limitRecovery: input.limitRecovery }),
         commandId,
         threadId: input.threadId,
         ...(input.title === undefined ? {} : { title: input.title }),
@@ -718,7 +722,10 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
         run.status === "starting" ||
         run.status === "running" ||
         run.status === "waiting",
-    )?.id;
+    )?.id ??
+    // A settled turn whose background work still runs: Stop ends that work.
+    orchestrationV2BackgroundWorkStopRunId(projection) ??
+    undefined;
   if (runId === undefined) return { sequence: 0 };
   return yield* dispatch({
     type: "run.interrupt",

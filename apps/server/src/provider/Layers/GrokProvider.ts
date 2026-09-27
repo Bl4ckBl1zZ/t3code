@@ -31,6 +31,7 @@ import {
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
 import {
+  GROK_SUPPORTED_RUNTIME_MODES,
   isValidGrokReasoningEffortToken,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
@@ -40,6 +41,7 @@ import { discoverGrokSkills } from "../Drivers/GrokSkills.ts";
 const GROK_PRESENTATION = {
   displayName: "Grok",
   showInteractionModeToggle: false,
+  supportedRuntimeModes: GROK_SUPPORTED_RUNTIME_MODES,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],

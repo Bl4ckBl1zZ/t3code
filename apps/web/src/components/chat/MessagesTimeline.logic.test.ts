@@ -1,4 +1,14 @@
-import { RunId } from "@t3tools/contracts";
+import {
+  MessageId,
+  NodeId,
+  RunAttemptId,
+  RunId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import type { WorkLogEntry, TimelineEntry } from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -1300,6 +1310,87 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("hides a delegation tool row once its returned task id names a child card", () => {
+    const runId = "turn-1" as never;
+    const child = (id: string) => ({
+      id,
+      kind: "event" as const,
+      createdAt: "2026-01-01T00:00:01Z",
+      projectedItem: {
+        position: 0,
+        visibility: "local" as const,
+        sourceThreadId: "thread-1" as never,
+        sourceItemId: `item-${id}` as never,
+        item: {
+          id: `item-${id}`,
+          threadId: "thread-1",
+          runId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          status: "running",
+          title: `Subagent ${id}`,
+          startedAt: null,
+          completedAt: null,
+          updatedAt: {},
+          type: "subagent",
+          origin: "app_owned",
+          subagentId: id,
+          childThreadId: null,
+          prompt: id,
+        },
+      } as never,
+    });
+    const delegation = (id: string, taskId: string, failed = false) => ({
+      id,
+      kind: "work" as const,
+      createdAt: "2026-01-01T00:00:02Z",
+      entry: {
+        id,
+        createdAt: "2026-01-01T00:00:02Z",
+        label: "Delegated a child task",
+        tone: failed ? ("error" as const) : ("tool" as const),
+        itemType: "dynamic_tool" as const,
+        toolLifecycleStatus: failed ? ("failed" as const) : ("completed" as const),
+        projectedItem: {
+          item: {
+            id,
+            runId,
+            type: "dynamic_tool",
+            status: failed ? "failed" : "completed",
+            toolName: "t3-code.delegate_task",
+            input: { task: taskId },
+            output: { content: JSON.stringify({ taskId }), structuredContent: { taskId } },
+          },
+        } as never,
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        child("a"),
+        delegation("delegate-a", "a"),
+        delegation("unmatched", "other-child"),
+        child("c"),
+        delegation("failed", "c", true),
+      ],
+      latestRun: null,
+      isWorking: false,
+      alwaysExpandActivity: true,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    const visibleTools = rows.flatMap((row) =>
+      row.kind === "work" ? row.groupedEntries.map((entry) => entry.id) : [],
+    );
+    expect(visibleTools).toContain("unmatched");
+    expect(visibleTools).toContain("failed");
+    expect(visibleTools).not.toContain("delegate-a");
+  });
+
   it("leaves a lone subagent card as its own event row", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -2076,6 +2167,195 @@ describe("V2 live work focus", () => {
   function work(item: WorkLogEntry): TimelineEntry {
     return { kind: "work", id: item.id, createdAt: at, entry: item };
   }
+  it("folds each run of a provider-native subagent thread like a normal turn", () => {
+    // A Claude subagent's child thread, as projected: no runs, one runless
+    // root turn, and a user prompt for the launch and for a SendMessage resume.
+    const threadId = ThreadId.make("subagent-child");
+    const rootNodeId = NodeId.make("task-root");
+    const at = (second: number) =>
+      DateTime.makeUnsafe(new Date(Date.UTC(2026, 8, 25, 22, 51, second)).toISOString());
+    const base = (id: string, ordinal: number, second: number, endSecond = second) => ({
+      id: TurnItemId.make(id),
+      threadId,
+      runId: null,
+      nodeId: rootNodeId,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal,
+      status: "completed" as const,
+      title: null,
+      startedAt: at(second),
+      completedAt: at(endSecond),
+      updatedAt: at(endSecond),
+    });
+    const prompt = (id: string, ordinal: number, second: number) => ({
+      ...base(id, ordinal, second),
+      type: "user_message" as const,
+      messageId: MessageId.make(id),
+      text: `Prompt ${id}`,
+      attachments: [],
+      inputIntent: "turn_start" as const,
+      createdBy: "agent" as const,
+      creationSource: "provider" as const,
+    });
+    const answer = (id: string, ordinal: number, second: number) => ({
+      ...base(id, ordinal, second),
+      type: "assistant_message" as const,
+      messageId: MessageId.make(id),
+      text: `Answer ${id}`,
+      streaming: false,
+    });
+    type ResumeState = "running" | "completed" | "failed";
+    const items = (resume: ResumeState) =>
+      [
+        prompt("launch", 1, 0),
+        { ...base("launch-ls", 2, 4), type: "command_execution" as const, input: "ls src" },
+        {
+          ...base("launch-thinking", 3, 8),
+          type: "reasoning" as const,
+          title: "Thinking",
+          text: "Not there.",
+          streaming: false,
+        },
+        answer("launch-answer", 4, 8),
+        prompt("resume", 5, 72),
+        {
+          ...base("resume-ls", 6, 77),
+          type: "command_execution" as const,
+          input: "ls src",
+          status: resume === "running" ? ("running" as const) : ("completed" as const),
+          completedAt: resume === "running" ? null : at(77),
+        },
+        ...(resume === "failed"
+          ? [
+              {
+                ...base("resume-error", 7, 80),
+                type: "error" as const,
+                status: "failed" as const,
+                failure: {
+                  class: "provider_error" as const,
+                  message: "Subagent failed",
+                  code: null,
+                  retryable: null,
+                },
+              },
+            ]
+          : []),
+        ...(resume === "running" ? [] : [answer("resume-answer", 8, 80)]),
+      ].map((item, position) => ({
+        position,
+        visibility: "local" as const,
+        sourceThreadId: threadId,
+        sourceItemId: item.id,
+        item,
+      }));
+    const rows = (input: {
+      resume: ResumeState;
+      working: boolean;
+      expandedRunIds?: ReadonlySet<RunId>;
+    }) =>
+      deriveMessagesTimelineRows({
+        timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+          visibleTurnItems: items(input.resume),
+          optimisticMessages: [],
+        }),
+        latestRun: null,
+        isWorking: input.working,
+        runlessWorkActive: input.working,
+        ...(input.expandedRunIds === undefined ? {} : { expandedRunIds: input.expandedRunIds }),
+        activeTurnStartedAt: input.working ? DateTime.formatIso(at(72)) : null,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+    const shape = (timeline: ReturnType<typeof deriveMessagesTimelineRows>) =>
+      timeline.map((row) =>
+        row.kind === "turn-fold"
+          ? `fold:${row.label}`
+          : row.kind === "message"
+            ? `${row.message.role}:${row.message.id}`
+            : row.kind,
+      );
+
+    // Settled: each run folds its work, keeping its prompt and final answer.
+    const settled = rows({ resume: "completed", working: false });
+    expect(shape(settled)).toEqual([
+      "user:launch",
+      "fold:Worked for 8.0s",
+      "assistant:launch-answer",
+      "user:resume",
+      "fold:Worked for 8.0s",
+      "assistant:resume-answer",
+    ]);
+
+    // Each fold opens on its own.
+    const launchFold = settled.find((row) => row.kind === "turn-fold");
+    if (launchFold?.kind !== "turn-fold") throw new Error("Expected the launch fold");
+    const expanded = rows({
+      resume: "completed",
+      working: false,
+      expandedRunIds: new Set([launchFold.runId]),
+    });
+    expect(shape(expanded)).toEqual([
+      "user:launch",
+      "fold:Worked for 8.0s",
+      "work",
+      "assistant:launch-answer",
+      "user:resume",
+      "fold:Worked for 8.0s",
+      "assistant:resume-answer",
+    ]);
+
+    // While the resume runs, only the settled launch folds; the resume's tool
+    // reads as live work.
+    const running = rows({ resume: "running", working: true });
+    expect(shape(running)).toEqual([
+      "user:launch",
+      "fold:Worked for 8.0s",
+      "assistant:launch-answer",
+      "user:resume",
+      "work",
+    ]);
+    expect(running.find((row) => row.kind === "work")?.liveEntry).toBeDefined();
+
+    // A failed run stays open, as on a normal thread.
+    expect(shape(rows({ resume: "failed", working: false }))).toEqual([
+      "user:launch",
+      "fold:Worked for 8.0s",
+      "assistant:launch-answer",
+      "user:resume",
+      "work",
+      "work",
+      "assistant:resume-answer",
+    ]);
+  });
+
+  it("shows a provider-native subagent's runless tool as live work while it works", () => {
+    const runless = (working: boolean, status: WorkLogEntry["toolLifecycleStatus"]) =>
+      deriveMessagesTimelineRows({
+        timelineEntries: [work(entry("command", status, { runId: null }))],
+        latestRun: null,
+        isWorking: working,
+        runlessWorkActive: working,
+        activeTurnStartedAt: working ? at : null,
+        alwaysExpandActivity: true,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+    const running = runless(true, "inProgress");
+    expect(running.find((row) => row.kind === "work")?.liveEntry?.id).toBe("command");
+    expect(running.some((row) => row.kind === "working")).toBe(false);
+    // Once the subagent settles, the same entry reads as finished history.
+    const settled = runless(false, "completed");
+    expect(settled.find((row) => row.kind === "work")?.liveEntry).toBeUndefined();
+    expect(settled.some((row) => row.kind === "working")).toBe(false);
+  });
+  it("does not treat runless entries as live work on a thread with runs", () => {
+    const result = rows([work(entry("runless", "inProgress", { runId: null }))]);
+    expect(result.find((row) => row.kind === "work")?.liveEntry).toBeUndefined();
+    expect(result.some((row) => row.kind === "working")).toBe(true);
+  });
   it("keeps a running tool focused when a later concurrent call completes", () => {
     const running = entry("running", "inProgress");
     expect(resolveLiveWorkEntry([running, entry("done")], runId)).toBe(running);
@@ -2223,4 +2503,112 @@ describe("plainThoughtPreviewText", () => {
       "snake_case_name is 2 * 3 * 4",
     );
   });
+});
+
+describe("failed turn transcript", () => {
+  it.each(["provider_error", "usage_limit"] as const)(
+    "keeps historical %s failures and preceding work visible without folds",
+    (failureClass) => {
+      const runId = RunId.make("failed-run");
+      const threadId = ThreadId.make("failed-thread");
+      const at = DateTime.makeUnsafe("2026-09-20T12:00:00Z");
+      const base = {
+        threadId,
+        runId,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 0,
+        title: null,
+        startedAt: at,
+        completedAt: at,
+        updatedAt: at,
+      };
+      const items: OrchestrationV2ProjectedTurnItem[] = [
+        {
+          position: 0,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: TurnItemId.make("user"),
+          item: {
+            ...base,
+            id: TurnItemId.make("user"),
+            type: "user_message",
+            status: "completed",
+            messageId: MessageId.make("user"),
+            createdBy: "user",
+            creationSource: "web",
+            inputIntent: "turn_start",
+            text: "Build it",
+            attachments: [],
+          },
+        },
+        {
+          position: 1,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: TurnItemId.make("command"),
+          item: {
+            ...base,
+            id: TurnItemId.make("command"),
+            type: "command_execution",
+            status: "completed",
+            input: "pwd",
+            output: "",
+            exitCode: 0,
+          },
+        },
+        {
+          position: 2,
+          visibility: "local",
+          sourceThreadId: threadId,
+          sourceItemId: TurnItemId.make("failure"),
+          item: {
+            ...base,
+            id: TurnItemId.make("failure"),
+            type: "error",
+            status: "failed",
+            failure: {
+              class: failureClass,
+              message: "The provider stopped this turn.\nRetry later.",
+              code: null,
+              retryable: true,
+            },
+          },
+        },
+      ];
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+          visibleTurnItems: items,
+          optimisticMessages: [],
+        }).map((entry) => ({
+          ...entry,
+          attempt: {
+            id: RunAttemptId.make("superseded-attempt"),
+            runId,
+            attemptOrdinal: 1,
+            rootNodeId: NodeId.make("superseded-root"),
+            status: "superseded" as const,
+          },
+        })),
+        latestRun: {
+          runId: RunId.make("newer-run"),
+          status: "completed",
+          startedAt: DateTime.formatIso(at),
+          completedAt: DateTime.formatIso(at),
+        },
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+      expect(rows.some((row) => row.kind === "turn-fold" || row.kind === "attempt-fold")).toBe(
+        false,
+      );
+      const work = rows.flatMap((row) => (row.kind === "work" ? row.groupedEntries : []));
+      expect(work.map((entry) => entry.id)).toEqual(["command", "failure"]);
+    },
+  );
 });

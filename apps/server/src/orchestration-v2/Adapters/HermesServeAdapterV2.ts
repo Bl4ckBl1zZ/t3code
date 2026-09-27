@@ -4073,7 +4073,9 @@ export function makeHermesServeAdapterV2(
         ),
         ensureThread: (threadInput) =>
           Effect.gen(function* () {
-            if (threadInput.existingProviderThread !== undefined) {
+            // Only a row that already carries a native session can be resumed;
+            // a placeholder handed over by turn start still needs a binding.
+            if (threadInput.existingProviderThread?.nativeThreadRef != null) {
               return yield* runtime.resumeThread({
                 providerThread: threadInput.existingProviderThread,
                 threadId: threadInput.threadId,

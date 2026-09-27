@@ -1,3 +1,4 @@
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 /**
  * Multi-instance validation slices for `ProviderInstanceRegistryLive`.
  *
@@ -535,9 +536,12 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
   // surfaced; that merged layer then provides `ServerConfig.layerTest`'s
   // `FileSystem` dep while keeping everything else surfaced to the test.
   const infraLayer = OpenCodeRuntimeLive.pipe(Layer.provideMerge(NodeServices.layer));
-  const baseLayer = ServerConfig.layerTest(process.cwd(), {
-    prefix: "provider-instance-registry-all-drivers-test",
-  }).pipe(
+  const baseLayer = ServerSecretStore.layer.pipe(
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), {
+        prefix: "provider-instance-registry-all-drivers-test",
+      }),
+    ),
     Layer.provideMerge(infraLayer),
     Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
     Layer.provideMerge(ServerSettingsService.layerTest()),

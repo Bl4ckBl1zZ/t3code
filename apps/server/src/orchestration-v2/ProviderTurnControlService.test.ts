@@ -217,11 +217,19 @@ it.effect(
         ProjectionStoreV2,
         ProjectionStoreV2.of({
           apply: () => Effect.void,
+          getThreadAttachmentIds: () => Effect.die("unused attachment lookup"),
+          getMessageCount: () => Effect.die("unused message count"),
+          getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
+          getThreadRecords: () => Effect.die("unused record read"),
+          getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
           getThreadShell: () => Effect.die("unused getThreadShell"),
           getPlan: () => Effect.die("unused getPlan"),
           getThreadProjection: () => Ref.get(projection),
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+          getTurnStartContext: () => Effect.die("unused getTurnStartContext"),
+          getTurnStartHistory: () => Effect.die("unused getTurnStartHistory"),
+          hasUnpairedRunInterruptRequest: () => Effect.die("unused interrupt read"),
         }),
       );
       const sessionManagerLayer = Layer.succeed(
@@ -418,5 +426,86 @@ it.effect(
       assert.include(received, "Attached file context");
       assert.notInclude(received, "t3-citation://");
       assert.equal(projection.messages[0]?.text, text);
+    }),
+);
+
+it.effect(
+  "interrupts a settled turn only while its provider thread still has background work",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:settled-stop");
+      const sessionId = ProviderSessionId.make("session:settled-stop");
+      const providerThreadId = ProviderThreadId.make("provider-thread:settled-stop");
+      const providerTurnId = ProviderTurnId.make("provider-turn:settled-stop");
+      const attemptId = RunAttemptId.make("attempt:settled-stop");
+      const providerThread = {
+        id: providerThreadId,
+        providerSessionId: sessionId,
+        driver,
+        providerInstanceId,
+      } as OrchestrationV2ProviderThread;
+      const base = makeProjection({ now, threadId, providerThread, providerTurnId, attemptId });
+      const projection = {
+        ...base,
+        providerTurns: base.providerTurns.map((turn) => ({
+          ...turn,
+          status: "completed" as const,
+          completedAt: now,
+        })),
+      } satisfies OrchestrationV2ThreadProjection;
+      let hasBackgroundWork = false;
+      const interrupts: Array<{ readonly target: ProviderThreadId; readonly restart?: boolean }> =
+        [];
+      const runtime = {
+        hasPendingBackgroundWorkForThread: (target: OrchestrationV2ProviderThread) =>
+          Effect.sync(() => {
+            assert.equal(target.id, providerThreadId);
+            return hasBackgroundWork;
+          }),
+        interruptTurn: (input: {
+          readonly providerThread: OrchestrationV2ProviderThread;
+          readonly providerTurnId: ProviderTurnId;
+          readonly requestRuntimeRestart?: boolean;
+        }) =>
+          Effect.sync(() => {
+            assert.equal(input.providerTurnId, providerTurnId);
+            interrupts.push({
+              target: input.providerThread.id,
+              ...(input.requestRuntimeRestart === undefined
+                ? {}
+                : { restart: input.requestRuntimeRestart }),
+            });
+          }),
+      } as unknown as ProviderAdapterV2SessionRuntime;
+      const layer = providerTurnControlLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStoreV2)({
+              getThreadProjection: () => Effect.succeed(projection),
+            }),
+            Layer.mock(ProviderSessionManagerV2)({
+              get: () => Effect.succeed(Option.some(runtime)),
+            }),
+            Layer.mock(RuntimePolicyV2)({}),
+            Layer.mock(AttachmentMaterialization)({}),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const control = yield* ProviderTurnControlServiceV2;
+        const interrupt = control.interrupt({
+          threadId,
+          providerSessionId: sessionId,
+          providerThreadId,
+          providerTurnId,
+        });
+        // Nothing left running: a settled turn has nothing to stop.
+        yield* interrupt;
+        assert.deepEqual(interrupts, []);
+        hasBackgroundWork = true;
+        yield* interrupt;
+        assert.deepEqual(interrupts, [{ target: providerThreadId, restart: true }]);
+      }).pipe(Effect.provide(layer));
     }),
 );

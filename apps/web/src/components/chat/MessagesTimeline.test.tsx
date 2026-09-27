@@ -1383,7 +1383,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work Log");
   });
 
-  it("stacks consecutive subagent rows in one group", async () => {
+  it("folds consecutive subagent rows into one collapsed card", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const subagentEntry = (index: number) => ({
       id: `subagent-${index}`,
@@ -1425,9 +1425,12 @@ describe("MessagesTimeline", () => {
       <MessagesTimeline {...buildProps()} timelineEntries={[subagentEntry(1), subagentEntry(2)]} />,
     );
 
-    expect(markup).toContain('data-v2-event-group-count="2"');
-    expect(markup).toContain('aria-label="Open Map surface 1"');
-    expect(markup).toContain('aria-label="Open Map surface 2"');
+    // A turn's subagents fold into one card whose header counts them; the
+    // rows stay behind the disclosure until the reader opens it.
+    expect(markup).toContain("data-subagent-group");
+    expect(markup).toContain('aria-label="2 subagents"');
+    expect(markup).toContain('aria-description="2 working"');
+    expect(markup).not.toContain('aria-label="Open Map surface 1"');
   });
 
   it("shows the final Codex subagent result on a row that opens the child thread", async () => {

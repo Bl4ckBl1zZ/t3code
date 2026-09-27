@@ -192,11 +192,23 @@ function makeTestLayer(input: {
     ProjectionStoreV2,
     ProjectionStoreV2.of({
       apply: () => Effect.void,
+      getThreadAttachmentIds: () => Effect.die("unused attachment lookup"),
+      getMessageCount: () => Effect.die("unused message count"),
+      getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
+      getThreadRecords: () => Effect.succeed(input.projection),
+      getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
       getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
       getThreadShell: () => Effect.die("unused getThreadShell"),
       getThreadProjection: () => Effect.succeed(input.projection),
       getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+      getTurnStartContext: () => Effect.succeed({ ...input.projection, hasConversation: true }),
+      getTurnStartHistory: () => Effect.succeed(input.projection.turnItems),
       getPlan: () => Effect.die("unused getPlan"),
+      hasUnpairedRunInterruptRequest: (_threadId, requestId, resultId) =>
+        Effect.succeed(
+          input.projection.turnItems.some((item) => item.id === requestId) &&
+            !input.projection.turnItems.some((item) => item.id === resultId),
+        ),
     }),
   );
   const eventSinkLayer = Layer.succeed(
@@ -497,11 +509,20 @@ function makeStartTestLayer(input: {
           ProjectionStoreV2,
           ProjectionStoreV2.of({
             apply: () => Effect.void,
+            getThreadAttachmentIds: () => Effect.die("unused attachment lookup"),
+            getMessageCount: () => Effect.die("unused message count"),
+            getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
+            getThreadRecords: () => Effect.succeed(input.projection),
+            getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
             getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
             getThreadShell: () => Effect.die("unused getThreadShell"),
             getPlan: () => Effect.die("unused getPlan"),
             getThreadProjection: () => Effect.succeed(input.projection),
             getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+            getTurnStartContext: () =>
+              Effect.succeed({ ...input.projection, hasConversation: true }),
+            getTurnStartHistory: () => Effect.succeed(input.projection.turnItems),
+            hasUnpairedRunInterruptRequest: () => Effect.succeed(false),
           }),
         ),
         Layer.succeed(

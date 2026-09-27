@@ -522,6 +522,15 @@ struct FeatureComposerView: View {
                 .padding(.top, 10)
             }
 
+            if let attachmentLimitMessage {
+                Label(attachmentLimitMessage, systemImage: "exclamationmark.circle")
+                    .foregroundStyle(T3Colors.warning)
+                    .font(T3Typography.supporting)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+            }
+
             if imageAttachmentCount > 0, !imagesAllowed {
                 HStack(spacing: 8) {
                     Label("Choose a model that accepts images", systemImage: "exclamationmark.circle")
@@ -904,7 +913,11 @@ struct FeatureComposerView: View {
     }
 
     private var remainingAttachmentSlots: Int {
-        max(0, 8 - attachments.count - attachmentPreparation.pendingItemCount)
+        max(
+            0,
+            ComposerAttachments.maximumAttachmentCount - attachments.count
+                - attachmentPreparation.pendingItemCount
+        )
     }
 
     private func canAttach(needsImages: Bool) -> Bool {
@@ -913,7 +926,8 @@ struct FeatureComposerView: View {
 
     /// Why an attach source is off, as the menu item's subtitle.
     private func attachReason(needsImages: Bool) -> String? {
-        if attachments.count >= 8 { return "8 of 8 attached" }
+        let limit = ComposerAttachments.maximumAttachmentCount
+        if attachments.count >= limit { return "\(limit) of \(limit) attached" }
         if remainingAttachmentSlots == 0 || attachmentPreparation.isPreparing { return "Preparing…" }
         if needsImages, !imagesAllowed { return "Model doesn’t accept images" }
         return nil
@@ -1015,7 +1029,7 @@ struct FeatureComposerView: View {
     private func appendPastedImages(_ datas: [Data]) {
         guard !isSending, !isStashing, !voice.state.isBusy else { return }
         if datas.count > remainingAttachmentSlots {
-            fileDropError = "A message can contain up to 8 attachments. Extra images were not added."
+            fileDropError = "A message can contain up to \(ComposerAttachments.maximumAttachmentCount) attachments. Extra images were not added."
         }
         appendImageData(datas)
     }
@@ -1025,7 +1039,8 @@ struct FeatureComposerView: View {
             let attachment = try await Task.detached(priority: .userInitiated) {
                 try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
             }.value
-            guard generation == historyGeneration, attachments.count < 8 else { return }
+            guard generation == historyGeneration,
+                attachments.count < ComposerAttachments.maximumAttachmentCount else { return }
             attachments.append(attachment)
         } catch {
             guard generation == historyGeneration else { return }
@@ -1054,8 +1069,7 @@ struct FeatureComposerView: View {
 
     private func receiveExternalFileDrop() async {
         guard readyExternalFileDropID != nil, let batch = externalFileDrop else { return }
-        let remaining = max(0, 8 - attachments.count - attachmentPreparation.pendingItemCount)
-        let accepted = min(remaining, batch.providers.count - batch.nextIndex)
+        let accepted = min(remainingAttachmentSlots, batch.providers.count - batch.nextIndex)
         let endIndex = batch.nextIndex + accepted
         let operation = attachmentPreparation.begin(itemCount: accepted)
         defer { attachmentPreparation.finish(operation) }
@@ -1068,7 +1082,7 @@ struct FeatureComposerView: View {
                 let attachment = try await FeatureDroppedAttachment.load(provider, typeIdentifier: type)
                 guard !Task.isCancelled, historyDraftKey == batch.draftKey else { return }
                 guard batch.nextIndex == index else { continue }
-                guard attachments.count < 8 else { break }
+                guard attachments.count < ComposerAttachments.maximumAttachmentCount else { break }
                 attachments.append(attachment)
                 batch.advance(expectedIndex: index)
             } catch {
@@ -1079,7 +1093,7 @@ struct FeatureComposerView: View {
         }
         guard !Task.isCancelled else { return }
         if !batch.isComplete || batch.omittedCount > 0 {
-            failures.append("A message can contain up to 8 attachments. Extra files were not added.")
+            failures.append("A message can contain up to \(ComposerAttachments.maximumAttachmentCount) attachments. Extra files were not added.")
         }
         batch.finish()
         onExternalFileDropConsumed(batch.id)
@@ -1091,7 +1105,7 @@ struct FeatureComposerView: View {
     /// to the composer that accepted the drop. The existing upload queue owns sending.
     private func receiveDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
         guard !isSending, !isStashing, !voice.state.isBusy else { return false }
-        let remaining = max(0, 8 - attachments.count - attachmentPreparation.pendingItemCount)
+        let remaining = remainingAttachmentSlots
         let accepted = providers.compactMap { provider -> (NSItemProvider, String)? in
             guard let type = provider.registeredTypeIdentifiers.first(where: {
                 UTType($0)?.conforms(to: .data) == true
@@ -1100,7 +1114,7 @@ struct FeatureComposerView: View {
         }
         guard !accepted.isEmpty else { return false }
         guard remaining > 0 else {
-            fileDropError = "A message can contain up to 8 attachments."
+            fileDropError = "A message can contain up to \(ComposerAttachments.maximumAttachmentCount) attachments."
             return false
         }
         let destination = historyDraftKey
@@ -1112,7 +1126,7 @@ struct FeatureComposerView: View {
                 do {
                     let attachment = try await FeatureDroppedAttachment.load(provider, typeIdentifier: type)
                     guard historyDraftKey == destination, historyGeneration == generation else { return }
-                    guard attachments.count < 8 else { break }
+                    guard attachments.count < ComposerAttachments.maximumAttachmentCount else { break }
                     attachments.append(attachment)
                 } catch {
                     guard historyDraftKey == destination, historyGeneration == generation else { return }
@@ -1120,7 +1134,7 @@ struct FeatureComposerView: View {
                 }
             }
             if accepted.count > remaining {
-                fileDropError = "Only the first \(remaining) files were added. A message can contain up to 8 attachments."
+                fileDropError = "Only the first \(remaining) files were added. A message can contain up to \(ComposerAttachments.maximumAttachmentCount) attachments."
             }
         }
         return true
@@ -1258,7 +1272,9 @@ struct FeatureComposerView: View {
     }
 
     private var canSend: Bool {
-        guard composerTrigger?.kind != .model, sendBlocker == nil else { return false }
+        guard composerTrigger?.kind != .model, sendBlocker == nil, attachmentLimitMessage == nil else {
+            return false
+        }
         return FeatureComposerSubmissionEligibility.canSend(
             text: storedText,
             attachmentCount: attachments.count,
@@ -1266,6 +1282,14 @@ struct FeatureComposerView: View {
             isSending: isSending,
             preparationState: attachmentPreparation,
             imageAttachmentCount: imageAttachmentCount
+        )
+    }
+
+    /// The contract's per-message limits, checked before Send is offered so the
+    /// draft stays put instead of failing on the server.
+    private var attachmentLimitMessage: String? {
+        ComposerAttachments.limitError(
+            for: attachments.map { ($0.filename, $0.mimeType, $0.data.count) }
         )
     }
 

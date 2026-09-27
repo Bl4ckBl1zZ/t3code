@@ -34,8 +34,10 @@ const HANDOFF_IN_FLIGHT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
 ]);
 
 // Once a subagent stops, its last streamed result says more than the stale
-// progress line; while it runs, live progress comes first.
+// progress line; while it runs, live progress comes first. Idle agents are
+// waiting for their next input, so they read as stopped rather than working.
 const TERMINAL_SUBAGENT_STATUSES = new Set<OrchestrationV2TurnItem["status"]>([
+  "idle",
   "completed",
   "failed",
   "cancelled",

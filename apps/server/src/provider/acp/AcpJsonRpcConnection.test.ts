@@ -15,6 +15,7 @@ import * as Stream from "effect/Stream";
 import { describe, expect } from "vite-plus/test";
 
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import { GROK_ACP_INITIALIZE_META } from "./GrokAcpSupport.ts";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
@@ -404,6 +405,40 @@ describe("AcpSessionRuntime", () => {
       ),
       Effect.scoped,
       Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("declares Grok's prompting client type on initialize", () => {
+    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "acp-runtime-"));
+    const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+
+      const initialize = NodeFS.readFileSync(requestLogPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { method?: string; params?: { _meta?: unknown } })
+        .find((message) => message.method === "initialize");
+      // Without it Grok's Auto mode silently denies what its classifier blocks.
+      expect(initialize?.params?._meta).toEqual({ clientType: "extension" });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { T3_ACP_REQUEST_LOG_PATH: requestLogPath },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          initializeMeta: GROK_ACP_INITIALIZE_META,
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
     );
   });
 

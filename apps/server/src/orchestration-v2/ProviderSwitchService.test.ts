@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderThreadId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
@@ -99,6 +100,54 @@ it.effect(
         testLayer({ [currentInstanceId]: { continuationKey: "codex:account:primary" } }),
       ),
     ),
+);
+
+it.effect("hands off from a native provider thread after its session detaches", () =>
+  Effect.gen(function* () {
+    const service = yield* ProviderSwitch.ProviderSwitchServiceV2;
+    const thread = projection();
+    const nativeProviderThreadId = ProviderThreadId.make("provider-thread:native");
+    const result = yield* service.plan({
+      projection: {
+        ...thread,
+        thread: { ...thread.thread, activeProviderThreadId: nativeProviderThreadId },
+        // Detaching a stopped session removes its record from the projection.
+        providerSessions: [],
+        providerThreads: [
+          {
+            id: nativeProviderThreadId,
+            driver,
+            providerInstanceId: currentInstanceId,
+            providerSessionId: ProviderSessionId.make("detached_session"),
+            appThreadId: thread.thread.id,
+            ownerNodeId: null,
+            nativeThreadRef: { driver, nativeId: "native-thread:abc", strength: "strong" },
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: null,
+            lastRunOrdinal: null,
+            handoffIds: [],
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      } as OrchestrationV2ThreadProjection,
+      targetModelSelection: {
+        instanceId: ProviderInstanceId.make("codex_other"),
+        model: "gpt-5.2-codex",
+      },
+    });
+    assert.equal(result.transition.type, "create_with_handoff");
+    assert.deepEqual(result.releaseProviderSessionIds, []);
+  }).pipe(
+    Effect.provide(
+      testLayer({
+        [currentInstanceId]: { continuationKey: "codex:account:primary" },
+        codex_other: { continuationKey: "codex:account:other" },
+      }),
+    ),
+  ),
 );
 
 it.effect("distinguishes compatible and incompatible instances of the same driver", () =>

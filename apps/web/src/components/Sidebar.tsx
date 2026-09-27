@@ -1,3 +1,4 @@
+import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { ThreadPullRequestsControl } from "./pullRequest/ThreadPullRequestsControl";
 import {
   applyDurableThreadOrder,
@@ -467,97 +468,102 @@ function SidebarThreadTooltip({
     .filter((instanceId) => instanceId !== modelInstanceId)
     .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
   return (
-    <TooltipPopup side="right" align="start" sideOffset={4} variant="glass">
-      {/* The viewport's own inset (py-1 px-2) plus this one make the floating inset. */}
-      <div className="flex min-w-0 max-w-80 flex-col gap-2 px-1 py-2">
-        <div className="min-w-0 truncate text-xs leading-tight font-medium text-foreground">
-          {thread.title}
-        </div>
-        <div className="grid gap-1.5 pl-0.5 text-xs text-muted-foreground">
-          {showProjectContext && projectTitle ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <ProjectFavicon
-                projectId={thread.projectId}
-                environmentId={thread.environmentId}
-                cwd={projectCwd ?? ""}
-                faviconPath={projectFaviconPath}
-                className="size-3 shrink-0 stroke-muted-foreground"
-              />
-              <div className="min-w-0 truncate text-foreground/75">{projectTitle}</div>
+    <ThreadHoverCardPopup side="right" align="start" sideOffset={4}>
+      <ThreadHoverCard title={thread.title}>
+        {showProjectContext && projectTitle ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <ProjectFavicon
+              projectId={thread.projectId}
+              environmentId={thread.environmentId}
+              cwd={projectCwd ?? ""}
+              faviconPath={projectFaviconPath}
+              className="size-3 shrink-0 stroke-muted-foreground"
+            />
+            <div className="min-w-0 truncate text-foreground/75">{projectTitle}</div>
+          </div>
+        ) : null}
+        {environmentLabel ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <ConnectedEnvironmentMachineIcon
+              environmentId={thread.environmentId}
+              className="size-3 shrink-0 stroke-muted-foreground"
+            />
+            <div className="min-w-0 truncate text-foreground/75">{environmentLabel}</div>
+          </div>
+        ) : null}
+        {showProjectContext && thread.branch ? (
+          <div className="flex min-w-0 items-center gap-2 text-foreground/75">
+            <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
+            <MiddleTruncate value={thread.branch} className="flex" />
+          </div>
+        ) : null}
+        {showProjectContext && branchMismatch ? (
+          <div className="flex min-w-0 items-start gap-2 text-warning">
+            <CircleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0 stroke-current" />
+            <div className="min-w-0 flex-1 wrap-break-word leading-5">
+              You're currently checked out on another branch.
             </div>
-          ) : null}
-          {environmentLabel ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <ConnectedEnvironmentMachineIcon
-                environmentId={thread.environmentId}
-                className="size-3 shrink-0 stroke-muted-foreground"
-              />
-              <div className="min-w-0 truncate text-foreground/75">{environmentLabel}</div>
+          </div>
+        ) : null}
+        {driverKind ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <ProviderInstanceIcon
+              driverKind={driverKind}
+              displayName={
+                providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
+              }
+              accentColor={providerEntry?.accentColor}
+              // Initials would swallow a size-3 glyph: accent dot, name in label.
+              showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
+              badgeContent="none"
+              badgeClassName="h-2 min-w-2 px-0"
+              iconClassName="size-3 shrink-0 grayscale opacity-60"
+            />
+            <div className="min-w-0 truncate text-foreground/75">
+              {showInstanceBadge && providerEntry
+                ? `${modelLabel} · ${providerEntry.displayName}`
+                : modelLabel}
             </div>
-          ) : null}
-          {showProjectContext && thread.branch ? (
-            <div className="flex min-w-0 items-center gap-2 text-foreground/75">
-              <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
-              <MiddleTruncate value={thread.branch} className="flex" />
+          </div>
+        ) : null}
+        {previousProviderNames.length > 0 ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <ArrowRightLeftIcon className="size-3 shrink-0 stroke-muted-foreground" />
+            <div className="min-w-0 truncate text-foreground/75">
+              Handed off from {previousProviderNames.join(", ")}
             </div>
-          ) : null}
-          {showProjectContext && branchMismatch ? (
-            <div className="flex min-w-0 items-start gap-2 text-warning">
-              <CircleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0 stroke-current" />
-              <div className="min-w-0 flex-1 wrap-break-word leading-5">
-                You're currently checked out on another branch.
-              </div>
+          </div>
+        ) : null}
+        {terminalStatus ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <TerminalIcon
+              aria-hidden
+              className={cn("size-3 shrink-0", terminalStatus.colorClass)}
+            />
+            <div className="min-w-0 truncate text-foreground/75">
+              {terminalProcessLabel(terminalProcessCount)}
             </div>
-          ) : null}
-          {driverKind ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <ProviderInstanceIcon
-                driverKind={driverKind}
-                displayName={
-                  providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
-                }
-                accentColor={providerEntry?.accentColor}
-                // Initials would swallow a size-3 glyph: accent dot, name in label.
-                showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
-                badgeContent="none"
-                badgeClassName="h-2 min-w-2 px-0"
-                iconClassName="size-3 shrink-0 grayscale opacity-60"
-              />
-              <div className="min-w-0 truncate text-foreground/75">
-                {showInstanceBadge && providerEntry
-                  ? `${modelLabel} · ${providerEntry.displayName}`
-                  : modelLabel}
-              </div>
+          </div>
+        ) : null}
+        {thread.runtime?.lastError ? (
+          <div
+            className={cn(
+              "flex min-w-0 items-center gap-2",
+              thread.runtime.lastErrorClass === "usage_limit"
+                ? "text-warning-foreground"
+                : "text-destructive-foreground",
+            )}
+          >
+            <CircleAlertIcon className="size-3 shrink-0 stroke-current" />
+            <div className="min-w-0 truncate">
+              {thread.runtime.lastErrorClass === "usage_limit"
+                ? "Usage limit reached"
+                : "Error occurred"}
             </div>
-          ) : null}
-          {previousProviderNames.length > 0 ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <ArrowRightLeftIcon className="size-3 shrink-0 stroke-muted-foreground" />
-              <div className="min-w-0 truncate text-foreground/75">
-                Handed off from {previousProviderNames.join(", ")}
-              </div>
-            </div>
-          ) : null}
-          {terminalStatus ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <TerminalIcon
-                aria-hidden
-                className={cn("size-3 shrink-0", terminalStatus.colorClass)}
-              />
-              <div className="min-w-0 truncate text-foreground/75">
-                {terminalProcessLabel(terminalProcessCount)}
-              </div>
-            </div>
-          ) : null}
-          {thread.runtime?.lastError ? (
-            <div className="flex min-w-0 items-center gap-2 text-destructive-foreground">
-              <CircleAlertIcon className="size-3 shrink-0 stroke-current" />
-              <div className="min-w-0 truncate">Error occurred</div>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </TooltipPopup>
+          </div>
+        ) : null}
+      </ThreadHoverCard>
+    </ThreadHoverCardPopup>
   );
 }
 
@@ -655,6 +661,11 @@ const WORK_INBOX_BADGE_STYLE: Record<
   failed: {
     label: "Failed",
     className: "bg-red-500/15 text-red-700 dark:text-red-300",
+    railClassName: null,
+  },
+  limited: {
+    label: "Limited",
+    className: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
     railClassName: null,
   },
   done: {
@@ -1083,35 +1094,41 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               icon: "input" as const,
               className: "text-indigo-600 dark:text-indigo-300",
             }
-          : status === "failed"
+          : status === "limited"
             ? {
-                label: "Failed",
+                label: "Limited",
                 icon: "failed" as const,
-                className: "text-red-700 dark:text-red-300",
+                className: "text-warning-foreground",
               }
-            : isWoke
+            : status === "failed"
               ? {
-                  label: "Woke",
-                  icon: "woke" as const,
-                  className: "text-warning-foreground",
+                  label: "Failed",
+                  icon: "failed" as const,
+                  className: "text-red-700 dark:text-red-300",
                 }
-              : isUnread
+              : isWoke
                 ? {
-                    label: "Done",
-                    icon: "done" as const,
-                    className: "text-emerald-700 dark:text-emerald-300",
+                    label: "Woke",
+                    icon: "woke" as const,
+                    className: "text-warning-foreground",
                   }
-                : // Ranked under Done and Woke, matching sidebar v1: a result the
-                  // reader has not seen yet outranks work that is still going.
-                  // Sky like Working, but unanimated — nothing is generating,
-                  // something is merely still out there.
-                  status === "background"
+                : isUnread
                   ? {
-                      label: "Background",
-                      icon: "working" as const,
-                      className: "text-sky-600/80 dark:text-sky-400/80",
+                      label: "Done",
+                      icon: "done" as const,
+                      className: "text-emerald-700 dark:text-emerald-300",
                     }
-                  : null;
+                  : // Ranked under Done and Woke, matching sidebar v1: a result the
+                    // reader has not seen yet outranks work that is still going.
+                    // Sky like Working, but unanimated — nothing is generating,
+                    // something is merely still out there.
+                    status === "background"
+                    ? {
+                        label: "Background",
+                        icon: "working" as const,
+                        className: "text-sky-600/80 dark:text-sky-400/80",
+                      }
+                    : null;
 
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;

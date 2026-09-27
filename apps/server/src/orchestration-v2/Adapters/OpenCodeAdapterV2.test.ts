@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   NodeId,
+  OpenCodeSettings,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
@@ -8,8 +10,13 @@ import {
   ThreadId,
   type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
+import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+
+import { ServerConfig } from "../../config.ts";
+import type { OpenCodeRuntimeShape } from "../../provider/opencodeRuntime.ts";
 
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "../IdAllocator.ts";
@@ -20,9 +27,9 @@ import {
   openCodePermissionRules,
   openCodePermissionRequestKind,
   openCodeToolProjectionKind,
+  makeOpenCodeAdapterV2,
   makeOpenCodeProtocolLogger,
   OPENCODE_PROVIDER,
-  OpenCodeProviderCapabilitiesV2,
 } from "./OpenCodeAdapterV2.ts";
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 
@@ -100,16 +107,87 @@ describe("OpenCodeAdapterV2", () => {
     }).pipe(Effect.provide(idAllocatorLayer)),
   );
 
-  it("advertises the identity strengths exposed by the SDK boundary", () => {
-    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeThreadIds, "strong");
-    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeTurnIds, "weak");
-    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeItemIds, "strong");
-    assert.equal(OpenCodeProviderCapabilitiesV2.identity.nativeRequestIds, "strong");
-    assert.isTrue(OpenCodeProviderCapabilitiesV2.threads.canForkFromTurn);
-    assert.isTrue(OpenCodeProviderCapabilitiesV2.turns.supportsActiveSteering);
-    assert.equal(OpenCodeProviderCapabilitiesV2.turns.terminalStatusQuality, "strong");
-    assert.isFalse(OpenCodeProviderCapabilitiesV2.subagents.canCloseSubagents);
-  });
+  it.effect("lets OpenCode title new sessions from their first prompt", () =>
+    Effect.gen(function* () {
+      const idAllocator = yield* IdAllocatorV2;
+      const serverConfig = yield* ServerConfig;
+      const createInputs: Array<unknown> = [];
+      const fakeClient = {
+        event: {
+          subscribe: async (_input?: unknown, options?: { readonly signal?: AbortSignal }) => ({
+            // Emits nothing and ends when the pump's abort signal fires.
+            stream: {
+              [Symbol.asyncIterator]: () => ({
+                next: () =>
+                  new Promise<IteratorResult<never>>((resolve) => {
+                    const done = () => resolve({ done: true, value: undefined });
+                    if (options?.signal?.aborted) return done();
+                    options?.signal?.addEventListener("abort", done, { once: true });
+                  }),
+              }),
+            },
+          }),
+        },
+        session: {
+          create: async (input: unknown) => {
+            createInputs.push(input);
+            return { data: { id: "ses_native_1", time: { created: 1, updated: 1 } } };
+          },
+        },
+      } as unknown as OpencodeClient;
+      const unused = (operation: string) => () => Effect.die(`${operation} is not used`);
+      const runtime: OpenCodeRuntimeShape = {
+        startOpenCodeServerProcess: unused("startOpenCodeServerProcess"),
+        connectToOpenCodeServer: () =>
+          Effect.succeed({
+            url: "test://opencode",
+            version: "test",
+            exitCode: null,
+            external: true,
+          }),
+        runOpenCodeCommand: unused("runOpenCodeCommand"),
+        createOpenCodeSdkClient: () => fakeClient,
+        loadOpenCodeInventory: unused("loadOpenCodeInventory"),
+        loadInventoryFromCli: unused("loadInventoryFromCli"),
+      };
+      const instanceId = ProviderInstanceId.make("opencode");
+      const threadId = ThreadId.make("thread-opencode-title");
+      const modelSelection = { instanceId, model: "default" };
+      const adapter = makeOpenCodeAdapterV2({
+        instanceId,
+        settings: yield* Schema.decodeEffect(OpenCodeSettings)({}),
+        environment: {},
+        runtime,
+        idAllocator,
+        serverConfig,
+      });
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-opencode-title"),
+        modelSelection,
+        runtimePolicy: runtimePolicy("full-access"),
+      });
+      yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: runtimePolicy("full-access"),
+      });
+      // OpenCode names a session from its first prompt only when create
+      // leaves the title unset, so the adapter never sends one.
+      assert.lengthOf(createInputs, 1);
+      assert.notProperty(createInputs[0], "title");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          idAllocatorLayer,
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-opencode-v2-adapter-" }).pipe(
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
+      ),
+    ),
+  );
 
   it("maps native permission families to orchestration request kinds", () => {
     assert.equal(openCodePermissionRequestKind("bash"), "command");
@@ -126,7 +204,7 @@ describe("OpenCodeAdapterV2", () => {
   it("maps OpenCode tools to semantic turn-item families", () => {
     assert.equal(openCodeToolProjectionKind("bash"), "command_execution");
     assert.equal(openCodeToolProjectionKind("edit"), "file_change");
-    assert.equal(openCodeToolProjectionKind("read"), "file_search");
+    assert.equal(openCodeToolProjectionKind("read"), "dynamic_tool");
     assert.equal(openCodeToolProjectionKind("lsp"), "file_search");
     assert.equal(openCodeToolProjectionKind("websearch"), "web_search");
     assert.equal(openCodeToolProjectionKind("codesearch"), "web_search");

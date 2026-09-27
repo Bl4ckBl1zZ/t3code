@@ -6,6 +6,7 @@ import {
   ProviderThreadId,
   RunAttemptId,
   RunId,
+  ScheduledTaskId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2ConversationMessage,
@@ -502,6 +503,34 @@ describe("V2 session presentation", () => {
       },
     } satisfies Extract<OrchestrationV2TurnItem, { readonly type: "error" }>;
 
+    expect(
+      providerErrorPresentation({
+        ...retryItem,
+        status: "failed",
+        failure: { ...retryItem.failure, class: "usage_limit" },
+      }),
+    ).toMatchObject({ label: "Usage limit reached after 2/10 retries" });
+    const recoveredLimit = {
+      ...retryItem,
+      status: "completed" as const,
+      completedAt: now,
+      failure: { ...retryItem.failure, class: "usage_limit" as const },
+    };
+    const [recoveredEntry] = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        {
+          item: recoveredLimit,
+          position: 0,
+          visibility: "local",
+          sourceThreadId: recoveredLimit.threadId,
+          sourceItemId: recoveredLimit.id,
+        },
+      ],
+      optimisticMessages: [],
+    });
+    if (recoveredEntry?.kind !== "work") throw new Error("Expected recovered provider work");
+    expect(recoveredEntry.entry.label).toBe("Provider recovered (2/10 retries)");
+    expect(workEntryIndicatesToolFailure(recoveredEntry.entry)).toBe(false);
     expect(providerErrorPresentation(retryItem)).toEqual({
       label: "Retrying provider (2/10)",
       detail: "Claude API overloaded. Retrying in 1.5s.",
@@ -846,8 +875,10 @@ describe("V2 session presentation", () => {
       inputIntent: "turn_start" as const,
       text: "Queued input",
       attachments: [],
-      createdBy: "user" as const,
-      creationSource: "web" as const,
+      createdBy: "agent" as const,
+      creationSource: "mcp" as const,
+      scheduledTaskId: ScheduledTaskId.make("task-queued"),
+      senderThreadId: ThreadId.make("thread-agent-sender"),
     } satisfies OrchestrationV2TurnItem;
     const promotedEntries = deriveTimelineEntriesFromVisibleTurnItems({
       visibleTurnItems: [
@@ -865,6 +896,8 @@ describe("V2 session presentation", () => {
     expect(promotedEntries[0]?.kind).toBe("message");
     if (promotedEntries[0]?.kind === "message") {
       expect(promotedEntries[0].message.inputIntent).toBe("turn_start");
+      expect(promotedEntries[0].message.scheduledTaskId).toBe("task-queued");
+      expect(promotedEntries[0].message.senderThreadId).toBe("thread-agent-sender");
     }
   });
 
@@ -1114,5 +1147,60 @@ describe("workEntryIndicatesToolFailure", () => {
 
   it("leaves a successful command alone", () => {
     expect(workEntryIndicatesToolFailure(entry({ exitCode: 0 }))).toBe(false);
+  });
+});
+
+describe("read and search tool labels", () => {
+  const now = DateTime.makeUnsafe("2026-09-20T00:00:00.000Z");
+  const threadId = ThreadId.make("thread-read-search");
+  const base = {
+    threadId,
+    runId: RunId.make("run-read-search"),
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    status: "completed" as const,
+    title: null,
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+  };
+  const labelOf = (item: OrchestrationV2TurnItem) => {
+    const [entry] = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        { position: 0, visibility: "local", sourceThreadId: threadId, sourceItemId: item.id, item },
+      ],
+      optimisticMessages: [],
+    });
+    return entry?.kind === "work" ? entry.entry.label : null;
+  };
+
+  it("labels a read of a bare filename from its structured input", () => {
+    expect(
+      labelOf({
+        ...base,
+        id: TurnItemId.make("read-readme"),
+        ordinal: 0,
+        type: "dynamic_tool",
+        toolName: "Read",
+        input: { file_path: "README" },
+        output: "project notes",
+      }),
+    ).toBe("Read README");
+  });
+
+  it("labels a search tool with its query and target", () => {
+    expect(
+      labelOf({
+        ...base,
+        id: TurnItemId.make("grep-todo"),
+        ordinal: 0,
+        type: "dynamic_tool",
+        toolName: "Grep",
+        input: { pattern: "TODO", path: "apps/web" },
+      }),
+    ).toBe("Searched TODO in web");
   });
 });

@@ -1,5 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type GrokSettings, ProviderDriverKind, type RuntimeMode } from "@t3tools/contracts";
+import {
+  type GrokSettings,
+  type ProviderApprovalDecision,
+  type ProviderApprovalOption,
+  ProviderDriverKind,
+  type RuntimeMode,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -32,18 +38,32 @@ interface GrokAcpRuntimeInput extends Omit<
   readonly runtimeMode?: RuntimeMode;
 }
 
+/**
+ * The runtime modes `grok agent` can launch in: ask, its auto classifier, and
+ * always-approve. It has no Auto-accept edits: `acceptEdits` only exists as a
+ * settings-file `permissions.defaultMode`, and `grok agent` treats it as ask.
+ */
+export const GROK_SUPPORTED_RUNTIME_MODES = [
+  "approval-required",
+  "auto",
+  "full-access",
+] as const satisfies ReadonlyArray<RuntimeMode>;
+
+/**
+ * Launch argv for a runtime mode. `--permission-mode` on the argv beats the
+ * user's Grok config, so Supervised cannot inherit a configured always-approve.
+ * A mode Grok does not offer launches asking.
+ */
 export function grokAcpSpawnArgs(runtimeMode?: RuntimeMode): ReadonlyArray<string> {
   switch (runtimeMode) {
-    case "approval-required":
-      return ["--permission-mode", "default", "agent", "stdio"];
-    case "auto-accept-edits":
-      return ["--permission-mode", "acceptEdits", "agent", "stdio"];
+    case undefined:
+      return ["agent", "stdio"];
     case "auto":
       return ["--permission-mode", "auto", "agent", "stdio"];
     case "full-access":
       return ["agent", "--always-approve", "stdio"];
     default:
-      return ["agent", "stdio"];
+      return ["--permission-mode", "default", "agent", "stdio"];
   }
 }
 
@@ -85,6 +105,77 @@ export function grokAcpRuntimeProcessOwnership(
   };
 }
 
+/**
+ * Grok's Auto mode asks the client about an action its classifier blocks only
+ * when the client declares a type that can show a prompt; the default
+ * (`generic`) gets a silent denial instead. `extension` is the prompting type
+ * that keeps the permission options T3 already maps (no always-approve row,
+ * no per-command persistent grants).
+ */
+export const GROK_ACP_INITIALIZE_META = { clientType: "extension" } as const;
+
+/**
+ * Grok's only session-scoped `allow_always` answer: "Yes, allow all edits
+ * during this session" on an edit prompt. Its bash, monitor and MCP
+ * `always-allow` rows instead save a grant for the whole project that outlives
+ * the session (grok-build `crates/codegen/xai-grok-workspace/src/permission/`
+ * `prompter.rs` `ALLOW_EDITS_SESSION_OPTION_ID`, `grants.rs`
+ * `record_prompt_outcome`).
+ */
+const GROK_ALLOW_EDITS_SESSION_OPTION_ID = "allow-edits-session";
+
+/**
+ * The approval choices a Grok permission prompt can honor. The session choice
+ * appears only where Grok's answer lasts for the session.
+ */
+export function grokApprovalOptions(
+  request: EffectAcpSchema.RequestPermissionRequest,
+): ReadonlyArray<ProviderApprovalOption> {
+  const has = (kind: EffectAcpSchema.PermissionOption["kind"], optionId?: string) =>
+    request.options.some(
+      (option) =>
+        option.kind === kind && (optionId === undefined || option.optionId.trim() === optionId),
+    );
+  return [
+    { decision: "cancel", label: "Cancel" },
+    ...(has("reject_once") ? [{ decision: "decline", label: "Decline" } as const] : []),
+    ...(has("allow_always", GROK_ALLOW_EDITS_SESSION_OPTION_ID)
+      ? [{ decision: "acceptForSession", label: "Allow all edits this session" } as const]
+      : []),
+    ...(has("allow_once") ? [{ decision: "accept", label: "Approve" } as const] : []),
+  ];
+}
+
+/**
+ * The Grok option a user's approval selects. A session approval picks only
+ * Grok's session-scoped edit option; on a prompt whose `allow_always` would
+ * save a project-wide grant it approves once, even when a client answers with
+ * a choice the card did not offer. No answer saves a project-wide grant.
+ */
+export function selectGrokPermissionOption(
+  request: EffectAcpSchema.RequestPermissionRequest,
+  decision: ProviderApprovalDecision,
+): string | undefined {
+  const find = (kind: EffectAcpSchema.PermissionOption["kind"], optionId?: string) =>
+    request.options
+      .find(
+        (option) =>
+          option.kind === kind && (optionId === undefined || option.optionId.trim() === optionId),
+      )
+      ?.optionId.trim() || undefined;
+  switch (decision) {
+    case "cancel":
+      return undefined;
+    case "decline":
+      return find("reject_once");
+    case "acceptForSession":
+      return find("allow_always", GROK_ALLOW_EDITS_SESSION_OPTION_ID) ?? find("allow_once");
+    case "accept":
+    case "acceptAlways":
+      return find("allow_once");
+  }
+}
+
 export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
 ): Effect.Effect<
@@ -109,6 +200,7 @@ export const makeGrokAcpRuntime = (
         // Current Grok treats Ctrl+C cancellation as a barrier against stale
         // background-task wake prompts until the next genuine user turn.
         cancelMeta: { ...input.cancelMeta, cancelTrigger: "ctrl_c" },
+        initializeMeta: GROK_ACP_INITIALIZE_META,
         ...grokAcpRuntimeProcessOwnership(processGroupPlatform),
       }).pipe(
         Layer.provide(

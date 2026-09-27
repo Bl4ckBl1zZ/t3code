@@ -1,5 +1,15 @@
 import * as Haptics from "expo-haptics";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import {
+  subagentGroupTiming,
+  summarizeSubagentStatuses,
+} from "@t3tools/client-runtime/state/subagent-display";
+import {
+  isOrchestrationV2WorkActive,
+  type EnvironmentId,
+  type OrchestrationV2TurnItem,
+  type ThreadId,
+} from "@t3tools/contracts";
+import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { useNavigation } from "@react-navigation/native";
 import { useMemo } from "react";
 import { Pressable, View } from "react-native";
@@ -7,6 +17,7 @@ import { Pressable, View } from "react-native";
 import { AgentOrb } from "../../components/AgentOrb";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
+import { cn } from "../../lib/cn";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
 import {
   resolveLifecyclePresentation,
@@ -194,5 +205,116 @@ export function ThreadLifecycleRow(props: {
     relatedRow
   ) : (
     <View className={RELATED_THREAD_ROWS_CLASS}>{relatedRow}</View>
+  );
+}
+
+type SubagentItem = Extract<OrchestrationV2TurnItem, { type: "subagent" }>;
+
+const SUBAGENT_GROUP_VISIBLE_ORBS = 3;
+
+/** Wall time of a settled group; a live group's header already says it is working. */
+function settledGroupDuration(items: ReadonlyArray<SubagentItem>): string | null {
+  const timing = subagentGroupTiming(items);
+  if (timing.startedAt === null || timing.completedAt === null) return null;
+  const duration = Date.parse(timing.completedAt) - Date.parse(timing.startedAt);
+  return duration > 0 ? formatDuration(duration) : null;
+}
+
+/**
+ * A turn's adjacent subagents as one collapsible card: a header that stacks
+ * their orbs and counts their states, and the ordinary rows once expanded.
+ * Expansion lives in the feed's state so it survives list recycling.
+ */
+export function SubagentLifecycleGroup(props: {
+  readonly entries: ReadonlyArray<LifecycleEntry>;
+  readonly items: ReadonlyArray<SubagentItem>;
+  readonly environmentId: EnvironmentId;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}) {
+  const iconSubtle = useThemeColor("--color-icon-subtle");
+  const label = `${props.items.length} subagents`;
+  const summary = summarizeSubagentStatuses(props.items.map((item) => item.status));
+  const active = props.items.some((item) => isOrchestrationV2WorkActive(item.status));
+  const failed = props.items.some((item) => item.status === "failed");
+  const duration = active ? null : settledGroupDuration(props.items);
+  return (
+    <View className="-mx-1 mb-3 px-1">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${label}, ${summary}`}
+        accessibilityState={{ expanded: props.expanded }}
+        hitSlop={4}
+        onPress={() => {
+          void Haptics.selectionAsync();
+          props.onToggle();
+        }}
+        className="min-h-11 flex-row items-center gap-2.5 rounded-md px-0.5 py-1.5 active:bg-subtle"
+      >
+        <View accessible={false} className="flex-row items-center">
+          {props.items.slice(0, SUBAGENT_GROUP_VISIBLE_ORBS).map((item, index) => {
+            const presentation = resolveLifecyclePresentation(item, []);
+            return (
+              <View key={item.id} style={{ marginLeft: index === 0 ? 0 : -4 }}>
+                <AgentOrb
+                  seed={
+                    presentation?.kind === "related-thread" && presentation.orbSeed !== null
+                      ? presentation.orbSeed
+                      : item.subagentId
+                  }
+                  size={16}
+                  state={
+                    (presentation?.kind === "related-thread" ? presentation.orbState : null) ??
+                    "done"
+                  }
+                />
+              </View>
+            );
+          })}
+          {props.items.length > SUBAGENT_GROUP_VISIBLE_ORBS ? (
+            <Text className="pl-1.5 text-2xs tabular-nums text-foreground-muted">
+              +{props.items.length - SUBAGENT_GROUP_VISIBLE_ORBS}
+            </Text>
+          ) : null}
+        </View>
+        <Text className="min-w-0 flex-1 text-xs" numberOfLines={1}>
+          <Text className="font-t3-medium text-foreground">{label}</Text>
+          <Text
+            className={cn(
+              "text-2xs",
+              active
+                ? "text-sky-600 dark:text-sky-400"
+                : failed
+                  ? "text-rose-600 dark:text-rose-400"
+                  : "text-foreground-muted",
+            )}
+          >
+            {"  "}
+            {summary}
+          </Text>
+        </Text>
+        {duration ? (
+          <Text className="shrink-0 text-2xs tabular-nums text-foreground-muted">{duration}</Text>
+        ) : null}
+        <SymbolView
+          name={props.expanded ? "chevron.up" : "chevron.down"}
+          size={11}
+          tintColor={iconSubtle}
+          type="monochrome"
+        />
+      </Pressable>
+      {props.expanded ? (
+        <View className="mt-1 gap-px rounded-xl border border-neutral-300/50 p-1 dark:border-white/[0.08]">
+          {props.entries.map((entry) => (
+            <ThreadLifecycleRow
+              key={entry.id}
+              entry={entry}
+              environmentId={props.environmentId}
+              grouped
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 }

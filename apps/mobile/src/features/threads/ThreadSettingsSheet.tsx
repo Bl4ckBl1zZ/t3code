@@ -49,10 +49,12 @@ export function threadSettingsSummaryLabel(input: {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly isHermes: boolean;
+  readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode> | undefined;
 }): string {
   const runtime = runtimeModeMenu({
     isHermes: input.isHermes,
     runtimeMode: input.runtimeMode,
+    supportedRuntimeModes: input.supportedRuntimeModes,
   }).selected;
   return [
     input.modelLabel,
@@ -294,10 +296,6 @@ export function ThreadSettingsSheet(props: {
   const [expandedProviders, setExpandedProviders] = useState<ReadonlySet<string>>(() => new Set());
   const [pendingModel, setPendingModel] = useState<ModelOption | null>(null);
   const [submenu, setSubmenu] = useState<SubmenuPage | null>(null);
-  const runtimeChoices = runtimeModeMenu({
-    isHermes: props.isHermes,
-    runtimeMode: props.runtimeMode,
-  });
   const wasPresentedRef = useRef(false);
   const notifyDismissed = useCallback(() => {
     if (!wasPresentedRef.current) {
@@ -330,6 +328,14 @@ export function ThreadSettingsSheet(props: {
   // The list highlights the staged pick; Save turns it into the applied one.
   const isDisplayed = (option: ModelOption) =>
     pendingModel ? option.key === pendingModel.key : isApplied(option);
+  const displayedModel =
+    pendingModel ??
+    props.providerGroups.flatMap((group) => group.models).find((option) => isApplied(option));
+  const runtimeChoices = runtimeModeMenu({
+    isHermes: props.isHermes,
+    runtimeMode: props.runtimeMode,
+    supportedRuntimeModes: displayedModel?.supportedRuntimeModes,
+  });
 
   // While a model is staged, the settings rows describe and edit the staged
   // model's options (kept on its pending selection); Save applies model and

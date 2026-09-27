@@ -472,18 +472,19 @@ function ThreadRouteContent(
       threadId: String(selectedThread.id),
     });
   }, [navigation, selectedThread]);
+  const stopRunId = composer.interruptibleRunId ?? composer.backgroundWorkStopRunId;
   const handleStopThread = useCallback(() => {
-    if (!selectedThread || composer.interruptibleRunId === null) {
+    if (!selectedThread || stopRunId === null) {
       return;
     }
     return interruptThreadTurn({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
-        runId: composer.interruptibleRunId,
+        runId: stopRunId,
       },
     });
-  }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread]);
+  }, [stopRunId, interruptThreadTurn, selectedThread]);
 
   const threadGitControlProps = {
     environmentId: environmentIdRaw ?? "",
@@ -611,6 +612,32 @@ function ThreadRouteContent(
     [navigation],
   );
 
+  const parentThreadEnvironmentId = selectedThread?.environmentId ?? null;
+  const parentThreadId = selectedThread?.lineage.parentThreadId ?? null;
+  const providerSubagent = useMemo(
+    () =>
+      composer.isProviderSubagentThread
+        ? {
+            status: composer.providerSubagentStatus,
+            onOpenParent:
+              parentThreadEnvironmentId === null || parentThreadId === null
+                ? null
+                : () =>
+                    navigation.navigate("Thread", {
+                      environmentId: parentThreadEnvironmentId,
+                      threadId: parentThreadId,
+                    }),
+          }
+        : null,
+    [
+      composer.isProviderSubagentThread,
+      composer.providerSubagentStatus,
+      navigation,
+      parentThreadEnvironmentId,
+      parentThreadId,
+    ],
+  );
+
   if (!environmentId || !threadId) {
     return <OpeningThreadLoadingScreen />;
   }
@@ -643,6 +670,7 @@ function ThreadRouteContent(
           activityRun={composer.selectedThreadActivityRun}
           activeWorkActivityText={composer.activeWorkActivityText}
           activeWorkStartedAt={composer.activeWorkStartedAt}
+          providerSubagent={providerSubagent}
           activePendingApproval={requests.activePendingApproval}
           respondingApprovalId={requests.respondingApprovalId}
           activePendingUserInput={requests.activePendingUserInput}
@@ -655,6 +683,7 @@ function ThreadRouteContent(
           threadSyncStatus={selectedThreadDetailState.status}
           activeThreadBusy={composer.activeThreadBusy}
           canStopThread={composer.interruptibleRunId !== null}
+          canStopBackgroundWork={composer.backgroundWorkStopRunId !== null}
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}

@@ -42,6 +42,24 @@ changed agents -- which ones it ran on before. The elapsed time beside a working
 the moment that turn started, including while it waits for your approval, and disappears once the
 thread stops working.
 
+**Limited** means the provider stopped on a usage or rate limit. The conversation keeps the
+provider's explanation. Retry after the limit resets, or switch to another provider instance.
+Queued messages stay saved while the limit blocks the thread, and the thread stays **Limited**
+while they wait. They run after the next turn finishes; see
+[Paused queues](./composer.md#paused-queues).
+
+When the provider reports a reset time, choose **Resume at reset** to schedule a continuation. You
+can cancel it from the thread. Enable **Auto-resume limited threads** in **Settings → General** on
+web and desktop to schedule limit stops by default. The environment must be running when the reset
+arrives; it resumes overdue continuations after a restart. Sending a new message, archiving, or
+settling the thread prevents a pending continuation from starting.
+
+Choose **Snooze until reset** to hide the thread until its allowance returns. Snooze and
+auto-resume are independent: snooze alone wakes the thread without sending a message; enabling
+both wakes and continues it. **Wake now** cancels the snooze. Enable **Snooze limited threads** in
+**Settings → General** on web and desktop to snooze limit stops by default. Providers without a
+reset time offer manual retry and the normal snooze choices.
+
 ## Delete threads on web and desktop
 
 Choose **Delete** from a thread's menu, or select several threads and choose **Delete (N)**. With
@@ -142,7 +160,7 @@ already have synced positions, update those servers before reordering the sectio
 
 On iPad, drag files from another app onto a thread row to open its composer with those files.
 Existing text and attachments stay in place, and the message remains unsent. Preparation uses
-the same file-size and eight-attachment limits as the composer. If you leave while files are
+the same file-size and attachment limits as the composer. If you leave while files are
 being prepared, return to that thread to finish adding the pending files during this app session.
 Archived rows and batch-selection mode do not accept drops.
 

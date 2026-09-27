@@ -1,9 +1,12 @@
+import { makeProviderFailure } from "../ProviderFailure.ts";
+import { xAiRateLimitedErrorCode } from "../../provider/acp/XAiAcpExtension.ts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import {
   defaultInstanceIdForDriver,
   GrokSettings,
   ProviderDriverKind,
   type OrchestrationV2ProviderCapabilities,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -12,11 +15,13 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import type * as EffectAcpErrors from "effect-acp/errors";
+import * as EffectAcpErrors from "effect-acp/errors";
 
 import { ServerConfig } from "../../config.ts";
 import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.ts";
 import {
+  grokApprovalOptions,
+  selectGrokPermissionOption,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
 } from "../../provider/acp/GrokAcpSupport.ts";
@@ -30,6 +35,7 @@ import {
   extractXAiKilledBackgroundTasks,
   extractXAiMonitorTaskId,
   isXAiPersistentMonitor,
+  registerXAiSubagentFinished,
   makeXAiAskUserQuestionCancelledResponse,
   makeXAiAskUserQuestionResponse,
   normalizeXAiAcpToolCallState,
@@ -41,7 +47,7 @@ import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { IdAllocatorV2 } from "../IdAllocator.ts";
 import { ProviderContinuationRequests } from "../ProviderContinuationRequests.ts";
-import { ProviderAdapterV2 } from "../ProviderAdapter.ts";
+import { ProviderAdapterV2, type ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
@@ -49,6 +55,7 @@ import {
 } from "../ProviderAdapterDriver.ts";
 import {
   AcpProviderCapabilitiesV2,
+  acpPermissionDisposition,
   makeAcpAdapterV2,
   type AcpAdapterV2ExtensionContext,
   type AcpAdapterV2Flavor,
@@ -114,8 +121,10 @@ export const registerGrokAcpExtensions: NonNullable<AcpAdapterV2Flavor["register
   runtime,
   requestUserInput,
   applyBackgroundTaskMutation,
+  finishSubagent,
 }) =>
   registerXAiBackgroundTaskTracking(runtime, applyBackgroundTaskMutation).pipe(
+    Effect.andThen(registerXAiSubagentFinished(runtime, finishSubagent)),
     Effect.andThen(registerGrokAskUserQuestionExtensions({ runtime, requestUserInput })),
   );
 
@@ -153,6 +162,17 @@ const registerGrokAskUserQuestionExtensions = ({
     { discard: true },
   );
 
+/**
+ * Grok's permission mode is fixed at launch. Explicit approval or sandbox
+ * overrides launch it asking, so every mutating prompt reaches T3's policy
+ * check instead of being bypassed by always-approve or Grok's auto classifier.
+ */
+export function grokLaunchRuntimeMode(runtimePolicy: ProviderAdapterV2RuntimePolicy): RuntimeMode {
+  return runtimePolicy.approvalPolicy === undefined && runtimePolicy.sandboxPolicy === undefined
+    ? runtimePolicy.runtimeMode
+    : "approval-required";
+}
+
 export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdapterV2Flavor {
   return {
     driver: GROK_PROVIDER,
@@ -181,14 +201,32 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
     resolveModelId: (selection) => resolveGrokAcpBaseModelId(selection.model),
     makeRuntime:
       options.makeRuntime ??
-      ((input) =>
+      (({ runtimePolicy, ...input }) =>
         makeGrokAcpRuntime({
           ...input,
           interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
           grokSettings: options.settings,
           environment: options.environment,
           childProcessSpawner: options.childProcessSpawner,
+          runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
         })),
+    // In its Auto mode Grok decides routine actions itself and only asks about
+    // what its classifier blocked, so every prompt it sends goes to the user.
+    permissionDisposition: (policy, request) =>
+      grokLaunchRuntimeMode(policy) === "auto" ? "ask" : acpPermissionDisposition(policy, request),
+    approvalOptions: grokApprovalOptions,
+    selectPermissionOption: selectGrokPermissionOption,
+    promptFailure: (cause) =>
+      makeProviderFailure({
+        cause,
+        ...(Schema.is(EffectAcpErrors.AcpRequestError)(cause)
+          ? {
+              message: cause.errorMessage,
+              code: String(cause.code),
+              class: cause.code === xAiRateLimitedErrorCode ? "usage_limit" : "provider_error",
+            }
+          : { class: "provider_error" }),
+      }),
     registerExtensions: registerGrokAcpExtensions,
     extractSubagentUpdate: extractXAiAcpSubagentUpdate,
     extractSubagentEndNotice: extractXAiAcpSubagentEndNotice,

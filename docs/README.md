@@ -18,7 +18,7 @@
 - [Background commands](./user/background-commands.md)
 - [Voice input](./user/voice-input.md)
 - [Background service (Linux)](./user/background-service.md)
-- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md)
+- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Pi](./user/providers-pi.md)
 
 Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 

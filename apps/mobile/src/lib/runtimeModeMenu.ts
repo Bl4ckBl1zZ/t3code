@@ -27,13 +27,16 @@ const HERMES_RUNTIME_MODE_MENU_OPTIONS: ReadonlyArray<RuntimeModeMenuOption> =
 
 /**
  * The Runtime menu entry for a thread. T3 Work (Hermes) threads get the two
- * options Hermes actually distinguishes; everything else gets the four generic
- * modes. A mode outside the offered set still has to read as something, since a
- * thread can carry one in from wherever it was created.
+ * options Hermes actually distinguishes; everything else gets the generic
+ * modes the provider supports (all four when it lists none). A mode outside
+ * the offered set still has to read as something, since a thread can carry one
+ * in from wherever it was created; it reads as the first offered mode, which
+ * is the mode the server runs it in.
  */
 export function runtimeModeMenu(input: {
   readonly isHermes: boolean;
   readonly runtimeMode: RuntimeMode;
+  readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode> | undefined;
 }): {
   readonly options: ReadonlyArray<RuntimeModeMenuOption>;
   readonly selected: RuntimeModeMenuOption;
@@ -45,10 +48,15 @@ export function runtimeModeMenu(input: {
       selected: HERMES_RUNTIME_MODE_MENU_OPTIONS.find((option) => option.mode === mode)!,
     };
   }
+  const supported = input.supportedRuntimeModes;
+  const supportedOptions =
+    supported === undefined || supported.length === 0
+      ? []
+      : DEFAULT_RUNTIME_MODE_MENU_OPTIONS.filter((option) => supported.includes(option.mode));
+  const options =
+    supportedOptions.length > 0 ? supportedOptions : DEFAULT_RUNTIME_MODE_MENU_OPTIONS;
   return {
-    options: DEFAULT_RUNTIME_MODE_MENU_OPTIONS,
-    selected:
-      DEFAULT_RUNTIME_MODE_MENU_OPTIONS.find((option) => option.mode === input.runtimeMode) ??
-      DEFAULT_RUNTIME_MODE_MENU_OPTIONS[0]!,
+    options,
+    selected: options.find((option) => option.mode === input.runtimeMode) ?? options[0]!,
   };
 }

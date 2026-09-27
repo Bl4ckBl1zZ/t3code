@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
 import {
+  deriveProviderSubagentStatus,
+  deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
@@ -9,7 +11,10 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import {
   CommandId,
+  getProviderAttachmentLimitError,
+  isProviderNativeSubagentThread,
   MessageId,
+  orchestrationV2BackgroundWorkStopRunId,
   type EnvironmentId,
   type ModelSelection,
   type ProviderInteractionMode,
@@ -176,19 +181,53 @@ export function useThreadComposerState(options?: {
     };
   }, [selectedThreadRuntime]);
 
+  // Provider-native subagent threads work without an app run; their runless
+  // root turn is what shows them working (and times them).
+  const runlessWorkStartedAt = useMemo(
+    () =>
+      selectedThreadProjection
+        ? deriveRunlessWorkStartedAt(selectedThreadProjection.projection)
+        : null,
+    [selectedThreadProjection],
+  );
   const activeWorkStartedAt = useMemo(() => {
     if (!selectedThreadShell) {
       return null;
     }
-    return deriveActiveWorkStartedAt(
-      selectedThreadActivityRun,
-      selectedThreadSessionActivity,
-      null,
+    return (
+      deriveActiveWorkStartedAt(selectedThreadActivityRun, selectedThreadSessionActivity, null) ??
+      runlessWorkStartedAt
     );
-  }, [selectedThreadActivityRun, selectedThreadSessionActivity, selectedThreadShell]);
+  }, [
+    runlessWorkStartedAt,
+    selectedThreadActivityRun,
+    selectedThreadSessionActivity,
+    selectedThreadShell,
+  ]);
+
+  // A provider-native subagent thread cannot take messages; its status stands
+  // in for the composer.
+  const isProviderSubagentThread =
+    selectedThreadProjection !== null &&
+    isProviderNativeSubagentThread(selectedThreadProjection.projection.thread);
+  const providerSubagentStatus = useMemo(
+    () =>
+      selectedThreadProjection
+        ? deriveProviderSubagentStatus(selectedThreadProjection.projection)
+        : null,
+    [selectedThreadProjection],
+  );
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const interruptibleRunId = selectedThreadRuntime?.activeRunId ?? null;
+  // A settled run whose background work runs on: Stop ends that work.
+  const backgroundWorkStopRunId = useMemo(
+    () =>
+      activeThreadBusy || selectedThreadProjection === null
+        ? null
+        : orchestrationV2BackgroundWorkStopRunId(selectedThreadProjection.projection),
+    [activeThreadBusy, selectedThreadProjection],
+  );
 
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -242,6 +281,12 @@ export function useThreadComposerState(options?: {
         options?.onRequestFreshHermesChat?.();
         return null;
       }
+    }
+
+    const attachmentLimitError = getProviderAttachmentLimitError(attachments);
+    if (attachmentLimitError !== undefined) {
+      setPendingConnectionError(attachmentLimitError);
+      return null;
     }
 
     const metadata = makeQueuedMessageMetadata();
@@ -523,6 +568,8 @@ export function useThreadComposerState(options?: {
     onQueuedMessageEditingChange,
     activeWorkStartedAt,
     activeWorkActivityText,
+    isProviderSubagentThread,
+    providerSubagentStatus,
     draftMessage,
     draftAttachments,
     modelSelection,
@@ -530,6 +577,7 @@ export function useThreadComposerState(options?: {
     interactionMode,
     activeThreadBusy,
     interruptibleRunId,
+    backgroundWorkStopRunId,
     onChangeDraftMessage,
     onPickDraftImages,
     onPickDraftDocuments,

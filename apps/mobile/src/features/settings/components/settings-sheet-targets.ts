@@ -7,6 +7,7 @@ export type SettingsSheetTarget =
   | "SettingsProjectGrouping"
   | "SettingsClientStorage"
   | "SettingsIntegrations"
+  | "SettingsProviderAccounts"
   | "SettingsOpenRouter"
   | "SettingsVoiceInput"
   | "SettingsVoiceModel"

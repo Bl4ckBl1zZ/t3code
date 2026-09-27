@@ -1,7 +1,4 @@
-import {
-  orchestrationV2TurnItemStatusIsTerminal,
-  type OrchestrationV2TurnItem,
-} from "@t3tools/contracts";
+import { isOrchestrationV2WorkActive, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 
 import type { TimelineEntry } from "~/session-logic";
 
@@ -19,7 +16,7 @@ export function workingSubagentsFromTimeline(
   for (const entry of entries) {
     if (entry.kind !== "event") continue;
     const item = entry.projectedItem.item;
-    if (item.type === "subagent" && !orchestrationV2TurnItemStatusIsTerminal(item.status)) {
+    if (item.type === "subagent" && isOrchestrationV2WorkActive(item.status)) {
       working.push(item);
     }
   }

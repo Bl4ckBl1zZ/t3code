@@ -499,8 +499,10 @@ public struct ThreadDetailView: View {
                 .keyboardShortcut(.upArrow, modifiers: [.command, .option])
             Button("Next Turn") { turnNavigationRequest += 1 }
                 .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-            Button("Send Message") { send() }
-                .keyboardShortcut(.return, modifiers: .command)
+            if !currentThread.isProviderNativeSubagentThread {
+                Button("Send Message") { send() }
+                    .keyboardShortcut(.return, modifiers: .command)
+            }
             if currentThread.state == .working || currentThread.state == .queued {
                 Button("Stop") { Task { await model.cancelTurn(threadID: thread.id) } }
                     .keyboardShortcut(".", modifiers: .command)
@@ -636,6 +638,16 @@ public struct ThreadDetailView: View {
                             ThreadArchivedBar {
                                 await model.setArchived(thread.id, archived: false)
                                 PlatformHapticEngine.shared.play(.success)
+                            }
+                        } else if currentThread.isProviderNativeSubagentThread {
+                            // The provider runs this conversation and the
+                            // server refuses sends. A question or approval it
+                            // asks here still has to be answerable, so the
+                            // composer returns for exactly that: with a request
+                            // pending it shows only the request panel.
+                            providerSubagentBar(detail)
+                            if !detail.approvals.isEmpty || !detail.userInputs.isEmpty {
+                                composer(detail)
                             }
                         } else {
                             composer(detail)
@@ -794,7 +806,10 @@ public struct ThreadDetailView: View {
             backgroundCommands: backgroundCommands,
             onOpenThread: onOpenRelatedThread,
             onMerge: lineageMergeBack,
-            onDetach: lineageDetach
+            onDetach: lineageDetach,
+            onStop: canStopBackgroundWork
+                ? { Task { await model.cancelTurn(threadID: thread.id) } }
+                : nil
         )
     }
 
@@ -827,6 +842,15 @@ public struct ThreadDetailView: View {
 
     /// Background commands for the open thread, finished ones included so the bar
     /// can report an ending that has just landed.
+    /// The turn has settled but background work it started still runs; Stop
+    /// on the status bar ends it.
+    private var canStopBackgroundWork: Bool {
+        guard let detail else { return false }
+        return detail.workflow.backgroundWorkStopRunID != nil
+            && detail.thread.state != .working
+            && detail.thread.state != .queued
+    }
+
     private var backgroundCommands: [ThreadDetailsBackgroundCommand] {
         guard let detail else { return [] }
         return ThreadDetailsBackgroundTasks.backgroundCommands(detail.timelineItems.map(\.item))
@@ -984,6 +1008,26 @@ public struct ThreadDetailView: View {
             if let citation = AssistantCitation.parse(url.absoluteString) { citationPreview = citation; return .handled }
             return .systemAction
         })
+    }
+
+    private func providerSubagentBar(_ detail: FeatureThreadDetail) -> some View {
+        let selection = currentSelection
+        let provider = selection.flatMap { selection in
+            threadProviders.first { $0.id == selection.providerID }
+        }
+        let model = selection.flatMap { selection in
+            provider?.models.first { $0.id == selection.modelID }
+        }
+        let parentThreadID = detail.workflow.thread?.parentThreadID
+        return ProviderSubagentBar(
+            provider: provider,
+            modelLabel: model?.name ?? selection?.modelID ?? currentThread.providerName ?? "Subagent",
+            effortLabel: model.flatMap {
+                DailyUXModelOptions.reasoningSummary(for: $0, selections: selection?.options ?? [])
+            },
+            status: detail.workflow.providerSubagentStatus,
+            onOpenParent: parentThreadID.map { id in { openRelatedThread(id) } }
+        )
     }
 
     private var composerKeyboardDismissGesture: some Gesture {

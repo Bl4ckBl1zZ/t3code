@@ -86,7 +86,7 @@
       {
         "name": "CURSOR_API_KEY",
         "label": "Cursor API key",
-        "description": "Required by the Cursor Agent SDK.",
+        "description": "Optional. Overrides browser sign-in for this provider.",
         "placeholder": "Paste API key",
         "sensitive": true
       }
@@ -343,6 +343,30 @@
         "description": "Optional path to the official Antigravity ACP executable. Leave empty for automatic selection.",
         "placeholder": "Automatic",
         "clearWhenEmpty": "persist"
+      }
+    ]
+  },
+  {
+    "driver": "pi",
+    "label": "Pi",
+    "hasDefaultInstance": true,
+    "badgeLabel": "Early Access",
+    "environmentFields": [],
+    "fields": [
+      {
+        "key": "binaryPath",
+        "control": "text",
+        "label": "Binary path",
+        "description": "Path to the Pi coding agent binary.",
+        "placeholder": "pi",
+        "clearWhenEmpty": "omit"
+      },
+      {
+        "key": "launchArgs",
+        "control": "text",
+        "label": "Launch arguments",
+        "description": "Additional CLI arguments passed to pi --mode rpc on session start.",
+        "clearWhenEmpty": "omit"
       }
     ]
   },

@@ -6,7 +6,11 @@ import {
   buildPrContentPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
-import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
+import {
+  normalizeCliError,
+  sanitizeThreadTitle,
+  toJsonSchemaObject,
+} from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 
 describe("buildCommitMessagePrompt", () => {
@@ -114,6 +118,39 @@ describe("buildPrContentPrompt", () => {
 });
 
 describe("buildBranchNamePrompt", () => {
+  it("requests a semantic prefix as part of the same branch response", () => {
+    const { prompt, outputSchema } = buildBranchNamePrompt({
+      message: "Add search",
+      naming: { mode: "semantic", prefix: "ignored", instructions: "ignored instruction" },
+    });
+    expect(prompt).toContain("feat/add-search");
+    expect(prompt).not.toContain("ignored instruction");
+    expect(toJsonSchemaObject(outputSchema)).toMatchObject({ required: ["branch"] });
+  });
+  it("appends custom instructions without imposing a prefix, case or word limit", () => {
+    const { prompt } = buildBranchNamePrompt({
+      message: "Add search",
+      naming: {
+        mode: "custom",
+        prefix: "ignored",
+        instructions: "Use Julius/ABC-123 and preserve capitalization.",
+      },
+    });
+    expect(prompt).toContain("Use Julius/ABC-123 and preserve capitalization.");
+    expect(prompt).toContain("complete branch name");
+    expect(prompt).not.toContain("2-6 words");
+    expect(prompt).not.toContain("lowercase");
+    expect(prompt).not.toContain("no issue prefixes");
+  });
+  it("asks for just the fragment in static mode", () => {
+    const { prompt } = buildBranchNamePrompt({
+      message: "Add search",
+      naming: { mode: "static", prefix: "team", instructions: "ignored instruction" },
+    });
+    expect(prompt).toContain("without a prefix or namespace");
+    expect(prompt).not.toContain("ignored instruction");
+  });
+
   it("includes the user message in the prompt", () => {
     const result = buildBranchNamePrompt({
       message: "Fix the login timeout bug",

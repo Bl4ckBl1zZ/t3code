@@ -2,6 +2,7 @@ import { assert } from "@effect/vitest";
 import {
   type ChatAttachment,
   CommandId,
+  isOrchestrationV2WorkActive,
   MessageId,
   ProjectId,
   ThreadId,
@@ -47,13 +48,20 @@ export const MESSAGE_STEERING_INITIAL_PROMPT =
   "Respond with exactly: steering fixture initial response";
 export const SUBAGENT_PROMPT =
   "Spawn 2 subagents, one to read package.json and one to read tsconfig.json";
-export const SUBAGENT_V2_PROMPT = "just say hello";
+export const SUBAGENT_V2_NESTED_PROMPT =
+  "Spawn one subagent and tell it to spawn its own subagent, which must in turn spawn one more subagent whose only task is to reply with exactly: Hello. Each agent waits for its child and replies with exactly what the child said. Wait for your subagent, then reply with exactly what it said.";
+export const SUBAGENT_V2_PROMPT =
+  "Spawn one subagent whose only task is to reply with exactly: Hello. Wait for it to finish, then reply with exactly what it said.";
+export const SUBAGENT_V2_APPROVAL_PROMPT =
+  "Do not run any commands yourself. Spawn one subagent whose only task is to run this exact shell command: printf 'subagent approval fixture' > subagent-approval.txt and then reply with exactly: Written. Wait for it to finish, then reply with exactly what it said.";
+export const SUBAGENT_V2_NESTED_APPROVAL_PROMPT =
+  "Do not run any commands yourself. Spawn one subagent and tell it not to run any commands itself but to spawn its own subagent, whose only task is to run this exact shell command: printf 'nested approval fixture' > nested-approval.txt and then reply with exactly: Written. Each agent waits for its child and replies with exactly what the child said. Wait for your subagent, then reply with exactly what it said.";
 export const OPENCODE_SUBAGENT_PROMPT =
   "Use the task tool exactly once. Delegate to the general subagent with this prompt: Respond exactly CHILD_OK. After the task completes, respond exactly PARENT_OK.";
 export const SUBAGENT_CONTINUE_PROMPT =
   "Spawn one subagent and have it reply exactly: initial subagent response";
 export const SUBAGENT_CONTINUE_PARENT_PROMPT =
-  "@hooke have the same subagent reply exactly: continued subagent response";
+  "Have the same subagent you spawned earlier reply exactly: continued subagent response";
 export const SUBAGENT_CONTINUE_CHILD_PROMPT = "Reply exactly: continued subagent response";
 export const TURN_INTERRUPT_PROMPT =
   "Do not answer immediately. First run the local shell command `sleep 30`, then respond with exactly: interrupt fixture should not finish naturally.";
@@ -191,6 +199,8 @@ export type OrchestratorFixtureInputStep =
         OrchestrationV2Command,
         { readonly type: "runtime-request.respond" }
       >["decision"];
+      /** Captures the shell snapshot under this key while the request is pending. */
+      readonly shellSnapshotKeyWhilePending?: string;
     }
   | {
       readonly type: "answer_next_user_input_request";
@@ -245,7 +255,7 @@ export interface FixtureIds {
 
 export const CODEX_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("codex"),
-  model: "gpt-5.4",
+  model: "gpt-6-luna",
 } satisfies ModelSelection;
 
 export const CLAUDE_MODEL_SELECTION = {
@@ -267,6 +277,12 @@ export const OPENCODE_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("opencode"),
   model: "openai/gpt-5.4-mini",
   options: [{ id: "agent", value: "build" }],
+} satisfies ModelSelection;
+
+/** Pi fixtures are recorded against this pinned OpenRouter model; the slug is `provider/model`. */
+export const PI_MODEL_SELECTION = {
+  instanceId: ProviderInstanceId.make("pi"),
+  model: "openrouter/deepseek/deepseek-v4-flash",
 } satisfies ModelSelection;
 
 export const ACP_REGISTRY_MODEL_SELECTION = {
@@ -546,6 +562,9 @@ export function materializeFixtureInput(input: {
             threadId: ids.threadId,
             commandId: commands.at(-1)!.commandId,
             decision: step.decision ?? "accept",
+            ...(step.shellSnapshotKeyWhilePending === undefined
+              ? {}
+              : { shellSnapshotKeyWhilePending: step.shellSnapshotKeyWhilePending }),
           };
           steps.push({ type: "advance_clock", duration: "1 millis" });
           steps.push({ type: "await_thread_idle", threadId: ids.threadId });
@@ -918,6 +937,66 @@ export function assertNoExtraAppRunsForProviderChildren(input: {
     input.expectedAppRuns,
     "provider child activity must not create additional app runs",
   );
+}
+
+/**
+ * Provider-native subagent threads have no runs; clients show them working
+ * from the child's runless root turn. Pin that contract for every recorded
+ * native subagent: the child hangs off the subagent node, every root turn is
+ * runless, the root turn is live before the child's first item, and its
+ * activity mirrors the subagent's (including a resume re-opening it).
+ */
+export function assertProviderNativeSubagentRootTurns(result: OrchestratorV2ScenarioResult) {
+  const activity = (statuses: ReadonlyArray<OrchestrationV2ExecutionNode["status"]>) =>
+    statuses
+      .map((status) => (isOrchestrationV2WorkActive(status) ? "active" : status))
+      .filter((status, index, all) => status !== all[index - 1]);
+  for (const projection of result.projections.values()) {
+    for (const subagent of projection.subagents) {
+      if (subagent.origin !== "provider_native" || subagent.childThreadId === null) continue;
+      const childThreadId = subagent.childThreadId;
+      const child = result.projections.get(childThreadId);
+      assert.isDefined(child, `missing child thread for subagent ${subagent.id}`);
+      assert.equal(child.thread.creationSource, "provider");
+      assert.deepEqual(child.thread.forkedFrom, { type: "node", nodeId: subagent.id });
+      assert.lengthOf(child.runs, 0);
+      const roots = child.nodes.filter((node) => node.kind === "root_turn");
+      assert.isNotEmpty(roots, `child ${childThreadId} must have a root turn`);
+      for (const root of roots) assert.isNull(root.runId);
+
+      const rootEvents = result.domainEvents.flatMap((event, index) =>
+        event.type === "node.updated" &&
+        event.payload.threadId === childThreadId &&
+        event.payload.kind === "root_turn"
+          ? [{ index, status: event.payload.status }]
+          : [],
+      );
+      const firstItemIndex = result.domainEvents.findIndex(
+        (event) =>
+          event.type === "turn-item.updated" &&
+          event.payload.threadId === childThreadId &&
+          event.payload.type !== "user_message",
+      );
+      assert.equal(rootEvents[0]?.status, "running");
+      if (firstItemIndex !== -1) {
+        assert.isBelow(
+          rootEvents[0]?.index ?? Infinity,
+          firstItemIndex,
+          `child ${childThreadId} must be working before its first item`,
+        );
+      }
+      const subagentStatuses = result.domainEvents.flatMap((event) =>
+        event.type === "subagent.updated" && event.payload.id === subagent.id
+          ? [event.payload.status]
+          : [],
+      );
+      assert.deepEqual(
+        activity(rootEvents.map((event) => event.status)),
+        activity(subagentStatuses),
+        `child ${childThreadId} root turn must follow subagent ${subagent.id}`,
+      );
+    }
+  }
 }
 
 export function assertExecutionNodeKinds(

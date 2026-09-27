@@ -10,11 +10,13 @@ import { CursorOrchestratorReplayHarness } from "../Adapters/CursorAdapterV2.tes
 import { AcpRegistryOrchestratorReplayHarness } from "../Adapters/AcpRegistryAdapterV2.testkit.ts";
 import { GrokOrchestratorReplayHarness } from "../Adapters/GrokAdapterV2.testkit.ts";
 import { OpenCodeOrchestratorReplayHarness } from "../Adapters/OpenCodeAdapterV2.testkit.ts";
+import { PiOrchestratorReplayHarness } from "../Adapters/PiAdapterV2.testkit.ts";
 import { layer as idAllocatorLayer } from "../IdAllocator.ts";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
 import { messageRestartInput } from "./fixtures/message_steering/input.ts";
 import {
+  assertProviderNativeSubagentRootTurns,
   materializeFixtureInput,
   type OrchestratorFixtureInput,
   type ProviderOrchestratorReplayVariant,
@@ -91,6 +93,7 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
     enableLegacyTokenStreaming: input.enableLegacyTokenStreaming ?? false,
   }).pipe(provideDeterministicTestRuntime);
   input.driver.assertOutput(result, transcript);
+  assertProviderNativeSubagentRootTurns(result);
   if (input.enableLegacyTokenStreaming !== true) {
     assert.isFalse(
       result.domainEvents.some(isStreamingAssistantEvent),
@@ -152,6 +155,11 @@ function runFixtureProviderWithRegisteredHarness(input: {
       return runFixtureProvider({
         ...input,
         harness: OpenCodeOrchestratorReplayHarness,
+      }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
+    case "pi":
+      return runFixtureProvider({
+        ...input,
+        harness: PiOrchestratorReplayHarness,
       }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
     default:
       return Effect.die(

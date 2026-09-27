@@ -10,6 +10,8 @@
     "continueThreadsAfterServerUpdate": false,
     "sidebarAutoSettleAfterDays": 3,
     "sidebarAutoSettleOnMerge": true,
+    "snoozeLimitedThreads": false,
+    "autoResumeLimitedThreads": false,
     "autoDeleteSettledAfterDays": null,
     "enableLegacyTokenStreaming": false,
     "enableHermes": false,
@@ -49,6 +51,9 @@
         }
       ]
     },
+    "branchNamingMode": "static",
+    "branchNamePrefix": "t3code",
+    "branchNameInstructions": "",
     "sourceControlWritingStyle": {
       "mode": "repo_conventions",
       "customInstructions": "",
@@ -101,6 +106,12 @@
         "gcpProject": "",
         "gcpLocation": "",
         "binaryPath": "",
+        "customModels": []
+      },
+      "pi": {
+        "enabled": false,
+        "binaryPath": "pi",
+        "launchArgs": "",
         "customModels": []
       },
       "opencode": {

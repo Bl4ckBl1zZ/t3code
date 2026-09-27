@@ -153,9 +153,7 @@ export function QueuedRunsControl(props: {
       {workflow?.isHeld === true ? (
         <div className="mb-1 flex items-center gap-1.5 rounded-sm bg-muted/60 px-1.5 py-1 text-[11px] text-muted-foreground">
           <PauseIcon className="size-3 shrink-0" />
-          <span className="min-w-0 flex-1">
-            Paused when the server restarted. Nothing was lost.
-          </span>
+          <span className="min-w-0 flex-1">Paused. Nothing was lost.</span>
           <Button
             size="xs"
             variant="ghost"

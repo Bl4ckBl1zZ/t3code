@@ -1,6 +1,7 @@
 import type {
   ModelCapabilities,
   ModelSelection,
+  RuntimeMode,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
@@ -19,6 +20,8 @@ export type ModelOption = {
   readonly isLegacy: boolean;
   readonly capabilities: ModelCapabilities | null;
   readonly selection: ModelSelection;
+  /** Runtime modes the model's provider can run; absent means all of them. */
+  readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode>;
 };
 
 export type ProviderGroup = {
@@ -35,6 +38,7 @@ function providerDisplayLabel(provider: {
   if (provider.displayName) return provider.displayName;
   if (provider.driver === "codex") return "Codex";
   if (provider.driver === "claudeAgent") return "Claude";
+  if (provider.driver === "pi") return "Pi";
   return provider.instanceId;
 }
 
@@ -185,6 +189,9 @@ export function buildModelOptions(
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         capabilities: model.capabilities,
+        ...(provider.supportedRuntimeModes === undefined
+          ? {}
+          : { supportedRuntimeModes: provider.supportedRuntimeModes }),
         selection: normalizeSelectionOptions(
           {
             instanceId: provider.instanceId,

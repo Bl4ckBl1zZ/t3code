@@ -1,5 +1,9 @@
 import { Fragment } from "react";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import * as DateTime from "effect/DateTime";
 import {
+  type EnvironmentId,
+  isOrchestrationV2WorkActive,
   orchestrationV2TurnItemStatusIsTerminal,
   type OrchestrationV2Run,
   type OrchestrationV2TurnItem,
@@ -25,11 +29,21 @@ import {
 import { formatOrchestrationV2RollbackDetail } from "@t3tools/shared/orchestrationV2Timeline";
 
 import { getProviderInstanceEntry } from "../../providerInstances";
+import { useProjects, useThreadProjection, useThreadShell } from "../../state/entities";
+import { useProviderEntryByInstanceId } from "../../state/providerEntries";
+import { ThreadHoverCardPopup } from "../ThreadHoverCard";
+import { AgentElapsed } from "./AgentElapsed";
+import { SubagentTooltipContent } from "./SubagentTooltipContent";
+import { resolveThreadModelBadge } from "./threadModelBadge";
 import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
 import { subagentOrbSeed, type SubagentTurnItem } from "./SubagentsStatusBadge.logic";
-import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
+import {
+  PROVIDER_ICON_BY_PROVIDER,
+  getTriggerDisplayModelName,
+  providerTextColorClassName,
+} from "./providerIconUtils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
@@ -67,6 +81,8 @@ export type HandoffTimelineRun = Pick<
 
 export function V2LifecycleRow(props: {
   readonly item: OrchestrationV2TurnItem;
+  /** The timeline's environment; enables the subagent hover card. */
+  readonly environmentId?: EnvironmentId | undefined;
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
   readonly onOpenThread: (threadId: ThreadId) => void;
@@ -212,7 +228,13 @@ export function V2LifecycleRow(props: {
     );
   }
   if (item.type === "subagent") {
-    return <SubagentRow item={item} onOpenThread={props.onOpenThread} />;
+    return (
+      <SubagentRow
+        item={item}
+        environmentId={props.environmentId}
+        onOpenThread={props.onOpenThread}
+      />
+    );
   }
   return null;
 }
@@ -223,24 +245,32 @@ export function V2LifecycleRow(props: {
  */
 export function SubagentRow(props: {
   readonly item: SubagentTurnItem;
+  /** Given in the timeline, where hovering a subagent shows its thread hover card. */
+  readonly environmentId?: EnvironmentId | undefined;
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
   const { item } = props;
   // Once a subagent stops, its last streamed result says more than the stale
   // progress line; while it runs, live progress comes first.
-  const active = !orchestrationV2TurnItemStatusIsTerminal(item.status);
+  const active = isOrchestrationV2WorkActive(item.status);
   const streamedResult = item.result?.trim() ? item.result : null;
   const detail = active
     ? (item.progress ?? streamedResult ?? item.prompt)
     : (streamedResult ?? item.progress ?? item.prompt);
-  return (
+  const row = (
     <RelatedThreadRow
       itemType={item.type}
       orb={{
         // Seed by child thread id when it exists so the relationships panel
         // (which only knows thread ids) resolves the same color.
         seed: subagentOrbSeed(item),
-        state: active ? "active" : item.status === "failed" ? "failed" : "done",
+        state: active
+          ? "active"
+          : item.status === "failed"
+            ? "failed"
+            : item.status === "idle"
+              ? "idle"
+              : "done",
       }}
       title={subagentDisplayTitle(item.title ?? "Subagent")}
       detail={detail}
@@ -249,13 +279,87 @@ export function SubagentRow(props: {
       onOpenThread={props.onOpenThread}
     />
   );
+  const environmentId = props.environmentId;
+  if (environmentId === undefined) return row;
+  return (
+    <Tooltip>
+      <TooltipTrigger delay={200} render={<div className="min-w-0" />}>
+        {row}
+      </TooltipTrigger>
+      <ThreadHoverCardPopup side="top" align="start">
+        <SubagentTimelineTooltip environmentId={environmentId} item={item} />
+      </ThreadHoverCardPopup>
+    </Tooltip>
+  );
+}
+
+function isoOrNull(value: DateTime.Utc | null | undefined): string | null {
+  return value ? DateTime.formatIso(value) : null;
+}
+
+/**
+ * Mounted only while the hover card is open, so its subscriptions to the live
+ * projection, shells and projects cost nothing for the rows nobody hovers.
+ */
+function SubagentTimelineTooltip(props: {
+  readonly environmentId: EnvironmentId;
+  readonly item: SubagentTurnItem;
+}) {
+  const { item } = props;
+  const parentRef = scopeThreadRef(props.environmentId, item.threadId);
+  // The timeline item lags the projected subagent between stream events.
+  const agent =
+    useThreadProjection(parentRef)?.projection.subagents.find(
+      (candidate) => candidate.id === item.subagentId,
+    ) ?? null;
+  const parent = useThreadShell(parentRef);
+  const child = useThreadShell(
+    item.childThreadId === null ? null : scopeThreadRef(props.environmentId, item.childThreadId),
+  );
+  const projects = useProjects();
+  const providerEntry = useProviderEntryByInstanceId().get(item.providerInstanceId) ?? null;
+  const modelLabel =
+    resolveThreadModelBadge({ modelSelection: child?.modelSelection, providerEntry })?.model ??
+    agent?.model ??
+    null;
+  const findProject = (projectId: string | undefined) =>
+    projects.find(
+      (project) => project.environmentId === props.environmentId && project.id === projectId,
+    );
+  const status = agent?.status ?? item.status;
+  return (
+    <SubagentTooltipContent
+      title={subagentDisplayTitle(child?.title ?? item.title ?? "Subagent")}
+      modelLabel={modelLabel}
+      driver={providerEntry?.driverKind ?? item.driver}
+      providerDisplayName={providerEntry?.displayName}
+      elapsed={
+        <AgentElapsed
+          agent={{
+            status,
+            startedAt: isoOrNull(agent?.startedAt ?? item.startedAt),
+            completedAt: isoOrNull(agent?.completedAt ?? item.completedAt),
+          }}
+        />
+      }
+      status={status}
+      result={agent?.result ?? item.result}
+      progress={agent?.progress ?? item.progress}
+      workflow={agent?.workflow}
+      usage={agent?.usage}
+      parentThread={parent ?? undefined}
+      childThread={child ?? undefined}
+      parentProject={findProject(parent?.projectId)}
+      childProject={findProject(child?.projectId)}
+    />
+  );
 }
 
 /**
  * The 16px slot that ends a timeline row, drawn as the tool row draws it:
  * pulsing dots while the item is in flight, an alert once it failed, a dash
- * when it stopped short. Success draws nothing and only names the outcome for
- * screen readers. `destructive` matches a row whose heading is already red.
+ * when it stopped short. Success and idle (waiting for its next input, neither
+ * running nor finished) draw nothing and only name the state for screen readers. `destructive` matches a row whose heading is already red.
  */
 export function TimelineRowStatusSlot(props: {
   readonly status: OrchestrationV2TurnItem["status"];
@@ -263,7 +367,7 @@ export function TimelineRowStatusSlot(props: {
 }) {
   const { status } = props;
   const label = `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
-  if (status === "completed") {
+  if (status === "completed" || status === "idle") {
     return (
       // role is required for the label to be exposed: ARIA ignores aria-label
       // on a generic, role-less element.
@@ -437,7 +541,14 @@ function HandoffEndpoint(props: {
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
       {Icon === null ? null : <Icon aria-hidden="true" className="size-3 shrink-0" />}
-      <span className="max-w-40 truncate">{label}</span>
+      <span
+        className={cn(
+          "max-w-40 truncate font-medium",
+          entry === undefined ? undefined : providerTextColorClassName(entry.driverKind),
+        )}
+      >
+        {label}
+      </span>
     </span>
   );
 }

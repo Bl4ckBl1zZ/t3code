@@ -316,7 +316,7 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   return models;
 });
 
-export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
+function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
       name: "t3code_desktop",
@@ -340,7 +340,7 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
   // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
   // so `CODEX_HOME=~/.codex_work` would reach codex verbatim and trip
   // "CODEX_HOME points to '~/.codex_work', but that path does not exist".
-  // Expand here for parity with `CodexTextGeneration`/`CodexSessionRuntime`.
+  // Expand here for parity with `CodexTextGeneration`.
   const resolvedHomePath = input.homePath ? expandHomePath(input.homePath) : undefined;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const environment = {
@@ -418,7 +418,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         cwds: [input.cwd],
       }),
       requestAllCodexModels(client),
-      client.request("account/rateLimits/read", undefined).pipe(
+      client.request("account/rateLimits/read", null).pipe(
         Effect.timeoutOption(Duration.millis(3_000)),
         Effect.map(Option.getOrUndefined),
         Effect.orElseSucceed(() => undefined),

@@ -4,6 +4,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -20,6 +21,8 @@ const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
+// With generic tool placeholders, the reply text the agent sends after the tool.
+const genericToolReplyText = process.env.T3_ACP_GENERIC_TOOL_REPLY_TEXT;
 const emitPostSettleMonitorFlow = process.env.T3_ACP_EMIT_POST_SETTLE_MONITOR_FLOW === "1";
 const emitInTurnTaskOutputThenLateDuplicate =
   process.env.T3_ACP_EMIT_IN_TURN_TASKOUTPUT_THEN_LATE_DUPLICATE === "1";
@@ -41,6 +44,15 @@ const emitPlanThenHang = process.env.T3_ACP_EMIT_PLAN_THEN_HANG === "1";
 const emitActiveToolThenHang = process.env.T3_ACP_EMIT_ACTIVE_TOOL_THEN_HANG === "1";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
 const hangPromptForever = process.env.T3_ACP_HANG_PROMPT_FOREVER === "1";
+// Advertises the session mode as a `category: "mode"` config option under this
+// id, the way agents that name their mode picker differently do.
+const modeConfigOptionId = process.env.T3_ACP_MODE_CONFIG_OPTION_ID;
+// Sends fs/write_text_file for this path, then fs/read_text_file, at the start of
+// each prompt whatever the client advertised, and appends each outcome as a JSON
+// line to T3_ACP_CLIENT_FS_PROBE_LOG_PATH.
+const clientFsProbePath = process.env.T3_ACP_CLIENT_FS_PROBE_PATH;
+const clientFsProbeLogPath = process.env.T3_ACP_CLIENT_FS_PROBE_LOG_PATH;
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const hangAfterPermission = process.env.T3_ACP_HANG_AFTER_PERMISSION === "1";
 const hangFirstPromptForever = process.env.T3_ACP_HANG_FIRST_PROMPT_FOREVER === "1";
 const emitLateUpdateAfterCancel = process.env.T3_ACP_EMIT_LATE_UPDATE_AFTER_CANCEL === "1";
@@ -260,6 +272,18 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   }
 
   return [
+    ...(modeConfigOptionId === undefined
+      ? []
+      : [
+          {
+            id: modeConfigOptionId,
+            name: "Permission mode",
+            category: "mode",
+            type: "select" as const,
+            currentValue: currentModeId,
+            options: availableModes.map((mode) => ({ value: mode.id, name: mode.name })),
+          },
+        ]),
     {
       id: "model",
       name: "Model",
@@ -528,7 +552,10 @@ const program = Effect.gen(function* () {
           },
         );
       }
-      if (request.configId === "mode" && typeof request.value === "string") {
+      if (
+        (request.configId === "mode" || request.configId === modeConfigOptionId) &&
+        typeof request.value === "string"
+      ) {
         currentModeId = request.value;
       }
       if (request.configId === "model" && typeof request.value === "string") {
@@ -546,6 +573,13 @@ const program = Effect.gen(function* () {
       return {
         configOptions: configOptions(),
       };
+    }),
+  );
+
+  yield* agent.handleSetSessionMode((request) =>
+    Effect.sync(() => {
+      currentModeId = request.modeId;
+      return {};
     }),
   );
 
@@ -606,6 +640,28 @@ const program = Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       beginAcpMockPrompt(cancelledSessions, requestedSessionId);
       promptCount += 1;
+
+      if (clientFsProbePath !== undefined && clientFsProbeLogPath !== undefined) {
+        const probes = [
+          [
+            "fs/write_text_file",
+            { sessionId: requestedSessionId, path: clientFsProbePath, content: "probe" },
+          ],
+          ["fs/read_text_file", { sessionId: requestedSessionId, path: clientFsProbePath }],
+        ] as const;
+        for (const [method, params] of probes) {
+          const outcome = yield* agent.raw.request(method, params).pipe(
+            Effect.map((result) => ({ method, result })),
+            Effect.catch((error) =>
+              Effect.succeed({
+                method,
+                errorCode: error._tag === "AcpRequestError" ? error.code : error._tag,
+              }),
+            ),
+          );
+          NodeFS.appendFileSync(clientFsProbeLogPath, `${encodeJson(outcome)}\n`, "utf8");
+        }
+      }
 
       if (residualCallbackTriggerPath !== undefined) {
         yield* Effect.gen(function* () {
@@ -1249,6 +1305,16 @@ const program = Effect.gen(function* () {
             },
           },
         });
+
+        if (genericToolReplyText !== undefined) {
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: genericToolReplyText },
+            },
+          });
+        }
 
         return { stopReason: "end_turn" };
       }

@@ -720,6 +720,7 @@ export type SidebarThreadStatus =
   | "working"
   | "background"
   | "failed"
+  | "limited"
   | "ready";
 
 /** Optional so both sidebars' inputs satisfy it; absent counts as none. */
@@ -775,7 +776,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
     return "working";
   }
   if (thread.runtime?.status === "failed") {
-    return "failed";
+    return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   // The state between working and ready: the turn settled, but a delegated
   // agent or a detached command is still running and will wake the thread.
@@ -800,7 +801,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
  * Mirrors the mobile clients' `resolveWorkInboxBadge` / `workInboxBadge`, so a
  * Work row reads the same on every surface.
  */
-export type WorkInboxBadge = "needs-you" | "working" | "failed" | "done";
+export type WorkInboxBadge = "needs-you" | "working" | "failed" | "limited" | "done";
 
 export function resolveWorkInboxBadge(input: {
   readonly status: SidebarThreadStatus;
@@ -816,6 +817,8 @@ export function resolveWorkInboxBadge(input: {
       return "working";
     case "failed":
       return "failed";
+    case "limited":
+      return "limited";
     case "ready":
       return input.hasUnseenCompletion ? "done" : null;
   }

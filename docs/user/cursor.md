@@ -6,13 +6,27 @@ TypeScript package. It does not use Cursor's ACP transport for V2 execution.
 ## Prerequisites
 
 - Node.js 22.13 or newer. The repository's supported Node version satisfies this requirement.
-- A Cursor API key in `CURSOR_API_KEY`. Provider-instance environment variables override the host
-  environment in the same way as the other providers.
+- Sign in with Cursor in **Settings > Providers > Cursor**, or provide a Cursor API key in
+  `CURSOR_API_KEY`.
 - A model accepted by the Cursor SDK. `auto` is sent to the SDK as its `default` model selection.
 
 The adapter currently uses the SDK's local-agent runtime so runs operate in the selected T3 Code
 workspace. Cursor cloud agents need repository and cloud-environment configuration that T3 Code does
 not expose yet.
+
+## Sign in
+
+Choose **Sign in**, then open the sign-in page and complete it in your browser. T3 Code
+updates automatically when sign-in finishes. This works when connected to a remote environment too.
+In the Android app, use **Settings > Provider accounts** for an already configured Cursor instance.
+
+Each provider instance keeps its own login on the environment that runs it. Your Cursor editor and
+CLI login are separate. A configured `CURSOR_API_KEY` overrides browser sign-in; remove that override
+to use the browser flow.
+
+Use **Change account** or **Sign out** in the same settings section. Both stop that
+instance's running threads and keep their history. Sign-out forgets the saved credential; to revoke
+the generated key before it expires, remove it from your Cursor dashboard's API keys.
 
 ## V2 Capability Mapping
 
@@ -37,8 +51,8 @@ intentionally uses the authenticated, thread-scoped MCP server instead.
 
 Cursor task events include an `agentId`, but the local SDK does not register that identifier as a
 resumable agent: `Agent.resume()` returns `AgentNotFoundError`. The adapter therefore does not attach
-a provider thread to native task projections or advertise subagent thread IDs. Sending a new message
-from a projected child starts a new Cursor agent rather than pretending to resume the task runtime.
+a provider thread to native task projections or advertise subagent thread IDs. A projected child is
+read-only: send messages from the parent thread.
 
 Runtime modes map to the controls the local SDK exposes: full access disables its sandbox, while
 restricted modes and explicit non-full-access sandbox policies enable it. Explicit approval policy

@@ -247,6 +247,135 @@ function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
 }
 
 describe("buildThreadFeed", () => {
+  it("folds each run of a provider-native subagent thread like a normal turn", () => {
+    // A Claude subagent's child thread, as projected: no runs, and a user
+    // prompt for the launch and for a SendMessage resume.
+    const runless = <T extends OrchestrationV2TurnItem>(item: T, id: string, ordinal: number) => ({
+      ...item,
+      id: TurnItemId.make(id),
+      runId: null,
+      ordinal,
+    });
+    const prompt = (id: string, ordinal: number, at: string) =>
+      runless(
+        { ...userMessage(at), messageId: MessageId.make(id), creationSource: "provider" as const },
+        id,
+        ordinal,
+      );
+    const answer = (id: string, ordinal: number, at: string) =>
+      runless({ ...assistantMessage(at), messageId: MessageId.make(id) }, id, ordinal);
+    const { exitCode: _exitCode, ...completedCommand } = command("2026-06-20T00:01:17.000Z");
+    const feed = (resumeRunning: boolean) =>
+      buildThreadFeed(
+        [
+          prompt("launch", 1, "2026-06-20T00:00:00.000Z"),
+          runless(command("2026-06-20T00:00:04.000Z"), "launch-ls", 2),
+          answer("launch-answer", 3, "2026-06-20T00:00:08.000Z"),
+          prompt("resume", 4, "2026-06-20T00:01:12.000Z"),
+          resumeRunning
+            ? runless(
+                { ...completedCommand, status: "running", completedAt: null, output: "" },
+                "resume-ls",
+                5,
+              )
+            : runless(command("2026-06-20T00:01:17.000Z"), "resume-ls", 5),
+          ...(resumeRunning ? [] : [answer("resume-answer", 6, "2026-06-20T00:01:20.000Z")]),
+        ].map((item, position) => projected(item, position)),
+      );
+    const shape = (entries: ReadonlyArray<ThreadFeedEntry>) =>
+      entries.map((entry) =>
+        entry.type === "run-fold"
+          ? `fold:${entry.label}`
+          : entry.type === "message"
+            ? `${entry.message.role}:${entry.message.id}`
+            : entry.type,
+      );
+
+    const settled = deriveThreadFeedPresentation(feed(false), null, new Set());
+    expect(shape(settled)).toEqual([
+      "user:launch",
+      "fold:Worked for 8.0s",
+      "assistant:launch-answer",
+      "user:resume",
+      "fold:Worked for 8.0s",
+      "assistant:resume-answer",
+    ]);
+    const launchFold = settled.find((entry) => entry.type === "run-fold");
+    if (launchFold?.type !== "run-fold") throw new Error("Expected the launch fold");
+    expect(
+      shape(deriveThreadFeedPresentation(feed(false), null, new Set([launchFold.runId]))),
+    ).toEqual([
+      "user:launch",
+      "fold:Worked for 8.0s",
+      "activity-group",
+      "assistant:launch-answer",
+      "user:resume",
+      "fold:Worked for 8.0s",
+      "assistant:resume-answer",
+    ]);
+
+    // While the resume runs, only the settled launch folds.
+    expect(
+      shape(
+        deriveThreadFeedPresentation(
+          feed(true),
+          null,
+          new Set(),
+          new Set(),
+          "2026-06-20T00:01:12.000Z",
+        ),
+      ),
+    ).toEqual([
+      "user:launch",
+      "fold:Worked for 8.0s",
+      "assistant:launch-answer",
+      "user:resume",
+      "working",
+    ]);
+  });
+
+  it("keeps the sender of an agent message distinct from its timeline source", () => {
+    const feed = buildThreadFeed([
+      projected(
+        {
+          ...userMessage(),
+          createdBy: "agent",
+          creationSource: "mcp",
+          senderThreadId: sourceThreadId,
+        },
+        0,
+      ),
+    ]);
+    const messageEntry = feed.find((entry) => entry.type === "message");
+    expect(messageEntry?.message.senderThreadId).toBe(sourceThreadId);
+    expect(messageEntry?.message.sourceThreadId).toBe(threadId);
+  });
+
+  it("hides a delegation call once its returned task id names a child card", () => {
+    const delegation = (id: string, taskId: string, ordinal: number, failed = false) =>
+      ({
+        ...base(`item-${id}`, "2026-06-20T00:00:03.000Z", ordinal),
+        status: failed ? ("failed" as const) : ("completed" as const),
+        type: "dynamic_tool" as const,
+        toolName: "t3-code.delegate_task",
+        input: { task: taskId },
+        output: { content: JSON.stringify({ taskId }), structuredContent: { taskId } },
+      }) as OrchestrationV2TurnItem;
+    const feed = buildThreadFeed([
+      projected(subagent("a", 0), 0),
+      projected(delegation("delegate-a", "node-a", 1), 1),
+      projected(delegation("unmatched", "node-other", 2), 2),
+      projected(delegation("failed", "node-a", 3, true), 3),
+    ]);
+    const tools = feed.flatMap((entry) =>
+      entry.type === "activity-group"
+        ? entry.activities.map((activity) => activity.projectedItem.item.id)
+        : [],
+    );
+    expect(feed.some((entry) => entry.type === "lifecycle")).toBe(true);
+    expect(tools).toEqual(["item-unmatched", "item-failed"]);
+  });
+
   it("counts the files a multi-file change touched instead of naming only the first", () => {
     const summaryOf = (item: OrchestrationV2TurnItem) =>
       buildThreadFeed([projected(item, 0)]).find((entry) => entry.type === "activity-group")
@@ -270,6 +399,31 @@ describe("buildThreadFeed", () => {
         ],
       }),
     ).toBe("Changed 2 files");
+  });
+
+  it("presents a usage-limit stop as a warning while preserving its explanation", () => {
+    const message = "Plan usage limit reached. Try again after reset.";
+    const entries = buildThreadFeed([
+      projected(
+        {
+          ...base("item-limit", "2026-06-20T00:00:02.000Z", 1),
+          type: "error",
+          status: "failed",
+          title: "Usage limit reached",
+          failure: { class: "usage_limit", message, code: "usageLimitExceeded", retryable: null },
+        },
+        0,
+      ),
+    ]);
+    const activity = entries.flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities : [],
+    )[0];
+    expect(activity).toMatchObject({
+      summary: "Usage limit reached",
+      status: "neutral",
+      icon: "warning",
+    });
+    expect(activity?.getFullDetail()).toContain(message);
   });
 
   it("presents provider retries as visible work-log activity", () => {
@@ -700,7 +854,7 @@ describe("buildThreadFeed", () => {
     const feed = buildThreadFeed([projected(toolItem, 0)]);
     const activity = feed[0]?.type === "activity-group" ? feed[0].activities[0] : null;
 
-    expect(activity?.summary).toBe("Read");
+    expect(activity?.summary).toBe("Read /repo/apps/web/src/App.tsx");
     expect(activity?.detail).toBe("/repo/apps/web/src/App.tsx");
     expect(activity?.icon).toBe("eye");
   });
@@ -903,5 +1057,87 @@ describe("thread feed system dividers", () => {
       "activity-group",
       "message",
     ]);
+  });
+});
+
+it.each(["provider_error", "usage_limit"] as const)(
+  "keeps a historical %s failure and preceding work visible without folds",
+  (failureClass) => {
+    const at = "2026-06-20T00:00:03.000Z";
+    const error: OrchestrationV2TurnItem = {
+      ...base("failure", at, 2),
+      type: "error",
+      status: "failed",
+      failure: {
+        class: failureClass,
+        message: "The provider stopped this turn.\nRetry later.",
+        code: null,
+        retryable: true,
+      },
+    };
+    const command: OrchestrationV2TurnItem = {
+      ...base("command", "2026-06-20T00:00:02.000Z", 1),
+      type: "command_execution",
+      input: "pwd",
+      output: "",
+      exitCode: 0,
+    };
+    const feed = deriveThreadFeedPresentation(
+      buildThreadFeed([projected(userMessage(), 0), projected(command, 1), projected(error, 2)]),
+      { runId: RunId.make("newer-run"), status: "completed", startedAt: at, completedAt: at },
+      new Set(),
+    );
+    expect(feed.some((entry) => entry.type === "run-fold" || entry.type === "work-toggle")).toBe(
+      false,
+    );
+    const activities = feed.flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities : [],
+    );
+    expect(activities.map((activity) => activity.projectedItem.item.id)).toEqual([
+      "command",
+      "failure",
+    ]);
+    expect(activities.at(-1)).toMatchObject({ canExpand: false });
+  },
+);
+
+describe("read and search activity", () => {
+  const activitiesOf = (item: OrchestrationV2TurnItem) =>
+    buildThreadFeed([projected(item, 0)]).flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities : [],
+    );
+
+  it("shows only the structured path in expanded read details", () => {
+    const item: OrchestrationV2TurnItem = {
+      ...base("read-detail", "2026-06-20T00:00:03.000Z", 2),
+      type: "dynamic_tool",
+      toolName: "Read",
+      title: "Read src/env.ts",
+      input: { path: "src/env.ts" },
+      output: "---\nname: env\n---\nsecret content",
+    };
+    const [activity] = activitiesOf(item);
+
+    expect(activity?.summary).toBe("Read src/env.ts");
+    expect(activity?.icon).toBe("eye");
+    expect(activity?.getFullDetail()).toBe("src/env.ts");
+    expect(activity?.canExpand).toBe(true);
+    expect(activity?.getCopyText()).not.toContain("secret content");
+
+    const [withoutPath] = activitiesOf({ ...item, id: TurnItemId.make("read-no-path"), input: {} });
+    expect(withoutPath?.getFullDetail()).toBeNull();
+    expect(withoutPath?.canExpand).toBe(false);
+  });
+
+  it("labels file searches with the adapter title", () => {
+    const [activity] = activitiesOf({
+      ...base("file-search", "2026-06-20T00:00:03.000Z", 2),
+      type: "file_search",
+      title: "Searched TODO in web",
+      pattern: "TODO",
+    });
+
+    expect(activity?.summary).toBe("Searched TODO in web");
+    expect(activity?.icon).toBe("search");
   });
 });

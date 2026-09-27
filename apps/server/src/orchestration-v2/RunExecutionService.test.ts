@@ -23,9 +23,12 @@ import {
   ProviderTurnId,
   RunAttemptId,
   RunId,
+  ServerSettingsError,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -538,6 +541,166 @@ it.effect("skips Git baseline capture for projectless Hermes runs", () =>
     assert.equal(yield* Ref.get(captures), 0);
   }),
 );
+
+for (const scenario of ["failure", "interruption", "stale-attempt", "start-guard"] as const) {
+  it.effect(`handles ${scenario} before the provider turn starts`, () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread:run-execution-settings-failure");
+      const runId = RunId.make("run:run-execution-settings-failure");
+      const attemptId = RunAttemptId.make("attempt:run-execution-settings-failure");
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const providerSessionId = ProviderSessionId.make("session:run-execution-settings-failure");
+      const providerThreadId = ProviderThreadId.make(
+        "provider-thread:run-execution-settings-failure",
+      );
+      const rootNodeId = NodeId.make("node:run-execution-settings-failure");
+      const checkpointScope = {
+        id: CheckpointScopeId.make("checkpoint-scope:run-execution-settings-failure"),
+      } as OrchestrationV2CheckpointScope;
+      const providerStarts = yield* Ref.make(0);
+      const guardedWrites = yield* Ref.make(0);
+      const writes = yield* Ref.make<ReadonlyArray<ReadonlyArray<OrchestrationV2DomainEvent>>>([]);
+      const testLayer = runExecutionServiceLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(CheckpointServiceV2)({
+              captureBaseline: () =>
+                scenario === "start-guard" ? Effect.void : Effect.die("not reached"),
+            }),
+            Layer.mock(EventSinkV2)({
+              writeIfRunCurrent: (input) =>
+                Effect.gen(function* () {
+                  assert.equal(input.threadId, threadId);
+                  assert.equal(input.runId, runId);
+                  assert.equal(input.activeAttemptId, attemptId);
+                  assert.equal(input.expectedStatus, "running");
+                  yield* Ref.update(guardedWrites, (count) => count + 1);
+                  if (scenario === "stale-attempt") {
+                    return { committed: false, storedEvents: [] };
+                  }
+                  yield* Ref.update(writes, (current) => [...current, input.events]);
+                  return { committed: true, storedEvents: [] };
+                }),
+            }),
+            idAllocatorLayer,
+            Layer.mock(ProviderEventIngestorV2)({ ingestNormalized: () => Effect.succeed([]) }),
+            scenario === "start-guard"
+              ? ServerSettingsService.layerTest()
+              : Layer.mock(ServerSettingsService)({
+                  getSettings:
+                    scenario === "interruption"
+                      ? Effect.interrupt
+                      : Effect.fail(
+                          new ServerSettingsError({
+                            settingsPath: "<test>",
+                            operation: "read-file",
+                            cause: new Error("settings read failed"),
+                          }),
+                        ),
+                }),
+          ),
+        ),
+      );
+
+      const result = yield* Effect.gen(function* () {
+        const runExecution = yield* RunExecutionServiceV2;
+        yield* runExecution.startRootRun({
+          commandId: CommandId.make("command:run-execution-settings-failure"),
+          appThread: { id: threadId } as OrchestrationV2AppThread,
+          providerSessionId,
+          session: {
+            events: Stream.never,
+            startTurn: () => Ref.update(providerStarts, (count) => count + 1),
+          } as unknown as ProviderAdapterV2SessionRuntime,
+          run: {
+            id: runId,
+            threadId,
+            ordinal: 1,
+            providerInstanceId,
+            status: "running",
+          } as OrchestrationV2Run,
+          rootNode: { id: rootNodeId, status: "running" } as OrchestrationV2ExecutionNode,
+          checkpointScope,
+          providerThread: {
+            id: providerThreadId,
+            driver,
+          } as OrchestrationV2ProviderThread,
+          attempt: {
+            id: attemptId,
+            providerTurnId: null,
+            status: "running",
+          } as OrchestrationV2RunAttempt,
+          attemptId,
+          providerTurnOrdinal: 1,
+          // A declined start is a normal exit, not a preparation failure.
+          ...(scenario === "start-guard"
+            ? { shouldStartProviderTurn: () => Effect.succeed(false) }
+            : {}),
+          message: {
+            messageId: MessageId.make("message:run-execution-settings-failure"),
+            text: "Start after settings fail.",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+          modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: process.cwd(),
+            approvalPolicy: "never",
+            sandboxPolicy: {
+              type: "readOnly",
+              access: { type: "fullAccess" },
+              networkAccess: false,
+            },
+          },
+        });
+      }).pipe(Effect.provide(testLayer), Effect.exit);
+
+      assert.equal(yield* Ref.get(providerStarts), 0);
+      const events = (yield* Ref.get(writes)).flat();
+      if (scenario === "interruption") {
+        assert.isTrue(Exit.isFailure(result));
+        if (Exit.isFailure(result)) assert.isTrue(Cause.hasInterruptsOnly(result.cause));
+        assert.equal(yield* Ref.get(guardedWrites), 0);
+        assert.isEmpty(events);
+        return;
+      }
+      assert.isTrue(Exit.isSuccess(result));
+      if (scenario === "start-guard") {
+        assert.equal(yield* Ref.get(guardedWrites), 0);
+        assert.isEmpty(events);
+        return;
+      }
+      assert.equal(yield* Ref.get(guardedWrites), 1);
+      if (scenario === "stale-attempt") {
+        assert.isEmpty(events);
+        return;
+      }
+      assert.deepEqual(
+        events
+          .filter(
+            (event) =>
+              event.type === "run.updated" ||
+              event.type === "run-attempt.updated" ||
+              event.type === "node.updated",
+          )
+          .map((event) => event.payload.status),
+        ["failed", "failed", "failed"],
+      );
+      const errorItem = events.find(
+        (event) => event.type === "turn-item.updated" && event.payload.type === "error",
+      );
+      assert.isDefined(errorItem);
+      if (errorItem?.type === "turn-item.updated" && errorItem.payload.type === "error") {
+        // The persisted item carries a bounded curated message; the exact
+        // underlying text stays in the logged cause.
+        assert.equal(errorItem.payload.failure.message, "Run preparation failed.");
+      }
+    }),
+  );
+}
 
 it.effect("keeps ingesting owned child events after the root turn terminalizes", () =>
   Effect.gen(function* () {
@@ -1942,7 +2105,7 @@ function childThreadCreatedEvent(ids: BackgroundScenarioIds): ProviderAdapterV2E
 
 function childBackgroundTurnItemEvent(
   ids: BackgroundScenarioIds,
-  status: "running" | "completed",
+  status: "running" | "completed" | "idle",
   ordinal: number,
 ): ProviderAdapterV2Event {
   return {
@@ -1963,7 +2126,7 @@ function childBackgroundTurnItemEvent(
 function backgroundTurnItemEvent(
   ids: BackgroundScenarioIds,
   type: "command_execution" | "dynamic_tool" | "subagent",
-  status: "running" | "completed",
+  status: "running" | "completed" | "idle",
   ordinal: number,
   itemId?: TurnItemId,
 ): ProviderAdapterV2Event {
@@ -1984,7 +2147,7 @@ function backgroundTurnItemEvent(
 
 function subagentEvent(
   ids: BackgroundScenarioIds,
-  status: "running" | "completed",
+  status: "running" | "completed" | "idle",
 ): ProviderAdapterV2Event {
   return {
     type: "subagent.updated",
@@ -2188,6 +2351,7 @@ function rootTerminalEvent(
 function runBackgroundItemScenario(
   key: string,
   makeEvents: (ids: BackgroundScenarioIds) => ReadonlyArray<ProviderAdapterV2Event>,
+  options?: { readonly keepEventStreamOpen?: boolean },
 ) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(key);
@@ -2246,9 +2410,15 @@ function runBackgroundItemScenario(
         providerSessionId: ProviderSessionId.make(`session:${key}`),
         session: {
           events: Stream.empty,
-          subscribeEvents: Effect.succeed({
-            events: Stream.fromIterable(makeEvents(ids)),
-            close: Deferred.succeed(ingestionDone, undefined),
+          subscribeEvents: Effect.sync(() => {
+            const events = Stream.fromIterable(makeEvents(ids));
+            return {
+              events:
+                options?.keepEventStreamOpen === true
+                  ? events.pipe(Stream.concat(Stream.never))
+                  : events,
+              close: Deferred.succeed(ingestionDone, undefined),
+            };
           }),
           startTurn: () => Effect.void,
         } as unknown as ProviderAdapterV2SessionRuntime,
@@ -2299,3 +2469,26 @@ function runBackgroundItemScenario(
     return yield* Ref.get(observed);
   });
 }
+
+it.effect("releases ingestion after idle subagent rows and items settle", () =>
+  Effect.gen(function* () {
+    const observed = yield* runBackgroundItemScenario(
+      "subagent-idle",
+      (ids) => [
+        subagentEvent(ids, "running"),
+        backgroundTurnItemEvent(ids, "subagent", "running", 1),
+        subagentEvent(ids, "idle"),
+        backgroundTurnItemEvent(ids, "subagent", "idle", 2),
+        rootTerminalEvent(ids, "completed"),
+      ],
+      { keepEventStreamOpen: true },
+    );
+    assert.deepEqual(observed, [
+      "subagent:running",
+      "turn_item:running",
+      "subagent:idle",
+      "turn_item:idle",
+      "root-finalized",
+    ]);
+  }),
+);

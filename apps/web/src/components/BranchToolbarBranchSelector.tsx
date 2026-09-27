@@ -783,6 +783,11 @@ export function BranchToolbarBranchSelector({
         ) : null}
         <span
           className="flex min-w-0"
+          onMouseDownCapture={(event) => {
+            if (event.button !== 0 || event.ctrlKey) {
+              event.stopPropagation();
+            }
+          }}
           onContextMenu={(event) => handleBranchContextMenu(event, resolvedActiveBranch)}
         >
           <ComboboxTrigger

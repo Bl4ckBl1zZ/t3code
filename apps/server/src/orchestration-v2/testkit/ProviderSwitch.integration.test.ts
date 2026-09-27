@@ -33,6 +33,7 @@ import {
   LegacyV1ThreadImporter,
   layer as legacyV1ThreadImporterLayer,
 } from "../LegacyV1ThreadImporter.ts";
+import { OrchestrationEffectWorkerV2 } from "../EffectWorker.ts";
 import { OrchestratorV2 } from "../Orchestrator.ts";
 import {
   ProjectionMaintenanceV2,
@@ -82,6 +83,7 @@ function makeTestAdapter(input: {
   readonly responseByRunOrdinal: Readonly<Record<number, string>>;
   readonly responseByThreadId?: Readonly<Record<string, Readonly<Record<number, string>>>>;
   readonly capturedTurns: Ref.Ref<ReadonlyArray<CapturedTurn>>;
+  readonly nativeThreadGeneration?: Ref.Ref<number>;
   readonly failResume?: boolean;
   readonly failedRunOrdinals?: ReadonlySet<number>;
 }): ProviderAdapterV2Shape {
@@ -116,7 +118,11 @@ function makeTestAdapter(input: {
           ensureThread: (threadInput) =>
             Effect.gen(function* () {
               const createdAt = yield* DateTime.now;
-              const nativeThreadId = `${input.driver}:${threadInput.threadId}`;
+              const generation =
+                input.nativeThreadGeneration === undefined
+                  ? ""
+                  : `:${yield* Ref.getAndUpdate(input.nativeThreadGeneration, (value) => value + 1)}`;
+              const nativeThreadId = `${input.driver}:${threadInput.threadId}${generation}`;
               return {
                 id: ProviderThreadId.make(`provider-thread:${nativeThreadId}`),
                 driver: input.driver,
@@ -526,6 +532,7 @@ describe("orchestration v2 provider switching", () => {
       Effect.gen(function* () {
         const cwd = yield* checkpointWorkspace("provider-switch");
         const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const codexNativeThreadGeneration = yield* Ref.make(0);
         const registryLayer = makeProviderAdapterRegistryLayer([
           makeTestAdapter({
             instanceId: ProviderInstanceId.make("codex"),
@@ -538,6 +545,7 @@ describe("orchestration v2 provider switching", () => {
             },
             capturedTurns,
             failResume: true,
+            nativeThreadGeneration: codexNativeThreadGeneration,
           }),
           makeTestAdapter({
             instanceId: ProviderInstanceId.make("claudeAgent"),
@@ -608,6 +616,20 @@ describe("orchestration v2 provider switching", () => {
           yield* waitForIdle(threadId);
           yield* orchestrator.dispatch(commands[2]!);
           yield* waitForIdle(threadId);
+          // Stopping the shared Codex process drops its loaded native thread, so
+          // returning to Codex has to resume it (and fall back when that fails).
+          const codexSession = (yield* orchestrator.getThreadProjection(
+            threadId,
+          )).providerSessions.find(
+            (session) => session.providerInstanceId === CODEX_MODEL_SELECTION.instanceId,
+          )!;
+          yield* orchestrator.dispatch({
+            type: "provider-session.detach",
+            commandId: CommandId.make("command:provider-switch:stop-codex"),
+            threadId,
+            providerSessionId: codexSession.id,
+          });
+          yield* (yield* OrchestrationEffectWorkerV2).drain();
           yield* orchestrator.dispatch(commands[3]!);
           return yield* waitForIdle(threadId);
         }).pipe(
@@ -642,9 +664,22 @@ describe("orchestration v2 provider switching", () => {
         assert.lengthOf(projection.providerThreads, 2);
         assert.equal(projection.runs[0]?.providerThreadId, projection.runs[2]?.providerThreadId);
         assert.notEqual(projection.runs[0]?.providerThreadId, projection.runs[1]?.providerThreadId);
+        // The failed resume bound a fresh native Codex thread to the same row.
+        assert.equal(yield* Ref.get(codexNativeThreadGeneration), 2);
+        const codexThread = projection.providerThreads.find(
+          (providerThread) => providerThread.id === projection.runs[2]?.providerThreadId,
+        );
+        assert.equal(codexThread?.nativeThreadRef?.nativeId, `codex:${threadId}:1`);
         assert.deepEqual(
-          projection.contextHandoffs.map((handoff) => handoff.strategy),
-          ["full_thread_summary", "delta_since_target_last_seen"],
+          projection.contextHandoffs.map((handoff) => [
+            handoff.strategy,
+            handoff.coveredRunOrdinals,
+          ]),
+          [
+            ["full_thread_summary", { from: 1, to: 1 }],
+            ["delta_since_target_last_seen", { from: 2, to: 2 }],
+            ["full_thread_summary", { from: 1, to: 2 }],
+          ],
         );
         assert.deepEqual(
           projection.contextTransfers.map((transfer) => [
@@ -655,6 +690,7 @@ describe("orchestration v2 provider switching", () => {
           [
             ["provider_handoff", "consumed", "portable_context"],
             ["provider_handoff", "consumed", "delta_context"],
+            ["provider_handoff", "resolved_portable", "portable_context"],
           ],
         );
         assert.deepEqual(
@@ -678,10 +714,13 @@ describe("orchestration v2 provider switching", () => {
         assert.include(turns[1]?.text ?? "", "Context handoff (full_thread_summary):");
         assert.include(turns[1]?.text ?? "", "codex before switch");
         assert.include(turns[1]?.text ?? "", claudePrompt);
+        // The fresh native thread has none of the earlier Codex turn, so the
+        // portable fallback re-sends it alongside the Claude delta.
+        assert.include(turns[2]?.text ?? "", "Context handoff (full_thread_summary):");
         assert.include(turns[2]?.text ?? "", "Context handoff (delta_since_target_last_seen):");
+        assert.include(turns[2]?.text ?? "", "codex before switch");
         assert.include(turns[2]?.text ?? "", "claude switched response");
         assert.include(turns[2]?.text ?? "", returnPrompt);
-        assert.notInclude(turns[2]?.text ?? "", "codex before switch");
         assert.equal(turns[0]?.providerThreadId, turns[2]?.providerThreadId);
       }),
     ),

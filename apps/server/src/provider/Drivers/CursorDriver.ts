@@ -2,12 +2,17 @@
  * CursorDriver — `ProviderDriver` for the Cursor Agent SDK runtime.
  *
  * Provider status, model discovery, orchestration, and text generation use the
- * official Cursor SDK and require CURSOR_API_KEY in the provider instance
- * environment.
+ * official Cursor SDK with an instance browser login or CURSOR_API_KEY.
  *
  * @module provider/Drivers/CursorDriver
  */
-import { CursorSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
+import {
+  CursorSettings,
+  ProviderDriverKind,
+  ProviderSetupError,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -39,7 +44,12 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
+import { makeCursorAuth } from "../CursorAuth.ts";
+import * as CursorCredentialStore from "../CursorCredentialStore.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import * as CursorAgentSdk from "../../orchestration-v2/Adapters/CursorAgentSdk.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
+const isSdkRunnerError = Schema.is(CursorAgentSdk.CursorAgentSdkRunnerError);
 
 const DRIVER_KIND = ProviderDriverKind.make("cursor");
 const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
@@ -49,8 +59,10 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
 
 export type CursorDriverEnv =
   | CursorAdapterV2DriverEnv
+  | Crypto.Crypto
   | BackgroundPolicy.BackgroundPolicy
   | ServerConfig
+  | ServerSecretStore.ServerSecretStore
   | ServerSettingsService;
 
 const withInstanceIdentity =
@@ -80,6 +92,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsService;
+      const sdkRunner = yield* CursorAgentSdk.CursorAgentSdkRunner;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -92,6 +105,48 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies CursorSettings;
+      const credentials = yield* CursorCredentialStore.makeCursorCredentialStore(instanceId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Could not open the Cursor credential store.",
+              cause,
+            }),
+        ),
+      );
+      const auth = yield* makeCursorAuth({
+        instanceId,
+        displayName: displayName ?? "Cursor",
+        enabled,
+        ...(processEnv.CURSOR_API_KEY ? { apiKey: processEnv.CURSOR_API_KEY } : {}),
+        store: credentials.store,
+        credentialBinding: credentials.binding,
+        onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
+          snapshot.refresh.pipe(
+            Effect.flatMap((provider) =>
+              !signedIn || provider.auth.status === "authenticated"
+                ? Effect.void
+                : Effect.fail(
+                    new ProviderSetupError({
+                      instanceId,
+                      operation: "start",
+                      detail: provider.message ?? "Could not verify the Cursor sign-in. Try again.",
+                    }),
+                  ),
+            ),
+          ),
+      });
+      const stampSnapshot: typeof stampIdentity = (draft) =>
+        stampIdentity({
+          ...draft,
+          setup: { canAuthenticate: !auth.usesApiKey, canInstall: false },
+          auth: {
+            ...draft.auth,
+            canLogout: !auth.usesApiKey,
+          },
+        });
 
       const orchestrationAdapter = yield* CursorAdapterV2Driver.create({
         instanceId,
@@ -101,6 +156,32 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         enabled,
         config,
       }).pipe(
+        Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
+          ...sdkRunner,
+          open: (input) =>
+            auth.requireApiKey.pipe(
+              Effect.flatMap((apiKey) =>
+                Effect.acquireRelease(
+                  sdkRunner
+                    .open({ ...input, options: { ...input.options, apiKey } })
+                    .pipe(
+                      Effect.flatMap((session) =>
+                        Effect.cached(session.close).pipe(
+                          Effect.map((close) => ({ ...session, close })),
+                        ),
+                      ),
+                    ),
+                  (session) => session.close.pipe(Effect.ignore),
+                ),
+              ),
+              auth.withAccess,
+              Effect.mapError((cause) =>
+                isSdkRunnerError(cause)
+                  ? cause
+                  : new CursorAgentSdk.CursorAgentSdkRunnerError({ method: "open", cause }),
+              ),
+            ),
+        }),
         Effect.mapError(
           (cause) =>
             new ProviderDriverError({
@@ -111,10 +192,23 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
             }),
         ),
       );
-      const textGeneration = yield* makeCursorTextGeneration(effectiveConfig, processEnv);
+      const textGeneration = yield* makeCursorTextGeneration(
+        effectiveConfig,
+        processEnv,
+        auth.requireApiKey,
+        auth.withAccess,
+      );
 
-      const checkProvider = checkCursorProviderStatus(effectiveConfig, processEnv).pipe(
-        Effect.map(stampIdentity),
+      const checkProvider = auth.readApiKey.pipe(
+        Effect.orElseSucceed(() => undefined),
+        Effect.flatMap((apiKey) =>
+          checkCursorProviderStatus(
+            effectiveConfig,
+            { ...processEnv, CURSOR_API_KEY: apiKey },
+            auth.usesApiKey ? "api-key" : "browser",
+          ),
+        ),
+        Effect.map(stampSnapshot),
         Effect.provide(CursorSdkCatalogLive),
       );
 
@@ -125,7 +219,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
-          buildInitialCursorProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+          buildInitialCursorProviderSnapshot(settings.provider).pipe(Effect.map(stampSnapshot)),
         checkProvider,
       }).pipe(
         Effect.mapError(
@@ -146,6 +240,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         displayName,
         accentColor,
         enabled,
+        auth: auth.controller,
         snapshot,
         orchestrationAdapter,
         textGeneration,

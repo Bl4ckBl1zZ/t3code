@@ -5,10 +5,7 @@ import {
   T3_CHAT_PRESENTATION_INSTRUCTIONS,
   T3_HTML_EMBED_INSTRUCTIONS,
 } from "./T3ChatPresentationInstructions.ts";
-import {
-  T3_CODE_ORCHESTRATION_CORE_INSTRUCTIONS,
-  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
-} from "./T3OrchestrationInstructions.ts";
+import { T3_CODE_ORCHESTRATION_CORE_INSTRUCTIONS } from "./T3OrchestrationInstructions.ts";
 
 const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
@@ -20,16 +17,6 @@ For browser work, first call \`preview_status\`. If no automation-capable previe
 
 Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
 `;
-
-/**
- * The browser block is omitted entirely when the preview tools aren't granted.
- * Describing `preview_*` tools the turn cannot call would be worse than saying
- * nothing: the instructions actively steer the model away from Playwright and
- * agent-browser, so leaving them in would talk it out of the only browser
- * automation it still has.
- */
-const browserToolInstructions = (browserToolsAvailable: boolean): string =>
-  browserToolsAvailable ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "";
 
 const CODEX_PLAN_MODE_PROMPT = `# Plan Mode (Conversational)
 
@@ -204,46 +191,4 @@ export function buildCodexAdditionalContext(
     t3_code_html_embeds: entry(T3_HTML_EMBED_INSTRUCTIONS),
     ...(browserToolsAvailable ? { t3_code_tools: entry(T3_CODE_BROWSER_TOOL_INSTRUCTIONS) } : {}),
   };
-}
-
-/** The retired V1 `CodexSessionRuntime` still embeds the T3 blocks in the mode prompt. */
-export const codexPlanModeDeveloperInstructions = (browserToolsAvailable: boolean): string =>
-  `<collaboration_mode>${CODEX_PLAN_MODE_PROMPT}
-${browserToolInstructions(browserToolsAvailable)}
-</collaboration_mode>`;
-
-export const codexDefaultModeDeveloperInstructions = (browserToolsAvailable: boolean): string =>
-  `<collaboration_mode>${CODEX_DEFAULT_MODE_PROMPT}
-${browserToolInstructions(browserToolsAvailable)}
-${T3_CODE_ORCHESTRATION_INSTRUCTIONS}
-</collaboration_mode>`;
-
-export interface CodexRuntimeInfo {
-  readonly model: string;
-  readonly reasoningEffort: string;
-}
-
-// Values come from trusted config, but keep the block single-line regardless.
-function toSingleLine(value: string): string {
-  return value.replaceAll(/\s+/g, " ").trim();
-}
-
-export function buildCodexDeveloperInstructions(
-  interactionMode: ProviderInteractionMode,
-  runtime: CodexRuntimeInfo,
-  /**
-   * Whether this turn's MCP credential grants the `preview` capability.
-   * Callers derive it from the session's actual credential rather than
-   * re-reading the setting, so the prompt cannot claim tools the turn doesn't
-   * have.
-   */
-  browserToolsAvailable = true,
-): string {
-  const base =
-    interactionMode === "plan"
-      ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
-      : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
-  return `${base}
-
-<runtime_info>In case you're asked: you are running in T3 Code through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. No need to mention this otherwise.</runtime_info>`;
 }

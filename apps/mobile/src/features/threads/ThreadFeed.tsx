@@ -122,6 +122,7 @@ import {
   resolveMarkdownLinkPresentation,
 } from "@t3tools/mobile-markdown-text/links";
 import {
+  failedFeedRunIds,
   deriveThreadFeedPresentation,
   threadFeedRunIsUnsettled,
   type ThreadFeedEntry,
@@ -152,7 +153,11 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
 import { waitForThreadShellReady } from "./threadForkNavigation";
-import { RELATED_THREAD_ROWS_CLASS, ThreadLifecycleRow } from "./ThreadLifecycleRow";
+import {
+  RELATED_THREAD_ROWS_CLASS,
+  SubagentLifecycleGroup,
+  ThreadLifecycleRow,
+} from "./ThreadLifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { formatOrchestrationV2TimelineDayLabel } from "@t3tools/shared/orchestrationV2Timeline";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
@@ -1088,6 +1093,37 @@ function useMarkdownStyles(
   ]);
 }
 
+/** Names an agent-sent prompt's origin, linking to the sending thread when it is known. */
+function AgentMessageAttribution(props: {
+  readonly environmentId: EnvironmentId;
+  readonly senderThreadId?: ThreadId | undefined;
+}) {
+  const navigation = useNavigation();
+  const senderThreadId = props.senderThreadId;
+  const label = (
+    <Text className="mb-1 pl-1 text-2xs text-foreground-muted opacity-70">
+      Sent by another agent
+    </Text>
+  );
+  return senderThreadId ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Open sending thread"
+      hitSlop={4}
+      onPress={() =>
+        navigation.navigate("Thread", {
+          environmentId: props.environmentId,
+          threadId: senderThreadId,
+        })
+      }
+    >
+      {label}
+    </Pressable>
+  ) : (
+    label
+  );
+}
+
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
   props: Pick<ThreadFeedProps, "environmentId" | "skills" | "threadId" | "workspaceRoot"> & {
@@ -1097,6 +1133,7 @@ function renderFeedEntry(
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: RunId | null;
+    readonly failedRunIds: ReadonlySet<RunId>;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string, anchorKey?: string) => void;
@@ -1127,7 +1164,14 @@ function renderFeedEntry(
   }
 
   if (entry.type === "lifecycle-group") {
-    return <LifecycleGroup entries={entry.entries} environmentId={props.environmentId} />;
+    return (
+      <LifecycleGroup
+        entries={entry.entries}
+        environmentId={props.environmentId}
+        expanded={props.expandedWorkGroups[entry.id] ?? false}
+        onToggle={() => props.onToggleWorkGroup(entry.id)}
+      />
+    );
   }
 
   if (entry.type === "run-fold") {
@@ -1245,9 +1289,10 @@ function renderFeedEntry(
           className="mb-5 items-start"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
-          <Text className="mb-1 pl-1 text-2xs text-foreground-muted opacity-70">
-            Sent by another agent
-          </Text>
+          <AgentMessageAttribution
+            environmentId={props.environmentId}
+            senderThreadId={message.senderThreadId}
+          />
           <View
             className="min-w-0 gap-2 rounded-[20px] rounded-tl-md border border-neutral-300/50 bg-card px-3.5 py-2.5 dark:border-white/[0.08]"
             style={{
@@ -1385,7 +1430,11 @@ function renderFeedEntry(
     const enterAnimated = isFreshTimestamp(message.createdAt);
     return (
       <Animated.View
-        className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")}
+        className={cn(
+          showAssistantMeta && !(message.runId && props.failedRunIds.has(message.runId))
+            ? "mb-5 px-1"
+            : "mb-2 px-1",
+        )}
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
         {message.text.trim().length > 0 ? (
@@ -1456,7 +1505,25 @@ function renderFeedEntry(
 function LifecycleGroup(props: {
   readonly entries: ReadonlyArray<Extract<ThreadFeedEntry, { type: "lifecycle" }>>;
   readonly environmentId: EnvironmentId;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
 }) {
+  // A run made only of subagents folds into one card; a mix with created
+  // threads keeps the stacked list.
+  const subagents = props.entries.flatMap((entry) =>
+    entry.row.item.type === "subagent" ? [entry.row.item] : [],
+  );
+  if (subagents.length === props.entries.length) {
+    return (
+      <SubagentLifecycleGroup
+        entries={props.entries}
+        items={subagents}
+        environmentId={props.environmentId}
+        expanded={props.expanded}
+        onToggle={props.onToggle}
+      />
+    );
+  }
   return (
     <View className={RELATED_THREAD_ROWS_CLASS}>
       {props.entries.map((entry) => (
@@ -2194,6 +2261,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       ),
     [presentedFeed, props.anchorMessageId, anchorTopInset],
   );
+  const failedRunIds = useMemo(
+    () => failedFeedRunIds(props.feed, props.latestRun),
+    [props.feed, props.latestRun],
+  );
   const terminalAssistantMessageIds = useMemo(() => {
     const terminalIdsByTurn = new Map<RunId, string>();
     for (const entry of props.feed) {
@@ -2415,6 +2486,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         expandedWorkRows,
         terminalAssistantMessageIds,
         unsettledTurnId,
+        failedRunIds,
         onCopyWorkRow,
         onToggleWorkGroup,
         onToggleWorkRow,
@@ -2438,6 +2510,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       expandedWorkRows,
       terminalAssistantMessageIds,
       unsettledTurnId,
+      failedRunIds,
       iconSubtleColor,
       userBubbleColor,
       markdownStyles,

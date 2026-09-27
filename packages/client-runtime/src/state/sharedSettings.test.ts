@@ -111,10 +111,12 @@ describe("pickSharedServerSettings", () => {
     expect(
       Object.keys(pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities)).sort(),
     ).toEqual([
+      "autoResumeLimitedThreads",
       "continueThreadsAfterServerUpdate",
       "newWorktreesStartFromOrigin",
       "sidebarAutoSettleAfterDays",
       "sidebarAutoSettleOnMerge",
+      "snoozeLimitedThreads",
       "sourceControlWritingStyle",
       "textGenerationModelSelection",
     ]);

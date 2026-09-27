@@ -74,6 +74,10 @@ function nonterminalRuns(projection: OrchestrationV2ThreadProjection) {
   });
 }
 
+function isNonterminalStatus(status: string): boolean {
+  return status === "pending" || status === "running" || status === "waiting";
+}
+
 export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const eventSink = yield* EventSink.EventSinkV2;
@@ -307,6 +311,60 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      // Delegated agents and dynamic tools can outlive their settled run the
+      // same way, and died with the process too. Left open, the parent thread
+      // shows an agent working forever, so cancel the item together with the
+      // subagent row and node it links to.
+      for (const item of projection.turnItems) {
+        if (item.type !== "subagent" && item.type !== "dynamic_tool") continue;
+        if (!isNonterminalStatus(item.status)) continue;
+        if (runs.some((run) => run.id === item.runId)) continue;
+        const providerInstanceId =
+          item.type === "subagent" ? item.providerInstanceId : projection.thread.providerInstanceId;
+        events.push({
+          id: yield* allocateEventId(),
+          type: "turn-item.updated",
+          threadId: projection.thread.id,
+          ...(item.runId === null ? {} : { runId: item.runId }),
+          ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+          providerInstanceId,
+          occurredAt: now,
+          payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
+        });
+        if (item.type !== "subagent") continue;
+        const subagent = projection.subagents.find(
+          (candidate) => candidate.id === item.subagentId && isNonterminalStatus(candidate.status),
+        );
+        if (subagent !== undefined) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "subagent.updated",
+            threadId: projection.thread.id,
+            ...(item.runId === null ? {} : { runId: item.runId }),
+            nodeId: subagent.id,
+            driver: subagent.driver,
+            providerInstanceId: subagent.providerInstanceId,
+            occurredAt: now,
+            payload: { ...subagent, status: "cancelled", completedAt: now, updatedAt: now },
+          });
+        }
+        const node = projection.nodes.find(
+          (candidate) => candidate.id === item.subagentId && isNonterminalStatus(candidate.status),
+        );
+        if (node !== undefined) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "node.updated",
+            threadId: projection.thread.id,
+            ...(item.runId === null ? {} : { runId: item.runId }),
+            nodeId: node.id,
+            providerInstanceId,
+            occurredAt: now,
+            payload: { ...node, status: "cancelled", completedAt: now },
+          });
+        }
+      }
+
       // Pending provider-switch handoffs are broadcast before their command
       // commits (Orchestrator.dispatchMessage), and the in-memory rejection
       // compensation does not survive a process stop. A non-terminal handoff
@@ -343,6 +401,55 @@ export const make = Effect.gen(function* () {
             providerInstanceId: item.toProviderInstanceId,
             occurredAt: now,
             payload: { ...orphanedHandoff, status: "failed", updatedAt: now },
+          });
+        }
+      }
+      // A provider-native subagent thread has no runs: its work is a runless
+      // root turn, plus items under it (Claude's live progress item), that
+      // only the dead provider process could settle. Left running, the child
+      // would show as working forever.
+      const cancelledItemIds = new Set(
+        events.flatMap((event) => (event.type === "turn-item.updated" ? [event.payload.id] : [])),
+      );
+      for (const node of projection.nodes) {
+        if (node.kind !== "root_turn" || node.runId !== null || !isNonterminalStatus(node.status)) {
+          continue;
+        }
+        events.push({
+          id: yield* allocateEventId(),
+          type: "node.updated",
+          threadId: projection.thread.id,
+          nodeId: node.id,
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+          payload: { ...node, status: "cancelled", completedAt: now },
+        });
+        for (const item of projection.turnItems) {
+          if (
+            item.nodeId !== node.id ||
+            item.runId !== null ||
+            !isNonterminalStatus(item.status) ||
+            cancelledItemIds.has(item.id)
+          ) {
+            continue;
+          }
+          cancelledItemIds.add(item.id);
+          events.push({
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            threadId: projection.thread.id,
+            nodeId: node.id,
+            providerInstanceId: projection.thread.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              ...item,
+              status: "cancelled",
+              completedAt: now,
+              updatedAt: now,
+              ...(item.type === "reasoning" || item.type === "assistant_message"
+                ? { streaming: false }
+                : {}),
+            },
           });
         }
       }

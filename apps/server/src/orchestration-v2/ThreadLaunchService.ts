@@ -52,6 +52,7 @@ export type ThreadLaunchWorkspaceStrategy =
 
 export interface ThreadLaunchInitialMessage {
   readonly messageId?: MessageId;
+  readonly senderThreadId?: ThreadId;
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   /** Names the schedule that produced this message, when one did. */
@@ -168,13 +169,15 @@ export const make = Effect.gen(function* () {
     threadId: ThreadId,
   ) {
     const projection = yield* threads
-      .getThreadProjection(threadId)
+      .getThreadRecords(threadId, ["runs"])
       .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
     if (
       projection.thread.projectId !== input.projectId ||
       projection.thread.archivedAt !== null ||
       projection.thread.deletedAt !== null ||
-      projection.messages.length > 0 ||
+      (yield* threads
+        .getMessageCount(threadId)
+        .pipe(Effect.mapError(mapError(input, "update-thread", threadId)))) > 0 ||
       projection.runs.length > 0
     ) {
       return yield* mapError(
@@ -247,12 +250,22 @@ export const make = Effect.gen(function* () {
               );
         return yield* textGeneration
           .generateBranchName({
+            naming: {
+              mode: settings.branchNamingMode,
+              prefix: settings.branchNamePrefix,
+              instructions: settings.branchNameInstructions,
+            },
             cwd,
             message: message.text,
             attachments: message.attachments,
             modelSelection,
           })
-          .pipe(Effect.map((result) => result.branch));
+          .pipe(
+            Effect.map((result) => ({
+              branch: result.branch,
+              exactName: settings.branchNamingMode === "custom",
+            })),
+          );
       });
 
     // The server owns worktree naming: without an explicit branch, provision
@@ -347,7 +360,14 @@ export const make = Effect.gen(function* () {
       const oldBranch = branch;
       const worktreeCwd = worktreePath;
       yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
-        Effect.flatMap((newBranch) => git.renameBranch({ cwd: worktreeCwd, oldBranch, newBranch })),
+        Effect.flatMap(({ branch: newBranch, exactName }) =>
+          git.renameBranch({
+            cwd: worktreeCwd,
+            oldBranch,
+            newBranch,
+            ...(exactName ? { exactName: true } : {}),
+          }),
+        ),
         Effect.flatMap((renamed) =>
           threads.dispatch({
             type: "thread.metadata.update",
@@ -595,6 +615,9 @@ export const make = Effect.gen(function* () {
               ...(input.initialMessage.scheduledTaskId === undefined
                 ? {}
                 : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
+              ...(input.initialMessage.senderThreadId === undefined
+                ? {}
+                : { senderThreadId: input.initialMessage.senderThreadId }),
               modelSelection: input.modelSelection,
               dispatchMode:
                 input.prepareWorkspace === false
@@ -640,7 +663,7 @@ export const make = Effect.gen(function* () {
               const preparationStillRequired =
                 runId === null
                   ? true
-                  : yield* threads.getThreadProjection(threadId).pipe(
+                  : yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }).pipe(
                       Effect.map((current) =>
                         current.runs.some((run) => run.id === runId && run.status === "preparing"),
                       ),
