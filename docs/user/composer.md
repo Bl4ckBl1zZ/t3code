@@ -268,8 +268,24 @@ Completed web conversations keep the final response visible. Expand **Worked for
 interim responses and completed tools. Subagents, forks, threads the agent created and
 commands still running remain visible outside that fold.
 
+When a turn starts several subagents in a row, the web timeline shows them as one card that counts
+how many are working, done or failed and how long the group has run. Expand it to see each
+subagent; hover one for its model, status and progress.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. Their composer is replaced by the subagent's status.
+
+On web and desktop, the thread details card floats in the space beside the conversation when the
+window leaves room for it, without narrowing the conversation. When it does not, the details button
+in the header opens the same card as a popover. On a short window the card folds what cannot fit:
+first section headings, the environment and workspace pickers, ports, background tasks,
+automations and lineage, then the editor picker, keeping scripts and in-progress Git actions.
+
+On web and desktop, a thread's subagents are listed in the thread details card under **Lineage**
+(or **Subagents** when the thread has no other relatives). Click a subagent to open its thread.
+Hover it to see its model, status, workflow phase progress and token usage. A workflow subagent
+shows its phase count beside its name, and when the run reported a script or a session, the menu
+beside the row can view the workflow script or open the run session.
 
 On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same 100-attachment limit applies to the picker and dropped files.
 

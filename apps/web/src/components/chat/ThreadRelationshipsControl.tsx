@@ -11,13 +11,22 @@ import {
   canDetachThreadProviderSession,
   resolveLatestMergeBackRun,
 } from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2Subagent,
+  OrchestrationV2ThreadShell,
+  ThreadId,
+} from "@t3tools/contracts";
+import { workflowPhaseProgress } from "@t3tools/shared/workflowObservability";
+import * as DateTime from "effect/DateTime";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
   CheckIcon,
   ChevronDownIcon,
   CornerLeftUpIcon,
+  ExternalLinkIcon,
+  FileCode2Icon,
   GitForkIcon,
   GitMergeIcon,
   LoaderCircleIcon,
@@ -27,11 +36,16 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
+import { AgentElapsed, type AgentElapsedTiming } from "./AgentElapsed";
+import { SubagentTooltipContent } from "./SubagentTooltipContent";
+import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { resolveThreadModelBadge } from "./threadModelBadge";
+import { WorkflowScriptDialog } from "../WorkflowScriptDialog";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { readLocalApi } from "../../localApi";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { useThreadProjection, useThreadShells } from "../../state/entities";
+import { useProjects, useThreadProjection, useThreadShells } from "../../state/entities";
 import { useProviderEntryByInstanceId } from "../../state/providerEntries";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -73,6 +87,14 @@ function relationshipOrbState(status: string | null): AgentOrbState {
   return "idle";
 }
 
+function subagentTiming(subagent: OrchestrationV2Subagent): AgentElapsedTiming {
+  return {
+    status: subagent.status,
+    startedAt: subagent.startedAt === null ? null : DateTime.formatIso(subagent.startedAt),
+    completedAt: subagent.completedAt === null ? null : DateTime.formatIso(subagent.completedAt),
+  };
+}
+
 function relationshipThreadTitle(input: {
   readonly title: string;
   readonly isSubagent: boolean;
@@ -95,6 +117,7 @@ export function ThreadRelationshipsPanel(props: {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
   const threadShells = useThreadShells();
+  const projects = useProjects().filter((project) => project.environmentId === props.environmentId);
   const activeShells = threadShells.filter(
     (thread) => thread.environmentId === props.environmentId,
   );
@@ -124,6 +147,15 @@ export function ThreadRelationshipsPanel(props: {
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
   const [subagentsExpanded, setSubagentsExpanded] = useState(false);
   const [showDone, setShowDone] = useState(false);
+  const [scriptPath, setScriptPath] = useState<string | null>(null);
+  // Workflow progress, usage and run handles live on the parent's projected
+  // subagent, keyed by the child thread the lineage row points at.
+  const subagentByChildThreadId = new Map<ThreadId, OrchestrationV2Subagent>();
+  for (const subagent of projection?.subagents ?? []) {
+    if (subagent.childThreadId !== null) {
+      subagentByChildThreadId.set(subagent.childThreadId, subagent);
+    }
+  }
 
   if (relationshipRows.length === 0) {
     return props.emptyFallback ?? null;
@@ -232,14 +264,47 @@ export function ThreadRelationshipsPanel(props: {
             title: node?.thread?.title ?? threadId,
             isSubagent,
           });
+          const subagent = showOrb ? subagentByChildThreadId.get(threadId) : undefined;
+          const phase = workflowPhaseProgress(subagent?.workflow);
+          const runScriptPath = subagent?.runHandles?.scriptPath;
+          const runSessionUrl = subagent?.runHandles?.sessionUrl;
+          const hasRunHandles = runScriptPath !== undefined || runSessionUrl !== undefined;
+          const relationshipHint = node?.missing
+            ? "This related thread is unavailable"
+            : `Open ${relationship.toLowerCase()} in this chat`;
           const modelSelection = node?.thread?.modelSelection ?? null;
-          const modelBadge = resolveThreadModelBadge({
-            modelSelection,
-            providerEntry: providerEntryByInstanceId.get(modelSelection?.instanceId ?? "") ?? null,
-          });
+          const providerEntry =
+            providerEntryByInstanceId.get(
+              modelSelection?.instanceId ?? subagent?.providerInstanceId ?? "",
+            ) ?? null;
+          const modelBadge = resolveThreadModelBadge({ modelSelection, providerEntry });
+          // A subagent's hover is the thread hover card; other relatives keep the hint.
+          const RelationshipPopup = subagent ? ThreadHoverCardPopup : TooltipPopup;
+          const relationshipTooltip = subagent ? (
+            <SubagentTooltipContent
+              title={threadTitle}
+              modelLabel={modelBadge?.model ?? subagent.model}
+              driver={providerEntry?.driverKind ?? subagent.driver}
+              providerDisplayName={providerEntry?.displayName}
+              elapsed={<AgentElapsed agent={subagentTiming(subagent)} />}
+              status={subagent.status}
+              result={subagent.result}
+              progress={subagent.progress}
+              workflow={subagent.workflow}
+              usage={subagent.usage}
+              parentThread={projection?.thread}
+              childThread={node?.thread ?? undefined}
+              parentProject={projects.find(
+                (project) => project.id === projection?.thread.projectId,
+              )}
+              childProject={projects.find((project) => project.id === node?.thread?.projectId)}
+            />
+          ) : (
+            relationshipHint
+          );
           const relationshipContent = (
             <>
-              <span className="relative -mx-0.5 grid size-4 shrink-0 place-items-center">
+              <span className="relative grid size-4 shrink-0 place-items-center">
                 {showOrb ? (
                   <AgentOrb seed={threadId} size={16} state={relationshipOrbState(edge.status)} />
                 ) : (
@@ -256,10 +321,19 @@ export function ThreadRelationshipsPanel(props: {
                 )}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-medium leading-4 text-foreground/85">
+                <span className="block truncate text-left text-[13px] font-medium leading-4 text-foreground/85">
                   {threadTitle}
                 </span>
               </span>
+              {phase ? (
+                <span
+                  className="shrink-0 text-[11px] leading-4 tabular-nums text-muted-foreground"
+                  aria-label={`Workflow phase ${phase.current} of ${phase.total}`}
+                  data-thread-relationship-phase
+                >
+                  {phase.current}/{phase.total}
+                </span>
+              ) : null}
               {modelBadge ? (
                 <span
                   className="flex min-w-0 shrink items-center gap-1 text-[11px] leading-4"
@@ -296,11 +370,7 @@ export function ThreadRelationshipsPanel(props: {
                     >
                       {relationshipContent}
                     </TooltipTrigger>
-                    <TooltipPopup side="left">
-                      {node?.missing
-                        ? "This related thread is unavailable"
-                        : `Open ${relationship.toLowerCase()} in this chat`}
-                    </TooltipPopup>
+                    <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
                   </Tooltip>
                   <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
                   <Tooltip>
@@ -335,6 +405,58 @@ export function ThreadRelationshipsPanel(props: {
                     </TooltipPopup>
                   </Tooltip>
                 </div>
+              ) : hasRunHandles ? (
+                <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
+                          disabled={node?.missing === true}
+                          onClick={() => openThread(threadId)}
+                        />
+                      }
+                    >
+                      {relationshipContent}
+                    </TooltipTrigger>
+                    <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
+                  </Tooltip>
+                  <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+                  {/* Run handles render only when the task reported them: a plain
+                      subagent has none and should not show dead affordances. */}
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
+                          aria-label={`Workflow run for ${threadTitle}`}
+                        />
+                      }
+                    >
+                      <MoreHorizontalIcon className="size-3" />
+                    </MenuTrigger>
+                    <MenuPopup align="end" className={THREAD_DETAILS_PANEL_MENU_POPUP_CLASS}>
+                      {runScriptPath !== undefined ? (
+                        <MenuItem onClick={() => setScriptPath(runScriptPath)}>
+                          <FileCode2Icon className="size-3.5" />
+                          View workflow script
+                        </MenuItem>
+                      ) : null}
+                      {runSessionUrl !== undefined ? (
+                        <MenuItem
+                          onClick={() => void readLocalApi()?.shell.openExternal(runSessionUrl)}
+                        >
+                          <ExternalLinkIcon className="size-3.5" />
+                          Open run session
+                        </MenuItem>
+                      ) : null}
+                    </MenuPopup>
+                  </Menu>
+                </div>
               ) : (
                 <Tooltip>
                   <TooltipTrigger
@@ -350,11 +472,7 @@ export function ThreadRelationshipsPanel(props: {
                   >
                     {relationshipContent}
                   </TooltipTrigger>
-                  <TooltipPopup side="left">
-                    {node?.missing
-                      ? "This related thread is unavailable"
-                      : `Open ${relationship.toLowerCase()} in this chat`}
-                  </TooltipPopup>
+                  <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
                 </Tooltip>
               )}
             </li>
@@ -475,6 +593,11 @@ export function ThreadRelationshipsPanel(props: {
           </>
         );
       })()}
+      <WorkflowScriptDialog
+        threadRef={ref}
+        scriptPath={scriptPath}
+        onClose={() => setScriptPath(null)}
+      />
     </section>
   );
 }

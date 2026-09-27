@@ -225,7 +225,7 @@ export default function ProjectScriptsControl({
               <span
                 className={cn(
                   "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
-                  isPanel && "not-sr-only ml-0.5 truncate",
+                  isPanel && "not-sr-only ml-0 truncate",
                 )}
               >
                 {primaryScript.name}
@@ -369,7 +369,7 @@ export default function ProjectScriptsControl({
             <span
               className={cn(
                 "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
-                isPanel && "not-sr-only ml-0.5",
+                isPanel && "not-sr-only ml-0",
               )}
             >
               {isPanel ? "Add project script" : "Add action"}

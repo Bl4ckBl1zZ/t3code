@@ -21,7 +21,10 @@ import {
   resolveTimelineMinimapPreview,
   type TimelineMinimapItem,
 } from "./timelineMinimapItems";
-import { orchestrationV2CommandExecutionIsLiveInBackground } from "@t3tools/contracts";
+import {
+  isOrchestrationV2WorkActive,
+  orchestrationV2CommandExecutionIsLiveInBackground,
+} from "@t3tools/contracts";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import type { AssistantCitation } from "@t3tools/contracts";
@@ -187,6 +190,14 @@ import {
   V2LifecycleRow,
   type HandoffTimelineRun,
 } from "./V2LifecycleRow";
+import {
+  subagentGroupTiming,
+  summarizeSubagentStatuses,
+} from "@t3tools/client-runtime/state/subagent-display";
+import { AgentElapsed } from "./AgentElapsed";
+import { AgentOrb } from "./AgentOrb";
+import { subagentOrbSeed, type SubagentTurnItem } from "./SubagentsStatusBadge.logic";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 import {
@@ -2092,7 +2103,14 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
 
 // A run of consecutive related-thread rows (subagents, created threads) stacks
 // as tightly as a list of tool calls instead of spacing out like separate events.
+// A run made only of subagents folds into one collapsible card instead.
 function V2EventGroupTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event-group" }> }) {
+  const subagents = row.events.flatMap((event) =>
+    event.projectedItem.item.type === "subagent" ? [event.projectedItem.item] : [],
+  );
+  if (subagents.length === row.events.length) {
+    return <V2SubagentGroup row={row} subagents={subagents} />;
+  }
   return (
     <div className="space-y-px" data-v2-event-group data-v2-event-group-count={row.events.length}>
       {row.events.map((event) => (
@@ -2101,6 +2119,101 @@ function V2EventGroupTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "e
     </div>
   );
 }
+
+const SUBAGENT_GROUP_VISIBLE_ORBS = 3;
+
+const V2SubagentGroup = memo(function V2SubagentGroup({
+  row,
+  subagents,
+}: {
+  row: Extract<TimelineRow, { kind: "event-group" }>;
+  subagents: ReadonlyArray<SubagentTurnItem>;
+}) {
+  // Survives the virtualizer recycling this row, like the work groups do.
+  const [expanded, toggleExpanded] = useWorkHistoryExpansion(`subagent-group:${row.id}`, false);
+  const label = `${subagents.length} subagents`;
+  const statusSummary = summarizeSubagentStatuses(subagents.map(({ status }) => status));
+  const active = subagents.some(({ status }) => isOrchestrationV2WorkActive(status));
+  const failed = subagents.some(({ status }) => status === "failed");
+  return (
+    <Collapsible
+      open={expanded}
+      onOpenChange={(open) => {
+        if (open !== expanded) toggleExpanded();
+      }}
+      data-subagent-group
+    >
+      <CollapsibleTrigger
+        aria-label={label}
+        aria-description={statusSummary}
+        className={cn(
+          "flex w-full min-w-0 items-center gap-2.5 rounded-md px-0.5 py-1 text-left transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+          expanded || active ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        <span className="flex shrink-0 items-center -space-x-1" aria-hidden>
+          {subagents.slice(0, SUBAGENT_GROUP_VISIBLE_ORBS).map((item) => (
+            <AgentOrb
+              key={item.id}
+              seed={subagentOrbSeed(item)}
+              size={16}
+              state={
+                isOrchestrationV2WorkActive(item.status)
+                  ? "active"
+                  : item.status === "failed"
+                    ? "failed"
+                    : item.status === "idle"
+                      ? "idle"
+                      : "done"
+              }
+              className="ring-1 ring-background"
+            />
+          ))}
+          {subagents.length > SUBAGENT_GROUP_VISIBLE_ORBS ? (
+            <span className="ps-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+              +{subagents.length - SUBAGENT_GROUP_VISIBLE_ORBS}
+            </span>
+          ) : null}
+        </span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[12px] leading-5">
+          <span className="shrink-0 font-medium text-foreground/82">{label}</span>
+          <span
+            className={cn(
+              "min-w-0 truncate text-[11px]",
+              active ? "text-info" : failed ? "text-destructive" : "text-muted-foreground/70",
+            )}
+          >
+            {statusSummary}
+          </span>
+        </span>
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/80">
+          <AgentElapsed agent={subagentGroupTiming(subagents)} />
+        </span>
+        <ChevronDownIcon
+          aria-hidden
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-180",
+          )}
+        />
+      </CollapsibleTrigger>
+      {/* Virtualized rows must settle before disclosure scroll anchoring resumes. */}
+      <CollapsiblePanel animate={false}>
+        {expanded ? (
+          <div
+            className="mt-1 space-y-px rounded-lg border border-border/60 bg-card/30 p-1"
+            data-v2-event-group
+            data-v2-event-group-count={row.events.length}
+          >
+            {row.events.map((event) => (
+              <V2EventTimelineRow key={event.id} row={event} />
+            ))}
+          </div>
+        ) : null}
+      </CollapsiblePanel>
+    </Collapsible>
+  );
+});
 
 const V2_EVENT_TONE_ICON_CLASS: Record<V2EventTone, string> = {
   muted: "text-muted-foreground/65",
@@ -2116,6 +2229,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
     return (
       <V2LifecycleRow
         item={item}
+        environmentId={ctx.activeThreadEnvironmentId}
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}
