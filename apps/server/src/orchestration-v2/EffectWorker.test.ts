@@ -809,7 +809,8 @@ it.effect("records an exhausted rollback so waiting clients stop and show why", 
 
     yield* Effect.gen(function* () {
       const executor = yield* OrchestrationEffectExecutorV2;
-      yield* executor.handlePermanentFailure?.(
+      assert.isDefined(executor.handlePermanentFailure);
+      yield* executor.handlePermanentFailure(
         {
           id: "effect:rollback-exhausted",
           commandId,

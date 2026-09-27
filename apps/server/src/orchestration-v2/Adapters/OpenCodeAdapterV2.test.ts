@@ -155,7 +155,7 @@ describe("OpenCodeAdapterV2", () => {
       const modelSelection = { instanceId, model: "default" };
       const adapter = makeOpenCodeAdapterV2({
         instanceId,
-        settings: Schema.decodeSync(OpenCodeSettings)({}),
+        settings: yield* Schema.decodeEffect(OpenCodeSettings)({}),
         environment: {},
         runtime,
         idAllocator,

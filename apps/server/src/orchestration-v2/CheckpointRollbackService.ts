@@ -13,9 +13,9 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
-import { EventSinkV2 } from "./EventSink.ts";
-import { IdAllocatorV2 } from "./IdAllocator.ts";
-import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { EventSinkV2, type EventSinkV2Error } from "./EventSink.ts";
+import { IdAllocatorV2, type IdAllocatorV2AllocationError } from "./IdAllocator.ts";
+import { ProjectionStoreV2, type ProjectionStoreV2Error } from "./ProjectionStore.ts";
 import type { ProviderAdapterV2RollbackTarget } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
@@ -70,7 +70,10 @@ export interface CheckpointRollbackServiceV2Shape {
     readonly threadId: ThreadId;
     readonly requestId: CommandId;
     readonly cause?: unknown;
-  }) => Effect.Effect<void, unknown>;
+  }) => Effect.Effect<
+    void,
+    EventSinkV2Error | IdAllocatorV2AllocationError | ProjectionStoreV2Error
+  >;
 }
 
 /** The rollback error a failed attempt carries, however deeply the worker wrapped it. */
