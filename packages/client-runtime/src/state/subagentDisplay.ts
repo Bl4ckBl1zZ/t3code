@@ -52,17 +52,15 @@ export function subagentGroupTiming(
   readonly startedAt: string | null;
   readonly completedAt: string | null;
 } {
-  let startMs: number | null = null;
-  let endMs: number | null = null;
+  let start: DateTime.Utc | null = null;
+  let end: DateTime.Utc | null = null;
   let endUnknown = false;
   for (const agent of agents) {
-    if (agent.startedAt) {
-      const ms = DateTime.toEpochMillis(agent.startedAt);
-      startMs = startMs === null ? ms : Math.min(startMs, ms);
+    if (agent.startedAt && (start === null || DateTime.isLessThan(agent.startedAt, start))) {
+      start = agent.startedAt;
     }
     if (agent.completedAt) {
-      const ms = DateTime.toEpochMillis(agent.completedAt);
-      endMs = endMs === null ? ms : Math.max(endMs, ms);
+      if (end === null || DateTime.isGreaterThan(agent.completedAt, end)) end = agent.completedAt;
     } else {
       endUnknown = true;
     }
@@ -72,8 +70,8 @@ export function subagentGroupTiming(
   );
   return {
     status: live ? "running" : "completed",
-    startedAt: startMs === null ? null : new Date(startMs).toISOString(),
-    completedAt: live || endUnknown || endMs === null ? null : new Date(endMs).toISOString(),
+    startedAt: start === null ? null : DateTime.formatIso(start),
+    completedAt: live || endUnknown || end === null ? null : DateTime.formatIso(end),
   };
 }
 
