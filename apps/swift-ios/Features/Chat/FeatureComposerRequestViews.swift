@@ -418,7 +418,7 @@ struct FeatureComposerUserInputPanel: View {
                     FeatureImageAttachmentPicker(
                         attachments: questionFiles,
                         preparationState: $preparation,
-                        maximumCount: max(0, 8 - files.filter { $0.key != question.id }.values.reduce(0) { $0 + $1.count })
+                        maximumCount: max(0, ComposerAttachments.maximumAttachmentCount - files.filter { $0.key != question.id }.values.reduce(0) { $0 + $1.count })
                     )
                     FeatureAttachmentStrip(
                         attachments: questionFiles,

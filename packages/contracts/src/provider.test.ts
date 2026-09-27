@@ -121,6 +121,61 @@ describe("ProviderSessionStartInput", () => {
 });
 
 describe("ProviderSendTurnInput", () => {
+  it("accepts 100 attachments and rejects 101", () => {
+    const attachments = Array.from({ length: 100 }, (_, index) => ({
+      type: "image",
+      id: `image-${index}`,
+      name: "image.png",
+      mimeType: "image/png",
+      sizeBytes: 1,
+    }));
+    expect(
+      decodeProviderSendTurnInput({ threadId: "thread-1", attachments }).attachments,
+    ).toHaveLength(100);
+    expect(() =>
+      decodeProviderSendTurnInput({
+        threadId: "thread-1",
+        attachments: [...attachments, attachments[0]],
+      }),
+    ).toThrow();
+  });
+
+  it("caps total image bytes without charging videos or other files", () => {
+    const image = {
+      type: "image",
+      id: "image",
+      name: "image.png",
+      mimeType: "image/png",
+      sizeBytes: 10 * 1024 * 1024,
+    };
+    const video = {
+      type: "video",
+      id: "video",
+      name: "video.mp4",
+      mimeType: "video/mp4",
+      sizeBytes: 50 * 1024 * 1024,
+    };
+    const file = {
+      type: "file",
+      id: "notes",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 50 * 1024 * 1024,
+    };
+    expect(
+      decodeProviderSendTurnInput({
+        threadId: "thread-1",
+        attachments: [...Array.from({ length: 8 }, () => image), video, file],
+      }).attachments,
+    ).toHaveLength(10);
+    expect(() =>
+      decodeProviderSendTurnInput({
+        threadId: "thread-1",
+        attachments: [...Array.from({ length: 8 }, () => image), { ...image, sizeBytes: 1 }],
+      }),
+    ).toThrow(/80 MiB/);
+  });
+
   it("accepts codex modelSelection", () => {
     const parsed = decodeProviderSendTurnInput({
       threadId: "thread-1",

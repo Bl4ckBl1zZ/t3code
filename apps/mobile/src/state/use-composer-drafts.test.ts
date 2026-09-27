@@ -273,7 +273,7 @@ describe("mobile composer drafts", () => {
       previewUri: "data:image/png;base64,YWJj",
     });
     const existingImage = image("existing");
-    const sharedImages = Array.from({ length: 8 }, (_, index) => image(`shared-${index}`));
+    const sharedImages = Array.from({ length: 100 }, (_, index) => image(`shared-${index}`));
 
     const merged = mergeComposerDraftContentState(
       { [draftKey]: { text: "", attachments: [existingImage] } },
@@ -281,9 +281,9 @@ describe("mobile composer drafts", () => {
       { text: "", attachments: sharedImages },
     );
 
-    expect(merged[draftKey]?.attachments).toHaveLength(8);
+    expect(merged[draftKey]?.attachments).toHaveLength(100);
     expect(merged[draftKey]?.attachments[0]).toEqual(existingImage);
-    expect(merged[draftKey]?.attachments.at(-1)?.id).toBe("shared-6");
+    expect(merged[draftKey]?.attachments.at(-1)?.id).toBe("shared-98");
   });
 
   it("restores the exact draft captured before an interrupted share import", () => {

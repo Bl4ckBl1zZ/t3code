@@ -245,7 +245,7 @@ struct PlatformIncomingShareImport: Sendable, Equatable {
 /// attachment identifiers make the operation idempotent if inbox cleanup fails
 /// after the atomic draft write.
 struct PlatformIncomingSharePipeline: Sendable {
-    static let maximumAttachmentCount = 8
+    static let maximumAttachmentCount = ComposerAttachments.maximumAttachmentCount
 
     private let source: PlatformIncomingShareSource
     private let drafts: PlatformIncomingShareDraftRepository

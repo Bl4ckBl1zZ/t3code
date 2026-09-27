@@ -34,6 +34,7 @@ import {
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
   type EnvironmentId,
+  getProviderAttachmentLimitError,
   type MessageId,
   type ModelSelection,
   type OrchestrationV2ThreadProjection,
@@ -7010,6 +7011,11 @@ function ChatViewContent(props: ChatViewProps) {
         threadIdForSend,
         `'${oversizedFile.name}' exceeds this server's ${Math.floor(fileLimit / 1024 / 1024)} MB file limit.`,
       );
+      return;
+    }
+    const attachmentLimitError = getProviderAttachmentLimitError(composerImagesSnapshot);
+    if (attachmentLimitError !== undefined) {
+      setThreadError(threadIdForSend, attachmentLimitError);
       return;
     }
 

@@ -10,7 +10,8 @@ composers.
 
 You can attach images up to 10 MB. On servers that support file uploads, you can also
 attach videos, text files, PDFs, ZIP archives, and other files. Each file can be up to the limit advertised
-by the server, capped at 50 MB. Each message can contain up to eight attachments in total. Files
+by the server, capped at 50 MB. Each message can contain up to 100 attachments, with at most 80 MiB
+of images in total. Files
 upload directly to the environment, where your agent can read, copy, or edit them by their file path.
 
 On web and desktop, use the paperclip beside the voice and send controls to attach files.
@@ -270,7 +271,7 @@ commands still running remain visible outside that fold.
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. Their composer is replaced by the subagent's status.
 
-On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same eight-attachment limit applies to the picker and dropped files.
+On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same 100-attachment limit applies to the picker and dropped files.
 
 If you choose another panel while a turn is working, its arriving plan will not replace your choice. A later turn can open its plan again when automatic plan opening is enabled.
 
