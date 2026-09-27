@@ -841,11 +841,6 @@ function scenarios(): ReadonlyArray<ReplayScenario> {
   ];
 }
 
-function recorderThreadConfigMetadata(scenario: ReplayScenario) {
-  const keys = [...new Set(scenario.runs.flatMap((run) => Object.keys(run.threadConfig ?? {})))];
-  return keys.length === 0 ? {} : { recorderThreadConfigKeys: keys };
-}
-
 function makeRecorder({
   outPath,
   scenario,
