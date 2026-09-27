@@ -15,6 +15,18 @@ final class RuntimeModeMenuTests: XCTestCase {
         XCTAssertEqual(menu.selected.title, "Approve actions")
     }
 
+    func testOffersOnlyTheModesAProviderSupportsReadingAnUnsupportedOneAsTheFirst() {
+        let supported: [RuntimeMode] = [.approvalRequired, .auto, .fullAccess]
+        let menu = RuntimeModeMenu.resolve(
+            isHermes: false,
+            runtimeMode: .autoAcceptEdits,
+            supportedRuntimeModes: supported
+        )
+
+        XCTAssertEqual(menu.options.map(\.mode), supported)
+        XCTAssertEqual(menu.selected.mode, .approvalRequired)
+    }
+
     func testOffersAWorkThreadTheTwoModesHermesDistinguishes() {
         let menu = RuntimeModeMenu.resolve(isHermes: true, runtimeMode: .fullAccess)
 

@@ -64,10 +64,16 @@ public struct RuntimeModeMenu: Equatable, Sendable {
     }
 
     /// T3 Work (Hermes) threads get the two options Hermes actually
-    /// distinguishes; everything else gets the four generic modes. A mode
-    /// outside the offered set still has to read as something, since a thread
-    /// can carry one in from wherever it was created.
-    public static func resolve(isHermes: Bool, runtimeMode: RuntimeMode) -> RuntimeModeMenu {
+    /// distinguishes; everything else gets the generic modes the provider
+    /// supports (all four when it lists none). A mode outside the offered set
+    /// still has to read as something, since a thread can carry one in from
+    /// wherever it was created; it reads as the first offered mode, which is
+    /// the mode the server runs it in.
+    public static func resolve(
+        isHermes: Bool,
+        runtimeMode: RuntimeMode,
+        supportedRuntimeModes: [RuntimeMode]? = nil
+    ) -> RuntimeModeMenu {
         if isHermes {
             let mode = HermesRuntimeModes.choice(for: runtimeMode).mode
             return RuntimeModeMenu(
@@ -75,9 +81,11 @@ public struct RuntimeModeMenu: Equatable, Sendable {
                 selected: hermesOptions.first { $0.mode == mode } ?? hermesOptions[0]
             )
         }
+        let supported = defaultOptions.filter { supportedRuntimeModes?.contains($0.mode) == true }
+        let options = supported.isEmpty ? defaultOptions : supported
         return RuntimeModeMenu(
-            options: defaultOptions,
-            selected: defaultOptions.first { $0.mode == runtimeMode } ?? defaultOptions[0]
+            options: options,
+            selected: options.first { $0.mode == runtimeMode } ?? options[0]
         )
     }
 }
