@@ -737,7 +737,6 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
           environment: {},
           attachmentsDir,
           fileSystem,
-          path: yield* Path.Path,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-thread-claude-accept-edits"),
