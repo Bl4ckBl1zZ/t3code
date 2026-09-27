@@ -16,15 +16,17 @@ wants to run or edit, and waits for approval. Work outside the workspace is rest
 without prompting; commands and anything else still stop for approval.
 
 **Auto**: routine actions proceed without you; risky ones still ask. How this is enforced depends
-on the provider: Codex delegates routine approvals to an AI reviewer, Claude uses its own auto
-permission mode, and providers without an equivalent (such as OpenCode) fall back to asking, like
-Supervised.
+on the provider: Codex delegates routine approvals to an AI reviewer, Claude and Grok use their
+own auto permission modes, and providers without an equivalent (such as OpenCode) fall back to
+asking, like Supervised. On Grok, commands its own review blocks come to you for approval.
 
 **Full access**: allow commands and edits without prompts. The default. The agent runs
 unattended until it finishes or asks a question of its own.
 
 Approvals appear inline in the conversation. Approve or reject one and the agent continues from
 there.
+
+Grok offers no **Auto-accept edits**. A Grok thread already set to it runs in **Supervised**.
 
 For Grok, **Always allow this session** remembers the matching command or tool input. Other
 actions still ask for approval. It does not change the thread to **Full access**.
