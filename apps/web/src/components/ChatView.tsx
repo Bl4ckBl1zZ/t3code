@@ -70,7 +70,10 @@ import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { resolveThreadProviderSession } from "@t3tools/client-runtime/state/thread-workflows";
+import {
+  resolveThreadProviderSession,
+  threadSupportsProviderHandoff,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import {
@@ -1844,8 +1847,10 @@ function ChatViewContent(props: ChatViewProps) {
     () => (serverProjection === null ? null : resolveThreadProviderSession(serverProjection)),
     [serverProjection],
   );
-  const supportsProviderSwitchingViaHandoff =
-    activeProviderSession?.capabilities.sessions.supportsProviderSwitchingViaHandoff === true;
+  const supportsProviderSwitchingViaHandoff = useMemo(
+    () => threadSupportsProviderHandoff(serverProjection),
+    [serverProjection],
+  );
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);

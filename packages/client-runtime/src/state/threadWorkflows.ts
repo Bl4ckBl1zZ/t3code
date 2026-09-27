@@ -88,6 +88,32 @@ export function resolveThreadProviderSession(projection: Projection): ProviderSe
 }
 
 /**
+ * Whether the thread may switch to another provider through a portable
+ * handoff. A live session answers from its capabilities; without one, an
+ * idle thread may hand off when it has no history to carry or still holds a
+ * native provider thread for the selected instance.
+ */
+export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
+  if (projection == null) return false;
+  const session = resolveThreadProviderSession(projection);
+  if (session !== null) {
+    return session.capabilities.sessions.supportsProviderSwitchingViaHandoff;
+  }
+  if (resolveActiveThreadRun(projection) !== null) return false;
+  if (projection.thread.historyOrigin === "v1_import" || projection.runs.length === 0) return true;
+
+  // Detaching a stopped session removes it from the projection, but its native
+  // provider thread remains available for the next turn's portable handoff.
+  return projection.providerThreads.some(
+    (thread) =>
+      thread.id === projection.thread.activeProviderThreadId &&
+      thread.appThreadId === projection.thread.id &&
+      thread.providerInstanceId === projection.thread.modelSelection.instanceId &&
+      thread.nativeThreadRef !== null,
+  );
+}
+
+/**
  * The runs the user actually queued. Automatic delegated-completion deliveries
  * and notification wakes are the agent's own follow-up, not queue entries.
  */
