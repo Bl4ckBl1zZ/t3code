@@ -279,6 +279,9 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// excluded from both workspaces: they are steps inside their parent, not
     /// work of their own.
     public var relationshipToParent: String?
+    /// The wire `creationSource`: `provider` marks a thread the provider
+    /// spawned on its own. Nil on rows cached before the field.
+    public var creationSource: String? = nil
     /// A title regeneration is in flight. The row menu shows "Regenerating…"
     /// and does not offer a second regeneration until the new title lands.
     public var isRegeneratingTitle: Bool
@@ -361,6 +364,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         supportsSnooze: Bool? = nil,
         workInboxRole: String? = nil,
         relationshipToParent: String? = nil,
+        creationSource: String? = nil,
         isRegeneratingTitle: Bool = false,
         supportsTitleRegeneration: Bool? = nil,
         linkedPullRequest: FeatureLinkedPullRequest? = nil,
@@ -417,6 +421,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.supportsSnooze = supportsSnooze
         self.workInboxRole = workInboxRole
         self.relationshipToParent = relationshipToParent
+        self.creationSource = creationSource
         self.isRegeneratingTitle = isRegeneratingTitle
         self.supportsTitleRegeneration = supportsTitleRegeneration
         self.linkedPullRequest = linkedPullRequest
@@ -451,6 +456,14 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// their own, so neither workspace lists them as a row.
     public var isSubagentThread: Bool {
         relationshipToParent == "subagent"
+    }
+
+    /// A subagent the provider spawned on its own (Claude's Agent tool, Codex
+    /// or Cursor native subagents). The provider owns its conversation, so the
+    /// server refuses messages sent to it; delegated children (`mcp`) still
+    /// take them. Mirrors `isProviderNativeSubagentThread` in contracts.
+    public var isProviderNativeSubagentThread: Bool {
+        relationshipToParent == "subagent" && creationSource == "provider"
     }
 
     /// Whether the Settled shelf may claim this thread. Mirrors the web
@@ -865,6 +878,9 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
     /// that carries the workflow and usage annotations a row renders.
     public var subagents: [ThreadRelationshipSubagentLink]
     public var transfers: [ThreadRelationshipTransferLink]
+    /// The thread's runless root turn, which only a provider-native subagent
+    /// has. Its bar reads this in place of a composer; nil until it arrives.
+    public var providerSubagentStatus: ProviderSubagentStatus?
 
     public init(
         appThreadID: String = "",
@@ -877,7 +893,8 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
         queuedMessageAttachmentCounts: [String: Int] = [:],
         thread: ThreadRelationshipShell? = nil,
         subagents: [ThreadRelationshipSubagentLink] = [],
-        transfers: [ThreadRelationshipTransferLink] = []
+        transfers: [ThreadRelationshipTransferLink] = [],
+        providerSubagentStatus: ProviderSubagentStatus? = nil
     ) {
         self.appThreadID = appThreadID
         self.activeProviderThreadID = activeProviderThreadID
@@ -890,6 +907,7 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
         self.thread = thread
         self.subagents = subagents
         self.transfers = transfers
+        self.providerSubagentStatus = providerSubagentStatus
     }
 
     /// What a client that cannot supply the projection reports: no queue, no

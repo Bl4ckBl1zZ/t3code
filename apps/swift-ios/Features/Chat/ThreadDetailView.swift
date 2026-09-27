@@ -499,8 +499,10 @@ public struct ThreadDetailView: View {
                 .keyboardShortcut(.upArrow, modifiers: [.command, .option])
             Button("Next Turn") { turnNavigationRequest += 1 }
                 .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-            Button("Send Message") { send() }
-                .keyboardShortcut(.return, modifiers: .command)
+            if !currentThread.isProviderNativeSubagentThread {
+                Button("Send Message") { send() }
+                    .keyboardShortcut(.return, modifiers: .command)
+            }
             if currentThread.state == .working || currentThread.state == .queued {
                 Button("Stop") { Task { await model.cancelTurn(threadID: thread.id) } }
                     .keyboardShortcut(".", modifiers: .command)
@@ -636,6 +638,16 @@ public struct ThreadDetailView: View {
                             ThreadArchivedBar {
                                 await model.setArchived(thread.id, archived: false)
                                 PlatformHapticEngine.shared.play(.success)
+                            }
+                        } else if currentThread.isProviderNativeSubagentThread {
+                            // The provider runs this conversation and the
+                            // server refuses sends. A question or approval it
+                            // asks here still has to be answerable, so the
+                            // composer returns for exactly that: with a request
+                            // pending it shows only the request panel.
+                            providerSubagentBar(detail)
+                            if !detail.approvals.isEmpty || !detail.userInputs.isEmpty {
+                                composer(detail)
                             }
                         } else {
                             composer(detail)
@@ -984,6 +996,26 @@ public struct ThreadDetailView: View {
             if let citation = AssistantCitation.parse(url.absoluteString) { citationPreview = citation; return .handled }
             return .systemAction
         })
+    }
+
+    private func providerSubagentBar(_ detail: FeatureThreadDetail) -> some View {
+        let selection = currentSelection
+        let provider = selection.flatMap { selection in
+            threadProviders.first { $0.id == selection.providerID }
+        }
+        let model = selection.flatMap { selection in
+            provider?.models.first { $0.id == selection.modelID }
+        }
+        let parentThreadID = detail.workflow.thread?.parentThreadID
+        return ProviderSubagentBar(
+            provider: provider,
+            modelLabel: model?.name ?? selection?.modelID ?? currentThread.providerName ?? "Subagent",
+            effortLabel: model.flatMap {
+                DailyUXModelOptions.reasoningSummary(for: $0, selections: selection?.options ?? [])
+            },
+            status: detail.workflow.providerSubagentStatus,
+            onOpenParent: parentThreadID.map { id in { openRelatedThread(id) } }
+        )
     }
 
     private var composerKeyboardDismissGesture: some Gesture {

@@ -962,9 +962,14 @@ public struct OrchestrationV2RunAttempt: Codable, Equatable, Sendable, Identifia
 
 public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identifiable {
     public let id: String
+    /// Null on a provider-native subagent's root turn: the provider started
+    /// that work, so no run of this thread owns it.
+    public let runId: String?
     public let kind: String
     public let status: String
     public let runtimeRequestId: String?
+    public let startedAt: OrchestrationV2Timestamp?
+    public let completedAt: OrchestrationV2Timestamp?
 }
 
 public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Identifiable {

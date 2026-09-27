@@ -4843,7 +4843,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             queuedMessageAttachmentCounts: queuedMessageAttachmentCounts,
             thread: relationshipShell(projection.thread, environment: environment, runs: runs),
             subagents: subagents,
-            transfers: transfers
+            transfers: transfers,
+            providerSubagentStatus: ProviderSubagentStatus.resolve(
+                nodes: projection.nodes,
+                parseDate: parseValidDate
+            )
         )
     }
 
@@ -5106,6 +5110,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
+            creationSource: thread.creationSource,
             isRegeneratingTitle: thread.titleRegeneration != nil,
             supportsTitleRegeneration: environment.descriptor?.capabilities
                 .threadTitleRegeneration,
@@ -5277,6 +5282,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             // both lists rather than showing it beside the work that spawned it.
             workInboxRole: thread.workInboxRole,
             relationshipToParent: thread.lineage.relationshipToParent,
+            creationSource: thread.creationSource,
             isRegeneratingTitle: thread.titleRegeneration != nil,
             supportsTitleRegeneration: environment.descriptor?.capabilities
                 .threadTitleRegeneration,
