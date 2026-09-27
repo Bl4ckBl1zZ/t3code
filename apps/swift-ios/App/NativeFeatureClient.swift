@@ -1874,6 +1874,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             throw NativeFeatureClientError.inputRequestNotFound
         }
         let route = try threadRoute(for: request.threadID)
+        // One set of answers shares a single message's attachment limits.
+        if let message = ComposerAttachments.limitError(for: attachments.values.flatMap { $0 }) {
+            throw NativeFeatureClientError.attachmentLimit(message)
+        }
         var persisted: [String: JSONValue] = [:]
         for (questionID, files) in attachments where !files.isEmpty {
             persisted[questionID] = .array(try await route.client.persistAttachments(
@@ -5992,8 +5996,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func makeUploadAttachments(
         _ attachments: [FeatureUploadAttachment]
     ) throws -> [UploadChatAttachment] {
-        guard attachments.count <= 8 else {
-            throw NativeFeatureClientError.tooManyAttachments
+        if let message = ComposerAttachments.limitError(for: attachments) {
+            throw NativeFeatureClientError.attachmentLimit(message)
         }
         return try attachments.map {
             try UploadChatAttachment(
@@ -6591,7 +6595,7 @@ private enum NativeFeatureClientError: LocalizedError {
     case branchRequired
     case deviceSessionNotFound
     case missingScope(String)
-    case tooManyAttachments
+    case attachmentLimit(String)
     case crossEnvironmentMerge
     case repositoryIdentityUnavailable
 
@@ -6608,7 +6612,7 @@ private enum NativeFeatureClientError: LocalizedError {
         case .branchRequired: "Choose a base branch for the new worktree."
         case .deviceSessionNotFound: "That device session is no longer active."
         case .missingScope: "This connection does not have permission to manage devices."
-        case .tooManyAttachments: "You can attach up to 8 images per message."
+        case let .attachmentLimit(message): message
         case .crossEnvironmentMerge:
             "These threads are on different environments and cannot be merged."
         case .repositoryIdentityUnavailable:

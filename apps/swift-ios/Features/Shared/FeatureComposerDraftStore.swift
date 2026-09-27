@@ -78,7 +78,7 @@ public enum FeatureComposerDraftImportError: LocalizedError, Equatable, Sendable
         switch self {
         case let .attachmentLimitExceeded(available):
             available == 0
-                ? "This draft already has eight attachments. Remove one before importing the share."
+                ? "This draft already has \(ComposerAttachments.maximumAttachmentCount) attachments. Remove one before importing the share."
                 : "This share needs more attachment slots. The current draft has room for \(available)."
         }
     }
@@ -343,7 +343,7 @@ public actor FeatureComposerDraftStore {
         text: String,
         attachments: [FeatureDraftAttachment],
         for key: String,
-        maximumAttachmentCount: Int = 8
+        maximumAttachmentCount: Int = ComposerAttachments.maximumAttachmentCount
     ) throws -> FeatureComposerDraft {
         var drafts = try loadIfNeeded()
         var persisted = drafts[key] ?? PersistedDraft(FeatureComposerDraft())
