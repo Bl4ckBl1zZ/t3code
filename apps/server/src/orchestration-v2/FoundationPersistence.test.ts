@@ -1989,6 +1989,18 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
       );
       yield* recovery.recover;
 
+      // The parent's own view of the subagent settles too: its row, its node
+      // and its timeline item outlived the settled run on the dead process.
+      const parentProjection = yield* projectionStore.getThreadProjection(parentId);
+      assert.equal(parentProjection.subagents[0]?.status, "cancelled");
+      assert.equal(
+        parentProjection.nodes.find((candidate) => candidate.id === subagentId)?.status,
+        "cancelled",
+      );
+      assert.equal(
+        parentProjection.turnItems.find((item) => item.type === "subagent")?.status,
+        "cancelled",
+      );
       const childProjection = yield* projectionStore.getThreadProjection(childId);
       const childRoot = childProjection.nodes.find((candidate) => candidate.id === childRootId);
       assert.equal(childRoot?.status, "cancelled");

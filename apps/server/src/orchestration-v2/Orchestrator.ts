@@ -41,6 +41,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  orchestrationV2BackgroundWorkStopRunId,
   ProviderInstanceId,
   type ProviderSessionId,
   RunId,
@@ -6571,9 +6572,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         run?.providerThreadId === null
           ? undefined
           : projection.providerThreads.find((candidate) => candidate.id === run?.providerThreadId);
-      const providerTurn = projection.providerTurns.find(
+      // A settled run stays interruptible while its background work runs on:
+      // the provider turn it ended with is what Stop asks to end that work.
+      const hasBackgroundWork =
+        run !== undefined && orchestrationV2BackgroundWorkStopRunId(projection) === run.id;
+      const providerTurn = projection.providerTurns.findLast(
         (candidate) =>
-          candidate.runAttemptId === run?.activeAttemptId && candidate.status === "running",
+          candidate.runAttemptId === run?.activeAttemptId &&
+          (candidate.status === "running" || hasBackgroundWork),
       );
       if (run === undefined || rootNode === undefined || providerThread === undefined) {
         return yield* new OrchestratorDispatchError({

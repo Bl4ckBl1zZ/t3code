@@ -311,6 +311,60 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      // Delegated agents and dynamic tools can outlive their settled run the
+      // same way, and died with the process too. Left open, the parent thread
+      // shows an agent working forever, so cancel the item together with the
+      // subagent row and node it links to.
+      for (const item of projection.turnItems) {
+        if (item.type !== "subagent" && item.type !== "dynamic_tool") continue;
+        if (!isNonterminalStatus(item.status)) continue;
+        if (runs.some((run) => run.id === item.runId)) continue;
+        const providerInstanceId =
+          item.type === "subagent" ? item.providerInstanceId : projection.thread.providerInstanceId;
+        events.push({
+          id: yield* allocateEventId(),
+          type: "turn-item.updated",
+          threadId: projection.thread.id,
+          ...(item.runId === null ? {} : { runId: item.runId }),
+          ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+          providerInstanceId,
+          occurredAt: now,
+          payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
+        });
+        if (item.type !== "subagent") continue;
+        const subagent = projection.subagents.find(
+          (candidate) => candidate.id === item.subagentId && isNonterminalStatus(candidate.status),
+        );
+        if (subagent !== undefined) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "subagent.updated",
+            threadId: projection.thread.id,
+            ...(item.runId === null ? {} : { runId: item.runId }),
+            nodeId: subagent.id,
+            driver: subagent.driver,
+            providerInstanceId: subagent.providerInstanceId,
+            occurredAt: now,
+            payload: { ...subagent, status: "cancelled", completedAt: now, updatedAt: now },
+          });
+        }
+        const node = projection.nodes.find(
+          (candidate) => candidate.id === item.subagentId && isNonterminalStatus(candidate.status),
+        );
+        if (node !== undefined) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "node.updated",
+            threadId: projection.thread.id,
+            ...(item.runId === null ? {} : { runId: item.runId }),
+            nodeId: node.id,
+            providerInstanceId,
+            occurredAt: now,
+            payload: { ...node, status: "cancelled", completedAt: now },
+          });
+        }
+      }
+
       // Pending provider-switch handoffs are broadcast before their command
       // commits (Orchestrator.dispatchMessage), and the in-memory rejection
       // compensation does not survive a process stop. A non-terminal handoff

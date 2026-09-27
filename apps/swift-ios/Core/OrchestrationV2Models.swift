@@ -994,6 +994,9 @@ public struct OrchestrationV2ProviderThread: Codable, Equatable, Sendable, Ident
     /// one recovered from the provider before it was adopted).
     public let appThreadId: String?
     public let status: String
+    /// The provider driver behind this thread (`codex`, `claudeAgent`, ...).
+    /// Optional so a hand-built thread without it still decodes.
+    public var driver: String? = nil
 }
 
 public struct OrchestrationV2ProviderTurn: Codable, Equatable, Sendable, Identifiable {

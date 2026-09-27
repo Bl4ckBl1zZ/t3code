@@ -3,6 +3,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
+  orchestrationV2BackgroundWorkStopRunId,
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
@@ -721,7 +722,10 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
         run.status === "starting" ||
         run.status === "running" ||
         run.status === "waiting",
-    )?.id;
+    )?.id ??
+    // A settled turn whose background work still runs: Stop ends that work.
+    orchestrationV2BackgroundWorkStopRunId(projection) ??
+    undefined;
   if (runId === undefined) return { sequence: 0 };
   return yield* dispatch({
     type: "run.interrupt",

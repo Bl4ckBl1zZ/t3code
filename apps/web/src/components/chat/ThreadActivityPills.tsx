@@ -1,6 +1,6 @@
 import { memo, useCallback, useId, useState } from "react";
 import type { ThreadId } from "@t3tools/contracts";
-import { ChevronUpIcon, TerminalIcon } from "lucide-react";
+import { ChevronUpIcon, SquareIcon, TerminalIcon } from "lucide-react";
 
 import {
   formatBackgroundElapsed,
@@ -56,8 +56,13 @@ export const ThreadActivityPills = memo(function ThreadActivityPills(props: {
   /** While a turn runs its own indicator already speaks; the background pill dims. */
   readonly turnInProgress: boolean;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  /**
+   * Ends the work these pills show once its turn has settled. Absent while a
+   * turn runs (the composer's Stop covers it) or when the provider cannot.
+   */
+  readonly onStop?: () => void;
 }) {
-  const { subagents, backgroundProcesses, onOpenThread } = props;
+  const { subagents, backgroundProcesses, onOpenThread, onStop } = props;
   const [handle] = useState(() => PopoverCreateHandle<ActivityPanel>());
   const agentsTriggerId = useId();
   const backgroundTriggerId = useId();
@@ -110,6 +115,17 @@ export const ThreadActivityPills = memo(function ThreadActivityPills(props: {
           processes={backgroundProcesses}
           turnInProgress={props.turnInProgress}
         />
+      ) : null}
+      {onStop !== undefined && subagents.length + backgroundProcesses.length > 0 ? (
+        <button
+          type="button"
+          aria-label="Stop background work"
+          className={PILL_CLASS_NAME}
+          onClick={onStop}
+        >
+          <SquareIcon aria-hidden className="size-3 shrink-0 fill-current" />
+          <span>Stop</span>
+        </button>
       ) : null}
       <Popover
         handle={handle}

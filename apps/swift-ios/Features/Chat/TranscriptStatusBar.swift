@@ -20,6 +20,9 @@ struct TranscriptStatusBar: View {
     let onOpenThread: (_ threadID: String, _ isArchived: Bool) -> Void
     let onMerge: () async throws -> Void
     let onDetach: () async throws -> Void
+    /// Ends the work this bar shows once its turn has settled. Nil while a turn
+    /// runs (the composer's Stop covers it) or when the provider cannot.
+    var onStop: (() -> Void)? = nil
 
     var body: some View {
         if backgroundCommands.isEmpty {
@@ -74,12 +77,39 @@ struct TranscriptStatusBar: View {
                             processes: processes
                         )
                     }
+
+                    if let onStop {
+                        stopCapsule(onStop)
+                    }
                 }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 8)
         }
+    }
+
+    /// Same geometry as the capsules beside it, so it reads as one of the set.
+    private func stopCapsule(_ onStop: @escaping () -> Void) -> some View {
+        Button(action: onStop) {
+            HStack(spacing: 7) {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Stop")
+                    .font(T3Typography.supportingStrong)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(T3Colors.textSecondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .frame(minHeight: 48)
+            .t3GlassEffect(.regular, interactive: true, in: Capsule(style: .continuous))
+            .t3GlassRim(in: Capsule(style: .continuous))
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop background work")
+        .accessibilityIdentifier("thread-background-stop")
     }
 
     /// Sampled outside the timeline, the way `ThreadDetailsBackgroundTaskRow`

@@ -17,6 +17,7 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
+  orchestrationV2BackgroundWorkStopRunId,
   ProjectId,
   RunId,
   type ScheduledTaskId,
@@ -664,7 +665,28 @@ const make = Effect.gen(function* () {
           runId: input.runId,
         });
       }
-      if (explicitRun !== undefined && isTerminalRunStatus(explicitRun.status)) {
+      const activeRun = latestActiveRun(target);
+      // A settled run whose background work runs on is still Stop's target:
+      // interrupting it asks the provider to end that work.
+      const backgroundWorkRun =
+        activeRun === undefined
+          ? yield* getProjectThreadRecords(input, [
+              "runs",
+              "providerThreads",
+              "turnItems",
+              "subagents",
+            ]).pipe(
+              Effect.map((records) => {
+                const runId = orchestrationV2BackgroundWorkStopRunId(records);
+                return records.runs.find((candidate) => candidate.id === runId);
+              }),
+            )
+          : undefined;
+      if (
+        explicitRun !== undefined &&
+        isTerminalRunStatus(explicitRun.status) &&
+        backgroundWorkRun?.id !== explicitRun.id
+      ) {
         return {
           type: "already_terminal",
           run: explicitRun as OrchestrationV2Run & {
@@ -672,7 +694,7 @@ const make = Effect.gen(function* () {
           },
         } as const;
       }
-      const interruptibleRun = latestActiveRun(target);
+      const interruptibleRun = activeRun ?? backgroundWorkRun;
       if (interruptibleRun === undefined) {
         if (input.runId === undefined) {
           return { type: "no_active_run" } as const;
