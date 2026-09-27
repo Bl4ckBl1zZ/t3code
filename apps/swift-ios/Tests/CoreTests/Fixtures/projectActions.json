@@ -72,6 +72,9 @@
         }
       ]
     },
+    "branchNamingMode": "static",
+    "branchNamePrefix": "t3code",
+    "branchNameInstructions": "",
     "sourceControlWritingStyle": {
       "mode": "repo_conventions",
       "customInstructions": "",

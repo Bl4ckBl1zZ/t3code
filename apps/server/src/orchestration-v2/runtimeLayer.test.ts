@@ -276,8 +276,6 @@ const SharedApplicationDataPlaneTestLayer = Layer.merge(
   Layer.provide(NodeServices.layer),
 );
 
-it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {});
-
 it.layer(LegacyImportTestLayer)("OrchestrationV2 legacy import", (it) => {
   it.effect("hydrates imported transcripts before commands and propagates hydration failures", () =>
     Effect.gen(function* () {
