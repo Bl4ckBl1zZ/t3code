@@ -205,6 +205,8 @@ const CODEX_CLIENT_INFO = {
 } as const;
 const CODEX_CLIENT_CAPABILITIES = {
   experimentalApi: true,
+  // Nothing reads per-turn diffs; the checkpoint diff is computed from git.
+  optOutNotificationMethods: ["turn/diff/updated"],
 } as const;
 
 export const CodexProviderCapabilitiesV2 = {
@@ -732,6 +734,9 @@ export function buildCodexTurnStartParams(input: {
       input: input.codexInput,
       cwd: input.runtimePolicy.cwd,
       model: input.modelSelection.model,
+      // Model catalogues can default summaries to "none". Request them on every
+      // turn, including resumed threads, for T3's reasoning timeline.
+      summary: "detailed",
       // Always explicit: omitting this on resume leaves Codex's previous
       // reviewer sticky after switching away from Auto mode.
       approvalsReviewer: runtimeModeDefaults.approvalsReviewer,
