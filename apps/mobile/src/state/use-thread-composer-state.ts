@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import {
   CommandId,
+  getProviderAttachmentLimitError,
   isProviderNativeSubagentThread,
   MessageId,
   type EnvironmentId,
@@ -271,6 +272,12 @@ export function useThreadComposerState(options?: {
         options?.onRequestFreshHermesChat?.();
         return null;
       }
+    }
+
+    const attachmentLimitError = getProviderAttachmentLimitError(attachments);
+    if (attachmentLimitError !== undefined) {
+      setPendingConnectionError(attachmentLimitError);
+      return null;
     }
 
     const metadata = makeQueuedMessageMetadata();

@@ -15,7 +15,11 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
 
-import { EnvironmentId, type ModelSelection } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  getProviderAttachmentLimitError,
+  type ModelSelection,
+} from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -864,6 +868,12 @@ export function NewTaskDraftScreen(props: {
       flow.submitting ||
       (workspaceMode === "worktree" && !selectedBranchName)
     ) {
+      return;
+    }
+
+    const attachmentLimitError = getProviderAttachmentLimitError(draft.attachments);
+    if (attachmentLimitError !== undefined) {
+      Alert.alert("Could not start task", attachmentLimitError);
       return;
     }
 
