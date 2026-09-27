@@ -4454,6 +4454,10 @@ export function makeClaudeAdapterV2(
               });
             });
           }
+          // Rate-limit frames park with the wake output so the drain can
+          // replay them to the turn that was still starting when they
+          // arrived; the offer gate below keeps them from requesting a
+          // continuation on their own.
           const isWakeEvidence =
             isPendingTaskNotification ||
             isPendingSubagentNotification ||
@@ -4461,7 +4465,8 @@ export function makeClaudeAdapterV2(
             isNewSubagentTaskStarted ||
             message.type === "assistant" ||
             message.type === "user" ||
-            message.type === "result";
+            message.type === "result" ||
+            message.type === "rate_limit_event";
           if (!isWakeEvidence) {
             return;
           }
