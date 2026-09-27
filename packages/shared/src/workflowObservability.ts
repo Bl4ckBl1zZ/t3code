@@ -5,7 +5,7 @@
  * same facts and must agree about them: a phase counter that means one thing
  * on desktop and another on a phone is worse than no counter.
  */
-import type { OrchestrationV2WorkflowProgress } from "@t3tools/contracts";
+import type { OrchestrationV2TaskUsage, OrchestrationV2WorkflowProgress } from "@t3tools/contracts";
 
 export interface WorkflowPhaseProgress {
   readonly current: number;
@@ -43,4 +43,16 @@ export function formatTokenCount(tokens: number): string {
   }
   const millions = tokens / 1_000_000;
   return `${millions < 10 ? millions.toFixed(1) : Math.round(millions)}M`;
+}
+
+/**
+ * One-line usage readout for a task, e.g. "12k tok · 4 tools". Tool uses are
+ * left out when the driver did not report them: "not reported" is not zero.
+ */
+export function formatTaskUsage(usage: OrchestrationV2TaskUsage | undefined): string | null {
+  if (usage === undefined) return null;
+  const tokens = `${formatTokenCount(usage.totalTokens)} tok`;
+  return usage.toolUses === undefined
+    ? tokens
+    : `${tokens} · ${usage.toolUses} ${usage.toolUses === 1 ? "tool" : "tools"}`;
 }

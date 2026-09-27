@@ -189,6 +189,41 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it.each([true, false])(
+    "drops the removed agents surface with isOpen=%s and falls back to a survivor",
+    (isOpen) => {
+      expect(
+        migratePersistedRightPanelState({
+          byThreadKey: {
+            "env-1:thread-A": {
+              isOpen,
+              activeSurfaceId: "agents",
+              surfaces: [{ id: "agents", kind: "agents" }],
+            },
+            "env-1:thread-B": {
+              isOpen,
+              activeSurfaceId: "agents",
+              surfaces: [
+                { id: "agents", kind: "agents" },
+                { id: "diff", kind: "diff" },
+              ],
+            },
+          },
+        }),
+      ).toEqual({
+        byThreadKey: {
+          "env-1:thread-A": { isOpen: false, activeSurfaceId: null, surfaces: [] },
+          "env-1:thread-B": {
+            isOpen,
+            activeSurfaceId: "diff",
+            surfaces: [{ id: "diff", kind: "diff" }],
+          },
+        },
+        threadPanelVisibilityByThreadKey: {},
+      });
+    },
+  );
+
   it("upgrades saved single-session terminal surfaces to split-capable surfaces", () => {
     expect(
       migratePersistedRightPanelState({

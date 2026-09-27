@@ -4,7 +4,7 @@
  * Phone rows have room for one line, so this shows the phase counter, the
  * current phase name, and the token rollup -- and nothing when the task is
  * not a workflow, which is the common case. The numbers come from the same
- * shared helpers the web Agents surface uses so the two never disagree.
+ * shared helpers the web lineage hover uses so the two never disagree.
  */
 import type { OrchestrationV2TaskUsage, OrchestrationV2WorkflowProgress } from "@t3tools/contracts";
 import { formatTokenCount, workflowPhaseProgress } from "@t3tools/shared/workflowObservability";

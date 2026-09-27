@@ -270,6 +270,12 @@ commands still running remain visible outside that fold.
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. Their composer is replaced by the subagent's status.
 
+On web and desktop, a thread's subagents are listed in the thread details card under **Lineage**
+(or **Subagents** when the thread has no other relatives). Click a subagent to open its thread.
+Hover it to see its model, status, workflow phase progress and token usage. A workflow subagent
+shows its phase count beside its name, and when the run reported a script or a session, the menu
+beside the row can view the workflow script or open the run session.
+
 On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same eight-attachment limit applies to the picker and dropped files.
 
 If you choose another panel while a turn is working, its arriving plan will not replace your choice. A later turn can open its plan again when automatic plan opening is enabled.

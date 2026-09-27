@@ -1,5 +1,5 @@
 /**
- * Read-only viewer for a workflow's script, opened from the Agents surface.
+ * Read-only viewer for a workflow's script, opened from a subagent's lineage row.
  *
  * The path is a hint carried on the task's run handles; the server re-derives
  * and re-validates containment before reading, so nothing here is trusted to
