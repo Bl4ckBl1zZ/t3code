@@ -4,7 +4,7 @@ Add an Antigravity account in **Settings → Providers** on web or desktop. Choo
 then enable the account. Open **Install and sign in** to install the managed runtime and
 sign in with Google. Installation and sign-in happen on the selected server, including
 when you open the web app remotely from a phone. Once the runtime is installed, you can
-also sign in from **Settings → Provider accounts** in the mobile app.
+also sign in from **Settings → Provider accounts** in the Android app.
 
 Choose a personal Google account, a business Google account, a Gemini API key, or Agent
 Platform in the account editor. Save changes before starting setup. Business accounts
