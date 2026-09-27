@@ -2197,7 +2197,8 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
           )}
         />
       </CollapsibleTrigger>
-      <CollapsiblePanel>
+      {/* Virtualized rows must settle before disclosure scroll anchoring resumes. */}
+      <CollapsiblePanel animate={false}>
         {expanded ? (
           <div
             className="mt-1 space-y-px rounded-lg border border-border/60 bg-card/30 p-1"
