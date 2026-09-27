@@ -1,3 +1,4 @@
+import "../provider/cursorShellSpawnGuard.ts";
 import { Agent, type AgentOptions, type RunResult } from "@cursor/sdk";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

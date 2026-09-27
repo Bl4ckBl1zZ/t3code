@@ -1,3 +1,4 @@
+import "../../provider/cursorShellSpawnGuard.ts";
 import {
   Agent,
   createAgentPlatform,
