@@ -18,6 +18,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { workflowPhaseProgress } from "@t3tools/shared/workflowObservability";
+import * as DateTime from "effect/DateTime";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
@@ -35,14 +36,16 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
-import { SubagentWorkflowSummary } from "./SubagentWorkflowSummary";
+import { AgentElapsed, type AgentElapsedTiming } from "./AgentElapsed";
+import { SubagentTooltipContent } from "./SubagentTooltipContent";
+import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { resolveThreadModelBadge } from "./threadModelBadge";
 import { WorkflowScriptDialog } from "../WorkflowScriptDialog";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { readLocalApi } from "../../localApi";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { useThreadProjection, useThreadShells } from "../../state/entities";
+import { useProjects, useThreadProjection, useThreadShells } from "../../state/entities";
 import { useProviderEntryByInstanceId } from "../../state/providerEntries";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -84,6 +87,14 @@ function relationshipOrbState(status: string | null): AgentOrbState {
   return "idle";
 }
 
+function subagentTiming(subagent: OrchestrationV2Subagent): AgentElapsedTiming {
+  return {
+    status: subagent.status,
+    startedAt: subagent.startedAt === null ? null : DateTime.formatIso(subagent.startedAt),
+    completedAt: subagent.completedAt === null ? null : DateTime.formatIso(subagent.completedAt),
+  };
+}
+
 function relationshipThreadTitle(input: {
   readonly title: string;
   readonly isSubagent: boolean;
@@ -106,6 +117,7 @@ export function ThreadRelationshipsPanel(props: {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
   const threadShells = useThreadShells();
+  const projects = useProjects().filter((project) => project.environmentId === props.environmentId);
   const activeShells = threadShells.filter(
     (thread) => thread.environmentId === props.environmentId,
   );
@@ -260,20 +272,36 @@ export function ThreadRelationshipsPanel(props: {
           const relationshipHint = node?.missing
             ? "This related thread is unavailable"
             : `Open ${relationship.toLowerCase()} in this chat`;
-          const relationshipTooltip =
-            subagent && !node?.missing ? (
-              <div className="flex flex-col gap-1 py-0.5">
-                <span>{relationshipHint}</span>
-                <SubagentWorkflowSummary workflow={subagent.workflow} usage={subagent.usage} />
-              </div>
-            ) : (
-              relationshipHint
-            );
           const modelSelection = node?.thread?.modelSelection ?? null;
-          const modelBadge = resolveThreadModelBadge({
-            modelSelection,
-            providerEntry: providerEntryByInstanceId.get(modelSelection?.instanceId ?? "") ?? null,
-          });
+          const providerEntry =
+            providerEntryByInstanceId.get(
+              modelSelection?.instanceId ?? subagent?.providerInstanceId ?? "",
+            ) ?? null;
+          const modelBadge = resolveThreadModelBadge({ modelSelection, providerEntry });
+          // A subagent's hover is the thread hover card; other relatives keep the hint.
+          const RelationshipPopup = subagent ? ThreadHoverCardPopup : TooltipPopup;
+          const relationshipTooltip = subagent ? (
+            <SubagentTooltipContent
+              title={threadTitle}
+              modelLabel={modelBadge?.model ?? subagent.model}
+              driver={providerEntry?.driverKind ?? subagent.driver}
+              providerDisplayName={providerEntry?.displayName}
+              elapsed={<AgentElapsed agent={subagentTiming(subagent)} />}
+              status={subagent.status}
+              result={subagent.result}
+              progress={subagent.progress}
+              workflow={subagent.workflow}
+              usage={subagent.usage}
+              parentThread={projection?.thread}
+              childThread={node?.thread ?? undefined}
+              parentProject={projects.find(
+                (project) => project.id === projection?.thread.projectId,
+              )}
+              childProject={projects.find((project) => project.id === node?.thread?.projectId)}
+            />
+          ) : (
+            relationshipHint
+          );
           const relationshipContent = (
             <>
               <span className="relative -mx-0.5 grid size-4 shrink-0 place-items-center">
@@ -342,7 +370,7 @@ export function ThreadRelationshipsPanel(props: {
                     >
                       {relationshipContent}
                     </TooltipTrigger>
-                    <TooltipPopup side="left">{relationshipTooltip}</TooltipPopup>
+                    <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
                   </Tooltip>
                   <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
                   <Tooltip>
@@ -393,7 +421,7 @@ export function ThreadRelationshipsPanel(props: {
                     >
                       {relationshipContent}
                     </TooltipTrigger>
-                    <TooltipPopup side="left">{relationshipTooltip}</TooltipPopup>
+                    <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
                   </Tooltip>
                   <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
                   {/* Run handles render only when the task reported them: a plain
@@ -444,7 +472,7 @@ export function ThreadRelationshipsPanel(props: {
                   >
                     {relationshipContent}
                   </TooltipTrigger>
-                  <TooltipPopup side="left">{relationshipTooltip}</TooltipPopup>
+                  <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
                 </Tooltip>
               )}
             </li>

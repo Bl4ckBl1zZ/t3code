@@ -2116,6 +2116,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
     return (
       <V2LifecycleRow
         item={item}
+        environmentId={ctx.activeThreadEnvironmentId}
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}
