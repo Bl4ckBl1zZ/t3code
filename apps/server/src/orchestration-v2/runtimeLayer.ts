@@ -120,6 +120,7 @@ const providerSessionManagerProvided = Layer.unwrap(
       providerAdapterRegistryProvided,
       eventSinkProvided,
       idAllocatorLayer,
+      providerEventIngestorProvided,
       projectionStoreLayer,
     ),
   ),

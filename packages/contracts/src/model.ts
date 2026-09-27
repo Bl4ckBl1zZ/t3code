@@ -164,6 +164,7 @@ const ACP_REGISTRY_DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const HERMES_ACP_DRIVER_KIND = ProviderDriverKind.make("hermesAcp");
 const OPENCLAW_DRIVER_KIND = ProviderDriverKind.make("openclaw");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
+const PI_DRIVER_KIND = ProviderDriverKind.make("pi");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
 
@@ -191,6 +192,8 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [ACP_REGISTRY_DRIVER_KIND]: "default",
   [HERMES_ACP_DRIVER_KIND]: "default",
   [OPENCLAW_DRIVER_KIND]: "default",
+  // "default" defers to the user's own Pi settings.json model selection.
+  [PI_DRIVER_KIND]: "default",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
   [ProviderDriverKind.make("hermes")]: "default",
 };
@@ -268,6 +271,7 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [ACP_REGISTRY_DRIVER_KIND]: "ACP Registry",
   [HERMES_ACP_DRIVER_KIND]: "Hermes in Code",
   [OPENCLAW_DRIVER_KIND]: "OpenClaw",
+  [PI_DRIVER_KIND]: "Pi",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
   [ProviderDriverKind.make("hermes")]: "Hermes",
 };

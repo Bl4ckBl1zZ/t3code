@@ -1,6 +1,7 @@
 import { HermesSetup } from "../HermesSetup";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
-import { CursorSetupSection } from "./CursorSetupSection";
+import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
+import { SettingsRow } from "./settingsLayout";
 import { readProviderConfigString } from "./providerSettingsFields";
 import type { EnvironmentId } from "@t3tools/contracts";
 
@@ -1077,14 +1078,22 @@ export function ProviderInstanceCard({
                 authMethod={readAntigravityAuthMethod(instance.config)}
                 onEnable={() => updateEnabled(true)}
               />
-            ) : driverKind === "cursor" && environmentId ? (
-              <CursorSetupSection
+            ) : environmentId && !readOnly && liveProvider?.setup?.canAuthenticate ? (
+              <ProviderAuthenticationSection
+                key={`${environmentId}:${instanceId}`}
                 environmentId={environmentId}
                 environmentLabel={environmentLabel ?? "this environment"}
                 instanceId={instanceId}
                 provider={liveProvider}
-                enabled={enabled}
                 readOnly={readOnly}
+              />
+            ) : environmentId &&
+              !readOnly &&
+              driverKind === "cursor" &&
+              liveProvider?.setup?.canAuthenticate === false ? (
+              <SettingsRow
+                title="Cursor account"
+                description="Using CURSOR_API_KEY. Remove it from this provider's environment to use browser sign-in."
               />
             ) : null}
             {driverOption ? (

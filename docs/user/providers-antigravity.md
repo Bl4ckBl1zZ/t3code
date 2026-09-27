@@ -3,14 +3,16 @@
 Add an Antigravity account in **Settings → Providers** on web or desktop. Choose the server that will run it,
 then enable the account. Open **Install and sign in** to install the managed runtime and
 sign in with Google. Installation and sign-in happen on the selected server, including
-when you open the web app remotely from a phone.
+when you open the web app remotely from a phone. Once the runtime is installed, you can
+also sign in from **Settings → Provider accounts** in the Android app.
 
 Choose a personal Google account, a business Google account, a Gemini API key, or Agent
 Platform in the account editor. Save changes before starting setup. Business accounts
 require a Google Cloud project and location; the editor names any missing configuration.
 API keys remain sensitive account settings.
 
-Google sign-in opens only when you choose **Open Google sign-in**. When signing in to a
+Choose **Sign in** under **Account**; Google sign-in opens only when you then choose
+**Open browser**. When signing in to a
 remote server, Google may redirect your browser to a local address that cannot load.
 Copy that complete callback address and paste it into the setup screen to finish the
 same sign-in. You can cancel or retry without replacing another device's sign-in flow.

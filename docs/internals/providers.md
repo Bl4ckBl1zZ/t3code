@@ -83,6 +83,15 @@ empty inventory is authoritative. Existing threads keep their explicit model ide
 options when catalog metadata is missing; the catalog is not permission to choose a different
 model for a thread.
 
+## Pi
+
+Pi runs the user's own `pi` install in RPC mode and owns native extension, package, and project
+trust discovery. T3 injects only its namespaced MCP bridge, so a Pi session behaves as it does in
+the Pi TUI. Pi session files back native resume, rollback, and same-instance thread forks.
+Forks use Pi's CLI in the destination directory because RPC session switching retains the source
+session's cwd. Provider switches still use portable handoff summaries.
+See the [adapter](../../apps/server/src/orchestration-v2/Adapters/PiAdapterV2.ts).
+
 ## Model manifest
 
 The model picker's legacy section is driven by `apps/server/src/provider/model-manifest.json`, which

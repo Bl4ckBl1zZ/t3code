@@ -7,19 +7,17 @@ import {
   ANTIGRAVITY_AUTH_METHODS,
   type AntigravityAuthMethod,
   type EnvironmentId,
-  type ProviderAuthState,
   type ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { useRef, useState } from "react";
 
-import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
 import { ensureLocalApi } from "../../localApi";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 
 interface ProviderSetupSectionProps {
   readonly environmentId: EnvironmentId;
@@ -32,27 +30,6 @@ interface ProviderSetupSectionProps {
   readonly readOnly: boolean;
   readonly onEnable: () => void;
 }
-
-const AUTH_PHASE_LABELS: Record<ProviderAuthState["phase"], string> = {
-  idle: "Sign in with your Google account.",
-  starting: "Starting Google sign-in.",
-  waiting: "Waiting for Google sign-in.",
-  verifying: "Checking Google sign-in and available models.",
-  succeeded: "Google sign-in complete.",
-  failed: "Google sign-in failed.",
-  cancelled: "Google sign-in cancelled.",
-};
-
-/** API key methods skip the browser, so the phases read as a credential check. */
-const CREDENTIAL_PHASE_LABELS: Record<ProviderAuthState["phase"], string> = {
-  idle: "Connect with the credentials in the provider settings.",
-  starting: "Checking credentials.",
-  waiting: "Checking credentials.",
-  verifying: "Checking credentials and available models.",
-  succeeded: "Connected.",
-  failed: "Could not connect with the configured credentials.",
-  cancelled: "Connection cancelled.",
-};
 
 /** Read the configured method from the instance config. Unknown values fall back to personal. */
 export function readAntigravityAuthMethod(config: unknown): AntigravityAuthMethod {
@@ -109,7 +86,6 @@ function ProviderSetupActions({
   provider,
   enabled,
   binaryPath,
-  authMethod,
 }: Pick<
   ProviderSetupSectionProps,
   "environmentId" | "environmentLabel" | "instanceId" | "enabled" | "binaryPath"
@@ -118,20 +94,11 @@ function ProviderSetupActions({
   readonly authMethod: AntigravityAuthMethod;
 }) {
   const target = { environmentId, input: { instanceId } };
-  const usesBrowser = authMethod === "oauth-personal" || authMethod === "oauth-business";
-  const phaseLabels = usesBrowser ? AUTH_PHASE_LABELS : CREDENTIAL_PHASE_LABELS;
-  const methodLabel =
-    ANTIGRAVITY_AUTH_METHODS.find((method) => method.value === authMethod)?.label ??
-    "Google account";
   const authQuery = useEnvironmentQuery(serverEnvironment.providerAuthState(target));
   const installQuery = useEnvironmentQuery(serverEnvironment.providerInstallState(target));
   const auth = authQuery.data;
   const installation = installQuery.data;
   const commandOptions = { reportFailure: false, reportDefect: false };
-  const startAuth = useAtomCommand(serverEnvironment.startProviderAuth, commandOptions);
-  const completeAuth = useAtomCommand(serverEnvironment.completeProviderAuth, commandOptions);
-  const cancelAuth = useAtomCommand(serverEnvironment.cancelProviderAuth, commandOptions);
-  const logoutAuth = useAtomCommand(serverEnvironment.logoutProviderAuth, commandOptions);
   const startInstall = useAtomCommand(serverEnvironment.startProviderInstall, commandOptions);
   const cancelInstall = useAtomCommand(serverEnvironment.cancelProviderInstall, commandOptions);
   const removeInstall = useAtomCommand(
@@ -141,9 +108,6 @@ function ProviderSetupActions({
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
   const pendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const [callbackDraft, setCallbackDraft] = useState({ flowId: null as string | null, value: "" });
-  const [copiedFlowId, setCopiedFlowId] = useState<string | null>(null);
-  const callbackUrl = callbackDraft.flowId === auth?.flowId ? callbackDraft.value : "";
   const authActive =
     auth?.phase === "starting" || auth?.phase === "waiting" || auth?.phase === "verifying";
   const installActive =
@@ -153,20 +117,6 @@ function ProviderSetupActions({
   const usesCustomBinary = Boolean(binaryPath?.trim());
   const installed =
     provider.installed || (!usesCustomBinary && installation?.installedVersion != null);
-  const authenticated = provider.auth.status === "authenticated";
-  const authStatusMessage =
-    auth === null
-      ? "Reading sign-in status."
-      : authActive || auth.phase === "failed" || auth.phase === "cancelled"
-        ? (auth.message ?? phaseLabels[auth.phase])
-        : authenticated
-          ? usesBrowser
-            ? "Signed in with Google."
-            : "Connected."
-          : auth.phase === "idle" && auth.message
-            ? auth.message
-            : phaseLabels.idle;
-  const authorizationUrl = auth?.phase === "waiting" ? auth.authorizationUrl : null;
   const queryError = authQuery.error ?? installQuery.error;
   const actionsDisabled = pendingLabel !== null || queryError !== null;
   const installationStatusMessage =
@@ -208,47 +158,6 @@ function ProviderSetupActions({
     } finally {
       pendingRef.current = false;
       setPendingLabel(null);
-    }
-  }
-
-  async function openSignInPage() {
-    if (!authorizationUrl) return;
-    try {
-      await ensureLocalApi().shell.openExternal(authorizationUrl);
-      setError(null);
-    } catch {
-      setError("Could not open the sign-in page. Copy the link and open it in your browser.");
-    }
-  }
-
-  async function copySignInLink() {
-    if (!authorizationUrl) return;
-    try {
-      await writeTextToClipboard(authorizationUrl, "Google sign-in link");
-      setCopiedFlowId(auth?.flowId ?? null);
-      setError(null);
-    } catch {
-      setError("Could not copy the sign-in link. Use Open sign-in page.");
-    }
-  }
-
-  async function submitCallback() {
-    const flowId = auth?.flowId;
-    if (!flowId || !callbackUrl.trim() || auth.phase !== "waiting") return;
-    const accepted = await runCommand("Checking redirect", () =>
-      completeAuth({ environmentId, input: { instanceId, flowId, callbackUrl } }),
-    );
-    if (accepted) {
-      setCallbackDraft({ flowId: null, value: "" });
-    }
-  }
-
-  async function signOut() {
-    const confirmed = await ensureLocalApi().dialogs.confirm(
-      `${usesBrowser ? "Sign out of Google" : "Disconnect"} for ${provider.displayName ?? "Antigravity"} on ${environmentLabel}? This stops its running threads. Thread history is kept.`,
-    );
-    if (confirmed) {
-      await runCommand("Signing out", () => logoutAuth(target));
     }
   }
 
@@ -345,116 +254,14 @@ function ProviderSetupActions({
         </div>
       </div>
 
-      <div className="grid gap-2 border-t border-border/60 pt-3">
-        <p className="font-medium">{methodLabel}</p>
-        <p role="status" className="text-muted-foreground [overflow-wrap:anywhere]">
-          {authStatusMessage}
-        </p>
-        {authorizationUrl ? (
-          <>
-            <div className="flex flex-wrap gap-2">
-              <Button size="xs" variant="outline" onClick={() => void openSignInPage()}>
-                Open sign-in page
-              </Button>
-              <Button size="xs" variant="ghost" onClick={() => void copySignInLink()}>
-                {copiedFlowId === auth?.flowId ? "Link copied" : "Copy sign-in link"}
-              </Button>
-            </div>
-            {auth?.expiresAt ? (
-              <p className="text-muted-foreground">
-                Link expires at{" "}
-                <time dateTime={auth.expiresAt}>
-                  {new Date(auth.expiresAt).toLocaleTimeString([], {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })}
-                </time>
-                .
-              </p>
-            ) : null}
-            <form
-              className="grid gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitCallback();
-              }}
-            >
-              <label htmlFor={`provider-callback-${instanceId}`}>
-                If the final localhost page does not load, paste its full URL here.
-              </label>
-              <Input
-                id={`provider-callback-${instanceId}`}
-                size="sm"
-                type="url"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="http://127.0.0.1:..."
-                value={callbackUrl}
-                maxLength={16_384}
-                disabled={actionsDisabled}
-                onChange={(event) =>
-                  setCallbackDraft({ flowId: auth?.flowId ?? null, value: event.target.value })
-                }
-              />
-              <Button
-                size="xs"
-                variant="outline"
-                type="submit"
-                className="w-fit"
-                disabled={actionsDisabled || !callbackUrl.trim()}
-              >
-                Continue
-              </Button>
-            </form>
-          </>
-        ) : auth?.phase === "waiting" ? (
-          <p className="text-muted-foreground">
-            Sign-in is open in another client. Complete or cancel it there.
-          </p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          {authActive && auth?.flowId ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={actionsDisabled}
-              onClick={() => {
-                const flowId = auth.flowId;
-                if (!flowId) return;
-                void runCommand("Cancelling sign-in", () =>
-                  cancelAuth({ environmentId, input: { instanceId, flowId } }),
-                );
-              }}
-            >
-              Cancel sign-in
-            </Button>
-          ) : !authActive && !authenticated && provider.setup?.canAuthenticate ? (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={actionsDisabled || !installed || auth === null || installActive}
-              onClick={() => void runCommand("Starting sign-in", () => startAuth(target))}
-            >
-              {usesBrowser
-                ? auth?.phase === "failed" || auth?.phase === "cancelled"
-                  ? "Retry Google sign-in"
-                  : "Sign in with Google"
-                : auth?.phase === "failed" || auth?.phase === "cancelled"
-                  ? "Retry connection"
-                  : "Connect"}
-            </Button>
-          ) : null}
-          {!authActive && provider.setup?.canAuthenticate ? (
-            <Button
-              size="xs"
-              variant={authenticated ? "outline" : "ghost"}
-              disabled={actionsDisabled || auth === null}
-              onClick={() => void signOut()}
-            >
-              {usesBrowser ? "Sign out of Google" : "Disconnect"}
-            </Button>
-          ) : null}
-        </div>
+      <div className="border-t border-border/60">
+        <ProviderAuthenticationSection
+          environmentId={environmentId}
+          environmentLabel={environmentLabel}
+          instanceId={instanceId}
+          provider={provider}
+          readOnly={false}
+        />
       </div>
 
       {pendingLabel ? <p role="status">{pendingLabel}.</p> : null}

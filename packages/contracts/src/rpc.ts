@@ -32,6 +32,8 @@ import {
   ProviderAuthState,
   ProviderAuthCompleteInput,
   ProviderAuthCancelInput,
+  ProviderAuthRespondInput,
+  ProviderAuthStartInput,
   ProviderSetupInput,
   ProviderInstallState,
   ProviderInstallCancelInput,
@@ -290,6 +292,7 @@ import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 export const WS_METHODS = {
   providerAuthStart: "provider.auth.start",
   providerAuthComplete: "provider.auth.complete",
+  providerAuthRespond: "provider.auth.respond",
   providerAuthCancel: "provider.auth.cancel",
   providerAuthLogout: "provider.auth.logout",
   providerAuthSubscribe: "provider.auth.subscribe",
@@ -589,7 +592,13 @@ export const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetry
 const ProviderSetupRpcError = Schema.Union([ProviderSetupError, EnvironmentAuthorizationError]);
 
 const WsProviderAuthStartRpc = Rpc.make(WS_METHODS.providerAuthStart, {
-  payload: ProviderSetupInput,
+  payload: ProviderAuthStartInput,
+  success: ProviderAuthState,
+  error: ProviderSetupRpcError,
+});
+
+const WsProviderAuthRespondRpc = Rpc.make(WS_METHODS.providerAuthRespond, {
+  payload: ProviderAuthRespondInput,
   success: ProviderAuthState,
   error: ProviderSetupRpcError,
 });
@@ -1462,6 +1471,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,
   WsProviderAuthCompleteRpc,
+  WsProviderAuthRespondRpc,
   WsProviderAuthCancelRpc,
   WsProviderAuthLogoutRpc,
   WsProviderAuthSubscribeRpc,
