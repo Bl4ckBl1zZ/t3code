@@ -1838,6 +1838,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 .projection
                 .activeRunID
         }
+        // A settled turn whose background work runs on: Stop ends that work.
+        if resolved == nil {
+            let projection: OrchestrationV2ThreadProjection? =
+                if activeThreadID == route.uiID, let cached = activeRawThread {
+                    cached
+                } else {
+                    try? await route.client.threadSnapshot(id: route.wireID).projection
+                }
+            resolved = projection?.backgroundWorkStopRunID
+        }
         guard let runID = resolved else { return }
         _ = try await route.client.interrupt(threadID: route.wireID, runID: runID)
         try? await refresh(client: route.client)
@@ -4833,6 +4843,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
 
         return FeatureThreadWorkflow(
+            backgroundWorkStopRunID: projection.backgroundWorkStopRunID,
             appThreadID: projection.thread.id,
             activeProviderThreadID: projection.thread.activeProviderThreadId,
             runs: runs,
@@ -6223,6 +6234,26 @@ extension OrchestrationV2ThreadProjection {
                 || $0.status == "running"
                 || $0.status == "waiting"
         }?.id
+    }
+
+    /// The run Stop targets once the turn has settled but its background work —
+    /// live background commands or delegated agents — keeps running. Mirrors
+    /// contracts' `orchestrationV2BackgroundWorkStopRunId`, including the
+    /// providers that can end work after a turn settles.
+    var backgroundWorkStopRunID: String? {
+        guard let latest = runs.last(where: { $0.status != "queued" }),
+              !["preparing", "starting", "running", "rolled_back"].contains(latest.status),
+              let driver = providerThreads.first(where: { $0.id == latest.providerThreadId })?.driver,
+              driver == "codex" || driver == "claudeAgent"
+        else { return nil }
+        let hasLiveBackgroundCommand = turnItems.contains { item in
+            guard case let .commandExecution(_, _, _, liveness) = item.payload else { return false }
+            return liveness.background == true && !item.status.isTerminal
+        }
+        let hasActiveAgent = subagents.contains {
+            $0.status == "pending" || $0.status == "running" || $0.status == "waiting"
+        }
+        return hasLiveBackgroundCommand || hasActiveAgent ? latest.id : nil
     }
 
     /// Replaces an item in place, preserving transcript order. An item that is

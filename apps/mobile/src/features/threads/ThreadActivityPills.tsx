@@ -36,6 +36,11 @@ const PILL_CLASS_NAME =
 export function ThreadActivityPills(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  /**
+   * Ends the work these pills show once its turn has settled. Absent while a
+   * turn runs (the composer's Stop covers it) or when the provider cannot.
+   */
+  readonly onStop?: () => void;
 }) {
   const items = useThreadVisibleTurnItems({
     environmentId: props.environmentId,
@@ -103,6 +108,22 @@ export function ThreadActivityPills(props: {
             pausedMs={background.pausedMs}
             startedAtMs={background.startedAtMs}
           />
+        </Pressable>
+      ) : null}
+      {props.onStop !== undefined ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Stop background work"
+          onPress={props.onStop}
+          className={PILL_CLASS_NAME}
+        >
+          <SymbolView
+            name={{ ios: "stop.fill", android: "stop" }}
+            size={11}
+            tintColor={iconColor}
+            type="monochrome"
+          />
+          <Text className="text-xs text-foreground-muted">Stop</Text>
         </Pressable>
       ) : null}
     </View>

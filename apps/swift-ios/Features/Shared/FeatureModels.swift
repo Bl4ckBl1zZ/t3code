@@ -857,6 +857,10 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
 /// ``FeatureSnapshot/threads`` and route taps by feature id, so those carry
 /// *feature-scoped* thread ids instead.
 public struct FeatureThreadWorkflow: Sendable, Equatable {
+    /// The settled run whose background work Stop can still end; nil while a
+    /// turn runs or when nothing runs on. See
+    /// ``OrchestrationV2ThreadProjection/backgroundWorkStopRunID``.
+    public var backgroundWorkStopRunID: String?
     /// The projection thread's wire id — the anchor
     /// ``ThreadWorkflows`` matches provider threads against when resolving the
     /// session. Empty on the placeholder value, which resolves no session.
@@ -883,6 +887,7 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
     public var providerSubagentStatus: ProviderSubagentStatus?
 
     public init(
+        backgroundWorkStopRunID: String? = nil,
         appThreadID: String = "",
         activeProviderThreadID: String? = nil,
         runs: [ThreadWorkflowRun] = [],
@@ -896,6 +901,7 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
         transfers: [ThreadRelationshipTransferLink] = [],
         providerSubagentStatus: ProviderSubagentStatus? = nil
     ) {
+        self.backgroundWorkStopRunID = backgroundWorkStopRunID
         self.appThreadID = appThreadID
         self.activeProviderThreadID = activeProviderThreadID
         self.runs = runs

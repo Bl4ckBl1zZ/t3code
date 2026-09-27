@@ -59,8 +59,15 @@ the moment, but this one will speak again by itself.
 | `Timed out`                             | A wait reached its deadline without the thing it wanted happening.                 |
 | `Stopped`                               | The command was cancelled before it finished.                                      |
 
-Stopping a turn does not stop a command that has been detached from it. The turn stops; the command
-keeps running and stays visible. To end it, ask the agent to stop it.
+## Stopping background work
+
+Once the turn has finished, Codex and Claude conversations with background work get a **Stop** pill
+beside the background pills, in the desktop and web app as well as both mobile apps. The `thread.stop`
+shortcut does the same. Stop ends the commands and agents the turn left running, and their rows end as
+stopped. Claude runs them inside its session, so stopping closes that session and everything in it
+ends; the next message starts a fresh one that picks up the conversation.
+
+Other providers cannot end work after its turn has finished. There, ask the agent to stop it.
 
 ## What each provider can show
 

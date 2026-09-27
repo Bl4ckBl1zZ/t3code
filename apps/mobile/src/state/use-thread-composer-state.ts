@@ -13,6 +13,7 @@ import {
   CommandId,
   isProviderNativeSubagentThread,
   MessageId,
+  orchestrationV2BackgroundWorkStopRunId,
   type EnvironmentId,
   type ModelSelection,
   type ProviderInteractionMode,
@@ -218,6 +219,14 @@ export function useThreadComposerState(options?: {
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const interruptibleRunId = selectedThreadRuntime?.activeRunId ?? null;
+  // A settled run whose background work runs on: Stop ends that work.
+  const backgroundWorkStopRunId = useMemo(
+    () =>
+      activeThreadBusy || selectedThreadProjection === null
+        ? null
+        : orchestrationV2BackgroundWorkStopRunId(selectedThreadProjection.projection),
+    [activeThreadBusy, selectedThreadProjection],
+  );
 
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -561,6 +570,7 @@ export function useThreadComposerState(options?: {
     interactionMode,
     activeThreadBusy,
     interruptibleRunId,
+    backgroundWorkStopRunId,
     onChangeDraftMessage,
     onPickDraftImages,
     onPickDraftDocuments,

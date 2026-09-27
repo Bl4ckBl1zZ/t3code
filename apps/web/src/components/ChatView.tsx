@@ -37,6 +37,7 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2ThreadProjection,
+  orchestrationV2BackgroundWorkStopRunId,
   type ProjectScript,
   type ProjectId,
   type ProviderApprovalDecision,
@@ -2860,6 +2861,15 @@ function ChatViewContent(props: ChatViewProps) {
       isConnecting,
       isRevertingCheckpoint,
     }) || runlessWorkStartedAt !== null;
+  // Background work can outlive its turn. Once the turn settles the composer's
+  // Stop is gone, so Stop moves to the background pills and the keybinding.
+  const canStopBackgroundWork = useMemo(
+    () =>
+      !isWorking &&
+      serverProjection !== null &&
+      orchestrationV2BackgroundWorkStopRunId(serverProjection) !== null,
+    [isWorking, serverProjection],
+  );
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(
       activeActivityRun,
@@ -3644,8 +3654,13 @@ function ChatViewContent(props: ChatViewProps) {
     [draftId, routeThreadKey, routeThreadRef, serverThread],
   );
 
-  const interruptContextRef = useRef({ activeThread, phase, setThreadError });
-  interruptContextRef.current = { activeThread, phase, setThreadError };
+  const interruptContextRef = useRef({
+    activeThread,
+    phase,
+    canStopBackgroundWork,
+    setThreadError,
+  });
+  interruptContextRef.current = { activeThread, phase, canStopBackgroundWork, setThreadError };
   const onInterrupt = useCallback(async () => {
     const { activeThread, setThreadError } = interruptContextRef.current;
     if (!activeThread) return;
@@ -6319,7 +6334,8 @@ function ChatViewContent(props: ChatViewProps) {
       if (command === "thread.stop") {
         if (
           !interruptContextRef.current.activeThread ||
-          interruptContextRef.current.phase !== "running"
+          (interruptContextRef.current.phase !== "running" &&
+            !interruptContextRef.current.canStopBackgroundWork)
         )
           return;
         event.preventDefault();
@@ -8621,6 +8637,7 @@ function ChatViewContent(props: ChatViewProps) {
                         backgroundProcesses={backgroundProcesses}
                         turnInProgress={isWorking || !latestRunSettled}
                         onOpenThread={onOpenRelatedThread}
+                        {...(canStopBackgroundWork ? { onStop: onInterrupt } : {})}
                       />
                     </div>
                   )}

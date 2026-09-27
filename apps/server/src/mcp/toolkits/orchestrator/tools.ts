@@ -232,7 +232,7 @@ export const ThreadWaitTool = Tool.make("t3_thread_wait", {
 
 export const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
   description:
-    "Request interruption of a running turn in a T3 thread in the calling project. Without runId, the newest interruptible run is selected. Terminal runs and threads without an active turn return without another side effect. clientRequestId makes retries idempotent.",
+    "Request interruption of a running turn in a T3 thread in the calling project. Without runId, the newest interruptible run is selected. A settled Codex or Claude turn whose background commands or agents still run is interruptible too; interrupting it ends that work. Other terminal runs and threads without an active turn return without another side effect. clientRequestId makes retries idempotent.",
   parameters: OrchestratorMcpThreadInterruptInput,
   success: OrchestratorMcpThreadInterruptResult,
   failure: OrchestratorMcpFailure,
