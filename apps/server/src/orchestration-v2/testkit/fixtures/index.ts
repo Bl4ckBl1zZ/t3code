@@ -22,7 +22,10 @@ import { openCodeRunningChildApprovalInput } from "./opencode_running_child_appr
 import { assertOpenCodeRunningChildApprovalOutput } from "./opencode_running_child_approval/output.ts";
 import { openCodeSubagentInput } from "./opencode_subagent/input.ts";
 import { assertOpenCodeSubagentOutput } from "./opencode_subagent/output.ts";
-import { assertPlanQuestionsOutput } from "./plan_questions/codex_output.ts";
+import {
+  assertCodexPlanQuestionsOutput,
+  assertPlanQuestionsOutput,
+} from "./plan_questions/codex_output.ts";
 import { assertOpenCodePlanQuestionsOutput } from "./plan_questions/opencode_output.ts";
 import { planQuestionsInput } from "./plan_questions/input.ts";
 import { assertProposedPlanOutput } from "./proposed_plan/codex_output.ts";
@@ -40,11 +43,20 @@ import { assertCursorSubagentOutput } from "./subagent/cursor_output.ts";
 import { assertSubagentContinueOutput } from "./subagent_continue/codex_output.ts";
 import { subagentContinueInput } from "./subagent_continue/input.ts";
 import { assertSubagentV2Output } from "./subagent_v2/codex_output.ts";
-import { subagentV2Input } from "./subagent_v2/input.ts";
+import { subagentV2Input, subagentV2NestedInput } from "./subagent_v2/input.ts";
+import { assertSubagentV2ApprovalOutput } from "./subagent_v2_approval/codex_output.ts";
+import {
+  SUBAGENT_V2_APPROVAL_POLICY,
+  subagentV2ApprovalInput,
+} from "./subagent_v2_approval/input.ts";
 import { assertSubagentV2NestedOutput } from "./subagent_v2_nested/codex_output.ts";
+import { assertSubagentV2NestedApprovalOutput } from "./subagent_v2_nested_approval/codex_output.ts";
+import { subagentV2NestedApprovalInput } from "./subagent_v2_nested_approval/input.ts";
 import { assertClaudeThreadRollbackOutput } from "./thread_rollback/claude_output.ts";
 import { assertThreadRollbackOutput } from "./thread_rollback/codex_output.ts";
 import { threadRollbackInput } from "./thread_rollback/input.ts";
+import { assertThreadRollbackAfterRestartOutput } from "./thread_rollback_after_restart/codex_output.ts";
+import { threadRollbackAfterRestartInput } from "./thread_rollback_after_restart/input.ts";
 import { assertTodoListOutput } from "./todo_list/codex_output.ts";
 import { assertTodoListCursorOutput } from "./todo_list/cursor_output.ts";
 import { assertTodoListGrokOutput } from "./todo_list/grok_output.ts";
@@ -251,7 +263,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
           "./tool_call_read_only_on_request/codex_transcript.ndjson",
           import.meta.url,
         ),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-6-luna declines the write under a read-only sandbox, so nothing asks for approval.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-6-sol" },
         runtimePolicyOverride: READ_ONLY_ON_REQUEST_POLICY,
         assertOutput: assertToolCallReadOnlyOnRequestOutput,
       },
@@ -323,7 +336,9 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
           "./tool_call_restricted_granular/codex_transcript.ndjson",
           import.meta.url,
         ),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-6 models write through the shell; gpt-5.6-terra's apply_patch raises the
+        // file-change approval this fixture covers.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-terra" },
         runtimePolicyOverride: RESTRICTED_GRANULAR_POLICY,
         assertOutput: assertToolCallRestrictedGranularOutput,
       },
@@ -346,7 +361,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent/codex_transcript.ndjson", import.meta.url),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-5.6-luna still runs multi-agent v1 (collabAgentToolCall); subagent_v2 covers v2.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-luna" },
         runtimePolicyOverride: READ_ONLY_ON_REQUEST_POLICY,
         assertOutput: assertSubagentOutput,
       },
@@ -372,7 +388,8 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent_continue/codex_transcript.ndjson", import.meta.url),
-        modelSelection: CODEX_MODEL_SELECTION,
+        // gpt-5.6-luna still runs multi-agent v1 (collabAgentToolCall); subagent_v2 covers v2.
+        modelSelection: { ...CODEX_MODEL_SELECTION, model: "gpt-5.6-luna" },
         assertOutput: assertSubagentContinueOutput,
       },
     ],
@@ -390,14 +407,43 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
     ],
   },
   {
+    name: "subagent_v2_approval",
+    buildInput: subagentV2ApprovalInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL("./subagent_v2_approval/codex_transcript.ndjson", import.meta.url),
+        modelSelection: CODEX_MODEL_SELECTION,
+        runtimePolicyOverride: SUBAGENT_V2_APPROVAL_POLICY,
+        assertOutput: assertSubagentV2ApprovalOutput,
+      },
+    ],
+  },
+  {
     name: "subagent_v2_nested",
-    buildInput: subagentV2Input,
+    buildInput: subagentV2NestedInput,
     providers: [
       {
         driver: ProviderDriverKind.make("codex"),
         transcriptFile: new URL("./subagent_v2_nested/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
         assertOutput: assertSubagentV2NestedOutput,
+      },
+    ],
+  },
+  {
+    name: "subagent_v2_nested_approval",
+    buildInput: subagentV2NestedApprovalInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL(
+          "./subagent_v2_nested_approval/codex_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CODEX_MODEL_SELECTION,
+        runtimePolicyOverride: SUBAGENT_V2_APPROVAL_POLICY,
+        assertOutput: assertSubagentV2NestedApprovalOutput,
       },
     ],
   },
@@ -571,7 +617,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./plan_questions/codex_transcript.ndjson", import.meta.url),
         modelSelection: CODEX_MODEL_SELECTION,
         runtimePolicyOverride: READ_ONLY_NEVER_POLICY,
-        assertOutput: assertPlanQuestionsOutput,
+        assertOutput: assertCodexPlanQuestionsOutput,
       },
       {
         driver: ProviderDriverKind.make("grok"),
@@ -768,6 +814,21 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./thread_rollback/claude_transcript.ndjson", import.meta.url),
         modelSelection: CLAUDE_MODEL_SELECTION,
         assertOutput: assertClaudeThreadRollbackOutput,
+      },
+    ],
+  },
+  {
+    name: "thread_rollback_after_restart",
+    buildInput: threadRollbackAfterRestartInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL(
+          "./thread_rollback_after_restart/codex_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CODEX_MODEL_SELECTION,
+        assertOutput: assertThreadRollbackAfterRestartOutput,
       },
     ],
   },

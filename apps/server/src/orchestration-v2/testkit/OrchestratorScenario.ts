@@ -67,6 +67,8 @@ export type OrchestratorV2ScenarioStep =
       readonly commandId: CommandId;
       readonly decision?: ProviderApprovalDecision;
       readonly answers?: ProviderUserInputAnswers;
+      /** Captures the shell snapshot under this key while the request is pending. */
+      readonly shellSnapshotKeyWhilePending?: string;
     };
 
 export interface OrchestratorV2Scenario {
@@ -81,6 +83,8 @@ export interface OrchestratorV2ScenarioResult {
   readonly domainEvents: ReadonlyArray<OrchestrationV2DomainEvent>;
   readonly projections: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection>;
   readonly shellSnapshot: OrchestrationV2ThreadShellSnapshot;
+  /** Shell snapshots captured mid-scenario, keyed by the step that asked for them. */
+  readonly capturedShellSnapshots: ReadonlyMap<string, OrchestrationV2ThreadShellSnapshot>;
 }
 
 export class OrchestratorV2ScenarioStepError extends Schema.TaggedErrorClass<OrchestratorV2ScenarioStepError>()(
@@ -213,6 +217,7 @@ export function runOrchestratorV2Scenario(
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
       const storedEventGroups: Array<ReadonlyArray<OrchestrationV2StoredEvent>> = [];
+      const capturedShellSnapshots = new Map<string, OrchestrationV2ThreadShellSnapshot>();
       const observedStoredEvents = yield* Ref.make<Array<OrchestrationV2StoredEvent>>([]);
       yield* orchestrator.streamStoredEvents.pipe(
         Stream.runForEach((event) =>
@@ -429,6 +434,12 @@ export function runOrchestratorV2Scenario(
             break;
           case "respond_to_next_runtime_request": {
             const request = yield* waitForPendingRuntimeRequest(step.threadId);
+            if (step.shellSnapshotKeyWhilePending !== undefined) {
+              capturedShellSnapshots.set(
+                step.shellSnapshotKeyWhilePending,
+                yield* orchestrator.getShellSnapshot(),
+              );
+            }
             const result = yield* orchestrator.dispatch({
               type: "runtime-request.respond",
               commandId: step.commandId,
@@ -468,6 +479,7 @@ export function runOrchestratorV2Scenario(
         domainEvents: storedEvents.map((stored) => stored.event),
         projections,
         shellSnapshot,
+        capturedShellSnapshots,
       };
     }),
   );

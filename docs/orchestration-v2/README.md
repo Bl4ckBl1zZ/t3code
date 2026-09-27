@@ -87,7 +87,7 @@ The Codex app-server probes showed several protocol realities that the V2 model 
 - `thread/status/changed` can become idle before or around completion, but `turn/completed` is the authoritative turn terminal event.
 - `turn/interrupt` completes as a request first; the interrupted terminal state arrives later through `turn/completed`.
 - Approval requests are provider-initiated JSON-RPC requests scoped to provider thread, turn, and item.
-- `thread/rollback` returns an authoritative provider thread snapshot after rollback.
+- `thread/revert` returns an authoritative provider thread snapshot after rollback (Codex 0.156 replaced count-based `thread/rollback`).
 - Subagent child `turn/completed` events can occur before the parent/root turn completes.
 - Child provider turns are real provider turns and must not be remapped onto the parent provider turn id.
 

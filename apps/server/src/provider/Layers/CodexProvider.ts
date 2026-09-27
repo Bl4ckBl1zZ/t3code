@@ -418,7 +418,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         cwds: [input.cwd],
       }),
       requestAllCodexModels(client),
-      client.request("account/rateLimits/read", undefined).pipe(
+      client.request("account/rateLimits/read", null).pipe(
         Effect.timeoutOption(Duration.millis(3_000)),
         Effect.map(Option.getOrUndefined),
         Effect.orElseSucceed(() => undefined),
