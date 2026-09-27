@@ -44,6 +44,9 @@ thread stops working.
 
 **Limited** means the provider stopped on a usage or rate limit. The conversation keeps the
 provider's explanation. Retry after the limit resets, or switch to another provider instance.
+Queued messages stay saved while the limit blocks the thread, and the thread stays **Limited**
+while they wait. They run after the next turn finishes; see
+[Paused queues](./composer.md#paused-queues).
 
 When the provider reports a reset time, choose **Resume at reset** to schedule a continuation. You
 can cancel it from the thread. Enable **Auto-resume limited threads** in **Settings → General** on

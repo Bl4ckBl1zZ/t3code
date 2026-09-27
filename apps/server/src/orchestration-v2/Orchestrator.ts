@@ -1,4 +1,8 @@
-import { latestRootProviderFailure } from "@t3tools/shared/orchestrationV2ThreadError";
+import {
+  latestExecutedRun,
+  latestRootProviderFailure,
+  usageLimitBlockedRun,
+} from "@t3tools/shared/orchestrationV2ThreadError";
 import {
   canContinueAfterRestart,
   RESTART_CONTINUATION_PROMPT,
@@ -325,6 +329,20 @@ function isBlockingRun(run: OrchestrationV2Run): boolean {
  * provider the user has not looked at since the server came back. One held run
  * holds the whole queue: they were meant to run in order.
  */
+/** The last error of the thread's current provider instance's newest session. */
+function latestSessionErrorForThread(
+  projection: Pick<OrchestrationV2ThreadProjection, "providerSessions" | "thread">,
+): string | null {
+  return (
+    projection.providerSessions
+      .filter((session) => session.providerInstanceId === projection.thread.providerInstanceId)
+      .toSorted(
+        (left, right) =>
+          DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+      )[0]?.lastError ?? null
+  );
+}
+
 function isHeldQueuedRun(run: OrchestrationV2Run): boolean {
   return run.status === "queued" && run.queueHeld === true;
 }
@@ -897,7 +915,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     });
 
-  const startNextQueuedRun = (threadId: ThreadId) =>
+  const startNextQueuedRun = (threadId: ThreadId, options?: { readonly failedRunId?: RunId }) =>
     Effect.gen(function* () {
       const projection = yield* projectionStore.getThreadProjection(threadId);
       if (
@@ -909,8 +927,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return;
       }
 
+      // The limit already stopped this thread. Starting the queue would send
+      // every waiting message and drop it from the queue as each one fails.
+      if (
+        usageLimitBlockedRun(
+          projection.runs,
+          projection.turnItems,
+          latestSessionErrorForThread(projection),
+        ) !== null
+      ) {
+        return;
+      }
       const queuedRun = nextQueuedRun(projection);
       if (queuedRun === undefined) {
+        return;
+      }
+      // A provider that just failed will likely fail the next message too.
+      // Hold the queue so the user decides when to resume it. Validation
+      // failures (setup, unsupported handoff) belong to that message alone,
+      // and a message queued for another provider is how users recover.
+      const failedRun = latestExecutedRun(projection.runs);
+      const failureClass =
+        failedRun?.id === options?.failedRunId
+          ? latestRootProviderFailure(failedRun, projection.turnItems)?.class
+          : undefined;
+      if (
+        failureClass !== undefined &&
+        failureClass !== "validation_error" &&
+        failedRun?.providerInstanceId === queuedRun.providerInstanceId
+      ) {
+        const now = yield* DateTime.now;
+        yield* writeSystemEvents(
+          projection.runs
+            .filter((run) => run.status === "queued")
+            .map((run) => ({
+              type: "run.updated" as const,
+              threadId,
+              runId: run.id,
+              providerInstanceId: run.providerInstanceId,
+              occurredAt: now,
+              payload: { ...run, queueHeld: true },
+            })),
+        );
         return;
       }
       const rootNodeId = queuedRun.rootNodeId;
@@ -1119,7 +1177,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         if (
           projection.runs.some(isBlockingRun) ||
           projection.runs.some(isHeldQueuedRun) ||
-          nextQueuedRun(projection) === undefined
+          nextQueuedRun(projection) === undefined ||
+          usageLimitBlockedRun(
+            projection.runs,
+            projection.turnItems,
+            latestSessionErrorForThread(projection),
+          ) !== null
         ) {
           return false;
         }
@@ -1725,7 +1788,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (command.type === "thread.metadata.update" && command.limitRecovery != null) {
       const projection = yield* loadProjectionForCommand(command);
-      const run = projection.runs.at(-1) ?? null;
+      const run = usageLimitBlockedRun(projection.runs, projection.turnItems, null);
       const failure = latestRootProviderFailure(run, projection.turnItems);
       const resetMs = Date.parse(command.limitRecovery.resetAt);
       if (command.limitRecovery.snooze === true && resetMs <= DateTime.toEpochMillis(now)) {
@@ -1743,8 +1806,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         failure?.class !== "usage_limit" ||
         failure.resetAt !== command.limitRecovery.resetAt ||
         resetMs <= DateTime.toEpochMillis(run.completedAt ?? run.requestedAt) ||
-        projection.runtimeRequests.some((request) => request.status === "pending") ||
-        projection.runs.some((candidate) => candidate.status === "queued")
+        projection.runtimeRequests.some((request) => request.status === "pending")
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -3273,7 +3335,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       if (command.usageLimitContinuationOfRunId !== undefined) {
-        const run = projection.runs.at(-1) ?? null;
+        const run = usageLimitBlockedRun(projection.runs, projection.turnItems, null);
         const failure = latestRootProviderFailure(run, projection.turnItems);
         const recovery = projection.thread.limitRecovery;
         const now = yield* DateTime.now;
@@ -5933,6 +5995,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Thread ${command.threadId} is not active.`,
         });
       }
+      // A limited thread would send every resumed message into the same limit.
+      if (
+        usageLimitBlockedRun(
+          projection.runs,
+          projection.turnItems,
+          latestSessionErrorForThread(projection),
+        ) !== null
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Continue the limited thread before resuming its queue.",
+        });
+      }
       const now = yield* DateTime.now;
       const emitEvent = emit(events, command);
       const held = projection.runs.filter(isHeldQueuedRun);
@@ -7838,7 +7914,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           finalizeDelegatedCompletionDelivery(threadId, stored.event.payload.id),
         );
       }
-      yield* threadDispatch.withLock(threadId, startNextQueuedRun(threadId));
+      yield* threadDispatch.withLock(
+        threadId,
+        startNextQueuedRun(
+          threadId,
+          stored.event.type === "run.updated" && stored.event.payload.status === "failed"
+            ? { failedRunId: stored.event.payload.id }
+            : undefined,
+        ),
+      );
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Failed to react to terminal V2 run", {

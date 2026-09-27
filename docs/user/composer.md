@@ -106,11 +106,17 @@ open the stack. Interacting with the attached banner or composer does not open t
 Messages you queue behind a running turn sit above the composer and send in order once the agent
 finishes. If the server restarts while messages are still waiting, the queue pauses instead of
 sending: the agent that was working is gone, and you may not want the next message going to a
-fresh one unread. Your messages, their order and their attachments are all kept.
+fresh one unread. The queue also pauses when a turn fails, since the same provider would likely
+fail the next message too. A message queued for a different provider still sends. Your messages,
+their order and their attachments are all kept.
 
-A paused queue says **Paused when the server restarted** above its rows. Edit, reorder or remove
-whatever you want first, then choose **Resume** to start the message at the top and let the rest
-follow. Nothing sends until you do.
+A paused queue says **Paused** above its rows. Edit, reorder or remove whatever you want first,
+then choose **Resume** to start the message at the top and let the rest follow. Nothing sends
+until you do.
+
+When a usage limit stops the thread, queued messages wait instead of running into the same limit,
+and the queue cannot be resumed while the limit holds. They send after the next turn on the thread
+finishes, such as a continuation at the reset time or a message you send yourself.
 
 ## Prompt stash
 

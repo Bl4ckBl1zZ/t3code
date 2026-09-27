@@ -136,7 +136,7 @@ struct QueuedMessageStripView: View {
             Image(systemName: "pause.circle")
                 .foregroundStyle(T3Colors.textSecondary)
                 .accessibilityHidden(true)
-            Text("Paused when the server restarted. Nothing was lost.")
+            Text("Paused. Nothing was lost.")
                 .foregroundStyle(T3Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
