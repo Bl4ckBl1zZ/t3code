@@ -3241,6 +3241,33 @@ export function makeClaudeAdapterV2(
         });
 
         /**
+         * The CLI process that owned this native thread's background work is
+         * gone. Its tasks died with it, so nothing is pending and no wake can
+         * follow; a buffered wake would otherwise start a continuation for
+         * work the user stopped.
+         */
+        const forgetProcessBackgroundWork = Effect.fnUntraced(function* (nativeThreadId: string) {
+          yield* sweepBackgroundTasks();
+          yield* Ref.set(pendingBackgroundTaskIds, new Set());
+          yield* Ref.update(wakeBuffers, (current) => {
+            if (!current.has(nativeThreadId)) {
+              return current;
+            }
+            const updated = new Map(current);
+            updated.delete(nativeThreadId);
+            return updated;
+          });
+          yield* Ref.update(requestedContinuations, (current) => {
+            if (!current.has(nativeThreadId)) {
+              return current;
+            }
+            const updated = new Set(current);
+            updated.delete(nativeThreadId);
+            return updated;
+          });
+        });
+
+        /**
          * Everything that can change a background command's state, handled
          * whether or not a turn is active.
          */
@@ -5768,6 +5795,25 @@ export function makeClaudeAdapterV2(
               });
             }
             const currentTurn = yield* Ref.get(activeTurn);
+            const nativeThreadId = turnInput.providerThread.nativeThreadRef?.nativeId ?? null;
+            if (
+              currentTurn === null &&
+              turnInput.requestRuntimeRestart === true &&
+              nativeThreadId !== null &&
+              existing.nativeThreadId === nativeThreadId
+            ) {
+              // Stop after the turn settled: the background work belongs to
+              // the CLI process, so closing its query is what stops it. The
+              // query-exit path retires the background command rows.
+              yield* closeLiveQueryForNativeThread(nativeThreadId);
+              // A turn started while the close was pending may have opened a
+              // replacement process. Its pending and wake state are its own.
+              const current = yield* Ref.get(queryContext);
+              if (current === null || current.query === existing.query) {
+                yield* forgetProcessBackgroundWork(nativeThreadId);
+              }
+              return;
+            }
             if (currentTurn?.providerTurnId !== turnInput.providerTurnId) {
               return yield* new ProviderAdapterProtocolError({
                 driver: CLAUDE_PROVIDER,
@@ -5929,6 +5975,32 @@ export function makeClaudeAdapterV2(
             }
             return false;
           }),
+          // Background work lives in the CLI process, which serves one native
+          // thread at a time. It is this thread's only while its query is live.
+          hasPendingBackgroundWorkForThread: (providerThread) =>
+            Effect.gen(function* () {
+              const nativeThreadId = providerThread.nativeThreadRef?.nativeId ?? null;
+              if (
+                nativeThreadId === null ||
+                (yield* Ref.get(queryContext))?.nativeThreadId !== nativeThreadId
+              ) {
+                return false;
+              }
+              if ((yield* Ref.get(pendingBackgroundTaskIds)).size > 0) {
+                return true;
+              }
+              for (const entry of (yield* Ref.get(sessionBackgroundTasks)).values()) {
+                if (!orchestrationV2TurnItemStatusIsTerminal(entry.item.status)) {
+                  return true;
+                }
+              }
+              for (const subagent of (yield* Ref.get(sessionSubagentsByTaskId)).values()) {
+                if (subagent.task.status === "running") {
+                  return true;
+                }
+              }
+              return false;
+            }),
           ensureThread: Effect.fn("ClaudeAdapterV2.ensureThread")(
             function* (threadInput: ProviderAdapterV2EnsureThreadInput) {
               const createdAt = yield* DateTime.now;

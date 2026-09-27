@@ -4561,6 +4561,212 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("stops background work after the turn settled", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let closes = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          close: (sdkMessages) =>
+            Effect.sync(() => {
+              closes++;
+            }).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+        });
+        const hasWorkForThread = harness.runtime.hasPendingBackgroundWorkForThread;
+        if (hasWorkForThread === undefined) {
+          return yield* Effect.die("Claude must report per-thread background work.");
+        }
+        yield* startBackgroundCommand({ harness, attemptId: "attempt-claude-settled-stop" });
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
+        assert.isTrue(yield* hasWorkForThread(harness.providerThread));
+        assert.isFalse(
+          yield* hasWorkForThread({
+            ...harness.providerThread,
+            nativeThreadRef: {
+              driver: CLAUDE_PROVIDER,
+              nativeId: "another-native-thread",
+              strength: "strong",
+            },
+          }),
+        );
+
+        // Stop on a settled thread reaches the adapter as an interrupt of the
+        // settled turn with requestRuntimeRestart.
+        yield* harness.runtime.interruptTurn({
+          providerThread: harness.providerThread,
+          providerTurnId: harness.terminalEvents()[0]!.providerTurnId,
+          requestRuntimeRestart: true,
+        });
+
+        assert.equal(closes, 1, "Stop must close the CLI process that owns the task");
+        yield* awaitUntil(
+          () => backgroundCommandItems(harness).at(-1)?.status === "cancelled",
+          "background command retired after Stop",
+        );
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        assert.isFalse(yield* hasWorkForThread(harness.providerThread));
+        assert.lengthOf(harness.terminalEvents(), 1);
+        assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("a settled Stop leaves a turn that replaced the closing process alone", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-v2-settled-stop-replaced-",
+        });
+        const processQueues: Array<Queue.Queue<SDKMessage>> = [];
+        const firstCloseRequested = yield* Deferred.make<void>();
+        const events: Array<ProviderAdapterV2Event> = [];
+        const continuationRequests: Array<ProviderContinuationRequest> = [];
+        const adapter = makeClaudeAdapterV2({
+          instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          idAllocator,
+          continuationRequests: {
+            offer: (request) =>
+              Effect.sync(() => {
+                continuationRequests.push(request);
+              }),
+          },
+          queryRunner: {
+            allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),
+            open: () =>
+              Effect.gen(function* () {
+                const sdkMessages = yield* Queue.unbounded<SDKMessage>();
+                const isFirstProcess = processQueues.length === 0;
+                processQueues.push(sdkMessages);
+                return {
+                  messages: Stream.fromQueue(sdkMessages),
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  interrupt: Effect.void,
+                  // The first CLI process keeps streaming until the test ends
+                  // it, so Stop stays parked waiting for it to exit.
+                  close: isFirstProcess
+                    ? Deferred.succeed(firstCloseRequested, undefined).pipe(Effect.asVoid)
+                    : Queue.shutdown(sdkMessages),
+                };
+              }),
+            forkSession: () => Effect.die("unused forkSession"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const threadId = ThreadId.make("thread-claude-settled-stop-replaced");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-settled-stop"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
+        const hasWorkForThread = runtime.hasPendingBackgroundWorkForThread;
+        if (hasPendingBackgroundWork === undefined || hasWorkForThread === undefined) {
+          return yield* Effect.die("Claude adapter runtime must report background work.");
+        }
+        const terminals = () => events.filter((event) => event.type === "turn.terminal");
+        const now = yield* DateTime.now;
+
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-settled-stop-replaced-a"),
+            text: "Run the build in the background.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(processQueues[0]!, wakeTaskStarted);
+        yield* Queue.offer(processQueues[0]!, turnOneResult);
+        yield* awaitUntil(() => terminals().length === 1, "first turn terminal");
+        const settledTurn = terminals()[0];
+        assert.isTrue(yield* hasWorkForThread(providerThread));
+
+        const stop = yield* runtime
+          .interruptTurn({
+            providerThread,
+            providerTurnId:
+              settledTurn?.type === "turn.terminal"
+                ? settledTurn.providerTurnId
+                : ProviderTurnId.make("missing"),
+            requestRuntimeRestart: true,
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(firstCloseRequested);
+
+        // While Stop waits for the old CLI to exit, a new turn on another
+        // model replaces the process and starts its own background task.
+        yield* runtime.startTurn({
+          ...makeClaudeTestTurnInput({
+            threadId,
+            providerThread: { ...providerThread, status: "active" },
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-settled-stop-replaced-b"),
+            text: "Start another background build.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+          }),
+          modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "claude-haiku-4-5-20251001" },
+        });
+        assert.lengthOf(processQueues, 2);
+        const replacementTaskId = "replacement-task";
+        yield* Queue.offer(
+          processQueues[1]!,
+          claudeSdkFrame({
+            ...wakeTaskStarted,
+            task_id: replacementTaskId,
+            uuid: "00000000-0000-4000-8000-000000000905",
+          }),
+        );
+
+        yield* Queue.shutdown(processQueues[0]!);
+        yield* Fiber.join(stop);
+        // The replacement's pending task survives the old process's Stop.
+        assert.isTrue(yield* hasPendingBackgroundWork);
+
+        // ...and still wakes Claude once its turn settles.
+        yield* Queue.offer(
+          processQueues[1]!,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000906",
+            result: "Started another build.",
+          }),
+        );
+        yield* awaitUntil(() => terminals().length === 2, "replacement turn terminal");
+        yield* Queue.offer(
+          processQueues[1]!,
+          claudeSdkFrame({
+            ...wakeNotification,
+            task_id: replacementTaskId,
+            uuid: "00000000-0000-4000-8000-000000000907",
+          }),
+        );
+        yield* awaitUntil(() => continuationRequests.length === 1, "replacement wake");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("stops the elapsed clock while a command is paused", () =>
     Effect.scoped(
       Effect.gen(function* () {
