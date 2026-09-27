@@ -11,7 +11,7 @@ const THREAD_DETAILS_PANEL_HOVER_SURFACE_CLASS =
   "hover:!bg-black/[0.055] data-pressed:!bg-black/[0.055] dark:hover:!bg-white/[0.075] dark:data-pressed:!bg-white/[0.075]";
 
 const THREAD_DETAILS_PANEL_SPLIT_TARGET_HOVER_SURFACE_CLASS =
-  "hover:!bg-black/[0.07] data-pressed:!bg-black/[0.07] dark:hover:!bg-white/[0.11] dark:data-pressed:!bg-white/[0.11]";
+  "hover:!bg-black/[0.07] data-pressed:!bg-black/[0.07] data-popup-open:!bg-black/[0.07] dark:hover:!bg-white/[0.11] dark:data-pressed:!bg-white/[0.11] dark:data-popup-open:!bg-white/[0.11]";
 
 const THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS = `${THREAD_DETAILS_PANEL_RESTING_BUTTON_SURFACE_CLASS} ${THREAD_DETAILS_PANEL_HOVER_SURFACE_CLASS}`;
 
@@ -29,7 +29,10 @@ export const THREAD_DETAILS_PANEL_SELECT_ROW_CLASS = `${THREAD_DETAILS_PANEL_ROW
 
 export const THREAD_DETAILS_PANEL_LINK_ROW_CLASS = `flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-start rounded-lg border border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 disabled:cursor-not-allowed disabled:opacity-55 sm:h-9 sm:text-[13px] ${THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS}`;
 
-export const THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS = `group/thread-details-link flex w-full items-center rounded-lg transition-colors ${THREAD_DETAILS_PANEL_HOVER_SURFACE_CLASS}`;
+// No transition on the group: its halves are Buttons whose background snaps, so an eased group
+// tint would land frames later and the hover would visibly commit in two steps. An open menu in
+// either half keeps the row tinted like a hovered one.
+export const THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS = `group/thread-details-link flex w-full items-center rounded-lg ${THREAD_DETAILS_PANEL_SPLIT_GROUP_SURFACE_CLASS}`;
 
 /**
  * `before:hidden` rather than `before:shadow-none`: this row is a flex
