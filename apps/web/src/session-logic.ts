@@ -15,6 +15,12 @@ import {
 } from "@t3tools/contracts";
 import { resolveT3McpToolPresentation } from "@t3tools/shared/t3McpToolPresentation";
 import { resolveOrchestrationV2ItemAttempt } from "@t3tools/shared/orchestrationV2Timeline";
+import {
+  classifyToolActivity,
+  collectToolFilePaths,
+  formatReadToolLabel,
+  formatSearchToolLabel,
+} from "@t3tools/shared/toolActivity";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type {
   ThreadPendingApproval,
@@ -495,7 +501,7 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
     case "file_search":
       return {
         ...common,
-        label: title ?? "Searched files",
+        label: title ?? formatSearchToolLabel(item) ?? "Searched files",
         ...(item.pattern ? { detail: item.pattern } : {}),
         toolTitle: title ?? "File search",
         toolData: item,
@@ -532,21 +538,30 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         toolData: item,
       };
     }
-    case "dynamic_tool":
+    case "dynamic_tool": {
+      const classified = classifyToolActivity({
+        itemType: "dynamic_tool_call",
+        data: { toolName: item.toolName ?? undefined, input: item.input },
+      });
+      const [readPath] = collectToolFilePaths({ input: item.input });
       return {
         ...common,
         label:
           resolveT3McpToolPresentation(item.toolName ?? title, item.status, item.input)
             ?.displayName ??
           title ??
-          item.toolName ??
-          "Tool call",
+          (classified === "read"
+            ? formatReadToolLabel(readPath ?? "")
+            : classified === "search"
+              ? (formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call")
+              : (item.toolName ?? "Tool call")),
         toolTitle: title ?? item.toolName ?? "Tool",
         ...(item.toolSurface ? { toolSurface: item.toolSurface } : {}),
         ...(item.toolIcon ? { toolIcon: item.toolIcon } : {}),
         ...(item.toolSource ? { toolSource: item.toolSource } : {}),
         toolData: { input: item.input, output: item.output },
       };
+    }
     default:
       return {
         ...common,

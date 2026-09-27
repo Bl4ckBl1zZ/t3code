@@ -1,5 +1,6 @@
 import * as NodeCrypto from "node:crypto";
 
+import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { ClaudeUsageLimitListener } from "../../provider/providerUsageLimits.ts";
 import { ModelManifest } from "../../provider/ModelManifest.ts";
@@ -2801,6 +2802,20 @@ export function makeClaudeAdapterV2(
             startedAt: input.startedAt,
             completedAt,
           };
+          const readPath = ["read", "read file"].includes(input.classification.normalizedName)
+            ? firstStringInputField(input.toolInput, ["file_path", "path"])?.trim()
+            : undefined;
+          const nativeToolInput = claudeNativeToolInputValue(input.toolInput);
+          const searchTitle = ["grep", "glob", "ls"].includes(input.classification.normalizedName)
+            ? formatSearchToolLabel({
+                input:
+                  nativeToolInput !== null &&
+                  typeof nativeToolInput === "object" &&
+                  !Array.isArray(nativeToolInput)
+                    ? (nativeToolInput as Record<string, unknown>)
+                    : undefined,
+              })
+            : undefined;
           const itemBase = {
             id: turnItemId,
             threadId: input.threadId,
@@ -2812,7 +2827,7 @@ export function makeClaudeAdapterV2(
             parentItemId: null,
             ordinal: input.ordinal,
             status: input.status,
-            title: null,
+            title: readPath !== undefined ? formatReadToolLabel(readPath) : (searchTitle ?? null),
             startedAt: input.startedAt,
             completedAt,
             updatedAt: input.updatedAt,

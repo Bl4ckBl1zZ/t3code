@@ -1149,3 +1149,58 @@ describe("workEntryIndicatesToolFailure", () => {
     expect(workEntryIndicatesToolFailure(entry({ exitCode: 0 }))).toBe(false);
   });
 });
+
+describe("read and search tool labels", () => {
+  const now = DateTime.makeUnsafe("2026-09-20T00:00:00.000Z");
+  const threadId = ThreadId.make("thread-read-search");
+  const base = {
+    threadId,
+    runId: RunId.make("run-read-search"),
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    status: "completed" as const,
+    title: null,
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+  };
+  const labelOf = (item: OrchestrationV2TurnItem) => {
+    const [entry] = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        { position: 0, visibility: "local", sourceThreadId: threadId, sourceItemId: item.id, item },
+      ],
+      optimisticMessages: [],
+    });
+    return entry?.kind === "work" ? entry.entry.label : null;
+  };
+
+  it("labels a read of a bare filename from its structured input", () => {
+    expect(
+      labelOf({
+        ...base,
+        id: TurnItemId.make("read-readme"),
+        ordinal: 0,
+        type: "dynamic_tool",
+        toolName: "Read",
+        input: { file_path: "README" },
+        output: "project notes",
+      }),
+    ).toBe("Read README");
+  });
+
+  it("labels a search tool with its query and target", () => {
+    expect(
+      labelOf({
+        ...base,
+        id: TurnItemId.make("grep-todo"),
+        ordinal: 0,
+        type: "dynamic_tool",
+        toolName: "Grep",
+        input: { pattern: "TODO", path: "apps/web" },
+      }),
+    ).toBe("Searched TODO in web");
+  });
+});

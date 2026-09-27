@@ -43,6 +43,12 @@ import {
   orchestrationV2TimelineDayKey,
   resolveOrchestrationV2ItemAttempt,
 } from "@t3tools/shared/orchestrationV2Timeline";
+import {
+  classifyToolActivity,
+  collectToolFilePaths,
+  formatReadToolLabel,
+  formatSearchToolLabel,
+} from "@t3tools/shared/toolActivity";
 import * as DateTime from "effect/DateTime";
 
 import { isV2LifecycleTimelineItem } from "./threadLifecycle";
@@ -74,6 +80,7 @@ export interface ThreadFeedActivity {
     | "edit"
     | "eye"
     | "globe"
+    | "search"
     | "hammer"
     | "message"
     | "warning"
@@ -341,6 +348,16 @@ function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"]
 
 function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
   if (item.type === "notification") return "zap";
+  if (item.type === "dynamic_tool") {
+    const classified = classifyToolActivity({
+      itemType: "dynamic_tool_call",
+      data: { toolName: item.toolName ?? undefined, input: item.input },
+    });
+    if (classified === "read") {
+      return "eye";
+    }
+    if (classified === "search") return "search";
+  }
   switch (item.type) {
     case "reasoning":
       return "agent";
@@ -349,7 +366,7 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "file_change":
       return "edit";
     case "file_search":
-      return "eye";
+      return "search";
     case "web_search":
       return "globe";
     case "approval_request":
@@ -425,7 +442,7 @@ function itemSummary(
         ? `Changed ${item.changes.length} files`
         : `Changed ${item.fileName}`;
     case "file_search":
-      return "Searched files";
+      return item.title?.trim() || formatSearchToolLabel(item) || "Searched files";
     case "web_search":
       return "Searched the web";
     case "approval_request":
@@ -452,8 +469,20 @@ function itemSummary(
       return "Thread created";
     case "subagent":
       return "Subagent";
-    case "dynamic_tool":
+    case "dynamic_tool": {
+      const classified = classifyToolActivity({
+        itemType: "dynamic_tool_call",
+        data: { toolName: item.toolName ?? undefined, input: item.input },
+      });
+      if (classified === "read") {
+        const [path] = collectToolFilePaths({ input: item.input });
+        return formatReadToolLabel(path ?? "");
+      }
+      if (classified === "search") {
+        return formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call";
+      }
       return toolPresentation?.displayName ?? item.toolName ?? "Tool call";
+    }
     case "proposed_plan":
       return "Proposed plan";
     case "todo_list":
@@ -530,8 +559,19 @@ function toFeedActivity(row: OrchestrationV2ProjectedTurnItem): ThreadFeedActivi
   const toolPresentation = itemToolPresentation(item);
   const summary = itemSummary(item, toolPresentation);
   const detail = itemPreview(item);
-  const getFullDetail = memoizeValue(() =>
-    JSON.stringify(
+  const readPaths =
+    item.type === "dynamic_tool" &&
+    classifyToolActivity({
+      itemType: "dynamic_tool_call",
+      data: { toolName: item.toolName ?? undefined, input: item.input },
+    }) === "read"
+      ? collectToolFilePaths(item)
+      : null;
+  const getFullDetail = memoizeValue(() => {
+    if (readPaths) {
+      return readPaths.join("\n") || null;
+    }
+    return JSON.stringify(
       {
         visibility: row.visibility,
         sourceThreadId: row.sourceThreadId,
@@ -540,8 +580,8 @@ function toFeedActivity(row: OrchestrationV2ProjectedTurnItem): ThreadFeedActivi
       },
       null,
       2,
-    ),
-  );
+    );
+  });
   const getCopyText = memoizeValue(() =>
     [summary, detail, getFullDetail()]
       .filter(
@@ -556,7 +596,7 @@ function toFeedActivity(row: OrchestrationV2ProjectedTurnItem): ThreadFeedActivi
     runId: item.runId,
     summary,
     detail,
-    canExpand: !(item.type === "error" && item.status === "failed"),
+    canExpand: !(item.type === "error" && item.status === "failed") && (readPaths?.length ?? 1) > 0,
     getFullDetail,
     getCopyText,
     icon: itemIcon(item),

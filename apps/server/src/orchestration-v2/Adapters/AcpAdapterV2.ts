@@ -47,6 +47,7 @@ import * as Stream from "effect/Stream";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
@@ -2814,9 +2815,28 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           let turnItem: OrchestrationV2TurnItem;
           switch (toolCall.kind) {
             case "read":
+              turnItem = {
+                ...base,
+                title: path ? formatReadToolLabel(path) : (title ?? "Read file"),
+                type: "dynamic_tool",
+                toolName: "Read",
+                input:
+                  path === undefined ||
+                  ["path", "filePath", "file_path"].some((key) => rawInputRecord?.[key] === path)
+                    ? (rawInputRecord ?? {})
+                    : { ...rawInputRecord, path },
+                ...(rawOutput === undefined ? {} : { output: rawOutput }),
+              };
+              break;
             case "search":
               turnItem = {
                 ...base,
+                title:
+                  formatSearchToolLabel({
+                    rawInput: rawInputRecord,
+                    input: rawInputRecord,
+                    ...(path === undefined ? {} : { pattern: path }),
+                  }) ?? title,
                 type: "file_search",
                 ...(path === undefined ? {} : { pattern: path }),
                 ...(path === undefined

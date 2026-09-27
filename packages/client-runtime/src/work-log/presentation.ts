@@ -1,4 +1,5 @@
 import { isToolLifecycleItemType, type ToolLifecycleItemType } from "@t3tools/contracts";
+import { classifyToolActivity } from "@t3tools/shared/toolActivity";
 
 export function isWorktreeSetupActivity(kind: string): boolean {
   return kind === "setup-script.requested" || kind === "setup-script.started";
@@ -56,7 +57,15 @@ export function workLogEntryIsLocalCodeSearch(entry: WorkLogPresentationEntry): 
 }
 
 export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupAction {
+  // Provider tool names such as Read, Grep, Glob, or Find carry the action
+  // when the item type is a generic dynamic tool call.
+  const classified = classifyToolActivity({
+    itemType: entry.itemType,
+    requestKind: entry.requestKind,
+    data: entry.toolTitle === undefined ? undefined : { toolName: entry.toolTitle },
+  });
   if (
+    classified === "read" ||
     entry.requestKind === "file-read" ||
     entry.itemType === "image_view" ||
     entry.viewedImagePath !== undefined ||
@@ -73,6 +82,11 @@ export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupActio
   }
   if (entry.requestKind === "command" || entry.itemType === "command_execution" || entry.command) {
     return "command";
+  }
+  if (classified === "search") {
+    return entry.itemType === "web_search" && !workLogEntryIsLocalCodeSearch(entry)
+      ? "search"
+      : "code-search";
   }
   if (workLogEntryIsLocalCodeSearch(entry)) return "code-search";
   if (entry.itemType === "web_search") return "search";

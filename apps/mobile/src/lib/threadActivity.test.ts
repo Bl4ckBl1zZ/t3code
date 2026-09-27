@@ -854,7 +854,7 @@ describe("buildThreadFeed", () => {
     const feed = buildThreadFeed([projected(toolItem, 0)]);
     const activity = feed[0]?.type === "activity-group" ? feed[0].activities[0] : null;
 
-    expect(activity?.summary).toBe("Read");
+    expect(activity?.summary).toBe("Read /repo/apps/web/src/App.tsx");
     expect(activity?.detail).toBe("/repo/apps/web/src/App.tsx");
     expect(activity?.icon).toBe("eye");
   });
@@ -1100,3 +1100,44 @@ it.each(["provider_error", "usage_limit"] as const)(
     expect(activities.at(-1)).toMatchObject({ canExpand: false });
   },
 );
+
+describe("read and search activity", () => {
+  const activitiesOf = (item: OrchestrationV2TurnItem) =>
+    buildThreadFeed([projected(item, 0)]).flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities : [],
+    );
+
+  it("shows only the structured path in expanded read details", () => {
+    const item: OrchestrationV2TurnItem = {
+      ...base("read-detail", "2026-06-20T00:00:03.000Z", 2),
+      type: "dynamic_tool",
+      toolName: "Read",
+      title: "Read src/env.ts",
+      input: { path: "src/env.ts" },
+      output: "---\nname: env\n---\nsecret content",
+    };
+    const [activity] = activitiesOf(item);
+
+    expect(activity?.summary).toBe("Read src/env.ts");
+    expect(activity?.icon).toBe("eye");
+    expect(activity?.getFullDetail()).toBe("src/env.ts");
+    expect(activity?.canExpand).toBe(true);
+    expect(activity?.getCopyText()).not.toContain("secret content");
+
+    const [withoutPath] = activitiesOf({ ...item, id: TurnItemId.make("read-no-path"), input: {} });
+    expect(withoutPath?.getFullDetail()).toBeNull();
+    expect(withoutPath?.canExpand).toBe(false);
+  });
+
+  it("labels file searches with the adapter title", () => {
+    const [activity] = activitiesOf({
+      ...base("file-search", "2026-06-20T00:00:03.000Z", 2),
+      type: "file_search",
+      title: "Searched TODO in web",
+      pattern: "TODO",
+    });
+
+    expect(activity?.summary).toBe("Searched TODO in web");
+    expect(activity?.icon).toBe("search");
+  });
+});
