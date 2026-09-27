@@ -20,6 +20,8 @@
     "continueThreadsAfterServerUpdate": false,
     "sidebarAutoSettleAfterDays": 3,
     "sidebarAutoSettleOnMerge": true,
+    "snoozeLimitedThreads": false,
+    "autoResumeLimitedThreads": false,
     "autoDeleteSettledAfterDays": null,
     "enableLegacyTokenStreaming": false,
     "enableHermes": false,
