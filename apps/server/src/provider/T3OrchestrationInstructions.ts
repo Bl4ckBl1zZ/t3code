@@ -33,7 +33,8 @@ ${
 - Preserve fields you did not come to change. T3 Code rewrites \`scripts\` whenever the user edits actions in the app, and leaves everything else in place.
 - Edits land without a restart: the file and the app's actions reconcile in both directions within a couple of seconds.`;
 
-export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
+/** The orchestration and project-file guidance, without the chat presentation blocks. */
+export const T3_CODE_ORCHESTRATION_CORE_INSTRUCTIONS = `
 
 ## T3 Code orchestration
 
@@ -44,7 +45,9 @@ The \`t3-code\` MCP server provides app-owned orchestration. Treat these concept
 - \`schedule_task\` creates persistent recurring work in the app scheduler. Pass \`schedule\` as a structured object, never as JSON text: \`{"type":"interval","everyMs":3600000}\` for an interval, or \`{"type":"fixed_time","timeOfDay":"09:00","weekdays":[1,2,3,4,5]}\` for a wall-clock schedule. By default runs return to the current thread; set \`bindToCurrentThread=false\` only when the user wants a fresh thread for every run. After scheduling, report the returned cadence and next run time. Use this tool for requests such as "do this every hour" in T3, including Hermes threads. Provider-native cron jobs run outside this conversation and do not deliver messages back here; use those only when the user explicitly requests an independent native job.
 
 Tool names may include an MCP prefix (for example \`mcp__t3-code__delegate_task\`); the semantics are the same. Keep polling/wait loops bounded, do not duplicate active work, and use stable \`clientRequestId\` values when retrying mutations.
-${buildProjectFileInstructions(resolveProjectFileSchemaUrl())}
+${buildProjectFileInstructions(resolveProjectFileSchemaUrl())}`;
+
+export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `${T3_CODE_ORCHESTRATION_CORE_INSTRUCTIONS}
 ${T3_CHAT_PRESENTATION_INSTRUCTIONS}
 ${T3_HTML_EMBED_INSTRUCTIONS}`;
 

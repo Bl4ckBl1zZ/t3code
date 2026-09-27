@@ -46,6 +46,8 @@ newest prompt clears the composer. Attached context is not recalled.
 
 Choose **Diff colors** in Appearance settings to use red/green or blue/orange additions
 and deletions. The native iOS app offers the same choice in its thread appearance settings.
+On web and desktop, **Chat width** in Appearance settings lets messages and the composer
+grow past the default column on wide screens: **Comfortable** (default), **Wide**, or **Full**.
 In web and desktop review panels, use **Show changed-file tree** to navigate folders
 and files, and the copy control beside a file heading to copy its path.
 

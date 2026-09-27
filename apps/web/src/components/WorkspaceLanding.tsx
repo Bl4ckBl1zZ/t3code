@@ -4,6 +4,7 @@ import { PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";
+import { isElectron } from "../env";
 import { useNewThreadHandler, useRememberedNewThreadProjectRef } from "../hooks/useHandleNewThread";
 import { HermesSetup } from "./HermesSetup";
 import { useWorkEnvironment } from "../hooks/useWorkEnvironment";
@@ -20,6 +21,7 @@ import { sortScopedProjectsForSidebar } from "./Sidebar.logic";
 import { Button } from "./ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 import { SidebarInset } from "./ui/sidebar";
+import { WorkspacePageHeader } from "./WorkspacePageHeader";
 
 /**
  * Landing on the index route drops straight into a draft thread for the
@@ -187,6 +189,7 @@ export function HermesUnavailableHero({
   const [connectionId] = useHermesConnection(environment?.environmentId ?? null);
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {isElectron ? <WorkspacePageHeader electron /> : null}
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
           <EmptyTitle>Set up Hermes</EmptyTitle>
@@ -215,6 +218,7 @@ export function HermesUnavailableHero({
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {isElectron ? <WorkspacePageHeader electron /> : null}
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
           <EmptyTitle>Couldn’t start a new thread</EmptyTitle>
@@ -239,6 +243,8 @@ function NoProjectsHero() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+        {/* The desktop window only moves where CSS opts in, so keep a titlebar strip. */}
+        {isElectron ? <WorkspacePageHeader electron /> : null}
         <Empty size="hero" className="flex-1">
           <div className="w-full max-w-lg px-8 py-12">
             <EmptyHeader className="max-w-none">

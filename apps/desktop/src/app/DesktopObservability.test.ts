@@ -1,10 +1,13 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import * as DesktopConfig from "./DesktopConfig.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -61,6 +64,51 @@ const makeEnvironmentLayer = (baseDir: string, isDevelopment = true) =>
       ),
     ),
   );
+
+interface ExportedRequest {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: string;
+}
+
+/** Answers every export with a 200 and keeps what was posted for assertions. */
+const collectorLayer = (requests: Array<ExportedRequest>) =>
+  Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.sync(() => {
+        requests.push({
+          url: request.url,
+          headers: request.headers,
+          body:
+            request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+        });
+        return HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }));
+      }),
+    ),
+  );
+
+const encodeObservabilitySettingsFile = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ observability: Schema.Record(Schema.String, Schema.String) }),
+  ),
+);
+
+const writeObservabilitySettings = Effect.fn(function* (
+  environmentLayer: ReturnType<typeof makeEnvironmentLayer>,
+  observability: Readonly<Record<string, string>>,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const { path, serverSettingsPath } = yield* Effect.gen(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    return environment;
+  }).pipe(Effect.provide(environmentLayer));
+  yield* fileSystem.makeDirectory(path.dirname(serverSettingsPath), { recursive: true });
+  yield* fileSystem.writeFileString(
+    serverSettingsPath,
+    encodeObservabilitySettingsFile({ observability }),
+  );
+});
 
 describe("DesktopObservability", () => {
   it("advances a retained output offset instead of repeatedly copying a full head chunk", () => {
@@ -328,4 +376,93 @@ describe("DesktopObservability", () => {
       Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici)),
     ),
   );
+
+  it.effect("exports traces to an OTEL endpoint over Settings, with its own headers", () => {
+    const requests: Array<ExportedRequest> = [];
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-observability-test-",
+      });
+      const environmentLayer = makeEnvironmentLayer(baseDir);
+      yield* writeObservabilitySettings(environmentLayer, {
+        otlpTracesUrl: "https://settings.example.com/v1/traces",
+      });
+
+      yield* Effect.scoped(
+        Effect.void.pipe(
+          Effect.withSpan("desktop-otel-export-test"),
+          Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(environmentLayer))),
+        ),
+      );
+
+      assert.deepEqual(
+        requests.map((request) => request.url),
+        ["https://collector.example.com/v1/traces"],
+      );
+      assert.include(requests[0]?.body ?? "", "desktop-otel-export-test");
+      assert.strictEqual(requests[0]?.headers["x-otel"], "desktop");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          collectorLayer(requests),
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+                OTEL_EXPORTER_OTLP_HEADERS: "x-otel=desktop",
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps its service name while OTEL resource attributes add dimensions", () => {
+    const requests: Array<ExportedRequest> = [];
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-observability-test-",
+      });
+      const environmentLayer = makeEnvironmentLayer(baseDir);
+      yield* writeObservabilitySettings(environmentLayer, {
+        otlpTracesUrl: "https://collector.example.com/v1/traces",
+      });
+
+      yield* Effect.scoped(
+        Effect.void.pipe(
+          Effect.withSpan("desktop-service-name-test"),
+          Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(environmentLayer))),
+        ),
+      );
+
+      assert.lengthOf(requests, 1);
+      const body = requests[0]?.body ?? "";
+      assert.include(body, '"stringValue":"t3code-desktop"');
+      assert.include(body, "deployment.environment.name");
+      assert.include(body, '"key":"service.namespace","value":{"stringValue":"t3code"}');
+      assert.notInclude(body, "renamed");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          collectorLayer(requests),
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                OTEL_SERVICE_NAME: "renamed",
+                OTEL_RESOURCE_ATTRIBUTES:
+                  "service.name=renamed,service.namespace=renamed,deployment.environment.name=development",
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+  });
 });

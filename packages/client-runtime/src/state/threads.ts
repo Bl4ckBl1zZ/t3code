@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type OrchestrationV2ShellThreadStatus,
   type OrchestrationV2ThreadDetailSnapshot,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadStreamItem,
@@ -47,10 +48,16 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
     : "Could not synchronize the thread.";
 }
 
+/**
+ * A preparing, starting or running run is mid-turn. Its projection can change
+ * many times per second, so the disk cache waits for it to settle.
+ */
+export function isThreadRunInFlight(status: OrchestrationV2ShellThreadStatus): boolean {
+  return status === "preparing" || status === "starting" || status === "running";
+}
+
 function shouldPersistThread(thread: OrchestrationV2ThreadProjection): boolean {
-  return !thread.runs.some(
-    (run) => run.status === "preparing" || run.status === "starting" || run.status === "running",
-  );
+  return !thread.runs.some((run) => isThreadRunInFlight(run.status));
 }
 
 export interface EnvironmentThreadStateOptions {

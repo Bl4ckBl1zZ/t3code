@@ -159,6 +159,9 @@ a stack is not finished until every visible linked request is terminal. A merge 
 your latest engagement does not settle resumed work again. Manually reopen any settled thread to
 bring it back to the active list. Automatic settlement retains its pin and ordering metadata.
 
+Settling a thread, by hand or automatically, also closes its terminals that wait at an idle prompt,
+and keeps their output. A terminal that runs a command, such as a dev server, stays open.
+
 To keep one thread out of **Settled** no matter how long it sits idle, open its menu, choose
 **Auto-settle behavior**, and pick **Disabled**. On iOS, long-press the thread on Home to open the
 menu. The current option is checked. Pick **Enabled** to return to the usual rules. Manual settle,

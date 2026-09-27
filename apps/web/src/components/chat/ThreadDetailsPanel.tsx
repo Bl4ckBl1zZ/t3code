@@ -69,7 +69,8 @@ export interface ThreadDetailsPanelProps {
   availableEnvironments: readonly EnvironmentOption[];
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
   onEnvModeChange: (mode: EnvMode) => void;
-  effectiveEnvModeOverride?: EnvMode;
+  /** The thread's env mode as ChatView resolves it. */
+  envMode: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
@@ -135,9 +136,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     onEnvModeChange: props.onEnvModeChange,
     startFromOrigin: props.startFromOrigin,
     onStartFromOriginChange: props.onStartFromOriginChange,
-    ...(props.effectiveEnvModeOverride
-      ? { effectiveEnvModeOverride: props.effectiveEnvModeOverride }
-      : {}),
+    envMode: props.envMode,
     ...(props.activeThreadBranchOverride !== undefined
       ? { activeThreadBranchOverride: props.activeThreadBranchOverride }
       : {}),

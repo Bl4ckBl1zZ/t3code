@@ -66,6 +66,7 @@ function baseProps(): ThreadDetailsPanelProps {
     isServerThread: true,
     isProjectlessConversation: false,
     envLocked: false,
+    envMode: "local",
     availableEnvironments: [],
     onEnvironmentChange: vi.fn(),
     onEnvModeChange: vi.fn(),

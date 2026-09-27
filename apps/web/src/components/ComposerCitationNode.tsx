@@ -16,7 +16,12 @@ import {
   type SerializedLexicalNode,
   type Spread,
 } from "lexical";
-import { createContext, use, type ReactElement } from "react";
+import {
+  createContext,
+  use,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+} from "react";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
@@ -114,6 +119,18 @@ function ComposerCitationDecorator(props: { citation: AssistantCitation; nodeKey
     );
     editor.getRootElement()?.focus({ preventScroll: true });
   };
+  // Put the caret right after the chip so Enter sends and typing continues the prompt.
+  const onRestoreFocus = () => {
+    if (!editor.isEditable()) return;
+    editor.update(
+      () => {
+        const node = $getNodeByKey(props.nodeKey);
+        if (node instanceof ComposerCitationNode && node.isAttached()) node.selectNext();
+      },
+      { discrete: true },
+    );
+    editor.getRootElement()?.focus({ preventScroll: true });
+  };
 
   return (
     <span
@@ -121,6 +138,23 @@ function ComposerCitationDecorator(props: { citation: AssistantCitation; nodeKey
       contentEditable={false}
       spellCheck={false}
       data-composer-citation-chip="true"
+      onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
+        // Tab from the comment button returns to the caret after the chip.
+        if (
+          !editor.isEditable() ||
+          event.key !== "Tab" ||
+          event.shiftKey ||
+          event.altKey ||
+          event.metaKey ||
+          event.ctrlKey ||
+          !(event.target instanceof HTMLElement) ||
+          event.target.dataset.citationCommentTrigger === undefined
+        ) {
+          return;
+        }
+        event.preventDefault();
+        onRestoreFocus();
+      }}
     >
       <AssistantCitationChip
         citation={props.citation}
@@ -138,6 +172,7 @@ function ComposerCitationDecorator(props: { citation: AssistantCitation; nodeKey
             commentContext.onSubmitAndSend();
             return true;
           },
+          onRestoreFocus,
         }}
         onRemove={onRemove}
       />

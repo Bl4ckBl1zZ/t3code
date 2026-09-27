@@ -304,6 +304,8 @@ export const executorLayer: Layer.Layer<
                   }),
               ),
             );
+          case "terminal.close-idle":
+            return resourceCleanup.closeIdleTerminals(effect.threadId);
           case "attachment.cleanup":
             return resourceCleanup
               .cleanupAttachments({

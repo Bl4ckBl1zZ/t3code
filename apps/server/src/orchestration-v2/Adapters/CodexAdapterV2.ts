@@ -70,8 +70,8 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import {
-  codexDefaultModeDeveloperInstructions,
-  codexPlanModeDeveloperInstructions,
+  buildCodexAdditionalContext,
+  codexModeDeveloperInstructions,
 } from "../../provider/CodexDeveloperInstructions.ts";
 import {
   materializeCodexShadowHome,
@@ -603,6 +603,9 @@ const decodeTurnReasoningEffort = Schema.decodeUnknownEffect(
 const CodexTurnStartParamsWithCollaborationMode = CodexSchema.V2TurnStartParams.pipe(
   Schema.fieldsAssign({
     collaborationMode: Schema.optionalKey(CodexSchema.ClientRequest__CollaborationMode),
+    additionalContext: Schema.optionalKey(
+      Schema.Record(Schema.String, CodexSchema.V2TurnStartParams__AdditionalContextEntry),
+    ),
   }),
 );
 type CodexTurnStartParamsWithCollaborationMode =
@@ -664,8 +667,7 @@ export function buildCodexTurnStartParams(input: {
   /**
    * Whether the thread's MCP credential grants the `preview` capability. False
    * when the user has withheld agent browser access, in which case the browser
-   * block is dropped from the developer instructions while the orchestration
-   * block stays.
+   * block is dropped from the T3 context while the orchestration block stays.
    */
   readonly hasBrowserTools?: boolean;
 }) {
@@ -686,13 +688,16 @@ export function buildCodexTurnStartParams(input: {
     const effort =
       selectedEffort === undefined ? undefined : yield* decodeTurnReasoningEffort(selectedEffort);
     const serviceTier = getCodexServiceTierOptionValue(input.modelSelection);
-    const browserToolsAvailable = input.hasT3Mcp === true && input.hasBrowserTools !== false;
+    // The T3 blocks ride `additionalContext`, not the mode prompt: newer models'
+    // catalogs override Default mode's `developer_instructions`.
     const developerInstructions =
       input.hasT3Mcp !== true
         ? undefined
-        : input.runtimePolicy.interactionMode === "plan"
-          ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
-          : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
+        : codexModeDeveloperInstructions(input.runtimePolicy.interactionMode);
+    const additionalContext =
+      input.hasT3Mcp !== true
+        ? undefined
+        : buildCodexAdditionalContext(input.hasBrowserTools !== false);
     const collaborationMode: CodexSchema.ClientRequest__CollaborationMode | undefined =
       input.runtimePolicy.interactionMode !== "plan" && developerInstructions === undefined
         ? undefined
@@ -720,6 +725,7 @@ export function buildCodexTurnStartParams(input: {
       ...(effort === undefined ? {} : { effort }),
       ...(serviceTier === undefined ? {} : { serviceTier }),
       ...(collaborationMode === undefined ? {} : { collaborationMode }),
+      ...(additionalContext === undefined ? {} : { additionalContext }),
     });
   });
 }
@@ -1602,6 +1608,13 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         const mcpRequestSequence = yield* Ref.make(0);
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
         const pendingRootTurns = yield* Ref.make(new Map<string, ProviderAdapterV2TurnInput>());
+        /** The latest `turn/start.additionalContext` per native root thread. */
+        const lastAdditionalContext = yield* Ref.make(
+          new Map<
+            string,
+            NonNullable<CodexTurnStartParamsWithCollaborationMode["additionalContext"]>
+          >(),
+        );
         const turnWaiters = yield* Ref.make(new Map<string, Deferred.Deferred<void, never>>());
         const subagentThreads = yield* Ref.make(new Map<string, CodexSubagentThreadContext>());
         const pendingSubagentTurns = yield* Ref.make(
@@ -3856,6 +3869,38 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
+        /**
+         * Compaction rebuilds history from user messages and Codex's own
+         * context, which drops the `additionalContext` messages. Codex only
+         * resends an entry when its value changes, so without this the T3
+         * context would stay lost until it did. Forked because notification
+         * handlers run on the transport's read loop, which also reads the
+         * response.
+         */
+        const sessionScope = yield* Effect.scope;
+        const restoreAdditionalContext = (threadId: string) =>
+          Effect.gen(function* () {
+            const context = (yield* Ref.get(lastAdditionalContext)).get(threadId);
+            if (context === undefined) return;
+            yield* client.request("thread/inject_items", {
+              threadId,
+              items: Object.entries(context).map(([key, entry]) => ({
+                type: "message",
+                role: "developer",
+                content: [{ type: "input_text", text: `<${key}>${entry.value}</${key}>` }],
+              })),
+            });
+          }).pipe(
+            Effect.timeout("10 seconds"),
+            Effect.catch((cause) =>
+              Effect.logWarning("orchestration-v2.codex-additional-context-restore-failed", {
+                cause,
+              }),
+            ),
+            Effect.forkIn(sessionScope),
+            Effect.asVoid,
+          );
+
         yield* client.handleServerNotification("item/completed", (payload) =>
           Effect.gen(function* () {
             const resolved = yield* resolveItemEventContext(payload.turnId);
@@ -4013,6 +4058,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             // Codex reports the boundary and nothing else — no token counts —
             // so the row is the marker alone. Same divider as Claude's.
             if (payload.item.type === "contextCompaction") {
+              if (context.subagent === null) {
+                yield* restoreAdditionalContext(payload.threadId);
+              }
               const occurredAt = yield* DateTime.now;
               const nativeItemId = payload.item.id;
               const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
@@ -5057,6 +5105,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               yield* Ref.update(pendingRootTurns, (current) => {
                 const updated = new Map(current);
                 updated.set(threadId, turnInput);
+                return updated;
+              });
+              yield* Ref.update(lastAdditionalContext, (current) => {
+                const updated = new Map(current);
+                if (turnStartParams.additionalContext === undefined) updated.delete(threadId);
+                else updated.set(threadId, turnStartParams.additionalContext);
                 return updated;
               });
               const started = yield* client.request("turn/start", turnStartParams);
