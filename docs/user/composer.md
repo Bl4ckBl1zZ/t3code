@@ -267,6 +267,10 @@ Completed web conversations keep the final response visible. Expand **Worked for
 interim responses and completed tools. Subagents, forks, threads the agent created and
 commands still running remain visible outside that fold.
 
+When a turn starts several subagents in a row, the web timeline shows them as one card that counts
+how many are working, done or failed and how long the group has run. Expand it to see each
+subagent; hover one for its model, status and progress.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. Their composer is replaced by the subagent's status.
 
