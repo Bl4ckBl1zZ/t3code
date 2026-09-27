@@ -1,7 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import { Clock3Icon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  EnvironmentId,
   ModelSelection,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
@@ -232,7 +233,26 @@ function statusVariant(status: ScheduledTask["lastRunStatus"]) {
   return "outline";
 }
 
-export function ScheduledTasksSettings() {
+/** Route search for deep links such as a thread's "Edit automation" action. */
+export function validateScheduledTasksSearch(raw: Record<string, unknown>): {
+  readonly environmentId?: EnvironmentId;
+  readonly taskId?: ScheduledTaskId;
+} {
+  return {
+    ...(typeof raw.environmentId === "string" && raw.environmentId.trim()
+      ? { environmentId: raw.environmentId as EnvironmentId }
+      : {}),
+    ...(typeof raw.taskId === "string" && raw.taskId.trim()
+      ? { taskId: raw.taskId as ScheduledTaskId }
+      : {}),
+  };
+}
+
+/** Opens the editor for `taskId` once it loads, when it belongs to the primary environment. */
+export function ScheduledTasksSettings(props: {
+  readonly environmentId?: EnvironmentId | undefined;
+  readonly taskId?: ScheduledTaskId | undefined;
+}) {
   useRelativeTimeTick(15_000);
   const environment = usePrimaryEnvironment();
   const projects = useProjects();
@@ -304,6 +324,18 @@ export function ScheduledTasksSettings() {
     setDraft(taskToDraft(task));
     setDialogOpen(true);
   }, []);
+
+  const openedLinkedTaskRef = useRef<string | null>(null);
+  const linkedTask =
+    props.taskId === undefined ||
+    (props.environmentId !== undefined && props.environmentId !== environment?.environmentId)
+      ? undefined
+      : tasks.find((task) => task.id === props.taskId);
+  useEffect(() => {
+    if (linkedTask === undefined || openedLinkedTaskRef.current === linkedTask.id) return;
+    openedLinkedTaskRef.current = linkedTask.id;
+    openForEdit(linkedTask);
+  }, [linkedTask, openForEdit]);
 
   const reportFailure = (title: string, error: unknown) => {
     toastManager.add(
