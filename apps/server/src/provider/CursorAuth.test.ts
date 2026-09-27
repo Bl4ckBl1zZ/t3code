@@ -116,6 +116,33 @@ it.layer(NodeServices.layer)("CursorAuth", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("exposes the browser sign-in as a shared-flow interaction for its owner only", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      expect(harness.auth.controller.credentialBinding).toEqual({
+        owner: "t3",
+        key: `cursor:${instanceId}`,
+      });
+      expect(yield* harness.auth.controller.isChangingCredentials!).toBe(false);
+      const starting = yield* harness.auth.controller.start(owner);
+      const waiting = yield* phase(harness.auth, "waiting");
+      expect(yield* harness.auth.controller.isChangingCredentials!).toBe(true);
+      expect(waiting.credentialOwner).toBe("t3");
+      expect(waiting.methods?.map((method) => method.id)).toEqual(["browser"]);
+      expect(waiting.interaction).toEqual({
+        type: "browser",
+        id: starting.flowId,
+        url: authorizationUrl,
+        requiresConsent: false,
+      });
+      const observed = yield* phase(harness.auth, "waiting", otherOwner);
+      expect(observed.interaction).toBeNull();
+      expect(observed.authorizationUrl).toBeNull();
+      yield* Effect.sync(() => harness.complete.resolve());
+      yield* phase(harness.auth, "succeeded");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("completes a remote browser login, saves its key and refreshes provider status", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

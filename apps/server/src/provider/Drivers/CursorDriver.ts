@@ -122,6 +122,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         enabled,
         ...(processEnv.CURSOR_API_KEY ? { apiKey: processEnv.CURSOR_API_KEY } : {}),
         store: credentials.store,
+        credentialBinding: credentials.binding,
         onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
           snapshot.refresh.pipe(
             Effect.flatMap((provider) =>
