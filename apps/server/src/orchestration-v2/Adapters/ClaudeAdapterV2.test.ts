@@ -2664,6 +2664,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         let debrisYields = 0;
         yield* awaitUntil(() => debrisYields++ >= 50, "zero-turn debris consumed");
+        // Debris never settles the turn, so Stop closes once the grace ends.
+        yield* TestClock.adjust("3 seconds");
         yield* Deferred.succeed(closeGate, undefined);
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
         assert.lengthOf(harness.terminalEvents(), 1);
@@ -2673,6 +2675,103 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.type === "message.updated" && event.message.text === staleText,
           ),
         );
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("Stop lets Claude abort the turn before closing the query", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const interruptSent = yield* Deferred.make<void>();
+        let closes = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Deferred.succeed(interruptSent, undefined),
+          close: (sdkMessages) =>
+            Effect.sync(() => {
+              closes++;
+            }).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+        });
+        const idAllocator = yield* IdAllocatorV2;
+        const attemptId = RunAttemptId.make("attempt-claude-interrupt-abort-first");
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: CLAUDE_PROVIDER,
+          nativeTurnId: `turn:${attemptId}`,
+        });
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId,
+            text: "Stop before you answer.",
+            attachments: [],
+          }),
+        );
+        const stop = yield* harness.runtime
+          .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(interruptSent);
+        yield* TestClock.adjust("2 seconds");
+        assert.equal(closes, 0, "Stop must wait for Claude to abort the turn");
+        // Claude's own abort path answers the interrupt with an aborted result.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000118",
+            result: "",
+            subtype: "error_during_execution",
+            errors: ["Error: Request was aborted."],
+          }),
+        );
+        yield* Fiber.join(stop);
+
+        assert.equal(closes, 1);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("Stop closes the query when Claude never aborts the turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const interruptSent = yield* Deferred.make<void>();
+        let closes = 0;
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Deferred.succeed(interruptSent, undefined),
+          close: (sdkMessages) =>
+            Effect.sync(() => {
+              closes++;
+            }).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+        });
+        const idAllocator = yield* IdAllocatorV2;
+        const attemptId = RunAttemptId.make("attempt-claude-interrupt-no-abort");
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: CLAUDE_PROVIDER,
+          nativeTurnId: `turn:${attemptId}`,
+        });
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId,
+            text: "Stop this task.",
+            attachments: [],
+          }),
+        );
+        const stop = yield* harness.runtime
+          .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(interruptSent);
+        yield* TestClock.adjust("3 seconds");
+        yield* Fiber.join(stop);
+
+        assert.equal(closes, 1);
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );
