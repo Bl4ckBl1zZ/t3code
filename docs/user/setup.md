@@ -18,7 +18,8 @@ means some history may not appear.
 Importing adds the selected projects and their visible conversation history. Imported
 conversations appear in **Settled** and can be resumed. Retrying an import does not duplicate
 completed conversations or replace history you have already continued in T3 Code. If some
-history cannot be imported, retry or continue without it.
+history cannot be imported, web and desktop finish setup anyway and show how many
+conversations were left out; open setup again to retry. On iOS, retry or continue without it.
 
 Setup is available on web, desktop and the native iOS app. Older connected servers may need
 an update before they support history import or account-specific setup terminals.

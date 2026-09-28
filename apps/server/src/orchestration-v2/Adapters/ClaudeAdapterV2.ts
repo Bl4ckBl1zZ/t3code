@@ -1805,6 +1805,9 @@ const BACKGROUND_TAIL_INTERVAL = "1500 millis" as const;
  */
 const SILENT_CONTINUATION_TIMEOUT = "60 seconds" as const;
 
+/** How long Stop waits for Claude to abort a turn before closing its query. */
+const CLAUDE_INTERRUPT_GRACE = "3 seconds" as const;
+
 function claudeNativeToolOutputFromToolResult(
   toolResult: ClaudeToolResultContentBlock,
 ): ClaudeNativeToolOutput {
@@ -2426,6 +2429,8 @@ interface ActiveClaudeTurnContext {
   // Root frames seen before the echo; held only when the CLI echoes early.
   gatedFramesBeforeEcho: number;
   readonly heldRootFrames: Array<SDKMessage>;
+  /** Succeeds once the turn is finalized; Stop waits on it before closing the query. */
+  readonly settled: Deferred.Deferred<void>;
 }
 
 interface ActiveClaudeProviderRetry {
@@ -4318,6 +4323,7 @@ export function makeClaudeAdapterV2(
             next.delete(input.context.providerTurnId);
             return next;
           });
+          yield* Deferred.succeed(input.context.settled, undefined);
         });
 
         const emitAssistantTextArtifacts = Effect.fnUntraced(function* (input: {
@@ -5702,6 +5708,7 @@ export function makeClaudeAdapterV2(
               promptEcho: isContinuationTurn ? "confirmed" : "pending",
               gatedFramesBeforeEcho: 0,
               heldRootFrames: [],
+              settled: yield* Deferred.make<void>(),
             };
             const userMessage = isContinuationTurn
               ? null
@@ -5826,6 +5833,13 @@ export function makeClaudeAdapterV2(
               return next;
             });
             yield* existing.query.interrupt;
+            // Let Claude abort the turn through its own path before the close
+            // kills the process, so the prompt reaches the transcript. A first
+            // turn killed before Claude writes it leaves later turns resuming a
+            // session Claude never saved ("No conversation found").
+            yield* Deferred.await(currentTurn.settled).pipe(
+              Effect.timeoutOption(CLAUDE_INTERRUPT_GRACE),
+            );
             yield* existing.query.close.pipe(Effect.ignore);
             const closed = yield* Deferred.await(existing.closed).pipe(
               Effect.timeoutOption("10 seconds"),
