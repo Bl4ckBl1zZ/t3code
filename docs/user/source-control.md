@@ -8,7 +8,7 @@ T3 Code works with the platforms your team already uses:
 
 - **GitHub** – Pull requests, repository creation, and clone integration
 - **GitLab** – Merge requests, repository publishing, and hosted clones
-- **Bitbucket** – Pull request workflows (via API token authentication)
+- **Bitbucket** – Pull request workflows (via access or API token authentication)
 - **Azure DevOps** – Pull request support for Microsoft-hosted repositories
 
 ## What You Can Do
@@ -100,26 +100,31 @@ You can now clone, publish, and create pull requests.
 
 ### For Bitbucket
 
-Bitbucket uses tokens instead of a CLI tool. Two options, both set as environment variables on the
-machine running T3 Code.
+Bitbucket uses tokens instead of a CLI tool. On web or desktop, open **Settings → Source Control**,
+expand **Bitbucket**, and choose how to sign in:
 
-Recommended, a Bitbucket access token:
+- **Access token**: a token created for one repository, project, or workspace. It can only reach
+  what it was created for.
+- **API token**: an Atlassian API token for your account, used with your account email. It can
+  reach every repository you can. Give it read/write access to repositories and pull requests, plus
+  user read access (`read:user:bitbucket`, used to verify the connection).
+
+Choose **Save**. The change applies right away and replaces any credential saved with the other
+method. Credentials are saved on the environment's server, so select a remote environment to
+configure it. Saved tokens can't be viewed again; enter a new one to replace it, or choose
+**Remove**.
+
+If no credentials are saved, T3 Code falls back to these environment variables on the machine
+running T3 Code. Restart T3 Code after changing them:
 
 ```bash
 export T3CODE_BITBUCKET_ACCESS_TOKEN="your-access-token"
-```
-
-Or an Atlassian account email plus API token, with read/write access to pull requests and
-repositories, plus read access to your user account (`read:user:bitbucket`, used to verify the
-connection):
-
-```bash
+# or
 export T3CODE_BITBUCKET_EMAIL="you@example.com"
 export T3CODE_BITBUCKET_API_TOKEN="your-token"
 ```
 
-If both are set, the access token wins. Restart T3 Code and verify the connection in **Source
-Control settings**.
+If both kinds are set, the access token wins. Saved credentials always win over the variables.
 
 ### For Azure DevOps
 
@@ -148,7 +153,7 @@ Control settings**.
 
 - **Provider shows "Not authenticated"** – Run the login command for that provider (e.g., `gh auth login`) in a terminal on the server, then rescan in Settings
 - **GitHub says it could not verify sign-in status** – T3 Code needs GitHub CLI 2.81.0 or newer to check sign-in status. Update `gh` (e.g., `brew upgrade gh`), then rescan
-- **Bitbucket not connecting** – Double-check your environment variables are set in the correct shell profile and the server was restarted
+- **Bitbucket not connecting** – Check the credentials saved in **Settings → Source Control**. If you use environment variables instead, make sure they are set in the correct shell profile and the server was restarted
 - **Can't push to a remote** – Verify your Git remote URL matches the provider you've authenticated with (SSH vs HTTPS remotes may need different credentials)
 
 **Need more help?** Check your provider's CLI documentation:

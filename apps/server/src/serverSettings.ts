@@ -136,15 +136,23 @@ function providerEnvironmentSecretName(input: {
 }
 
 /**
- * On disk the hub key is replaced by this marker and the real value lives in
- * the secret store, mirroring provider environment secrets. A client that
- * sends the marker back means "keep what you have".
+ * On disk a hub key or Bitbucket token is replaced by this marker and the
+ * real value lives in the secret store, mirroring provider environment
+ * secrets. A client that sends the marker back means "keep what you have".
  */
-const USAGE_LIMIT_SOURCE_KEY_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
+const SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
 
 export function usageLimitSourceSecretName(sourceId: string): string {
   return `usage-limit-source-${Buffer.from(sourceId, "utf8").toString("base64url")}`;
 }
+
+const BITBUCKET_SECRET_NAMES = {
+  accessToken: "bitbucket-access-token",
+  apiToken: "bitbucket-api-token",
+} as const;
+const BITBUCKET_SECRET_FIELDS = ["accessToken", "apiToken"] as const;
+
+const redactSecret = (value: string) => (value.length > 0 ? SECRET_REDACTED : "");
 
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
@@ -178,11 +186,16 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       id,
       {
         ...source,
-        managementKey: source.managementKey.length > 0 ? USAGE_LIMIT_SOURCE_KEY_REDACTED : "",
+        managementKey: redactSecret(source.managementKey),
       },
     ]),
   );
-  return { ...settings, providerInstances, usageLimitSources };
+  const bitbucket = {
+    ...settings.bitbucket,
+    accessToken: redactSecret(settings.bitbucket.accessToken),
+    apiToken: redactSecret(settings.bitbucket.apiToken),
+  };
+  return { ...settings, providerInstances, usageLimitSources, bitbucket };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -436,9 +449,63 @@ const make = Effect.gen(function* () {
     ),
   );
 
+  const writeSettingsAtomically = Effect.fnUntraced(
+    function* (settings: ServerSettings) {
+      const sparseSettingsJson = yield* encodeServerSettingsJson(
+        stripDefaultServerSettings(settings, PERSISTED_SERVER_SETTINGS_DEFAULTS) ?? {},
+      );
+
+      return yield* writeFileStringAtomically({
+        filePath: settingsPath,
+        contents: `${sparseSettingsJson}\n`,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, pathService),
+      );
+    },
+    Effect.mapError(
+      (cause) =>
+        new ServerSettingsError({
+          settingsPath,
+          operation: "write-file",
+          cause,
+        }),
+    ),
+  );
+
+  /**
+   * Moves Bitbucket tokens hand-edited into settings.json into the secret store as they load,
+   * so plaintext does not stay on disk. If the store is unavailable, the token keeps working
+   * from the file and the move is retried on the next load.
+   */
+  const moveInlineBitbucketTokens = (settings: ServerSettings) =>
+    Effect.gen(function* () {
+      const bitbucket = { ...settings.bitbucket };
+      let moved = false;
+      for (const field of BITBUCKET_SECRET_FIELDS) {
+        const value = bitbucket[field];
+        if (value.length === 0 || value === SECRET_REDACTED) continue;
+        const stored = yield* secretStore
+          .set(BITBUCKET_SECRET_NAMES[field], textEncoder.encode(value))
+          .pipe(
+            Effect.as(true),
+            Effect.catch(() =>
+              Effect.logWarning("failed to move a Bitbucket token into the secret store", {
+                field,
+              }).pipe(Effect.as(false)),
+            ),
+          );
+        if (!stored) continue;
+        bitbucket[field] = SECRET_REDACTED;
+        moved = true;
+      }
+      return moved ? { ...settings, bitbucket } : settings;
+    });
+
   const loadSettingsFromDisk = Effect.gen(function* () {
     let settings = DEFAULT_SERVER_SETTINGS;
     let persisted: typeof PersistedOptionalProviderSettings.Type = {};
+    let settingsFileTrusted = false;
 
     if (yield* readConfigExists) {
       const raw = yield* readRawConfig;
@@ -458,6 +525,7 @@ const make = Effect.gen(function* () {
         }
       } else {
         settings = decoded.value;
+        settingsFileTrusted = true;
       }
     }
 
@@ -487,9 +555,15 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    return foldProviderInstanceEnabledFlags(
+    const loaded = foldProviderInstanceEnabledFlags(
       restoreUsedProviders(settings, persisted, providerHistory),
     );
+    // Only rewrite a file that decoded cleanly; an untrusted one stays for the user to repair.
+    const migrated = settingsFileTrusted ? yield* moveInlineBitbucketTokens(loaded) : loaded;
+    if (migrated !== loaded) {
+      yield* writeSettingsAtomically(migrated);
+    }
+    return migrated;
   });
 
   const settingsCache = yield* Cache.make<typeof cacheKey, ServerSettings, ServerSettingsError>({
@@ -540,7 +614,7 @@ const make = Effect.gen(function* () {
       }
       const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
       for (const [sourceId, source] of Object.entries(settings.usageLimitSources)) {
-        if (source.managementKey !== USAGE_LIMIT_SOURCE_KEY_REDACTED) {
+        if (source.managementKey !== SECRET_REDACTED) {
           usageLimitSources[sourceId] = source;
           continue;
         }
@@ -556,10 +630,23 @@ const make = Effect.gen(function* () {
           managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
         };
       }
+      const bitbucket = { ...settings.bitbucket };
+      for (const field of BITBUCKET_SECRET_FIELDS) {
+        if (bitbucket[field] !== SECRET_REDACTED) continue;
+        const secret = yield* secretStore
+          .get(BITBUCKET_SECRET_NAMES[field])
+          .pipe(
+            Effect.mapError(
+              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+            ),
+          );
+        bitbucket[field] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
+      }
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        bitbucket,
       };
     });
 
@@ -701,13 +788,13 @@ const make = Effect.gen(function* () {
           current.usageLimitSources[sourceId as keyof typeof current.usageLimitSources]
             ?.managementKey;
         const source =
-          submitted.managementKey === USAGE_LIMIT_SOURCE_KEY_REDACTED &&
+          submitted.managementKey === SECRET_REDACTED &&
           previousKey &&
-          previousKey !== USAGE_LIMIT_SOURCE_KEY_REDACTED
+          previousKey !== SECRET_REDACTED
             ? { ...submitted, managementKey: previousKey }
             : submitted;
         const secretName = usageLimitSourceSecretName(sourceId);
-        if (source.managementKey === USAGE_LIMIT_SOURCE_KEY_REDACTED) {
+        if (source.managementKey === SECRET_REDACTED) {
           usageLimitSources[sourceId] = source;
           continue;
         }
@@ -721,7 +808,7 @@ const make = Effect.gen(function* () {
           secretName,
           value: textEncoder.encode(source.managementKey),
         });
-        usageLimitSources[sourceId] = { ...source, managementKey: USAGE_LIMIT_SOURCE_KEY_REDACTED };
+        usageLimitSources[sourceId] = { ...source, managementKey: SECRET_REDACTED };
       }
       for (const sourceId of Object.keys(current.usageLimitSources)) {
         if (sourceId in next.usageLimitSources) continue;
@@ -732,11 +819,31 @@ const make = Effect.gen(function* () {
         });
       }
 
+      const bitbucket = { ...next.bitbucket };
+      for (const field of BITBUCKET_SECRET_FIELDS) {
+        let value = bitbucket[field];
+        if (value === SECRET_REDACTED) {
+          // The marker keeps what is saved. A plaintext value hand-edited into settings.json
+          // is not in the secret store yet, so move it there instead of dropping it.
+          const inline = current.bitbucket[field];
+          if (inline === SECRET_REDACTED || inline.length === 0) continue;
+          value = inline;
+        }
+        const secretName = BITBUCKET_SECRET_NAMES[field];
+        if (value.length === 0) {
+          changes.push({ kind: "remove", secretName, operation: "remove-secret" });
+          continue;
+        }
+        changes.push({ kind: "write", secretName, value: textEncoder.encode(value) });
+        bitbucket[field] = SECRET_REDACTED;
+      }
+
       return {
         settings: {
           ...next,
           providerInstances: providerInstances as ServerSettings["providerInstances"],
           usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+          bitbucket,
         },
         changes,
       };
@@ -863,30 +970,6 @@ const make = Effect.gen(function* () {
         return resolveTextGenerationProvider(materialized);
       }),
     );
-
-  const writeSettingsAtomically = Effect.fnUntraced(
-    function* (settings: ServerSettings) {
-      const sparseSettingsJson = yield* encodeServerSettingsJson(
-        stripDefaultServerSettings(settings, PERSISTED_SERVER_SETTINGS_DEFAULTS) ?? {},
-      );
-
-      return yield* writeFileStringAtomically({
-        filePath: settingsPath,
-        contents: `${sparseSettingsJson}\n`,
-      }).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, pathService),
-      );
-    },
-    Effect.mapError(
-      (cause) =>
-        new ServerSettingsError({
-          settingsPath,
-          operation: "write-file",
-          cause,
-        }),
-    ),
-  );
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {

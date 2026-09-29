@@ -124,6 +124,7 @@ import {
   supportsDesktopAppUpdate,
 } from "~/versionSkew";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+import { RemoveT3ConnectEnvironmentDialog } from "../clerk/RemoveT3ConnectEnvironmentDialog";
 import { useCloudLinkController } from "~/cloud/useCloudLinkController";
 import { authEnvironment } from "~/state/auth";
 import { environmentCatalog } from "~/connection/catalog";
@@ -1375,7 +1376,7 @@ type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
   removingEnvironmentId: EnvironmentId | null;
   onConnect: (environmentId: EnvironmentId) => void;
-  onRemove: (environmentId: EnvironmentId) => void;
+  onRemove: (environment: EnvironmentPresentation) => void;
 };
 
 function SavedBackendListRow({
@@ -1549,7 +1550,7 @@ function SavedBackendListRow({
                   size="xs"
                   variant="outline"
                   disabled={removingEnvironmentId === environmentId}
-                  onClick={() => void onRemove(environmentId)}
+                  onClick={() => void onRemove(environment)}
                 >
                   {removingEnvironmentId === environmentId ? "Removing…" : "Remove"}
                 </Button>
@@ -1559,7 +1560,7 @@ function SavedBackendListRow({
                 variant="outline"
                 disabled={isConnecting || removingEnvironmentId === environmentId}
                 onClick={() =>
-                  void (isConnected ? onRemove(environmentId) : onConnect(environmentId))
+                  void (isConnected ? onRemove(environment) : onConnect(environmentId))
                 }
               >
                 {isConnected
@@ -2353,8 +2354,9 @@ export function ConnectionsSettings() {
     [retryEnvironment],
   );
 
-  const handleRemoveSavedBackend = useCallback(
-    async (environmentId: EnvironmentId) => {
+  const removeSavedBackend = useCallback(
+    async (environment: EnvironmentPresentation) => {
+      const environmentId = environment.environmentId;
       setRemovingSavedEnvironmentId(environmentId);
       setSavedBackendError(null);
       const result = await removeEnvironment(environmentId);
@@ -2373,6 +2375,21 @@ export function ConnectionsSettings() {
       }
     },
     [removeEnvironment],
+  );
+
+  // Removing a T3 Connect environment here leaves its account registration, so
+  // it confirms first and points to where it can be deregistered.
+  const [pendingT3ConnectRemoval, setPendingT3ConnectRemoval] =
+    useState<EnvironmentPresentation | null>(null);
+  const handleRemoveSavedBackend = useCallback(
+    (environment: EnvironmentPresentation) => {
+      if (environment.relayManaged && hasCloudPublicConfig()) {
+        setPendingT3ConnectRemoval(environment);
+        return;
+      }
+      void removeSavedBackend(environment);
+    },
+    [removeSavedBackend],
   );
 
   const visibleDesktopPairingLinks = desktopPairingLinks;
@@ -3548,6 +3565,17 @@ export function ConnectionsSettings() {
           savedEnvironments={savedEnvironments}
         />
       </SettingsSection>
+      {hasCloudPublicConfig() ? (
+        <RemoveT3ConnectEnvironmentDialog
+          environmentLabel={pendingT3ConnectRemoval?.label ?? null}
+          onCancel={() => setPendingT3ConnectRemoval(null)}
+          onConfirm={() => {
+            if (!pendingT3ConnectRemoval) return;
+            setPendingT3ConnectRemoval(null);
+            void removeSavedBackend(pendingT3ConnectRemoval);
+          }}
+        />
+      ) : null}
       <LoadBalancingSettings environments={environments} />
     </SettingsPageContainer>
   );

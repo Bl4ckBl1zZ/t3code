@@ -469,6 +469,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["static semantic prefix custom prompt instructions feat fix refactor chore"],
   },
   {
+    id: "bitbucket-credentials",
+    title: "Bitbucket credentials",
+    to: "/settings/source-control",
+    searchTerms: ["bitbucket atlassian access token api token email credentials sign in"],
+  },
+  {
     id: "remote-environments",
     title: "Remote environments",
     to: "/settings/connections",

@@ -265,7 +265,8 @@ environment's T3 Connect access, remove any managed tunnel, and free its host sp
 Deregistration is an account action and does not need a connection to the environment, so it also
 works for a server that was wiped or is no longer reachable. Device-local connect and disconnect
 controls remain in **Settings** → **Connections** on web and desktop or **Settings** →
-**Environments** on mobile.
+**Environments** on mobile. Removing an environment there only forgets it on that device; it stays
+registered to your account until you deregister it.
 
 When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's tunnel after it stays
 offline for several minutes. The environment stays linked and keeps the same address. When the host

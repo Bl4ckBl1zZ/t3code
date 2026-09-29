@@ -215,7 +215,12 @@ const makeTestRunner = (
   manifest: ModelManifest.ModelManifestData = {
     version: 1,
     currentModels: {},
-    compatibility: [{ driver: CODEX_DRIVER, t3CodeRange: ">=0.0.38", ranges: [] }],
+    // Every updatable driver gets a synthetic policy, so bundled ranges never leak into these tests.
+    compatibility: [CODEX_DRIVER, OPENCODE_DRIVER].map((driver) => ({
+      driver,
+      t3CodeRange: ">=0.0.38",
+      ranges: [],
+    })),
   },
 ) =>
   Effect.service(ProviderMaintenanceRunner.ProviderMaintenanceRunner).pipe(

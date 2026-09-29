@@ -133,6 +133,11 @@
       "otlpTracesUrl": "",
       "otlpMetricsUrl": ""
     },
+    "bitbucket": {
+      "email": "",
+      "accessToken": "",
+      "apiToken": ""
+    },
     "hermesProactiveDefaultApplied": false,
     "projectFileBackfillApplied": false,
     "usageLimitSources": {},
