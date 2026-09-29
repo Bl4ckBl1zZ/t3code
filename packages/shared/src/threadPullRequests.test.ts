@@ -5,6 +5,7 @@ import {
   threadPullRequestSearchTerms,
   updateLinkedPullRequests,
 } from "./threadPullRequests.ts";
+import { legacyLinkedPullRequestOf } from "./threadPullRequestChains.ts";
 const link = (number: number, host = "github.com") => ({
   projectId: ProjectId.make("p"),
   repository: "owner/repo",
@@ -207,4 +208,29 @@ it("keeps Azure's short repository selector for legacy readers while canonicaliz
   expect(state.pullRequests[0]?.repository).toBe("org/project/_git/repo");
   expect(state.linkedPullRequest).toEqual(legacy);
   expect(state.linkedPullRequests).toEqual([legacy]);
+});
+
+describe("legacyLinkedPullRequestOf", () => {
+  it("does not route links for a local-path remote with no host or provider", () => {
+    const localIdentity = {
+      canonicalKey: "/tmp/r/remote",
+      displayName: "remote",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "/tmp/r/remote.git",
+      },
+    };
+    const githubLink = {
+      host: "github.com",
+      repository: "owner/repo",
+      number: 7,
+      url: "https://github.com/owner/repo/pull/7",
+      source: "manual" as const,
+      linkedAt: "2026-01-01T00:00:07.000Z",
+      snapshot: null,
+      stack: null,
+    };
+    expect(legacyLinkedPullRequestOf([githubLink], ProjectId.make("p"), localIdentity)).toBeNull();
+  });
 });

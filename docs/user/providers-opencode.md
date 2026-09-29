@@ -3,8 +3,9 @@
 T3 Code uses the OpenCode setup on the connected environment. With a remote environment, its
 OpenCode login and configuration apply, not the setup on your desktop or phone.
 
-T3 Code requires OpenCode 1.14.19 or newer. It checks the server version before it loads models or
-starts work. If the check fails, update OpenCode or fix the server URL and password, then refresh
+T3 Code requires OpenCode 1.14.19 or a later 1.x release. OpenCode 2.0 and newer time out while T3
+Code loads models, so the provider status marks them as broken and recommends downgrading to 1.14.19.
+T3 Code checks the server version before it loads models or starts work. If the check fails, update OpenCode or fix the server URL and password, then refresh
 the provider status. Reconnecting the client also runs the check again.
 
 ## Server authentication
