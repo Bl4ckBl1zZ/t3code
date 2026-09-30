@@ -12,6 +12,7 @@ import {
   rewriteMarkdownFileUriHref,
   shouldOpenMarkdownFileLinkInBrowserByDefault,
   shouldOpenMarkdownFileLinkInEditor,
+  workspaceRelativeFilePath,
 } from "./markdown-links";
 
 describe("isWindowsDrivePathHref", () => {
@@ -460,6 +461,27 @@ describe("resolveInlineCodeFileLinkMeta", () => {
     expect(resolveInlineCodeFileLinkMeta("src/**/*.ts", "/Users/julius/project")).toBeNull();
   });
 
+  it("ignores model ids and versions that look like file extensions", () => {
+    const cwd = "/Users/julius/project";
+    for (const source of [
+      "z-ai/glm-5.3",
+      "z-ai/glm-5.3:12",
+      "python/3.12",
+      "Qwen/Qwen2.5-Coder",
+      "meta-llama/Llama-3.1-8B",
+    ]) {
+      expect(resolveInlineCodeFileLinkMeta(source, cwd)).toBeNull();
+    }
+    for (const source of [
+      "share/man/ls.1",
+      "usr/lib/libfoo.so.1",
+      "vendor/jquery-3.6.0.min.js",
+      "./models/glm-5.3",
+    ]) {
+      expect(resolveInlineCodeFileLinkMeta(source, cwd)).not.toBeNull();
+    }
+  });
+
   it("ignores extension-less relative segments like git refs and directories", () => {
     expect(resolveInlineCodeFileLinkMeta("origin/main", "/Users/julius/project")).toBeNull();
     expect(resolveInlineCodeFileLinkMeta("apps/web", "/Users/julius/project")).toBeNull();
@@ -496,5 +518,26 @@ describe("directory paths with a trailing separator", () => {
   it("does not produce an empty label for the filesystem root", () => {
     const meta = resolveMarkdownFileLinkMeta("/tmp/", "/repo/project");
     expect(meta?.basename).not.toBe("");
+  });
+});
+
+describe("workspaceRelativeFilePath", () => {
+  it.each([
+    ["/repo/project", "/repo/project", "."],
+    ["/repo/project/", "/repo/project/", "."],
+    ["/", "/", "."],
+    ["C:/USERS/mike/project", "c:/users/MIKE/project", "."],
+    ["/repo/project/src/main.ts", "/repo/project", "src/main.ts"],
+    ["/repo/project-other/a.ts", "/repo/project", null],
+  ])("maps %s under %s to %s", (path, root, expected) => {
+    expect(workspaceRelativeFilePath(path, root)).toBe(expected);
+  });
+});
+
+it("routes the project-root code link to the workspace explorer", () => {
+  const cwd = "/Users/saphid/.t3/worktrees/ov2-standalone-20260918";
+  expect(resolveInlineCodeFileLinkMeta(cwd, cwd)).toMatchObject({
+    workspaceRelativePath: ".",
+    filePath: cwd,
   });
 });

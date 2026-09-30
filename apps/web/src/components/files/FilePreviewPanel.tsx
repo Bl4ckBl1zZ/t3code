@@ -71,6 +71,7 @@ import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRev
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import {
   isMarkdownPreviewFile,
+  resolveFilePreviewPath,
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
 } from "./filePreviewMode";
@@ -981,7 +982,7 @@ export default function FilePreviewPanel({
   environmentId,
   cwd,
   projectName,
-  relativePath,
+  relativePath: requestedPath,
   attachment,
   threadRef,
   composerDraftTarget,
@@ -994,6 +995,8 @@ export default function FilePreviewPanel({
   selectedFilePending = false,
   workspaceMutationId = null,
 }: FilePreviewPanelProps) {
+  const relativePath =
+    attachment === undefined ? resolveFilePreviewPath(requestedPath, cwd) : requestedPath;
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const supportsDocuments = config?.environment.capabilities.fileDocumentPreviews === true;
   const { resolvedTheme } = useTheme();
@@ -1020,7 +1023,7 @@ export default function FilePreviewPanel({
     environmentId,
     cwd,
     relativePath,
-    attachment === undefined && !isMedia && !isPdf,
+    attachment === undefined && relativePath !== null && !isMedia && !isPdf,
   );
   // A chat link cannot tell a folder from a file, so a folder arrives here as
   // a file surface and the read fails. Keep the breadcrumbs, drop the preview

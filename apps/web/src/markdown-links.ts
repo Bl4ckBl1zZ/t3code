@@ -225,6 +225,9 @@ export function resolveMarkdownFileLinkTarget(
 const INLINE_CODE_DISQUALIFIER_PATTERN = /[\s`]/;
 const PATH_SEPARATOR_PATTERN = /[\\/]/;
 const FILE_EXTENSION_PATTERN = /\.[A-Za-z0-9_-]+$/;
+// A final dot between digits marks a version or model id (`glm-5.3`,
+// `Qwen2.5-Coder`), not an extension. `ls.1` and `libfoo.so.1` stay files.
+const VERSION_SUFFIX_PATTERN = /\d\.\d[^.]*$/;
 const NUMERIC_DOTTED_PATTERN = /^\d+(?:\.\d+)+$/;
 const BARE_EXTENSIONLESS_POSITION_PATTERN = /^[A-Za-z0-9_-]+(?::\d+){1,2}$/;
 // Any `Name:digits` shape also matches `error:1`, `port:3000`, `TODO:12`, so
@@ -373,9 +376,9 @@ export function resolveInlineCodeFileLinkMeta(
     const withoutPosition = candidate.replace(POSITION_SUFFIX_PATTERN, "");
     const firstSegment = withoutPosition.split("/")[0] ?? withoutPosition;
     if (looksLikeHostname(firstSegment, hasPosition)) return null;
-    if (!hasPosition && !FILE_EXTENSION_PATTERN.test(basenameOfPath(withoutPosition))) {
-      return null;
-    }
+    const basename = basenameOfPath(withoutPosition);
+    if (VERSION_SUFFIX_PATTERN.test(basename)) return null;
+    if (!hasPosition && !FILE_EXTENSION_PATTERN.test(basename)) return null;
   }
 
   const resolved = resolveMarkdownFileLinkMeta(candidate, cwd);
@@ -403,7 +406,11 @@ function basenameOfPath(path: string): string {
   return separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1) : trimmed;
 }
 
-function workspaceRelativePath(path: string, workspaceRoot: string | undefined): string | null {
+/** The path inside the workspace, `.` for the workspace root itself, or null outside it. */
+export function workspaceRelativeFilePath(
+  path: string,
+  workspaceRoot: string | undefined,
+): string | null {
   if (!workspaceRoot) return null;
   const normalizedPath = normalizeWindowsDrivePath(path.replaceAll("\\", "/"));
   const normalizedRoot = normalizeWindowsDrivePath(workspaceRoot.replaceAll("\\", "/")).replace(
@@ -413,6 +420,7 @@ function workspaceRelativePath(path: string, workspaceRoot: string | undefined):
   const caseInsensitive = isWindowsAbsolutePath(normalizeWindowsDrivePath(workspaceRoot));
   const pathForCompare = caseInsensitive ? normalizedPath.toLowerCase() : normalizedPath;
   const rootForCompare = caseInsensitive ? normalizedRoot.toLowerCase() : normalizedRoot;
+  if (pathForCompare.replace(/\/+$/, "") === rootForCompare) return ".";
   if (!pathForCompare.startsWith(`${rootForCompare}/`)) return null;
   return normalizedPath.slice(normalizedRoot.length + 1);
 }
@@ -437,7 +445,7 @@ function buildFileLinkMetaFromTarget(targetPath: string, cwd?: string): Markdown
     filePath: path,
     targetPath,
     displayPath: formatWorkspaceRelativePath(targetPath, cwd),
-    workspaceRelativePath: workspaceRelativePath(path, cwd),
+    workspaceRelativePath: workspaceRelativeFilePath(path, cwd),
     basename: basenameOfPath(path),
     ...(lineNumber !== undefined ? { line: lineNumber } : {}),
     ...(columnNumber !== undefined ? { column: columnNumber } : {}),

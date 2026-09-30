@@ -1,4 +1,12 @@
+import { workspaceRelativeFilePath } from "~/markdown-links";
 import { isAbsolutePath } from "~/terminal-links";
+
+/** Resolve workspace links before choosing between the explorer and a file preview. */
+export function resolveFilePreviewPath(path: string | null, cwd: string): string | null {
+  if (path === null) return null;
+  return path === "." || workspaceRelativeFilePath(path, cwd) === "." ? null : path;
+}
+
 export const isMarkdownPreviewFile = (path: string): boolean => /\.(?:md|mdx)$/i.test(path);
 
 export function setMarkdownTaskChecked(
