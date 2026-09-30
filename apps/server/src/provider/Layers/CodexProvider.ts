@@ -74,6 +74,12 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 };
 
 const DEFAULT_SERVICE_TIER_ID = "default";
+
+/** Shorter copy for tiers whose catalog description wraps in the traits menu. */
+const SERVICE_TIER_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  ultrafast: "Even faster, more expensive",
+};
+
 function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
 }
@@ -83,8 +89,12 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
   if (account.type === "apiKey") return "OpenAI API Key";
   if (account.type === "amazonBedrock") return "Amazon Bedrock";
   if (account.type !== "chatgpt") return undefined;
+  return codexPlanLabel(account.planType);
+}
 
-  switch (account.planType) {
+/** Shared with usage-limit sources, which report the same `planType` slugs. */
+export function codexPlanLabel(planType: string | null | undefined): string | undefined {
+  switch (planType) {
     case "free":
       return "ChatGPT Free Subscription";
     case "go":
@@ -95,6 +105,8 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
       return "ChatGPT Pro 20x Subscription";
     case "prolite":
       return "ChatGPT Pro 5x Subscription";
+    case "promax":
+      return "ChatGPT Pro Max Subscription";
     case "team":
       return "ChatGPT Team Subscription";
     case "self_serve_business_prolite":
@@ -113,7 +125,6 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
     case "unknown":
       return "ChatGPT Subscription";
     default:
-      account.planType satisfies never;
       return undefined;
   }
 }
@@ -176,12 +187,15 @@ export function mapCodexModelCapabilities(
           label: "Standard",
           ...(defaultServiceTier === DEFAULT_SERVICE_TIER_ID ? { isDefault: true } : {}),
         },
-        ...serviceTiers.map((tier) => ({
-          id: tier.id,
-          label: tier.name,
-          ...(tier.description ? { description: tier.description } : {}),
-          ...(defaultServiceTier === tier.id ? { isDefault: true } : {}),
-        })),
+        ...serviceTiers.map((tier) => {
+          const description = SERVICE_TIER_DESCRIPTIONS[tier.id] ?? tier.description;
+          return {
+            id: tier.id,
+            label: tier.name,
+            ...(description ? { description } : {}),
+            ...(defaultServiceTier === tier.id ? { isDefault: true } : {}),
+          };
+        }),
       ],
       currentValue: defaultServiceTier,
     });

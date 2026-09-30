@@ -29,14 +29,14 @@ describe("isLegacyModel (bundled manifest)", () => {
     assert.deepStrictEqual(
       [
         "gpt-6-luna",
-        "gpt-6-sol",
+        "gpt-6.1-sol",
         "gpt-daybreak-blue-latest",
         "gpt-daybreak-red-latest",
         "gpt-5.4",
       ].map((model) => [model, isLegacyModel(BUNDLED_MODEL_MANIFEST, CODEX, model)]),
       [
         ["gpt-6-luna", false],
-        ["gpt-6-sol", false],
+        ["gpt-6.1-sol", false],
         ["gpt-daybreak-blue-latest", false],
         ["gpt-daybreak-red-latest", false],
         ["gpt-5.4", true],
