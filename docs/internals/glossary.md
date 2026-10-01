@@ -29,6 +29,10 @@ The root filesystem path for a project. In [the orchestration model][1], it is t
 
 A Git worktree used as an isolated workspace for a thread. If a thread has a `worktreePath` in [the contracts][1], it runs there instead of in the main working tree. Git operations live behind the VCS driver contract in `apps/server/src/vcs/VcsDriver.ts`, implemented by [GitVcsDriverCore.ts][3].
 
+#### Scratch project
+
+The environment's home for threads without a project, shown to users as "No project". It is an ordinary project rooted at `<baseDir>/scratch`, created on first `projects.ensureScratch` and advertised as `ServerConfig.scratchWorkspaceRoot`. `ws.ts` gives each new thread in it its own non-Git folder through `worktreePath`. Withheld when the data dir sits inside a Git work tree. See `apps/server/src/project/ScratchProject.ts`.
+
 ### Thread timeline
 
 #### Thread

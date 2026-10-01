@@ -60,6 +60,21 @@ both wakes and continues it. **Wake now** cancels the snooze. Enable **Snooze li
 **Settings → General** on web and desktop to snooze limit stops by default. Providers without a
 reset time offer manual retry and the normal snooze choices.
 
+## Start without a project
+
+A thread does not need a project. On web and desktop, click **or start without a project** under a
+new thread's heading, pick **No project** from the project menu in that heading or from **New
+thread in...** in the command palette, or press `mod+alt+n`. To move a draft into a project, pick
+the project in the heading. On native iOS, **No project** appears in the project list once it exists
+on that environment.
+
+Each thread without a project works in its own folder under `~/.t3/scratch` (the `scratch` folder
+of your T3 data directory), named after its date, the first words of its first message, and a short
+id, like `2026-09-25-convert-these-pngs-to-webp-a1b2c3d4`. Deleting a thread keeps its folder, so
+the files the agent wrote stay until you delete them. Branch, worktree, and diff controls stay
+hidden because these folders are not Git repositories. This is unavailable when the data directory
+itself sits inside a Git checkout.
+
 ## Delete threads on web and desktop
 
 Choose **Delete** from a thread's menu, or select several threads and choose **Delete (N)**. With

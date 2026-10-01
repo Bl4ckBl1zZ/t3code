@@ -189,6 +189,7 @@ import {
   ProjectWriteFileError,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
+  ProjectEnsureScratchResult,
 } from "./project.ts";
 import {
   TerminalAttachInput,
@@ -311,6 +312,7 @@ export const WS_METHODS = {
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
   projectsMutate: "projects.mutate",
+  projectsEnsureScratch: "projects.ensureScratch",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -905,6 +907,13 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
 export const WsProjectsMutateRpc = Rpc.make(WS_METHODS.projectsMutate, {
   payload: ProjectMutation,
   success: Project,
+  error: Schema.Union([ProjectMutationError, EnvironmentAuthorizationError]),
+});
+
+// Finds or creates the Scratch project rooted at ServerConfig.scratchWorkspaceRoot.
+export const WsProjectsEnsureScratchRpc = Rpc.make(WS_METHODS.projectsEnsureScratch, {
+  payload: Schema.Struct({}),
+  success: ProjectEnsureScratchResult,
   error: Schema.Union([ProjectMutationError, EnvironmentAuthorizationError]),
 });
 
@@ -1534,6 +1543,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
+  WsProjectsEnsureScratchRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAgentSessionsScanRpc,

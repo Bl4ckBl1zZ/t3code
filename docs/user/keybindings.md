@@ -83,6 +83,8 @@ environment mode always come from your configured defaults, not from the thread 
 at. To keep a worktree, use the explicit "new thread in this worktree" action in the branch
 toolbar. The only difference between the two commands: with the current sidebar and more than one
 project, `chat.new` opens a project chooser first.
+`chat.newWithoutProject` (`mod+alt+n`) starts a thread
+[without a project](./thread-sidebar.md#start-without-a-project).
 
 Background submission from a new thread is the exception. `mod+enter` starts that thread and opens
 another new thread with the same workspace mode and base branch. **New worktree** remains selected,

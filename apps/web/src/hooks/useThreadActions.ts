@@ -19,6 +19,9 @@ import { useCallback, useMemo, useRef } from "react";
 import { getFallbackThreadIdAfterDelete, pinOrderKeyBetween } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { terminalEnvironment } from "../state/terminal";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -496,6 +499,9 @@ export function useThreadActions() {
           const archivedThreads = mayOwnWorktree
             ? await loadArchivedThreadShells(environmentId)
             : [];
+          const scratchWorkspaceRoot = appAtomRegistry
+            .get(environmentServerConfigsAtom)
+            .get(environmentId)?.scratchWorkspaceRoot;
           const orphanedWorktrees = [
             ...getWorktreesOrphanedByDeletion(
               mergeWorktreeOwners(threads, archivedThreads),
@@ -509,7 +515,14 @@ export function useThreadActions() {
             const projectCwd = owner
               ? (readProject({ environmentId, projectId: owner.projectId })?.workspaceRoot ?? null)
               : null;
-            if (projectCwd === null) return [];
+            // A Scratch thread's folder is not a git worktree, and deleting the
+            // thread keeps its files.
+            if (
+              projectCwd === null ||
+              isScratchProject({ workspaceRoot: projectCwd }, scratchWorkspaceRoot)
+            ) {
+              return [];
+            }
             return [
               {
                 environmentId,
