@@ -8,9 +8,12 @@ import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import { withCreatedPullRequestLink } from "./git/linkCreatedPullRequest.ts";
 import { AgentSessionScanner } from "./project/AgentSessionScanner.ts";
 import { AgentSessionImporter } from "./project/AgentSessionImporter.ts";
+import { claimScratchThreadFolder, ensureScratchProject } from "./project/ScratchProject.ts";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -76,6 +79,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
+  ProjectId,
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
@@ -85,6 +89,7 @@ import {
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { windowOrchestrationV2ThreadProjection } from "@t3tools/shared/orchestrationV2Window";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -133,6 +138,7 @@ import * as ThreadSearchQuery from "./orchestration-v2/ThreadSearchQuery.ts";
 import { readWorkflowScript } from "./orchestration-v2/WorkflowScriptQuery.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
+import { randomUuidV4 } from "./orchestration-v2/RandomUuid.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -717,6 +723,72 @@ const makeWsRpcLayer = (
           ),
         );
 
+      // Scratch threads run in a plain folder under the data dir. Inside a
+      // checkout (a dev worktree's .t3, a dotfiles home) that folder would
+      // inherit the repo's git status and checkpoints, so it is only offered
+      // when the data dir is outside any work tree. Detection failures and
+      // defects fail closed and hide the folder, never the config.
+      // Probed once per connection: a negative VCS detection is not cached.
+      // An interrupt stays an interrupt, so a config load cancelled mid-probe
+      // invalidates the cache and the next load probes again.
+      const [cachedScratchWorkspaceRoot, invalidateScratchWorkspaceRoot] =
+        yield* Effect.cachedInvalidateWithTTL(
+          gitWorkflow.isRepository(config.baseDir).pipe(
+            Effect.map((isRepository) =>
+              isRepository ? undefined : path.resolve(config.baseDir, "scratch"),
+            ),
+            Effect.catchCause((cause) =>
+              Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(undefined),
+            ),
+          ),
+          Duration.infinity,
+        );
+      const resolveScratchWorkspaceRoot = cachedScratchWorkspaceRoot.pipe(
+        Effect.onInterrupt(() => invalidateScratchWorkspaceRoot),
+      );
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      // A new thread in the Scratch project gets its own folder (see
+      // ScratchProject), or null when the thread is elsewhere.
+      const scratchThreadFolder = Effect.fn("ws.scratchThreadFolder")(function* (input: {
+        readonly threadId: ThreadId;
+        readonly projectId: ProjectId;
+        readonly text: string;
+      }) {
+        const scratchRoot = yield* resolveScratchWorkspaceRoot;
+        if (scratchRoot === undefined) return null;
+        const project = yield* projectService.getById(input.projectId);
+        if (
+          Option.isNone(project) ||
+          normalizeProjectPathForComparison(project.value.workspaceRoot) !==
+            normalizeProjectPathForComparison(scratchRoot)
+        ) {
+          return null;
+        }
+        return yield* claimScratchThreadFolder({
+          scratchRoot,
+          threadId: input.threadId,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+          text: input.text,
+        }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+      });
+
+      // Threads that already name a folder keep it.
+      const withScratchThreadFolder = (
+        command: Extract<OrchestrationV2Command, { readonly type: "thread.create" }>,
+      ) =>
+        command.worktreePath !== null
+          ? Effect.succeed(command)
+          : scratchThreadFolder({
+              threadId: command.threadId,
+              projectId: command.projectId,
+              text: command.title,
+            }).pipe(
+              Effect.map((worktreePath) =>
+                worktreePath === null ? command : { ...command, worktreePath },
+              ),
+            );
+
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
@@ -725,6 +797,7 @@ const makeWsRpcLayer = (
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
+        const scratchWorkspaceRoot = yield* resolveScratchWorkspaceRoot;
         const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
           externalLauncher.resolveAvailableEditors(),
         );
@@ -769,6 +842,7 @@ const makeWsRpcLayer = (
               }),
           threadResumeCompletionMarker: true,
           threadSnapshotWindow: true,
+          ...(scratchWorkspaceRoot === undefined ? {} : { scratchWorkspaceRoot }),
         };
       });
 
@@ -1278,7 +1352,11 @@ const makeWsRpcLayer = (
                     })
                   : null;
               const claimedCommand =
-                claim === null ? command : { ...command, attachments: claim.attachments };
+                command.type === "thread.create"
+                  ? yield* withScratchThreadFolder(command)
+                  : claim === null
+                    ? command
+                    : { ...command, attachments: claim.attachments };
               return yield* startup
                 .enqueueCommand(
                   threadManagement.dispatch(
@@ -1412,6 +1490,24 @@ const makeWsRpcLayer = (
                       threadId: input.threadId,
                       attachments: input.initialMessage.attachments,
                     });
+              // A new Scratch thread works in its own folder, named from its
+              // first message. Threads that already name a folder keep it, and
+              // a server-allocated id is unknown until launch, so those run in
+              // the Scratch root.
+              const scratchFolder =
+                input.threadId === undefined ||
+                input.reuseExistingThread === true ||
+                input.workspaceStrategy.type === "existing_worktree"
+                  ? null
+                  : yield* scratchThreadFolder({
+                      threadId: input.threadId,
+                      projectId: input.projectId,
+                      text: input.initialMessage?.text ?? input.title,
+                    });
+              const workspaceStrategy =
+                scratchFolder === null
+                  ? input.workspaceStrategy
+                  : { type: "existing_worktree" as const, worktreePath: scratchFolder };
               return yield* startup
                 .enqueueCommand(
                   threadLaunch.launch({
@@ -1425,7 +1521,7 @@ const makeWsRpcLayer = (
                     modelSelection: input.modelSelection,
                     runtimeMode: input.runtimeMode,
                     interactionMode: input.interactionMode,
-                    workspaceStrategy: input.workspaceStrategy,
+                    workspaceStrategy,
                     ...(input.prepareWorkspace === undefined
                       ? {}
                       : { prepareWorkspace: input.prepareWorkspace }),
@@ -2249,6 +2345,43 @@ const makeWsRpcLayer = (
                     }),
               ),
             ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.projectsEnsureScratch]: () =>
+          observeRpcEffect(
+            WS_METHODS.projectsEnsureScratch,
+            Effect.gen(function* () {
+              const commandId = CommandId.make(`server:scratch-project:${yield* randomUuidV4}`);
+              const workspaceRoot = yield* resolveScratchWorkspaceRoot;
+              if (workspaceRoot === undefined) {
+                return yield* new ProjectMutationError({
+                  commandId,
+                  message: "Threads without a project are not available on this environment.",
+                });
+              }
+              const projectId = yield* startup
+                .enqueueCommand(
+                  ensureScratchProject({
+                    workspaceRoot,
+                    projectId: ProjectId.make(yield* randomUuidV4),
+                    commandId: (step) => CommandId.make(`${commandId}:${step}`),
+                  }).pipe(
+                    Effect.provideService(ProjectService.ProjectService, projectService),
+                    Effect.provideService(FileSystem.FileSystem, fileSystem),
+                  ),
+                )
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProjectMutationError({
+                        commandId,
+                        message: "Failed to open the home for threads without a project.",
+                        cause,
+                      }),
+                  ),
+                );
+              return { projectId };
+            }),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>

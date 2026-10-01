@@ -65,6 +65,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -137,7 +138,11 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
+import {
+  type ComposerCommandItem,
+  ComposerCommandMenu,
+  composerSuggestionOptionId,
+} from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerImageThumbnail } from "./ComposerImageThumbnail";
@@ -1232,6 +1237,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     resetTrigger: resetComposerTrigger,
   } = useComposerTriggerState(() => detectComposerTrigger(prompt, prompt.length));
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
+  const composerSuggestionId = useId();
+  const composerSuggestionListId = `${composerSuggestionId}-${encodeURIComponent(draftId ?? activeThreadId ?? "new")}-suggestions`;
   const [composerHighlightedSearchKey, setComposerHighlightedSearchKey] = useState<string | null>(
     null,
   );
@@ -1432,7 +1439,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const composerMenuOpen = Boolean(composerTrigger);
   const composerMenuSearchKey = composerTrigger
-    ? `${composerTrigger.kind}:${composerTrigger.query.trim().toLowerCase()}`
+    ? `${composerSuggestionListId}:${composerTrigger.kind}:${composerTrigger.query.trim().toLowerCase()}`
     : null;
   const activeComposerMenuItem = useMemo(() => {
     const activeItemId = resolveComposerMenuActiveItemId({
@@ -1459,6 +1466,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
 
   const isComposerApprovalState = activePendingApproval !== null;
+  const composerSuggestionsVisible = composerMenuOpen && !isComposerApprovalState;
+  const composerSuggestionListVisible = composerSuggestionsVisible && composerMenuItems.length > 0;
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const hasComposerHeader =
     isComposerApprovalState ||
@@ -1896,6 +1905,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   useEffect(() => {
     setComposerHighlightedItemId(null);
+    setComposerHighlightedSearchKey(null);
     setComposerSubmissionError(null);
     setProviderInputSubmissionError(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
@@ -3856,9 +3866,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               </ComposerCommandMenuLayer>
             )}
 
-            {composerMenuOpen && !isComposerApprovalState && (
+            <div role="status" aria-atomic="true" className="sr-only">
+              {composerSuggestionsVisible && composerMenuItems.length === 0
+                ? isComposerMenuLoading
+                  ? "Searching workspace files..."
+                  : composerMenuEmptyState
+                : ""}
+            </div>
+            {composerSuggestionsVisible && (
               <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
                 <ComposerCommandMenu
+                  listId={composerSuggestionListId}
                   items={composerMenuItems}
                   resolvedTheme={resolvedTheme}
                   isLoading={isComposerMenuLoading}
@@ -3973,6 +3991,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               style={isComposerResting ? { paddingRight: restingFooterWidth } : undefined}
             >
               <ComposerPromptEditor
+                ariaLabel="Message"
+                suggestionListId={composerSuggestionListId}
+                activeSuggestionId={
+                  composerSuggestionListVisible && activeComposerMenuItem
+                    ? composerSuggestionOptionId(
+                        composerSuggestionListId,
+                        activeComposerMenuItem.id,
+                      )
+                    : undefined
+                }
                 containerClassName={isComposerResting ? "min-w-0 flex-1" : undefined}
                 placeholderClassName={
                   isComposerResting
