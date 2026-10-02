@@ -17,6 +17,9 @@ import {
   getCloneDestinationPath,
   getCloneDirectoryName,
   getDefaultCloneUrl,
+  getNewProjectGitHubRepository,
+  getNewProjectGitHubTarget,
+  getNewProjectPathPreview,
   normalizePastedCloneUrl,
   resolveAddProjectPath,
   sortAddProjectProviderSources,
@@ -215,6 +218,15 @@ describe("add project shared logic", () => {
     expect(readiness.github.ready).toBe(true);
     expect(readiness.gitlab).toEqual({ ready: false, hint: "Run glab auth login" });
     expect(sortAddProjectProviderSources(readiness)[0]).toBe("github");
+
+    // A new project publishes under the signed-in account, named after its folder.
+    const target = getNewProjectGitHubTarget(discovery);
+    expect(target).toEqual({ account: "octo" });
+    const preview = getNewProjectPathPreview("/home/me/.t3/projects", "Pinball Stats");
+    expect(preview).toBe("/home/me/.t3/projects/pinball-stats");
+    expect(getNewProjectGitHubRepository(target!, preview)).toBe("octo/pinball-stats");
+    expect(getNewProjectGitHubRepository({ account: null }, "C:\\t3\\projects\\app")).toBe("app");
+    expect(getNewProjectGitHubTarget(null)).toBeNull();
   });
 
   it("finds existing projects by normalized path in the target environment", () => {

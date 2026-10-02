@@ -25,6 +25,7 @@ import {
   isSidebarLifecycleThread,
   isSidebarNestedLinkClick,
   isSidebarSubagentThread,
+  isSidebarThreadWorking,
   isThreadVisibleInSidebarWorkspace,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -41,6 +42,7 @@ import {
   formatWorkingDurationLabel,
   shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
+  sortInboxThreadsByReturn,
   sortLogicalProjectsForSidebar,
   sortSidebarV2ProjectGroups,
   resolveThreadLastVisitedAt,
@@ -2609,5 +2611,102 @@ describe("reduceSidebarProjectScopeMenuState", () => {
         { type: "query-changed", query: "beta" },
       ),
     ).toEqual({ open: true, query: "beta" });
+  });
+});
+
+describe("Working shelf (beta)", () => {
+  const runtime = {
+    status: "running" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: "Codex",
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  };
+  const idle = {
+    hasActionableProposedPlan: false,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    interactionMode: "default" as const,
+    latestRun: makeLatestRun(),
+    runtime: { ...runtime, status: "completed" as const },
+  };
+
+  it("folds away working and background threads only", () => {
+    expect(isSidebarThreadWorking({ ...idle, runtime })).toBe(true);
+    expect(isSidebarThreadWorking({ ...idle, activeAgentCount: 1 })).toBe(true);
+    expect(isSidebarThreadWorking({ ...idle, backgroundProcessCount: 1 })).toBe(true);
+    expect(isSidebarThreadWorking(idle)).toBe(false);
+    expect(isSidebarThreadWorking({ ...idle, runtime, hasPendingApprovals: true })).toBe(false);
+    expect(isSidebarThreadWorking({ ...idle, runtime, hasPendingUserInput: true })).toBe(false);
+    expect(
+      isSidebarThreadWorking({
+        ...idle,
+        activeAgentCount: 1,
+        runtime: { ...runtime, status: "failed" as const, lastError: "boom" },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a ready plan in the inbox while background work runs", () => {
+    expect(
+      isSidebarThreadWorking({
+        ...idle,
+        interactionMode: "plan",
+        hasActionableProposedPlan: true,
+        activeAgentCount: 1,
+      }),
+    ).toBe(false);
+  });
+
+  describe("sortInboxThreadsByReturn", () => {
+    const thread = (
+      id: string,
+      input: { createdAt: string; completedAt?: string | null; unsettledAt?: string },
+    ) => ({
+      id: ThreadId.make(id),
+      environmentId: localEnvironmentId,
+      createdAt: input.createdAt,
+      unsettledAt: input.unsettledAt ?? null,
+      latestRun:
+        input.completedAt === undefined
+          ? null
+          : { ...makeLatestRun({ completedAt: input.completedAt }), requestedAt: input.createdAt },
+    });
+
+    it("puts the thread that finished last on top, whatever its age", () => {
+      const sorted = sortInboxThreadsByReturn([
+        thread("new", { createdAt: "2026-03-09T11:00:00.000Z" }),
+        thread("old-finished-now", {
+          createdAt: "2026-03-01T09:00:00.000Z",
+          completedAt: "2026-03-09T12:00:00.000Z",
+        }),
+        thread("reopened", {
+          createdAt: "2026-03-02T09:00:00.000Z",
+          unsettledAt: "2026-03-09T11:30:00.000Z",
+        }),
+      ]);
+      expect(sorted.map((entry) => entry.id)).toEqual(["old-finished-now", "reopened", "new"]);
+    });
+
+    it("counts a return the server does not stamp, like an approval request", () => {
+      const waiting = thread("asks-approval", {
+        createdAt: "2026-03-09T09:00:00.000Z",
+        completedAt: null,
+      });
+      const finished = thread("finished", {
+        createdAt: "2026-03-09T09:30:00.000Z",
+        completedAt: "2026-03-09T11:00:00.000Z",
+      });
+      expect(sortInboxThreadsByReturn([finished, waiting]).map((entry) => entry.id)).toEqual([
+        "finished",
+        "asks-approval",
+      ]);
+      expect(
+        sortInboxThreadsByReturn([finished, waiting], (entry) =>
+          entry === waiting ? Date.parse("2026-03-09T11:05:00.000Z") : undefined,
+        ).map((entry) => entry.id),
+      ).toEqual(["asks-approval", "finished"]);
+    });
   });
 });

@@ -174,6 +174,7 @@ import {
   isProviderSettingsUpdateCandidate,
   type ProviderSettingsUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
+import { ProviderUpdatesAction } from "../ProviderUpdatesAction";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
@@ -725,6 +726,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
         : []),
+      ...(settings.sidebarWorkingShelfEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
+        ? ["Working section"]
+        : []),
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
@@ -871,6 +876,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.autoResumeLimitedThreads,
       settings.snoozeLimitedThreads,
       settings.sidebarProjectGroupingMode,
+      settings.sidebarWorkingShelfEnabled,
       settings.sidebarThreadPreviewCount,
       settings.persistComposerContextStrip,
       settings.showSkillsInSlashMenu,
@@ -960,6 +966,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
+      sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
@@ -2494,6 +2501,33 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          {...searchableSetting("working-shelf")}
+          description="Fold working and background threads into a Working section. They return to the top of the inbox when they need you."
+          resetAction={
+            settings.sidebarWorkingShelfEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled ? (
+              <SettingResetButton
+                label="working section"
+                onClick={() =>
+                  updateSettings({
+                    sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarWorkingShelfEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
+              }
+              aria-label="Working section (beta)"
+            />
+          }
+        />
+
+        <SettingsRow
           {...searchableSetting("auto-resume-limited-threads")}
           description="Resume usage-limit stops at the reported reset time. Each thread can cancel its scheduled continuation."
           resetAction={
@@ -3953,6 +3987,7 @@ function EnvironmentProviderSettings(
         title={props.title ?? "Providers"}
         headerAction={
           <div className="flex items-center gap-1.5">
+            <ProviderUpdatesAction includeDriver={props.includeDriver} />
             <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
             {!readOnly && props.allowAddInstance !== false ? (
               <Tooltip>

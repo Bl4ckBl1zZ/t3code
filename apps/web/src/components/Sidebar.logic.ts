@@ -787,6 +787,16 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   return "ready";
 }
 
+/** Working beta: threads busy with work that does not need the user fold into
+    the Working shelf. Approvals, questions, plan prompts, and failures stay
+    in the inbox. */
+export function isSidebarThreadWorking(thread: ThreadStatusInput): boolean {
+  const status = resolveSidebarThreadStatus(thread);
+  if (status !== "working" && status !== "background") return false;
+  // A plan prompt outranks lingering background work, as in the status pill.
+  return resolveThreadStatusPill({ thread })?.label !== "Plan Ready";
+}
+
 /**
  * The lozenge a T3 Work row leads with, in place of the project name a Code
  * card carries there.
@@ -915,6 +925,36 @@ export function applyManualThreadOrderForSidebarV2<T>(
       return left.baseIndex - right.baseIndex;
     })
     .map((entry) => entry.thread);
+}
+
+/** Working beta: the inbox lists threads newest first by when each last came
+    back to the user, so a thread that leaves the Working shelf lands on top.
+    `observedReturnAt` adds returns the server does not stamp, such as an
+    approval request mid-run or background work ending. */
+export function sortInboxThreadsByReturn<
+  T extends Pick<
+    SidebarThreadSummary,
+    "id" | "environmentId" | "createdAt" | "unsettledAt" | "latestRun"
+  >,
+>(threads: readonly T[], observedReturnAt?: (thread: T) => number | undefined): T[] {
+  const timestamps = new Map(
+    threads.map((thread) => [
+      thread,
+      Math.max(
+        toSortableTimestamp(thread.createdAt) ?? 0,
+        toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
+        toSortableTimestamp(thread.latestRun?.requestedAt ?? undefined) ?? 0,
+        toSortableTimestamp(thread.latestRun?.completedAt ?? undefined) ?? 0,
+        observedReturnAt?.(thread) ?? 0,
+      ),
+    ]),
+  );
+  return [...threads].toSorted(
+    (left, right) =>
+      timestamps.get(right)! - timestamps.get(left)! ||
+      left.id.localeCompare(right.id) ||
+      left.environmentId.localeCompare(right.environmentId),
+  );
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime

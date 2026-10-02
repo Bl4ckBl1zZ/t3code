@@ -1,7 +1,10 @@
 import { assert, it, afterEach, describe, expect, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { VcsProcessExitError, VcsProcessSpawnError } from "@t3tools/contracts";
 
@@ -28,6 +31,250 @@ const layer = GitHubCli.layer.pipe(
 
 afterEach(() => {
   mockRun.mockReset();
+});
+
+describe("selectGitHubBaseRepository", () => {
+  const remotes = (...entries: ReadonlyArray<readonly [string, string]>) =>
+    entries
+      .flatMap(([name, url]) => [`${name}\t${url} (fetch)`, `${name}\t${url} (push)`])
+      .join("\n");
+  const select = (input: { remotes: string; resolved?: string }) =>
+    GitHubCli.selectGitHubBaseRepository({ resolved: "", host: "github.com", ...input });
+
+  it("picks the repository gh reads without a prompt", () => {
+    assert.deepStrictEqual(select({ remotes: remotes(["fork", "git@github.com:me/web.git"]) }), {
+      owner: "me",
+      name: "web",
+    });
+    const fork = remotes(
+      ["origin", "git@github.com:me/web.git"],
+      ["upstream", "https://github.com/Acme/Web.git"],
+    );
+    assert.deepStrictEqual(select({ remotes: fork }), { owner: "acme", name: "web" });
+    assert.deepStrictEqual(select({ remotes: fork, resolved: "remote.origin.gh-resolved base" }), {
+      owner: "me",
+      name: "web",
+    });
+    assert.deepStrictEqual(
+      select({ remotes: fork, resolved: "remote.origin.gh-resolved acme/other" }),
+      { owner: "acme", name: "other" },
+    );
+    // gh ranks remote names in any case.
+    assert.deepStrictEqual(
+      select({
+        remotes: remotes(
+          ["origin", "git@github.com:me/web.git"],
+          ["Upstream", "git@github.com:acme/web.git"],
+        ),
+      }),
+      { owner: "acme", name: "web" },
+    );
+  });
+
+  it("leaves gh to choose when it might weigh the remotes differently", () => {
+    for (const input of [
+      { remotes: "" },
+      {
+        remotes: remotes(["a", "git@github.com:me/web.git"], ["b", "git@github.com:acme/web.git"]),
+      },
+      {
+        remotes: remotes(
+          ["origin", "git@github.com:me/web.git"],
+          ["mirror", "git@gitlab.com:me/web.git"],
+        ),
+      },
+      { remotes: remotes(["origin", "git@github-work:me/web.git"]) },
+      {
+        remotes: remotes(
+          ["origin", "git@github.com:me/web.git"],
+          ["Origin", "git@github.com:acme/web.git"],
+        ),
+      },
+      {
+        remotes: remotes(
+          ["origin", "git@github.com:me/web.git"],
+          ["upstream", "git@github.com:acme/web.git"],
+        ),
+        resolved: "remote.origin.gh-resolved base\nremote.upstream.gh-resolved base",
+      },
+    ]) {
+      assert.strictEqual(select(input), null);
+    }
+  });
+});
+
+describe("GitHubCli.listPullRequestsByHead", () => {
+  const remoteOutput =
+    "origin\tgit@github.com:acme/web.git (fetch)\norigin\tgit@github.com:acme/web.git (push)\n";
+  const node = (number: number, headRefName: string) => ({
+    number,
+    title: `PR ${number}`,
+    url: `https://github.com/acme/web/pull/${number}`,
+    baseRefName: "main",
+    headRefName,
+    state: "MERGED",
+    mergedAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-02T00:00:00Z",
+    headRepository: { name: "web", nameWithOwner: "acme/web" },
+    headRepositoryOwner: { login: "acme" },
+  });
+  const decodeRequest = Schema.decodeSync(
+    Schema.fromJsonString(
+      Schema.Struct({
+        query: Schema.String,
+        variables: Schema.Record(Schema.String, Schema.Unknown),
+      }),
+    ),
+  );
+  const jsonOutput = (value: unknown) => processOutput(JSON.stringify(value));
+  const git = (input: VcsProcess.VcsProcessInput) =>
+    input.args[0] === "remote"
+      ? processOutput(remoteOutput)
+      : { ...processOutput(""), exitCode: ChildProcessSpawner.ExitCode(1) };
+
+  it.effect("reads heads on one repository in one GraphQL document", () =>
+    Effect.gen(function* () {
+      const documents: Array<{ query: string; variables: Record<string, unknown> }> = [];
+      mockRun.mockImplementation((input) =>
+        Effect.sync(() => {
+          if (input.command === "git") return git(input);
+          documents.push(decodeRequest(input.stdin ?? ""));
+          return jsonOutput({
+            data: {
+              repository: { h0: { nodes: [node(7, "feature/a")] }, h1: { nodes: [] } },
+            },
+          });
+        }),
+      );
+      const gh = yield* GitHubCli.GitHubCli;
+      const lookups = yield* Effect.all(
+        ["feature/a", "feature/b"].map((headSelector) =>
+          gh.listPullRequestsByHead({
+            cwd: "/repo",
+            headSelector,
+            state: "all",
+            limit: 100,
+            host: "github.com",
+          }),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("50 millis");
+      const [first, second] = yield* Fiber.join(lookups);
+      assert.deepStrictEqual(
+        first?.map((pr) => [pr.number, pr.state, pr.headRepositoryNameWithOwner]),
+        [[7, "merged", "acme/web"]],
+      );
+      assert.deepStrictEqual(second, []);
+      assert.strictEqual(documents.length, 1);
+      assert.deepStrictEqual(documents[0]!.variables, {
+        owner: "acme",
+        name: "web",
+        h0: "feature/a",
+        s0: ["OPEN", "CLOSED", "MERGED"],
+        h1: "feature/b",
+        s1: ["OPEN", "CLOSED", "MERGED"],
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("asks gh pr list when gh could read another repository", () =>
+    Effect.gen(function* () {
+      const commands: Array<ReadonlyArray<string>> = [];
+      mockRun.mockImplementation((input) =>
+        Effect.sync(() => {
+          commands.push([input.command, ...input.args]);
+          if (input.command === "git") {
+            return processOutput(
+              input.args[0] === "remote"
+                ? "a\tgit@github.com:me/web.git (fetch)\nb\tgit@github.com:acme/web.git (fetch)\n"
+                : "",
+            );
+          }
+          return input.args[3] === "feature/empty"
+            ? processOutput("")
+            : jsonOutput([node(8, "feature/a")]);
+        }),
+      );
+      const gh = yield* GitHubCli.GitHubCli;
+      const pullRequests = yield* gh.listPullRequestsByHead({
+        cwd: "/repo",
+        headSelector: "feature/a",
+        state: "all",
+        limit: 100,
+        host: "github.com",
+      });
+      assert.deepStrictEqual(
+        pullRequests.map((pr) => pr.number),
+        [8],
+      );
+      assert.deepStrictEqual(commands.at(-1), [
+        "gh",
+        "pr",
+        "list",
+        "--head",
+        "feature/a",
+        "--state",
+        "all",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+      ]);
+      const empty = yield* gh.listPullRequestsByHead({
+        cwd: "/repo",
+        headSelector: "feature/empty",
+        state: "all",
+        limit: 100,
+        host: "github.com",
+      });
+      assert.deepStrictEqual(empty, []);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("fails a rate-limited document whole instead of asking head by head", () =>
+    Effect.gen(function* () {
+      let ghCalls = 0;
+      mockRun.mockImplementation((input) => {
+        if (input.command === "git") return Effect.succeed(git(input));
+        ghCalls++;
+        return Effect.fail(
+          new VcsProcessExitError({
+            operation: "GitHubCli.execute",
+            command: "gh",
+            cwd: "/repo",
+            exitCode: 1,
+            failureKind: "rate-limited",
+            detail: "API rate limit exceeded.",
+            stderrLength: 24,
+            stderrTruncated: false,
+          }),
+        );
+      });
+      const gh = yield* GitHubCli.GitHubCli;
+      const lookups = yield* Effect.all(
+        ["feature/a", "feature/b"].map((headSelector) =>
+          gh
+            .listPullRequestsByHead({
+              cwd: "/repo",
+              headSelector,
+              state: "all",
+              limit: 100,
+              host: "github.com",
+            })
+            .pipe(Effect.flip),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("50 millis");
+      const errors = yield* Fiber.join(lookups);
+      assert.deepStrictEqual(
+        errors.map((error) => error._tag),
+        ["GitHubCliRateLimitError", "GitHubCliRateLimitError"],
+      );
+      assert.strictEqual(ghCalls, 1);
+    }).pipe(Effect.provide(layer)),
+  );
 });
 
 describe("GitHubCli.layer", () => {

@@ -66,6 +66,30 @@ describe("KeybindingsSettings.logic", () => {
     ).toBe("mod+shift+k");
   });
 
+  it.each([
+    ["k", "k"],
+    ["Tab", "tab"],
+    ["F5", "f5"],
+  ])("captures %s without a modifier", (key, expected) => {
+    const noModifiers = { metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
+    expect(keybindingFromKeyboardEvent({ key, ...noModifiers }, "MacIntel")).toBe(expected);
+  });
+
+  it("waits for a key when only a modifier is pressed", () => {
+    expect(
+      keybindingFromKeyboardEvent(
+        {
+          key: "Meta",
+          metaKey: true,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+        },
+        "MacIntel",
+      ),
+    ).toBeNull();
+  });
+
   it("serializes shortcuts and when expressions for upserts", () => {
     expect(
       shortcutToKeybindingInput({

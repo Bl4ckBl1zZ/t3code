@@ -911,6 +911,11 @@ interface ComposerPromptEditorProps {
   skills: ReadonlyArray<ServerProviderSkill>;
   disabled: boolean;
   placeholder: string;
+  ariaLabel?: string | undefined;
+  /** Identifies an editor with suggestions, even while its list is closed. */
+  suggestionListId?: string | undefined;
+  /** References the highlighted option only while its list is rendered. */
+  activeSuggestionId?: string | undefined;
   className?: string;
   containerClassName?: string | undefined;
   placeholderClassName?: string | undefined;
@@ -1670,6 +1675,9 @@ function ComposerPromptEditorInner({
   skills,
   disabled,
   placeholder,
+  ariaLabel,
+  suggestionListId,
+  activeSuggestionId,
   className,
   containerClassName,
   placeholderClassName,
@@ -1983,6 +1991,20 @@ function ComposerPromptEditorInner({
                   className,
                 )}
                 data-testid="composer-editor"
+                ariaLabel={ariaLabel}
+                ariaMultiline
+                {...(suggestionListId
+                  ? {
+                      ariaAutoComplete: "list" as const,
+                      "aria-haspopup": "listbox" as const,
+                      ...(activeSuggestionId
+                        ? {
+                            ariaControls: suggestionListId,
+                            ariaActiveDescendant: activeSuggestionId,
+                          }
+                        : {}),
+                    }
+                  : {})}
                 aria-placeholder={placeholder}
                 placeholder={<span />}
                 onPaste={onPaste}
@@ -2026,6 +2048,9 @@ export function ComposerPromptEditor({
   skills,
   disabled,
   placeholder,
+  ariaLabel,
+  suggestionListId,
+  activeSuggestionId,
   className,
   containerClassName,
   placeholderClassName,
@@ -2072,6 +2097,9 @@ export function ComposerPromptEditor({
         skills={skills}
         disabled={disabled}
         placeholder={placeholder}
+        ariaLabel={ariaLabel}
+        suggestionListId={suggestionListId}
+        activeSuggestionId={activeSuggestionId}
         {...(onCitationSubmitAndSend ? { onCitationSubmitAndSend } : {})}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}

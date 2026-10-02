@@ -60,6 +60,22 @@ both wakes and continues it. **Wake now** cancels the snooze. Enable **Snooze li
 **Settings → General** on web and desktop to snooze limit stops by default. Providers without a
 reset time offer manual retry and the normal snooze choices.
 
+## Start without a project
+
+A thread does not need a project. On web and desktop, click **or start without a project** under a
+new thread's heading, pick **No project** from the project menu in that heading or from **New
+thread in...** in the command palette, choose **New thread without a project** in the command
+palette, or press `mod+alt+n`. With no projects yet, choose **Start without a project**. To move a
+draft into a project, pick the project in the heading.
+
+Each thread without a project works in its own folder under `~/.t3/scratch` (the `scratch` folder
+of your T3 data directory), named after its date, the first words of its first message, and a short
+id, like `2026-09-25-convert-these-pngs-to-webp-a1b2c3d4`. Deleting a thread keeps its folder, so
+the files the agent wrote stay until you delete them. Branch, worktree, and diff controls stay
+hidden because these folders are not Git repositories. This is unavailable when the data directory
+itself sits inside a Git checkout. In the sidebar, these threads appear under a project named **No
+project**.
+
 ## Delete threads on web and desktop
 
 Choose **Delete** from a thread's menu, or select several threads and choose **Delete (N)**. With
@@ -155,6 +171,19 @@ automatic ordering. Pinned threads have their own order, and Work’s main threa
 
 Older servers keep local-only drag ordering. If a section mixes older servers with threads that
 already have synced positions, update those servers before reordering the section.
+
+## Fold working threads on web and desktop (beta)
+
+Turn on **Settings → General → Working section (beta)** to move active threads that are working,
+or waiting on background agents or commands, into a collapsed **Working** section below the active
+list. A thread returns to the top of the active list when it finishes, fails, or needs an approval,
+an answer, or a decision on a plan. Pinned threads and Work's main thread stay where they are, and
+snoozed and settled threads keep their own sections. The thread you have open stays visible even
+while the section is collapsed.
+
+While this is on, unpinned active threads are ordered by when each last came back to you, so you
+cannot drag them and **Reset thread position** is hidden. Pinned threads can still be dragged. Your
+saved order returns when you turn the setting off.
 
 ## Drop files onto a native thread
 

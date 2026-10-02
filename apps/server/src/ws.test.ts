@@ -162,3 +162,65 @@ for (const mode of ["all", "targeted", "background"] as const) {
     );
   });
 }
+
+it.effect(
+  "a fresh workspace refresh bypasses only the targeted instance's discovery caches",
+  () => {
+    const driver = ProviderDriverKind.make("claudeAgent");
+    const instanceIds = [ProviderInstanceId.make("claude"), ProviderInstanceId.make("claude_work")];
+    const invalidated: Array<string> = [];
+    const instances = instanceIds.map(
+      (instanceId) =>
+        ({
+          instanceId,
+          driverKind: driver,
+          continuationIdentity: { driverKind: driver, continuationKey: instanceId },
+          displayName: undefined,
+          enabled: true,
+          invalidateCaches: Effect.sync(() => {
+            invalidated.push(instanceId);
+          }),
+          snapshot: {
+            maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+              provider: driver,
+              packageName: "@example/claude",
+            }),
+            getSnapshot: Effect.never,
+            refresh: Effect.never,
+            streamChanges: Stream.empty,
+          },
+          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          textGeneration: {} as ProviderInstance["textGeneration"],
+        }) satisfies ProviderInstance,
+    );
+    const versionCache = new Map([
+      ["@example/claude", { expiresAt: Number.MAX_SAFE_INTEGER, version: "1.0.0" }],
+    ]);
+
+    return Effect.gen(function* () {
+      // Without a cwd this is not a workspace rescan, so caches keep their timers.
+      yield* bypassOwnedProviderCachesForRefresh({ instanceId: instanceIds[1]!, fresh: true });
+      assert.deepEqual(invalidated, []);
+
+      yield* bypassOwnedProviderCachesForRefresh({
+        instanceId: instanceIds[1]!,
+        cwd: "/workspace",
+        fresh: true,
+      });
+      assert.deepEqual(invalidated, [instanceIds[1]!]);
+      assert.isTrue(versionCache.has("@example/claude"));
+    }).pipe(
+      Effect.provideService(ProviderVersionCache, versionCache),
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(ModelManifest.ModelManifest)({
+            forceRefresh: Effect.die("a workspace rescan must not refetch the model manifest"),
+          }),
+          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+            listInstances: Effect.succeed(instances),
+          }),
+        ),
+      ),
+    );
+  },
+);
