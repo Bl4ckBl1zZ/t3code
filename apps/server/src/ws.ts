@@ -11,6 +11,7 @@ import { AgentSessionImporter } from "./project/AgentSessionImporter.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -54,6 +55,7 @@ import {
   type OrchestrationV2ShellSnapshot,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
+  type ProjectCreateNewInput,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -64,6 +66,8 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProjectMutationError,
+  ProjectId,
+  ProjectProvisionError,
   ProviderUploadFeedbackError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
@@ -165,6 +169,9 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
+import * as NewProject from "./project/NewProject.ts";
+import * as ScratchProject from "./project/ScratchProject.ts";
+import { randomUuidV4 } from "./orchestration-v2/RandomUuid.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import {
@@ -221,20 +228,41 @@ export const resolveFileManagerRevealKindForConfig = <E, R>(
   discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => undefined);
 
+/** A fresh workspace refresh also re-reads the instance's machine snapshot. */
+export const isFreshWorkspaceRefresh = (input: {
+  readonly instanceId?: ProviderInstanceId | undefined;
+  readonly cwd?: string | undefined;
+  readonly fresh?: boolean | undefined;
+}) => input.fresh === true && input.instanceId !== undefined && input.cwd !== undefined;
+
 /**
- * Runs first in `server.refreshProviders`. Only an explicit catalog refresh
+ * Runs first in `server.refreshProviders`. An explicit catalog refresh
  * (`refreshModels`) bypasses T3-owned caches: the remote model manifest, each
  * targeted instance's discovery caches and maintenance resolution, and the
- * npm latest-version cache. Workspace discovery and background status checks
- * keep their timers.
+ * npm latest-version cache. A fresh workspace refresh bypasses only the
+ * targeted instance's discovery caches, so new skills and plugin commands
+ * show up. Other workspace discovery and background status checks keep their
+ * timers.
  */
 export const bypassOwnedProviderCachesForRefresh = Effect.fn(
   "ws.bypassOwnedProviderCachesForRefresh",
 )(function* (input: {
   readonly instanceId?: ProviderInstanceId | undefined;
+  readonly cwd?: string | undefined;
+  readonly fresh?: boolean | undefined;
   readonly refreshModels?: boolean | undefined;
 }) {
-  if (!input.refreshModels) return;
+  if (!input.refreshModels) {
+    if (!isFreshWorkspaceRefresh(input)) return;
+    const instances = yield* (yield* ProviderInstanceRegistry.ProviderInstanceRegistry)
+      .listInstances;
+    yield* Effect.forEach(
+      instances.filter((instance) => instance.instanceId === input.instanceId),
+      (instance) => instance.invalidateCaches ?? Effect.void,
+      { discard: true },
+    );
+    return;
+  }
   const modelManifest = yield* ModelManifest.ModelManifest;
   const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const providerVersionCache = yield* ProviderMaintenance.ProviderVersionCache;
@@ -717,6 +745,56 @@ const makeWsRpcLayer = (
           ),
         );
 
+      const fileSystem = yield* FileSystem.FileSystem;
+      const scratchProject = yield* ScratchProject.make(config.baseDir);
+      // Projects started from just a name live beside Scratch and worktrees,
+      // away from folders the user organizes by hand. A nested repository is
+      // fine here (unlike Scratch) because each project gets its own `git init`.
+      const newProjectsRoot = path.resolve(config.baseDir, "projects");
+      const gitVcsDriver = yield* GitVcsDriver.GitVcsDriver;
+      const createNewProject = (input: ProjectCreateNewInput) =>
+        Effect.gen(function* () {
+          const folder = yield* NewProject.createNewProjectFolder({
+            root: newProjectsRoot,
+            name: input.name,
+          }).pipe(
+            Effect.provideService(GitVcsDriver.GitVcsDriver, gitVcsDriver),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.mapError(
+              (cause) =>
+                new ProjectProvisionError({
+                  message: "Failed to create the project folder.",
+                  cause,
+                }),
+            ),
+          );
+          const uuid = yield* randomUuidV4;
+          const projectId = ProjectId.make(uuid);
+          yield* projectService
+            .create({
+              commandId: CommandId.make(`server:project-create-new:${uuid}`),
+              projectId,
+              title: input.name,
+              workspaceRoot: folder.workspaceRoot,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) => new ProjectProvisionError({ message: cause.message, cause }),
+              ),
+              // Only a rejected create means no project uses the folder. An
+              // interrupt can land after the command is accepted, so keep it then.
+              Effect.tapError(() =>
+                fileSystem.remove(folder.workspaceRoot, { recursive: true }).pipe(Effect.ignore),
+              ),
+            );
+          return {
+            projectId,
+            workspaceRoot: folder.workspaceRoot,
+            ...(folder.commitError === undefined ? {} : { commitError: folder.commitError }),
+          };
+        });
+
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
@@ -725,6 +803,7 @@ const makeWsRpcLayer = (
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
+        const scratchWorkspaceRoot = yield* scratchProject.workspaceRoot;
         const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
           externalLauncher.resolveAvailableEditors(),
         );
@@ -769,6 +848,8 @@ const makeWsRpcLayer = (
               }),
           threadResumeCompletionMarker: true,
           threadSnapshotWindow: true,
+          ...(scratchWorkspaceRoot === undefined ? {} : { scratchWorkspaceRoot }),
+          newProjectsRoot,
         };
       });
 
@@ -1277,8 +1358,23 @@ const makeWsRpcLayer = (
                       attachments: command.attachments,
                     })
                   : null;
+              // A new Scratch thread that names no folder gets its own.
+              const preparedCommand =
+                command.type === "thread.create" && command.worktreePath === null
+                  ? yield* scratchProject
+                      .threadFolder({
+                        projectId: command.projectId,
+                        threadId: command.threadId,
+                        text: command.title,
+                      })
+                      .pipe(
+                        Effect.map((worktreePath) =>
+                          worktreePath === null ? command : { ...command, worktreePath },
+                        ),
+                      )
+                  : command;
               const claimedCommand =
-                claim === null ? command : { ...command, attachments: claim.attachments };
+                claim === null ? preparedCommand : { ...command, attachments: claim.attachments };
               return yield* startup
                 .enqueueCommand(
                   threadManagement.dispatch(
@@ -1401,6 +1497,10 @@ const makeWsRpcLayer = (
               yield* AttachmentClaims.validateAttachmentLimits(
                 input.initialMessage?.attachments ?? [],
               );
+              const workspaceStrategy = yield* scratchProject.launchWorkspaceStrategy({
+                ...input,
+                text: input.initialMessage?.text ?? input.title,
+              });
               // launch allocates the thread id, so a pending upload can only be
               // claimed once the caller has named one. Callers that let the
               // server pick the id must send the attachment with the follow-up
@@ -1425,7 +1525,7 @@ const makeWsRpcLayer = (
                     modelSelection: input.modelSelection,
                     runtimeMode: input.runtimeMode,
                     interactionMode: input.interactionMode,
-                    workspaceStrategy: input.workspaceStrategy,
+                    workspaceStrategy,
                     ...(input.prepareWorkspace === undefined
                       ? {}
                       : { prepareWorkspace: input.prepareWorkspace }),
@@ -1467,9 +1567,10 @@ const makeWsRpcLayer = (
                   new OrchestrationV2ThreadLaunchError({
                     commandId: input.commandId,
                     projectId: input.projectId,
-                    // Attachment rejections are the user's to fix, so say why.
+                    // Attachment and folder failures say why.
                     message:
-                      cause._tag === "AttachmentClaimError"
+                      cause._tag === "AttachmentClaimError" ||
+                      cause._tag === "ProjectProvisionError"
                         ? cause.message
                         : "Failed to launch thread",
                     cause,
@@ -1715,7 +1816,7 @@ const makeWsRpcLayer = (
                   );
                 }
               }
-              if (input.cwd && !input.refreshModels) {
+              if (input.cwd && !input.refreshModels && !isFreshWorkspaceRefresh(input)) {
                 // Workspace discovery only reads skills. Selecting a thread must
                 // not launch a disposable provider health-check process.
                 const snapshots = yield* Effect.forEach(
@@ -2249,6 +2350,34 @@ const makeWsRpcLayer = (
                     }),
               ),
             ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.projectsEnsureScratch]: () =>
+          observeRpcEffect(
+            WS_METHODS.projectsEnsureScratch,
+            startup
+              .enqueueCommand(scratchProject.ensureProject)
+              .pipe(
+                Effect.mapError((cause) =>
+                  cause._tag === "ProjectProvisionError"
+                    ? cause
+                    : new ProjectProvisionError({ message: cause.message, cause }),
+                ),
+              ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.projectsCreateNew]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsCreateNew,
+            startup
+              .enqueueCommand(createNewProject(input))
+              .pipe(
+                Effect.mapError((cause) =>
+                  cause._tag === "ProjectProvisionError"
+                    ? cause
+                    : new ProjectProvisionError({ message: cause.message, cause }),
+                ),
+              ),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>

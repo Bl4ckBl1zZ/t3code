@@ -77,6 +77,16 @@ If a step fails:
 3. For a command-line server, relaunch it with `npx t3@<client-version>`, replacing
    `<client-version>` with the client version shown in the warning.
 
+## Update providers
+
+**Settings → Providers** shows provider updates for the selected environment, one account at a
+time. On web and desktop, **Update all** in the section header updates every outdated provider on
+every connected environment at once, then reports the results in one notice that lists each update
+that failed. Hover it to see which providers it will update on each environment. Providers that only
+offer a manual update command, or whose accounts on one environment need different update
+commands, are not included; update those from their account in **Settings → Providers**.
+Environments you can view but not operate report a failure instead of updating.
+
 ## The Mobile App
 
 The native iOS app receives its own updates through TestFlight or the App Store.

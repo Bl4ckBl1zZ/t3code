@@ -111,72 +111,54 @@ it.effect("adds safe request context while retaining GitHub CLI causes", () =>
   }),
 );
 
-it.effect("uses gh json listing for non-open change request state queries", () =>
+it.effect("lists change request history through the batched head lookup", () =>
   Effect.gen(function* () {
-    let executeArgs: ReadonlyArray<string> = [];
+    let lookup: Parameters<GitHubCli.GitHubCli["Service"]["listPullRequestsByHead"]>[0] | null =
+      null;
     const provider = yield* makeProvider({
-      execute: (input) => {
-        executeArgs = input.args;
-        return Effect.succeed(
-          processResult(
-            JSON.stringify([
-              {
-                number: 7,
-                title: "Merged work",
-                url: "https://github.com/pingdotgg/t3code/pull/7",
-                baseRefName: "main",
-                headRefName: "feature/merged",
-                state: "merged",
-                updatedAt: "2026-01-02T00:00:00.000Z",
-              },
-            ]),
-          ),
-        );
+      listPullRequestsByHead: (input) => {
+        lookup = input;
+        return Effect.succeed([
+          {
+            number: 7,
+            title: "Merged work",
+            url: "https://enterprise.test/acme/web/pull/7",
+            baseRefName: "main",
+            headRefName: "feature/merged",
+            state: "merged",
+            mergedAt: "2026-01-01T00:00:00Z",
+            updatedAt: Option.some(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z")),
+          },
+        ]);
       },
     });
 
     const changeRequests = yield* provider.listChangeRequests({
       cwd: "/repo",
+      context: {
+        provider: { kind: "github", name: "GitHub Enterprise", baseUrl: "https://enterprise.test" },
+        remoteName: "origin",
+        remoteUrl: "https://enterprise.test/acme/web.git",
+      },
       headSelector: "feature/merged",
       state: "all",
       limit: 10,
     });
 
-    assert.deepStrictEqual(executeArgs, [
-      "pr",
-      "list",
-      "--head",
-      "feature/merged",
-      "--state",
-      "all",
-      "--limit",
-      "10",
-      "--json",
-      "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
-    ]);
+    assert.deepStrictEqual(lookup, {
+      cwd: "/repo",
+      headSelector: "feature/merged",
+      state: "all",
+      limit: 10,
+      host: "enterprise.test",
+    });
     assert.strictEqual(changeRequests[0]?.provider, "github");
     assert.strictEqual(changeRequests[0]?.state, "merged");
+    assert.strictEqual(changeRequests[0]?.mergedAt, "2026-01-01T00:00:00Z");
     assert.deepStrictEqual(
       changeRequests[0]?.updatedAt,
       Option.some(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z")),
     );
-  }),
-);
-
-it.effect("treats empty non-open change request listing output as no results", () =>
-  Effect.gen(function* () {
-    const provider = yield* makeProvider({
-      execute: () => Effect.succeed(processResult("")),
-    });
-
-    const changeRequests = yield* provider.listChangeRequests({
-      cwd: "/repo",
-      headSelector: "feature/empty",
-      state: "all",
-      limit: 10,
-    });
-
-    assert.deepStrictEqual(changeRequests, []);
   }),
 );
 

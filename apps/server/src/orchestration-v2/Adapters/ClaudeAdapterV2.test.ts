@@ -3456,6 +3456,217 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect.each([
+    { name: "a peer message's", fields: { origin: { kind: "peer", from: "peer-session" } } },
+    {
+      name: "another prompt's",
+      fields: { user_message_uuid: "00000000-0000-4000-8000-0000000007ff" },
+    },
+  ])("keeps a /compact turn open past $name result", ({ fields }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const attemptId = RunAttemptId.make("attempt-claude-compact-other-turn");
+        const stamp = (frame: SDKMessage) =>
+          claudeSdkFrame({ ...frame, user_message_uuid: claudePromptUuid(attemptId) });
+        const compactionEventIndex = () =>
+          harness.events.findIndex(
+            (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+          );
+
+        // The first prompt of a fresh (resumed) process, so the echo mode is
+        // still unknown and nothing is held.
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId,
+            text: "/compact",
+            attachments: [],
+          }),
+        );
+        // Recorded order after a resume: Claude first reports a background
+        // task the previous process left behind, then runs a turn of its own,
+        // and only then the queued `/compact`.
+        yield* Queue.offer(harness.sdkMessages, staleTaskNotificationResult);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            ...makeResultFrame({
+              uuid: "00000000-0000-4000-8000-0000000007f1",
+              result: "Answered the other turn.",
+            }),
+            ...fields,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "compact_boundary",
+            compact_metadata: { trigger: "manual", pre_tokens: 959_489, post_tokens: 10_107 },
+            uuid: "00000000-0000-4000-8000-0000000007f2",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          stamp(
+            claudeSdkFrame({
+              ...makeResultFrame({
+                uuid: "00000000-0000-4000-8000-0000000007f3",
+                result: "",
+                numTurns: 0,
+              }),
+              local_command: "compact",
+            }),
+          ),
+        );
+
+        yield* awaitUntil(
+          () => harness.terminalEvents().length === 1 && compactionEventIndex() !== -1,
+          "the /compact turn to compact and settle",
+        );
+        const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
+        const compaction = harness.events[compactionEventIndex()];
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        assert.equal(
+          compaction?.type === "turn_item.updated" ? compaction.turnItem.runId : null,
+          RunId.make(`run-${attemptId}`),
+        );
+        assert.isAbove(terminalIndex, compactionEventIndex());
+        assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("hands a peer message's turn ahead of a prompt to a continuation run", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const firstAttempt = RunAttemptId.make("attempt-claude-peer-1");
+        const userAttempt = RunAttemptId.make("attempt-claude-peer-2");
+        const continuationAttempt = RunAttemptId.make("attempt-claude-peer-3");
+        const peerText = "Replied to the peer session.";
+        const stamp = (frame: SDKMessage, attemptId: RunAttemptId) =>
+          claudeSdkFrame({ ...frame, user_message_uuid: claudePromptUuid(attemptId) });
+        const textRuns = (text: string) => {
+          const messageIds = new Set(
+            harness.events.flatMap((event) =>
+              event.type === "message.updated" && event.message.text === text
+                ? [event.message.id]
+                : [],
+            ),
+          );
+          return harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "assistant_message" &&
+            messageIds.has(event.turnItem.messageId)
+              ? [event.turnItem.runId]
+              : [],
+          );
+        };
+
+        // The first turn echoes on its first frame: this process echoes early.
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: firstAttempt,
+            text: "First.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          stamp(
+            makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-0000000007e0", text: "One." }),
+            firstAttempt,
+          ),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          stamp(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-0000000007e1", result: "One." }),
+            firstAttempt,
+          ),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
+
+        // A peer message wakes Claude while the next prompt is queued; that
+        // turn echoes nothing and carries the peer origin.
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: userAttempt,
+            text: "Second.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-0000000007e2", text: peerText }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            ...makeResultFrame({ uuid: "00000000-0000-4000-8000-0000000007e3", result: peerText }),
+            origin: { kind: "peer", from: "peer-session" },
+          }),
+        );
+        yield* awaitUntil(
+          () => harness.continuationRequests.length === 1,
+          "continuation request for the peer turn",
+        );
+        assert.lengthOf(harness.terminalEvents(), 1);
+
+        yield* Queue.offer(
+          harness.sdkMessages,
+          stamp(
+            makeAssistantTextFrame({ uuid: "00000000-0000-4000-8000-0000000007e4", text: "Two." }),
+            userAttempt,
+          ),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          stamp(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-0000000007e5", result: "Two." }),
+            userAttempt,
+          ),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 2, "user turn terminal");
+        assert.equal(harness.terminalEvents()[1]?.status, "completed");
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: continuationAttempt,
+            text: "Background task completed.",
+            attachments: [],
+            providerTurnOrdinal: 3,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 3, "continuation terminal");
+        assert.deepEqual(textRuns("Two."), [RunId.make(`run-${userAttempt}`)]);
+        assert.isNotEmpty(textRuns(peerText));
+        assert.isTrue(
+          textRuns(peerText).every((runId) => runId === RunId.make(`run-${continuationAttempt}`)),
+        );
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("keeps a subagent a queued wake turn launches with its continuation", () =>
     Effect.scoped(
       Effect.gen(function* () {

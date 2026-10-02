@@ -191,6 +191,7 @@ import {
   canPinWorkInboxThread,
   formatBackgroundWorkTooltip,
   isSidebarNestedLinkClick,
+  isSidebarThreadWorking,
   isThreadVisibleInSidebarWorkspace,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -205,6 +206,7 @@ import {
   resolveWorkingStartedAt,
   resolveWorkInboxBadge,
   sidebarProviderInstanceKey,
+  sortInboxThreadsByReturn,
   sortSidebarV2ProjectGroups,
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
@@ -280,6 +282,40 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 // Keep the v2 key so existing preferences survive the v2-to-default rename.
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
+const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:working-expanded";
+
+// Working beta: when this client saw each thread leave the Working shelf.
+// Module scope keeps the inbox order across routes that unmount the sidebar.
+let lastWorkingThreadKeys: ReadonlySet<string> | null = null;
+const observedInboxReturns = new Map<string, number>();
+
+/** Stamps threads that stopped working since the last call. The first call
+    only takes a baseline, so mounting never reshuffles the inbox. Pass null
+    to reset when the beta is off. */
+function observeInboxReturns(threads: readonly EnvironmentThreadShell[] | null): void {
+  if (threads === null) {
+    lastWorkingThreadKeys = null;
+    observedInboxReturns.clear();
+    return;
+  }
+  const working = new Set<string>();
+  const present = new Set<string>();
+  for (const thread of threads) {
+    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    present.add(key);
+    if (isSidebarThreadWorking(thread)) working.add(key);
+  }
+  // Drop deleted threads so the map stays bounded by the live thread list.
+  for (const key of observedInboxReturns.keys()) {
+    if (!present.has(key)) observedInboxReturns.delete(key);
+  }
+  const now = Date.now();
+  for (const key of lastWorkingThreadKeys ?? []) {
+    if (present.has(key) && !working.has(key)) observedInboxReturns.set(key, now);
+  }
+  lastWorkingThreadKeys = working;
+}
+
 const SIDEBAR_WORKSPACE_ROUTES_STORAGE_KEY = "t3code:sidebar-workspace-routes:v1";
 const SIDEBAR_WORKSPACE_ROUTES_SCHEMA = Schema.Struct({
   work: Schema.optional(Schema.String),
@@ -2034,14 +2070,14 @@ type SidebarThreadRowProps = ComponentProps<typeof SidebarThreadRow>;
 // inside the render loop's row factory — each draggable row needs its own
 // component instance.
 function SortableSidebarThreadRow(
-  props: Omit<SidebarThreadRowProps, "sortable"> & { sortableId: string },
+  props: Omit<SidebarThreadRowProps, "sortable"> & { sortableId: string; dragDisabled?: boolean },
 ) {
-  const { sortableId, ...rowProps } = props;
+  const { sortableId, dragDisabled = false, ...rowProps } = props;
   const { isDragging, listeners, setNodeRef, transform, transition } = useSortable({
     id: sortableId,
     // Drag listeners on the row would swallow the pointer gestures that select
     // text in the rename field.
-    disabled: rowProps.isRenaming,
+    disabled: rowProps.isRenaming || dragDisabled,
     animateLayoutChanges: animatePinnedLayoutChanges,
   });
   const sortable = useMemo<SidebarThreadRowSortable>(
@@ -2271,6 +2307,7 @@ export default function Sidebar() {
   const confirmThreadUnpin = useClientSettings((s) => s.confirmThreadUnpin);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     pinThread,
@@ -2712,7 +2749,7 @@ export default function Sidebar() {
   // the partition works directly off live shells: no archived-snapshot
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
-  const { activeThreads, snoozedThreads, settledThreads, snoozeNow } = useMemo(() => {
+  const sidebarSections = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
     // Snooze classification uses a REAL clock, not the quantized minute:
     // wake times are second-precise and a woken thread must not linger on
@@ -2728,7 +2765,12 @@ export default function Sidebar() {
           : scopedProjectKeys === null ||
             scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
+    // Every thread, not just the scoped ones, so a scope flip keeps returns.
+    observeInboxReturns(workingShelfEnabled ? threads : null);
+    const isPinnedThread = (thread: EnvironmentThreadShell) =>
+      pinnedThreadKeySet.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
     const active: EnvironmentThreadShell[] = [];
+    const working: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
     for (const thread of visible) {
@@ -2771,31 +2813,50 @@ export default function Sidebar() {
         })
       ) {
         settled.push(thread);
+      } else if (workingShelfEnabled && !isPinnedThread(thread) && isSidebarThreadWorking(thread)) {
+        // Working beta: only inbox threads fold away. Pins and Work's main
+        // thread stay put; snoozed and settled threads keep their shelves.
+        working.push(thread);
       } else {
         active.push(thread);
       }
     }
-    const isPinnedThread = (thread: EnvironmentThreadShell) =>
-      pinnedThreadKeySet.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
-    return {
-      activeThreads: applyDurableThreadOrder(
-        applyManualThreadOrderForSidebarV2(
-          sortThreadsForSidebar(active, isPinnedThread),
-          threadOrder,
-          (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-          isPinnedThread,
-        ),
-        (thread) => {
-          const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-          const pinned = isPinnedThread(thread);
-          return (
-            (pendingOrder?.pinned === pinned ? pendingOrder.keys.get(key) : undefined) ??
-            (pinned ? thread.pinOrderKey : thread.activeOrderKey)
-          );
-        },
-        isPinnedThread,
+    const orderedActive = applyDurableThreadOrder(
+      applyManualThreadOrderForSidebarV2(
+        sortThreadsForSidebar(active, isPinnedThread),
+        threadOrder,
         (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        isPinnedThread,
       ),
+      (thread) => {
+        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        const pinned = isPinnedThread(thread);
+        return (
+          (pendingOrder?.pinned === pinned ? pendingOrder.keys.get(key) : undefined) ??
+          (pinned ? thread.pinOrderKey : thread.activeOrderKey)
+        );
+      },
+      isPinnedThread,
+      (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+    );
+    return {
+      // Working beta: pins keep their arranged order; the rest of the inbox
+      // sorts by when each thread last came back. Saved positions are kept for
+      // when the beta is turned off.
+      activeThreads: workingShelfEnabled
+        ? [
+            ...orderedActive.filter(isPinnedThread),
+            ...sortInboxThreadsByReturn(
+              orderedActive.filter((thread) => !isPinnedThread(thread)),
+              (thread) =>
+                observedInboxReturns.get(
+                  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                ),
+            ),
+          ]
+        : orderedActive,
+      // Newest work first, by the same clock as the inbox.
+      workingThreads: sortInboxThreadsByReturn(working),
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozedThreads: snoozed.toSorted(
         (left, right) =>
@@ -2819,8 +2880,11 @@ export default function Sidebar() {
     threadOrder,
     threads,
     workEnvironmentScopeId,
+    workingShelfEnabled,
     workspace,
   ]);
+  const { activeThreads, workingThreads, snoozedThreads, settledThreads, snoozeNow } =
+    sidebarSections;
   // All workspaces share the same ordered thread list and drag behavior.
   const { sortableThreadKeys, activeSectionByKey } = useMemo(() => {
     const keys = activeThreads.map((thread) =>
@@ -3008,8 +3072,8 @@ export default function Sidebar() {
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const searchableThreads = useMemo(
-    () => [...activeThreads, ...snoozedThreads, ...settledThreads],
-    [activeThreads, settledThreads, snoozedThreads],
+    () => [...activeThreads, ...workingThreads, ...snoozedThreads, ...settledThreads],
+    [activeThreads, settledThreads, snoozedThreads, workingThreads],
   );
   const searchEnvironmentIds = useMemo(
     () =>
@@ -3148,9 +3212,36 @@ export default function Sidebar() {
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
+  // The Working shelf (beta) collapses the same way, with the same route
+  // exception: sending a message folds the open thread into the shelf, and
+  // its row must stay visible there.
+  const [workingShelfExpanded, setWorkingShelfExpanded] = useLocalStorage(
+    WORKING_SHELF_EXPANDED_KEY,
+    false,
+    Schema.Boolean,
+  );
+  const toggleWorkingShelf = useCallback(
+    () => setWorkingShelfExpanded((value) => !value),
+    [setWorkingShelfExpanded],
+  );
+  const visibleWorkingThreads = useMemo(() => {
+    if (workingShelfExpanded) return workingThreads;
+    if (routeThreadKey === null) return [];
+    const routeThread = workingThreads.find(
+      (thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+    );
+    return routeThread === undefined ? [] : [routeThread];
+  }, [routeThreadKey, workingShelfExpanded, workingThreads]);
+
   const orderedThreads = useMemo(
-    () => [...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [
+      ...activeThreads,
+      ...visibleWorkingThreads,
+      ...visibleSnoozedThreads,
+      ...renderedSettledThreads,
+    ],
+    [activeThreads, visibleWorkingThreads, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3906,7 +3997,10 @@ export default function Sidebar() {
                     },
                   ]
                 : []),
-              ...(!isPinned &&
+              // The Working beta orders the inbox by time, so a reset would
+              // change nothing visible until it is turned off.
+              ...(!workingShelfEnabled &&
+              !isPinned &&
               thread.activeOrderKey != null &&
               serverConfigs.get(thread.environmentId)?.environment.capabilities
                 .threadActiveOrderV2 === true
@@ -4244,6 +4338,7 @@ export default function Sidebar() {
       startThreadRename,
       toggleThreadPin,
       updateThreadMetadata,
+      workingShelfEnabled,
       workspace,
     ],
   );
@@ -4642,7 +4737,7 @@ export default function Sidebar() {
                         className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={openAddProjectCommandPalette}
                         type="button"
-                        aria-label="New project"
+                        aria-label="Add project"
                       />
                     }
                   >
@@ -4652,7 +4747,7 @@ export default function Sidebar() {
                       aria-hidden="true"
                     />
                   </TooltipTrigger>
-                  <TooltipPopup side="right">New project</TooltipPopup>
+                  <TooltipPopup side="right">Add project</TooltipPopup>
                 </Tooltip>
               </div>
             ) : null}
@@ -4805,7 +4900,7 @@ export default function Sidebar() {
                     {(() => {
                       const renderThreadRow = (
                         thread: EnvironmentThreadShell,
-                        section: "active" | "snoozed" | "settled",
+                        section: "active" | "working" | "snoozed" | "settled",
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -4814,7 +4909,8 @@ export default function Sidebar() {
                         // row: every other thread is a full card. Density comes
                         // from users (or the auto rules) actually parking work,
                         // not from the sidebar second-guessing what still matters.
-                        const isCard = section === "active";
+                        // Working rows stay cards so their live status shows.
+                        const isCard = section === "active" || section === "working";
                         const rowVariant = isCard ? "card" : "slim";
                         // Keyed per variant on purpose: when a thread settles,
                         // the card fades out in place and the slim row fades
@@ -4859,7 +4955,7 @@ export default function Sidebar() {
                               : null,
                           isPinned: pinnedThreadKeySet.has(threadKey),
                           canPin:
-                            section === "active" &&
+                            isCard &&
                             canPinWorkInboxThread({
                               thread,
                               providerDriverKindByInstance,
@@ -4913,10 +5009,13 @@ export default function Sidebar() {
                         // Only active cards are draggable: snoozed and settled
                         // rows sort by wake/settled time, so a manual position
                         // would be discarded on the next lifecycle transition.
-                        return isCard ? (
+                        // The Working beta orders the unpinned inbox by time and
+                        // its shelf by live status, so only pins stay draggable.
+                        return section === "active" ? (
                           <SortableSidebarThreadRow
                             key={rowKey}
                             sortableId={threadKey}
+                            dragDisabled={workingShelfEnabled && !pinnedThreadKeySet.has(threadKey)}
                             {...rowProps}
                           />
                         ) : (
@@ -4936,6 +5035,42 @@ export default function Sidebar() {
                       ];
                       for (const thread of activeThreads) {
                         items.push(renderThreadRow(thread, "active"));
+                      }
+                      // Working shelf (beta): busy inbox threads wait here until
+                      // they need the user, then return to the top of the inbox.
+                      if (workingThreads.length > 0) {
+                        items.push(
+                          <li
+                            key="working-shelf-header"
+                            data-thread-selection-safe
+                            className="list-none"
+                          >
+                            <button
+                              type="button"
+                              onClick={toggleWorkingShelf}
+                              aria-expanded={workingShelfExpanded}
+                              data-testid="sidebar-v2-working-shelf-toggle"
+                              className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                            >
+                              <span className="text-xs font-medium text-muted-foreground/50">
+                                {workingShelfExpanded
+                                  ? "Working"
+                                  : `Working (${workingThreads.length})`}
+                              </span>
+                              <span className="h-px flex-1 bg-sidebar-border/60" />
+                              <ChevronDownIcon
+                                aria-hidden
+                                className={cn(
+                                  "size-3 text-muted-foreground/50 transition-transform",
+                                  workingShelfExpanded && "rotate-180",
+                                )}
+                              />
+                            </button>
+                          </li>,
+                        );
+                        for (const thread of visibleWorkingThreads) {
+                          items.push(renderThreadRow(thread, "working"));
+                        }
                       }
                       // Snoozed shelf: between the inbox and Settled — out of the
                       // way, never gone. The header always renders while anything
@@ -5031,7 +5166,11 @@ export default function Sidebar() {
           ) : null}
           {!isSearchingThreads &&
           visibleDraftSessionCount === 0 &&
-          activeThreads.length + snoozedThreads.length + settledThreads.length === 0 ? (
+          activeThreads.length +
+            workingThreads.length +
+            snoozedThreads.length +
+            settledThreads.length ===
+            0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
               {projects.length === 0 ? (
                 <>

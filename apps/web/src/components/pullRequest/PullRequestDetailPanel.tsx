@@ -2025,16 +2025,18 @@ export function PullRequestDetailPanel({
               ))}
             </ToggleGroup>
             {tab === "summary" ? (
-              <span
-                className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                aria-label={checksSummary ? `Checks: ${checksSummary}` : "Checks"}
-              >
-                {checksState !== null ? (
-                  <PullRequestChecksPopover checks={detail.checks} checksState={checksState} />
-                ) : (
-                  <CircleDotIcon aria-hidden className="size-3.5" />
-                )}
-                {checksSummary}
+              <span className="ml-auto flex min-w-0 flex-1 items-center justify-end">
+                <span
+                  className="flex h-4 min-w-0 flex-wrap content-start items-center justify-end gap-x-1.5 overflow-hidden text-xs text-muted-foreground"
+                  aria-label={checksSummary ? `Checks: ${checksSummary}` : "Checks"}
+                >
+                  {checksState !== null ? (
+                    <PullRequestChecksPopover checks={detail.checks} checksState={checksState} />
+                  ) : (
+                    <CircleDotIcon aria-hidden className="size-3.5" />
+                  )}
+                  <span className="whitespace-nowrap">{checksSummary}</span>
+                </span>
               </span>
             ) : tab === "timeline" ? (
               <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">

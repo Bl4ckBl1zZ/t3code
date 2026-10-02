@@ -993,7 +993,16 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverRefreshProviders,
       concurrency: {
         mode: "singleFlight",
-        key: ({ environmentId }) => environmentId,
+        // Only identical requests share a flight: a fresh rescan must not
+        // resolve with an unrelated refresh that was already running.
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.instanceId ?? null,
+            input.cwd ?? null,
+            input.fresh ?? false,
+            input.refreshModels ?? false,
+          ]),
       },
     }),
     updateProvider: createEnvironmentRpcCommand(runtime, {

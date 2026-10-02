@@ -108,7 +108,19 @@ function groupCommandItems(
   return groups;
 }
 
+export function composerSuggestionOptionId(listId: string, itemId: string): string {
+  // JSON escapes lone UTF-16 surrogates before URI encoding without losing identity.
+  return `${listId}-${encodeURIComponent(JSON.stringify(itemId))}`;
+}
+
+const LISTBOX_LABEL_BY_TRIGGER: Record<ComposerTriggerKind, string> = {
+  path: "Files and folders",
+  "slash-command": "Commands",
+  skill: "Skills",
+};
+
 export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
+  listId: string;
   items: ComposerCommandItem[];
   resolvedTheme: "light" | "dark";
   isLoading: boolean;
@@ -149,7 +161,11 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
         className="dropdown-glass relative flex min-h-0 w-full flex-col overflow-hidden rounded-[20px] shadow-[0_16px_40px_-18px_rgb(0_0_0/55%)] **:data-[slot=scroll-area-scrollbar]:data-[orientation=vertical]:my-4 dark:shadow-[0_18px_44px_-18px_rgb(0_0_0/80%)]"
       >
         {props.items.length > 0 ? (
-          <CommandList className="max-h-72 min-h-0 not-empty:py-3">
+          <CommandList
+            id={props.listId}
+            aria-label={props.triggerKind ? LISTBOX_LABEL_BY_TRIGGER[props.triggerKind] : undefined}
+            className="max-h-72 min-h-0 not-empty:py-3"
+          >
             {groups.map((group, groupIndex) => (
               <div key={group.id}>
                 {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
@@ -162,6 +178,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                   {group.items.map((item) => (
                     <ComposerCommandMenuItem
                       key={item.id}
+                      optionId={composerSuggestionOptionId(props.listId, item.id)}
                       item={item}
                       resolvedTheme={props.resolvedTheme}
                       isActive={props.activeItemId === item.id}
@@ -205,6 +222,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
 });
 
 const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
+  optionId: string;
   item: ComposerCommandItem;
   resolvedTheme: "light" | "dark";
   isActive: boolean;
@@ -216,6 +234,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
 
   return (
     <CommandItem
+      render={<div id={props.optionId} />}
+      aria-selected={props.isActive}
       value={props.item.id}
       data-composer-item-id={props.item.id}
       active={props.isActive}

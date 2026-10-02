@@ -142,6 +142,35 @@ export class ProjectMutationError extends Schema.TaggedErrorClass<ProjectMutatio
   },
 ) {}
 
+/** The environment's Scratch project, created on first request. */
+export const ProjectEnsureScratchResult = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ProjectEnsureScratchResult = typeof ProjectEnsureScratchResult.Type;
+
+/** A project started from just a name, in a new folder the server makes. */
+export const ProjectCreateNewInput = Schema.Struct({
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+});
+export type ProjectCreateNewInput = typeof ProjectCreateNewInput.Type;
+
+export const ProjectCreateNewResult = Schema.Struct({
+  projectId: ProjectId,
+  workspaceRoot: TrimmedNonEmptyString,
+  /** Why the first commit failed. The project and its files exist either way. */
+  commitError: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ProjectCreateNewResult = typeof ProjectCreateNewResult.Type;
+
+/** A server-owned project folder (Scratch, or a new project) could not be made. */
+export class ProjectProvisionError extends Schema.TaggedErrorClass<ProjectProvisionError>()(
+  "ProjectProvisionError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 export const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 export type ProjectEntryKind = typeof ProjectEntryKind.Type;
 
