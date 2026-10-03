@@ -1,5 +1,6 @@
 import {
   latestRootProviderFailure,
+  latestUnheldRun,
   threadErrorSummary,
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -58,6 +59,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as Statement from "effect/unstable/sql/Statement";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedErrorClass<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -284,17 +286,26 @@ export function upsertProviderTurn(
 
 /**
  * A run snapshot captured before a provider turn started can be written back
- * after the cohort moved on (acknowledgement, successor delivery, Stop). Absent
- * means "unchanged", never "cleared".
+ * after other events recorded fields on the run: the delegated-completion
+ * cohort moving on (acknowledgement, successor delivery, Stop), or restart
+ * recovery noting cancelled background work. Absent means "unchanged", never
+ * "cleared".
  */
-function preserveDelegatedCompletion(
+function preserveRunRecordedFields(
   current: OrchestrationV2Run | undefined,
   next: OrchestrationV2Run,
 ): OrchestrationV2Run {
-  if (next.delegatedCompletion !== undefined || current?.delegatedCompletion === undefined) {
-    return next;
-  }
-  return { ...next, delegatedCompletion: current.delegatedCompletion };
+  if (current === undefined) return next;
+  return {
+    ...next,
+    ...(next.delegatedCompletion === undefined && current.delegatedCompletion !== undefined
+      ? { delegatedCompletion: current.delegatedCompletion }
+      : {}),
+    ...(next.restartCancelledBackgroundWork === undefined &&
+    current.restartCancelledBackgroundWork !== undefined
+      ? { restartCancelledBackgroundWork: current.restartCancelledBackgroundWork }
+      : {}),
+  };
 }
 
 function preserveCompletionDelivery(
@@ -392,12 +403,24 @@ export function applyToProjection(
         ...base,
         runs: upsertById(
           base.runs,
-          preserveDelegatedCompletion(
+          preserveRunRecordedFields(
             base.runs.find((run) => run.id === event.payload.id),
             event.payload,
           ),
         ),
       });
+    case "run.background-work-cancelled":
+      return {
+        ...base,
+        runs: base.runs.map((run) =>
+          run.id === event.payload.runId
+            ? {
+                ...run,
+                restartCancelledBackgroundWork: event.payload.restartCancelledBackgroundWork,
+              }
+            : run,
+        ),
+      };
     case "run-attempt.created":
     case "run-attempt.updated":
       return withLocalVisibleTurnItems({
@@ -743,6 +766,9 @@ const encodeThreadPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
 );
 const encodeRunPayload = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2RunJsonSchema));
+const encodeRestartCancelledBackgroundWork = Schema.encodeEffect(
+  Schema.fromJsonString(OrchestrationV2RunJsonSchema.fields.restartCancelledBackgroundWork),
+);
 const encodeRunAttemptPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2RunAttemptJsonSchema),
 );
@@ -1118,9 +1144,7 @@ export function threadShellFromProjection(
       projection.runs,
       projection.turnItems,
       providerSession?.lastError ?? null,
-    ) ??
-    projection.runs.at(-1) ??
-    null;
+    ) ?? latestUnheldRun(projection.runs);
   const activeRun =
     projection.runs
       .filter(isInterruptibleRunForShell)
@@ -1481,6 +1505,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
+    // For run upserts: a snapshot without `path` keeps the value another event recorded there.
+    const keepRecordedRunField = (payload: Statement.Fragment, path: string) => sql`
+      CASE
+        WHEN json_type(excluded.payload_json, ${path}) IS NULL
+          AND json_type(orchestration_v2_projection_runs.payload_json, ${path}) IS NOT NULL
+        THEN json_set(
+          ${payload},
+          ${path},
+          json_extract(orchestration_v2_projection_runs.payload_json, ${path})
+        )
+        ELSE ${payload}
+      END
+    `;
+
     const apply: ProjectionStoreV2Shape["apply"] = (event) =>
       Effect.gen(function* () {
         switch (event.type) {
@@ -1617,19 +1655,26 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 status = excluded.status,
                 requested_at = excluded.requested_at,
                 completed_at = excluded.completed_at,
-                payload_json = CASE
-                  WHEN json_type(excluded.payload_json, '$.delegatedCompletion') IS NULL
-                    AND json_type(orchestration_v2_projection_runs.payload_json, '$.delegatedCompletion') IS NOT NULL
-                  THEN json_set(
-                    excluded.payload_json,
-                    '$.delegatedCompletion',
-                    json_extract(
-                      orchestration_v2_projection_runs.payload_json,
-                      '$.delegatedCompletion'
-                    )
-                  )
-                  ELSE excluded.payload_json
-                END
+                payload_json = ${keepRecordedRunField(
+                  keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedCompletion"),
+                  "$.restartCancelledBackgroundWork",
+                )}
+            `;
+            break;
+          }
+          case "run.background-work-cancelled": {
+            // Only this field changes, so a concurrent lifecycle write is never regressed.
+            const workJson = yield* encodeRestartCancelledBackgroundWork(
+              event.payload.restartCancelledBackgroundWork,
+            );
+            yield* sql`
+              UPDATE orchestration_v2_projection_runs
+              SET payload_json = json_set(
+                payload_json,
+                '$.restartCancelledBackgroundWork',
+                json(${workJson})
+              )
+              WHERE run_id = ${event.payload.runId} AND thread_id = ${event.threadId}
             `;
             break;
           }
@@ -2932,41 +2977,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   THEN json_extract(t.payload_json, '$.forkedFrom.threadId')
                 ELSE NULL
               END AS forked_from_run_source_thread_id,
-              (
-                SELECT r.run_id
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_id,
-              (
-                SELECT r.status
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_status,
-              (
-                SELECT r.requested_at
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_requested_at,
-              (
-                SELECT json_extract(r.payload_json, '$.startedAt')
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_started_at,
-              (
-                SELECT r.completed_at
-                FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                ORDER BY r.ordinal DESC, r.run_id DESC
-                LIMIT 1
-              ) AS latest_run_completed_at,
+              presented.run_id AS latest_run_id,
+              presented.status AS latest_run_status,
+              presented.requested_at AS latest_run_requested_at,
+              json_extract(presented.payload_json, '$.startedAt') AS latest_run_started_at,
+              presented.completed_at AS latest_run_completed_at,
               (
                 SELECT r.run_id
                 FROM orchestration_v2_projection_runs r
@@ -3032,13 +3047,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               (
                 SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items item
+                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
                 INNER JOIN orchestration_v2_projection_runs r ON r.run_id = item.run_id
-                WHERE r.run_id = (
-                  SELECT latest.run_id FROM orchestration_v2_projection_runs latest
-                  WHERE latest.thread_id = t.thread_id
-                  ORDER BY latest.ordinal DESC, latest.run_id DESC LIMIT 1
-                )
+                WHERE r.run_id = presented.run_id
                   AND r.status = 'failed'
+                  AND item.thread_id = t.thread_id
                   AND item.type = 'error' AND item.status = 'failed'
                   AND item.node_id IS json_extract(r.payload_json, '$.rootNodeId')
                 ORDER BY item.updated_at DESC, item.ordinal DESC, item.turn_item_id DESC
@@ -3051,7 +3064,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               (
                 SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items item
-                WHERE item.run_id = blocked.run_id
+                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
+                WHERE item.thread_id = t.thread_id
+                  AND item.run_id = blocked.run_id
                   AND item.type = 'error' AND item.status = 'failed'
                   AND item.node_id IS json_extract(blocked.payload_json, '$.rootNodeId')
                 ORDER BY item.updated_at DESC, item.ordinal DESC, item.turn_item_id DESC
@@ -3146,6 +3161,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND s.status IN ('pending', 'running', 'waiting')
               ) AS live_subagents_json
             FROM orchestration_v2_projection_threads t
+            -- The newest run not waiting in a held queue, matching latestUnheldRun.
+            LEFT JOIN orchestration_v2_projection_runs presented ON presented.run_id = (
+              SELECT candidate.run_id
+              FROM orchestration_v2_projection_runs candidate
+              WHERE candidate.thread_id = t.thread_id
+                AND NOT (
+                  candidate.status = 'queued'
+                  AND json_extract(candidate.payload_json, '$.queueHeld') IS 1
+                )
+              ORDER BY candidate.ordinal DESC, candidate.run_id DESC
+              LIMIT 1
+            )
             LEFT JOIN orchestration_v2_projection_runs blocked ON blocked.run_id = (
               SELECT candidate.run_id
               FROM orchestration_v2_projection_runs candidate

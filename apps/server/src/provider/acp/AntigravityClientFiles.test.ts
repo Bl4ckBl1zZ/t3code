@@ -29,6 +29,28 @@ it.layer(NodeServices.layer)("Antigravity client files", (it) => {
       assert.deepEqual(result, { content: "two" });
     }),
   );
+  it.effect("refuses reads and writes outside the session roots", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped();
+      const outside = yield* fileSystem.makeTempDirectoryScoped();
+      const existing = path.join(outside, "existing.txt");
+      yield* fileSystem.writeFileString(existing, "outside");
+      const input = { fileSystem, path, allowedRoots: [root] };
+      const read = yield* readAntigravityClientTextFile({
+        ...input,
+        request: { sessionId: "test", path: existing },
+      }).pipe(Effect.exit);
+      const write = yield* writeAntigravityClientTextFile({
+        ...input,
+        request: { sessionId: "test", path: path.join(outside, "new.txt"), content: "x" },
+      }).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(read));
+      assert.isTrue(Exit.isFailure(write));
+      assert.isFalse(yield* fileSystem.exists(path.join(outside, "new.txt")));
+    }),
+  );
   it.effect.skipIf(!symlinksSupported)(
     "rejects leaf and ancestor symlinks outside the workspace",
     () =>

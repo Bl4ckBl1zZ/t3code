@@ -42,6 +42,7 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import packageJson from "../../../package.json" with { type: "json" };
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
@@ -1395,7 +1396,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     },
     onEvent: (event: ProviderAdapterV2Event) => Effect.Effect<unknown> = () => Effect.void,
     readChildMetadata?: (threadId: string) => Effect.Effect<unknown>,
-    onRequest: (method: string) => Effect.Effect<void> = () => Effect.void,
+    onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1420,7 +1421,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     {
                       ...client,
                       request: (method, params) =>
-                        onRequest(method).pipe(Effect.andThen(client.request(method, params))),
+                        onRequest(method, params).pipe(
+                          Effect.andThen(client.request(method, params)),
+                        ),
                     } satisfies CodexClient.CodexAppServerClient["Service"],
                     transcript,
                     readChildMetadata,
@@ -1571,6 +1574,119 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         ),
     );
   }
+
+  it.effect("identifies sessions to Codex with the same client info as the provider probe", () =>
+    Effect.gen(function* () {
+      const transcript = makeCodexReplayTranscript({
+        scenario: "initialize-client-info",
+        entries: codexReplayPreamble({
+          nativeThreadId: "client-info-thread",
+          nativeTurnId: "unused",
+          prompt: "unused",
+        }).slice(0, 5),
+      });
+      const initializeParams: Array<unknown> = [];
+      yield* makeCodexReplayHarness(
+        transcript,
+        undefined,
+        () => Effect.void,
+        undefined,
+        (method, params) =>
+          Effect.sync(() => {
+            if (method === "initialize") initializeParams.push(params);
+          }),
+      );
+      // Codex uses clientInfo.name as the request originator. Replays ignore the
+      // version, so pin the whole value here.
+      assert.deepEqual(initializeParams, [
+        {
+          clientInfo: {
+            name: "t3code_desktop",
+            title: "T3 Code Desktop",
+            version: packageJson.version,
+          },
+          capabilities: {
+            experimentalApi: true,
+            optOutNotificationMethods: ["turn/diff/updated"],
+          },
+        },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("unsubscribes from the native thread when it is unloaded", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "unload-thread";
+      const preamble = codexReplayPreamble({
+        nativeThreadId,
+        nativeTurnId: "unused",
+        prompt: "unused",
+      });
+      const transcript = makeCodexReplayTranscript({
+        scenario: "unload-thread",
+        entries: [
+          // initialize + thread/start only; no turn runs.
+          ...preamble.slice(0, 5),
+          {
+            type: "expect_outbound",
+            label: "thread/unsubscribe",
+            frame: { id: 3, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
+          },
+          // Response shape recorded from codex app-server 0.156.1.
+          {
+            type: "emit_inbound",
+            label: "thread/unsubscribe",
+            frame: { id: 3, result: { status: "unsubscribed" } },
+          },
+        ],
+      });
+      const requests: Array<string> = [];
+      const harness = yield* makeCodexReplayHarness(
+        transcript,
+        undefined,
+        () => Effect.void,
+        undefined,
+        (method) => Effect.sync(() => requests.push(method)),
+      );
+      assert.isDefined(harness.runtime.unloadThread);
+      yield* harness.runtime.unloadThread!({ providerThread: harness.providerThread });
+      assert.deepEqual(requests, ["initialize", "thread/start", "thread/unsubscribe"]);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect("keeps the app-server failure as the cause when an unload is rejected", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "unload-thread-rejected";
+      const preamble = codexReplayPreamble({
+        nativeThreadId,
+        nativeTurnId: "unused",
+        prompt: "unused",
+      });
+      const transcript = makeCodexReplayTranscript({
+        scenario: "unload-thread-rejected",
+        entries: [
+          ...preamble.slice(0, 5),
+          {
+            type: "expect_outbound",
+            label: "thread/unsubscribe",
+            frame: { id: 3, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
+          },
+          {
+            type: "emit_inbound",
+            label: "thread/unsubscribe",
+            frame: { id: 3, error: { code: -32600, message: "invalid thread id" } },
+          },
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(transcript);
+      const error = yield* harness.runtime.unloadThread!({
+        providerThread: harness.providerThread,
+      }).pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterProtocolError");
+      const cause = error._tag === "ProviderAdapterProtocolError" ? error.payload : undefined;
+      assert.equal((cause as { _tag?: string } | undefined)?._tag, "CodexAppServerRequestError");
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
 
   it.effect("sends promptless input for a restart continuation", () =>
     Effect.scoped(

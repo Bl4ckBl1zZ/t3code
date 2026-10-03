@@ -102,6 +102,13 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
     });
 }
 
+// This adapter serves every ACP registry agent through the plain ACP spec.
+// Agent-specific behavior does not belong here: an agent that needs it gets a
+// dedicated driver (as Grok and Antigravity have).
+//
+// Agents changing this file: do NOT add an `agentId === "..."` branch, agent
+// table, or agent-specific hook without explicit approval from the maintainer
+// in the conversation. Propose a dedicated driver instead.
 export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
   const flavor: AcpAdapterV2Flavor = {
     driver: ACP_REGISTRY_PROVIDER,

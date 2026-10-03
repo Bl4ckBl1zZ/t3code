@@ -4627,7 +4627,12 @@ describe("AcpAdapterV2", () => {
         const streamedSubagentText = "streamed subagent carryover text";
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+        const promptSettled = yield* Deferred.make<void>();
         const adapter = makeAcpAdapterV2({
+          testHooks: {
+            afterPromptSettledWithBackgroundWork: () =>
+              Deferred.succeed(promptSettled, undefined).pipe(Effect.asVoid),
+          },
           crypto: yield* Crypto.Crypto,
           instanceId,
           flavor: {
@@ -4716,18 +4721,7 @@ describe("AcpAdapterV2", () => {
         yield* runtime.startTurn(
           makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
         );
-        yield* Stream.fromQueue(protocolEvents).pipe(
-          Stream.filter(
-            (event) =>
-              event.direction === "incoming" &&
-              event.stage === "raw" &&
-              typeof event.payload === "string" &&
-              event.payload.includes('"stopReason"'),
-          ),
-          Stream.runHead,
-        );
-        yield* Effect.yieldNow;
-        yield* Effect.yieldNow;
+        yield* Deferred.await(promptSettled);
 
         // Stream assistant text onto the carryover subagent while the deferred
         // turn is still active so assistantText races ahead of task.result.
@@ -6734,6 +6728,146 @@ describe("AcpAdapterV2", () => {
           "wake buffer must not retain turn-1 or turn-2 in-turn-handled ack residue",
         );
       }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("settles a held root turn when the agent starts its own reply to finished work", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const continuationRequests: Array<ProviderContinuationRequest> = [];
+      const promptSettled = yield* Deferred.make<void>();
+      const instanceId = ProviderInstanceId.make("acp-test");
+      let subagentPhase: "spawn" | "complete" = "spawn";
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+      const adapter = makeAcpAdapterV2({
+        testHooks: {
+          afterPromptSettledWithBackgroundWork: () =>
+            Deferred.succeed(promptSettled, undefined).pipe(Effect.asVoid),
+        },
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          deferFinalizeForBackgroundWork: true,
+          enablePostSettleContinuation: true,
+          isProviderWakeNotification: (notification) =>
+            String(notification._meta?.promptId ?? "").startsWith("task-completed-"),
+          extractSubagentUpdate: (toolCall) =>
+            toolCall.toolCallId !== "tool-call-generic-1"
+              ? undefined
+              : {
+                  nativeTaskId: "task-generic-1",
+                  prompt: subagentPhase === "spawn" ? "background subagent" : "",
+                  title: subagentPhase === "spawn" ? "background subagent" : null,
+                  model: null,
+                  status: subagentPhase === "spawn" ? "running" : "completed",
+                  childSessionId: null,
+                  result: subagentPhase === "spawn" ? null : "SUB_DONE",
+                },
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (handler) =>
+                Effect.sync(() => {
+                  sessionUpdateHandler = handler;
+                }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+            }),
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        continuationRequests: {
+          offer: (request) =>
+            Effect.sync(() => {
+              continuationRequests.push(request);
+            }),
+        },
+      });
+      const threadId = ThreadId.make("thread-acp-provider-wake-settles-held-root");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-provider-wake"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
+      );
+      yield* Deferred.await(promptSettled);
+      if (sessionUpdateHandler === undefined) {
+        return yield* Effect.die("session update handler must be wired");
+      }
+
+      // The background work ends; the finish debounce still holds the root.
+      subagentPhase = "complete";
+      yield* sessionUpdateHandler({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-call-generic-1",
+          status: "completed",
+        },
+      });
+      // Inside that debounce the agent starts its own turn about the result.
+      yield* sessionUpdateHandler({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "WAKE_REPLY_TOKEN" },
+        },
+        _meta: { promptId: "task-completed-task-generic-1" },
+      });
+
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver: ACP_TEST_DRIVER,
+        nativeTurnId: "mock-session-1:turn:1",
+      });
+      let terminalStatus: string | null = null;
+      while (terminalStatus === null) {
+        const event = yield* Queue.take(events);
+        assert.isFalse(
+          (event.type === "message.updated" && event.message.text.includes("WAKE_REPLY_TOKEN")) ||
+            (event.type === "turn_item.updated" &&
+              event.turnItem.type === "assistant_message" &&
+              event.turnItem.text.includes("WAKE_REPLY_TOKEN")),
+          "the agent's own reply must not stream into the held root turn",
+        );
+        if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
+          terminalStatus = event.status;
+        }
+      }
+      assert.equal(terminalStatus, "completed");
+      assert.lengthOf(continuationRequests, 1, "the reply opens its own continuation run");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.effect("mid-turn completed mutation defers offer until finalize only when unhandled", () =>

@@ -29,6 +29,7 @@ function renderPendingActions(isRunning: boolean) {
         isComplete: true,
       },
       isRunning,
+      canInterrupt: isRunning,
       showPlanFollowUpPrompt: false,
       promptHasText: false,
       isSendBusy: false,
@@ -49,6 +50,7 @@ function renderStandaloneStop() {
       compact: true,
       pendingAction: null,
       isRunning: true,
+      canInterrupt: true,
       showPlanFollowUpPrompt: false,
       promptHasText: false,
       isSendBusy: false,
@@ -84,6 +86,7 @@ function renderSendButton() {
       compact: true,
       pendingAction: null,
       isRunning: false,
+      canInterrupt: false,
       showPlanFollowUpPrompt: false,
       promptHasText: true,
       isSendBusy: false,
@@ -235,6 +238,7 @@ describe("active-turn primary action", () => {
       createElement(ComposerPrimaryActions, {
         ...activeTurnProps,
         isRunning: true,
+        canInterrupt: true,
         hasSendableContent: false,
       }),
     );
@@ -248,6 +252,7 @@ describe("active-turn primary action", () => {
       createElement(ComposerPrimaryActions, {
         ...activeTurnProps,
         isRunning: true,
+        canInterrupt: true,
         hasSendableContent: true,
       }),
     );

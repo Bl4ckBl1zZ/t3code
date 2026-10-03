@@ -163,9 +163,11 @@ export const make = Effect.fn("ScratchProject.make")(function* (baseDir: string)
    * Claims a fresh folder for a new thread in the Scratch project, named from
    * the server's date, the thread's first words, and its id. Resolves to null
    * when the project is not Scratch (or Scratch is not offered). Each leaf is
-   * created without `recursive`, so the create itself claims it: a taken short
-   * name falls back to the full id, which only the same thread can hold. A
-   * thread whose id the server has yet to allocate gets a random one.
+   * created without `recursive`, so the create itself claims it and a folder
+   * is never shared: a taken short name falls back to the full id, and a taken
+   * full id (ids that normalize alike, a retried launch) to the full id plus a
+   * random suffix. A thread whose id the server has yet to allocate gets a
+   * random one.
    */
   const threadFolder = (input: {
     readonly projectId: ProjectId;
@@ -202,8 +204,11 @@ export const make = Effect.fn("ScratchProject.make")(function* (baseDir: string)
       const shortFolder = folderFor(id.slice(0, 8));
       if (yield* claim(shortFolder)) return shortFolder;
       const fullFolder = folderFor(id);
-      yield* claim(fullFolder);
-      return fullFolder;
+      if (yield* claim(fullFolder)) return fullFolder;
+      while (true) {
+        const folder = `${fullFolder}-${(yield* randomUuidV4).slice(0, 8)}`;
+        if (yield* claim(folder)) return folder;
+      }
     });
 
   /**

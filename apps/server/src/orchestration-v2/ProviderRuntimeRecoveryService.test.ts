@@ -295,6 +295,129 @@ it.effect("retires background commands that outlived their provider process", ()
   }).pipe(Effect.provide(layer));
 });
 
+it.effect(
+  "records cancelled work on the provider thread that lost it after a provider switch",
+  () => {
+    const threadId = ThreadId.make("thread_switch_note");
+    const claudeRunId = RunId.make("run_switch_note_claude");
+    const codexRunId = RunId.make("run_switch_note_codex");
+    const claudeThreadId = ProviderThreadId.make("provider_thread_switch_note_claude");
+    const codexThreadId = ProviderThreadId.make("provider_thread_switch_note_codex");
+    const claude = ProviderInstanceId.make("claude");
+    const codex = ProviderInstanceId.make("codex");
+    let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
+      null;
+    // Claude launched a background command and subagent, then the thread switched to Codex.
+    const projection = {
+      thread: { id: threadId, providerInstanceId: codex },
+      runtimeRequests: [],
+      providerSessions: [],
+      providerThreads: [],
+      providerTurns: [],
+      runs: [
+        {
+          id: claudeRunId,
+          ordinal: 1,
+          status: "completed",
+          providerInstanceId: claude,
+          providerThreadId: claudeThreadId,
+        },
+        {
+          id: codexRunId,
+          ordinal: 2,
+          status: "completed",
+          providerInstanceId: codex,
+          providerThreadId: codexThreadId,
+        },
+      ],
+      attempts: [],
+      nodes: [],
+      subagents: [],
+      messages: [],
+      turnItems: [
+        {
+          id: TurnItemId.make("turn_item_switch_note_command"),
+          runId: claudeRunId,
+          nodeId: null,
+          providerThreadId: claudeThreadId,
+          type: "command_execution",
+          title: null,
+          input: "pnpm dev",
+          background: true,
+          status: "running",
+        },
+        {
+          id: TurnItemId.make("turn_item_switch_note_subagent"),
+          runId: claudeRunId,
+          nodeId: null,
+          providerThreadId: null,
+          type: "subagent",
+          title: "Background subagent",
+          prompt: "Watch the build",
+          providerInstanceId: claude,
+          status: "running",
+        },
+      ],
+      contextHandoffs: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const layer = ProviderRuntimeRecovery.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getShellSnapshot: () =>
+              Effect.succeed({
+                schemaVersion: 2,
+                snapshotSequence: 0,
+                threads: [{ id: threadId }],
+                archivedThreads: [],
+              } as never),
+            getThreadProjection: () => Effect.succeed(projection),
+          }),
+          Layer.mock(EventSink.EventSinkV2)({
+            commitCommand: (input) => {
+              committedInput = input;
+              return Effect.succeed({ committed: true, cancelledEffectCount: 0 } as never);
+            },
+          }),
+          IdAllocator.layer,
+          Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.succeed(false) }),
+          Layer.mock(EffectOutbox.EffectOutboxV2)({
+            reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+          }),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile("startup");
+      const command = committedInput;
+      assert.isNotNull(command);
+      if (command === null) return;
+      // Settled runs keep their status; only the recorded work changes.
+      assert.isFalse(command.events.some((event) => event.type === "run.updated"));
+      const recorded = command.events.flatMap((event) =>
+        event.type === "run.background-work-cancelled" ? [event.payload] : [],
+      );
+      // The Codex run is later, but only Claude's turns may be told about it.
+      assert.deepEqual(
+        recorded.map((entry) => ({
+          runId: entry.runId,
+          work: entry.restartCancelledBackgroundWork.map((work) => [work.kind, work.label]),
+        })),
+        [
+          {
+            runId: claudeRunId,
+            work: [
+              ["shell", "pnpm dev"],
+              ["subagent", "Background subagent"],
+            ],
+          },
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  },
+);
+
 it.effect("uses the same reconciliation path to cancel runtime requests during shutdown", () => {
   const threadId = ThreadId.make("thread_shutdown_requests");
   let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =

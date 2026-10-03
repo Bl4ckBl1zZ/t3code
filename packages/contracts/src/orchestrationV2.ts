@@ -8,6 +8,7 @@ import { ToolActivitySurface, ToolActivityIcon, ToolActivitySource } from "./too
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
 
 import {
   CheckpointId,
@@ -450,6 +451,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /** Latest accepted rollback. Only its failure is recorded in `rollbackFailure`. */
+  rollbackRequestId: Schema.optional(CommandId),
   /** Latest rollback that failed after every retry; cleared when the next rollback starts. */
   rollbackFailure: Schema.optional(
     Schema.NullOr(
@@ -521,13 +524,28 @@ export type OrchestrationV2DelegatedCompletionDelivery =
 export const OrchestrationV2DelegatedCompletionCohort = Schema.Struct({
   disposition: Schema.Literals(["open", "stopped", "disposed"]),
   nextGeneration: PositiveInt,
-  // Optional for compatibility with cohorts persisted before bounded
-  // follow-up delivery was introduced. Missing means no delivery has settled.
-  settledDeliveryCount: Schema.optional(NonNegativeInt),
   delivery: Schema.NullOr(OrchestrationV2DelegatedCompletionDelivery),
 });
 export type OrchestrationV2DelegatedCompletionCohort =
   typeof OrchestrationV2DelegatedCompletionCohort.Type;
+
+/** Background work that restart recovery cancelled; the next provider turn is told once. */
+export const OrchestrationV2RestartCancelledBackgroundWork = Schema.Struct({
+  kind: Schema.Literals(["subagent", "shell", "monitor", "task"]),
+  label: TrimmedNonEmptyString,
+  /** Stable identity (turn item or provider task id) so same-named work is not merged. */
+  id: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2RestartCancelledBackgroundWork =
+  typeof OrchestrationV2RestartCancelledBackgroundWork.Type;
+
+/** Replaces a run's recorded restart-cancelled work without touching its lifecycle. */
+export const OrchestrationV2RunBackgroundWorkCancelled = Schema.Struct({
+  runId: RunId,
+  restartCancelledBackgroundWork: Schema.Array(OrchestrationV2RestartCancelledBackgroundWork),
+});
+export type OrchestrationV2RunBackgroundWorkCancelled =
+  typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
 export const OrchestrationV2RestartContinuation = Schema.Struct({
   messageId: MessageId,
@@ -558,6 +576,13 @@ export const OrchestrationV2Run = Schema.Struct({
   contextHandoffId: Schema.NullOr(ContextHandoffId),
   /** Links server-generated restart continuations to the interrupted run. */
   restartContinuationOfRunId: Schema.optional(RunId),
+  /**
+   * Set by restart recovery on the thread's latest started run. Delivered to
+   * the provider with the first later run that reaches a provider turn.
+   */
+  restartCancelledBackgroundWork: Schema.optional(
+    Schema.Array(OrchestrationV2RestartCancelledBackgroundWork),
+  ),
   sourcePlanRef: Schema.optional(
     Schema.Struct({
       threadId: ThreadId,
@@ -1789,6 +1814,11 @@ export const OrchestrationV2DomainEvent = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("run.background-work-cancelled"),
+    payload: OrchestrationV2RunBackgroundWorkCancelled,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("run-attempt.created"),
     payload: OrchestrationV2RunAttempt,
   }),
@@ -2624,6 +2654,11 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("run.background-work-cancelled"),
+    payload: OrchestrationV2RunBackgroundWorkCancelled,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("run-attempt.created"),
     payload: OrchestrationV2RunAttemptJson,
   }),
@@ -3227,6 +3262,48 @@ export const OrchestrationV2ThreadDetailSnapshot = Schema.Struct({
 });
 export type OrchestrationV2ThreadDetailSnapshot = typeof OrchestrationV2ThreadDetailSnapshot.Type;
 
+const knownDomainEventTypes: ReadonlySet<string> = new Set(
+  OrchestrationV2DomainEvent.members.flatMap((member) => {
+    const type = member.fields.type;
+    return "literals" in type ? type.literals : [type.literal];
+  }),
+);
+
+/**
+ * A thread event whose type this build does not know. Newer servers add event
+ * types; older clients decode them to this case and skip them, still advancing
+ * their resume cursor, instead of failing the whole subscription. A known type
+ * whose payload does not decode still fails. Decode-only: servers never send it.
+ */
+const OrchestrationV2UnknownThreadStreamEvent = Schema.Struct({
+  kind: Schema.Literal("event"),
+  sequence: NonNegativeInt,
+  event: Schema.Struct({
+    type: Schema.String.check(
+      Schema.makeFilter(
+        (type: string) =>
+          !knownDomainEventTypes.has(type) || "A known event type must decode in full.",
+      ),
+    ),
+  }),
+}).pipe(
+  Schema.decodeTo(
+    Schema.Struct({
+      kind: Schema.Literal("unknown-event"),
+      sequence: NonNegativeInt,
+      eventType: Schema.String,
+    }),
+    {
+      decode: SchemaGetter.transform((item) => ({
+        kind: "unknown-event" as const,
+        sequence: item.sequence,
+        eventType: item.event.type,
+      })),
+      encode: SchemaGetter.forbidden(() => "Servers never send unknown thread events."),
+    },
+  ),
+);
+
 export const OrchestrationV2ThreadStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("synchronized"),
@@ -3241,6 +3318,8 @@ export const OrchestrationV2ThreadStreamItem = Schema.Union([
     sequence: NonNegativeInt,
     event: OrchestrationV2DomainEvent,
   }),
+  // After the known arm: union members are tried in order.
+  OrchestrationV2UnknownThreadStreamEvent,
 ]);
 export type OrchestrationV2ThreadStreamItem = typeof OrchestrationV2ThreadStreamItem.Type;
 

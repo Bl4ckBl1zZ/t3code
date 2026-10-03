@@ -736,6 +736,58 @@ it.effect("stays silent about placement when there was no workspace to write to"
   }),
 );
 
+it.effect("tells the provider once about background work a restart cancelled", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const original = makeStartProjection({ now, text: "what next?", attachments: [] });
+    const startRun = original.runs[0]!;
+    // The earlier turn settled with a background command the restart killed.
+    const earlierRun = {
+      ...startRun,
+      id: RunId.make("run:provider-turn-start-uploads:earlier"),
+      ordinal: 1,
+      userMessageId: MessageId.make("message:provider-turn-start-uploads:earlier"),
+      activeAttemptId: RunAttemptId.make("run-attempt:provider-turn-start-uploads:earlier"),
+      status: "completed" as const,
+      restartCancelledBackgroundWork: [{ kind: "shell" as const, label: "pnpm dev" }],
+    };
+    const projection = {
+      ...original,
+      runs: [earlierRun, { ...startRun, ordinal: 2 }],
+    };
+    const startInputs = yield* Ref.make<ReadonlyArray<ProviderAdapterV2TurnMessage>>([]);
+    const placementWrites = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
+    const layer = makeStartTestLayer({
+      projection,
+      now,
+      startInputs,
+      placementWrites,
+      materialization: {
+        materialized: [],
+        promptBlock: null,
+        inlineAttachments: [],
+        outcome: "written",
+      },
+    });
+    yield* Effect.gen(function* () {
+      yield* (yield* ProviderTurnStartServiceV2).start({
+        threadId: startThreadId,
+        runId: startRunId,
+      });
+    }).pipe(Effect.provide(layer));
+    assert.equal(
+      (yield* Ref.get(startInputs))[0]?.text,
+      [
+        "Note: the T3 server restarted, and this background work was cancelled before it finished. It will not report back:",
+        "- shell: pnpm dev",
+        "",
+        "User message:",
+        "what next?",
+      ].join("\n"),
+    );
+  }),
+);
+
 it.effect("restart continuation never falls back to a fresh provider conversation", () =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;

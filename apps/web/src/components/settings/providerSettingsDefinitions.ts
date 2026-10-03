@@ -135,7 +135,6 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
   {
     value: ProviderDriverKind.make("acpRegistry"),
     label: "ACP Registry",
-    badgeLabel: "V2 Preview",
     settingsSchema: AcpRegistrySettings,
     hasDefaultInstance: false,
   },
@@ -147,7 +146,6 @@ export const PROVIDER_SETTINGS_DEFINITIONS: readonly ProviderSettingsDefinition[
   {
     value: ProviderDriverKind.make("pi"),
     label: "Pi",
-    badgeLabel: "Early Access",
     settingsSchema: PiSettings,
   },
   {

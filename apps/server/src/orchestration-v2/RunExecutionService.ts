@@ -53,6 +53,9 @@ import { makeProviderFailure, makeProviderFailureTurnItem } from "./ProviderFail
 
 export interface ProviderEventRoutingState {
   readonly ownedThreadIds: ReadonlySet<ThreadId>;
+  // Set once this run's root turn ended. A child thread created after that
+  // belongs to the run that is live then, so this one no longer adopts it.
+  readonly rootTurnEnded: boolean;
   readonly ownedProviderThreadIds: ReadonlySet<ProviderThreadId>;
   readonly ownedProviderTurnIds: ReadonlySet<ProviderTurnId>;
   readonly rootProviderTurnId: ProviderTurnId | null;
@@ -120,8 +123,14 @@ function isRunOwnedSubagentTerminalStatus(
   return status === "interrupted" || status === "failed" || status === "cancelled";
 }
 
+/**
+ * Whether a new run takes over a subagent's child thread, so a later message
+ * can resume it there. A running subagent stays with the run that launched it,
+ * which keeps ingesting until it ends; taking it over too would store its
+ * events twice. An interrupted, failed or cancelled one is never resumed.
+ */
 export function canRouteRelatedSubagent(status: OrchestrationV2Subagent["status"]): boolean {
-  return status !== "interrupted" && status !== "failed" && status !== "cancelled";
+  return status === "completed";
 }
 
 function emptyOpenRunOwnedSubagentProjection(): OpenRunOwnedSubagentProjection {
@@ -272,6 +281,7 @@ export function makeProviderEventRoutingState(input: {
 }): ProviderEventRoutingState {
   return {
     ownedThreadIds: new Set([input.identity.threadId, ...(input.relatedThreadIds ?? [])]),
+    rootTurnEnded: false,
     ownedProviderThreadIds: new Set([
       input.identity.providerThreadId,
       ...(input.relatedProviderThreadIds ?? []),
@@ -314,6 +324,7 @@ export function routeProviderEvent(
         return [true, state];
       }
       const isOwnedSubagent =
+        !state.rootTurnEnded &&
         event.appThread.lineage.relationshipToParent === "subagent" &&
         event.appThread.lineage.parentThreadId !== null &&
         ownsThread(event.appThread.lineage.parentThreadId);
@@ -369,7 +380,9 @@ export function routeProviderEvent(
         state,
       ];
     case "turn.terminal":
-      return [event.providerTurnId === state.rootProviderTurnId, state];
+      return event.providerTurnId === state.rootProviderTurnId
+        ? [true, { ...state, rootTurnEnded: true }]
+        : [false, state];
   }
 }
 
@@ -590,9 +603,14 @@ export const layer: Layer.Layer<
         const checkpointCaptureCommandId = CommandId.make(
           `command:effect:checkpoint.capture:${input.run.id}`,
         );
+        // Stopped runs capture too: their checkpoint is the rollback point for
+        // the next message. The capture is enqueued with these terminal events,
+        // ahead of any later run's start on this thread's effect lane.
         const finalization = {
           effects:
-            input.terminal.status === "completed"
+            input.terminal.status === "completed" ||
+            input.terminal.status === "interrupted" ||
+            input.terminal.status === "cancelled"
               ? [
                   {
                     id: `effect:checkpoint.capture:${input.run.id}`,

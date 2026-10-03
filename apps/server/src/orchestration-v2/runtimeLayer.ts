@@ -52,6 +52,7 @@ import { layer as threadFeedbackServiceLayer } from "./ThreadFeedbackService.ts"
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadSearchQueryLayer } from "./ThreadSearchQuery.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
+import { layer as threadCommandExecutorLayer } from "./ThreadCommandExecutor.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
@@ -94,7 +95,11 @@ const legacyV1ThreadImporterProvided = legacyV1ThreadImporterLayer.pipe(
 const providerEventIngestorProvided = providerEventIngestorLayer.pipe(
   // The same `storesLayer` reference the event sink gets, so layer memoization
   // hands the ingestor the projection everything else already writes to.
-  Layer.provide(Layer.mergeAll(eventSinkProvided, idAllocatorLayer, storesLayer)),
+  // The same executor reference the orchestrator gets, so both share one
+  // per-thread lock.
+  Layer.provide(
+    Layer.mergeAll(eventSinkProvided, idAllocatorLayer, storesLayer, threadCommandExecutorLayer),
+  ),
 );
 
 const checkpointServiceProvided = checkpointServiceLayer.pipe(Layer.provide(idAllocatorLayer));

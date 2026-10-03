@@ -298,9 +298,12 @@ Use `create_threads` instead for a batch that shares the caller's checkout.
 ### `t3_thread_list`
 
 Lists durable thread shells in the calling thread's project, newest first.
-Callers can filter by title, run status, and whether app-owned sub-agent threads
-are included. Results are bounded and offset-paginated. Deleted threads and
-threads from other projects are never exposed.
+Callers can filter by title, run status, settled state (`settled: true` lists
+threads the user or auto-settlement moved out of the active list), and whether
+app-owned sub-agent threads are included. Results are bounded and
+offset-paginated. Deleted threads and threads from other projects are never
+exposed. Each listed thread, and `t3_thread_read`'s thread detail, reports
+`settled` and `settledAt`.
 
 ### `t3_thread_read`
 

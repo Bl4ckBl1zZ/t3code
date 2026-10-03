@@ -19,7 +19,10 @@ interface PendingActionState {
 interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
+  /** The turn is running: sending queues instead of starting a turn. */
   isRunning: boolean;
+  /** Stop can reach a run, including one still preparing or starting. */
+  canInterrupt: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -62,6 +65,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  canInterrupt,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -107,7 +111,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   if (pendingAction) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
-        {isRunning ? renderStopGenerationButton(true) : null}
+        {canInterrupt ? renderStopGenerationButton(true) : null}
         {pendingAction.questionIndex > 0 ? (
           compact ? (
             <Button
@@ -156,7 +160,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (isRunning && !hasSendableContent) {
+  if (canInterrupt && !hasSendableContent) {
     return renderStopGenerationButton(false);
   }
 

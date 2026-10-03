@@ -111,6 +111,10 @@ fresh one unread. The queue also pauses when a turn fails, since the same provid
 fail the next message too. A message queued for a different provider still sends. Your messages,
 their order and their attachments are all kept.
 
+Press `Option+Up` on macOS or `Alt+Up` on Windows and Linux with the cursor at the start of the
+composer to edit the most recently queued message. Change `thread.editQueuedMessage` in
+**Settings → Keybindings** to use another shortcut.
+
 A paused queue says **Paused** above its rows. Edit, reorder or remove whatever you want first,
 then choose **Resume** to start the message at the top and let the rest follow. Nothing sends
 until you do.
@@ -277,7 +281,8 @@ how many are working, done or failed and how long the group has run. Expand it t
 subagent; hover one for its model, status and progress.
 
 Subagent threads started by the agent can't take messages; message the parent
-thread instead. Their composer is replaced by the subagent's status.
+thread instead. Their composer is replaced by the subagent's status. When such a subagent needs an
+approval or an answer, the parent thread asks for it.
 
 On web and desktop, the thread details card floats in the space beside the conversation when the
 window leaves room for it, without narrowing the conversation. When it does not, the details button

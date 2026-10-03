@@ -64,7 +64,8 @@ export interface CheckpointRollbackServiceV2Shape {
   /**
    * Records that the rollback requested by `requestId` failed after every
    * retry, so clients waiting on it stop and show `cause`'s reason. The next
-   * rollback of the thread clears it.
+   * rollback of the thread clears it, and a late failure from a rollback it
+   * superseded is dropped.
    */
   readonly recordPermanentFailure: (input: {
     readonly threadId: ThreadId;
@@ -179,8 +180,15 @@ export const layer: Layer.Layer<
       });
 
       const targetOrdinal = checkpoint.appRunOrdinal ?? 0;
+      // Stopped and failed runs after the target leave the provider
+      // conversation too, so they must not stay visible.
       const runsToRollback = projection.runs.filter(
-        (run) => run.ordinal > targetOrdinal && run.status === "completed",
+        (run) =>
+          run.ordinal > targetOrdinal &&
+          (run.status === "completed" ||
+            run.status === "interrupted" ||
+            run.status === "failed" ||
+            run.status === "cancelled"),
       );
       // Rolled-back turns stay in the audit history, but no longer exist in
       // the provider conversation and must not be counted by a later rewind.
@@ -359,6 +367,13 @@ export const layer: Layer.Layer<
       Effect.gen(function* () {
         const { thread } = yield* projections.getThreadRecords(input.threadId, []);
         if (thread.deletedAt !== null) return;
+        // A newer rollback superseded this one; its late failure is not news.
+        if (
+          thread.rollbackRequestId !== undefined &&
+          thread.rollbackRequestId !== input.requestId
+        ) {
+          return;
+        }
         const now = yield* DateTime.now;
         const id = yield* ids.allocate.event({ threadId: input.threadId });
         yield* eventSink.write({

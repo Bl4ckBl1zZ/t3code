@@ -14,6 +14,26 @@ function asTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/** A Claude `Skill` call: the skill it loads and the arguments it passes, if any. */
+export function claudeSkillInvocation(
+  toolName: string | null | undefined,
+  input: unknown,
+): { readonly name: string; readonly args: string | undefined } | undefined {
+  if (toolName !== "Skill") return undefined;
+  const record = asRecord(input);
+  const name = asTrimmedString(record?.skill);
+  return name === undefined ? undefined : { name, args: asTrimmedString(record?.args) };
+}
+
+/** Activity log heading a dynamic tool derives from its input: the skill a Claude `Skill` call loads. */
+export function dynamicToolTitle(
+  toolName: string | null | undefined,
+  input: unknown,
+): string | undefined {
+  const skill = claudeSkillInvocation(toolName, input);
+  return skill === undefined ? undefined : `Skill: ${skill.name}`;
+}
+
 function recordHasKeys(
   value: Record<string, unknown> | undefined,
 ): value is Record<string, unknown> {

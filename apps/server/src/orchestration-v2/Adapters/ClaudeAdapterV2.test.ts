@@ -56,15 +56,18 @@ import {
   type ProviderAdapterV2TurnInput,
 } from "../ProviderAdapter.ts";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
+import { makeProviderFailure } from "../ProviderFailure.ts";
 import {
   CLAUDE_AGENT_SDK_QUERY_PROTOCOL,
   CLAUDE_DEFAULT_INSTANCE_ID,
   CLAUDE_PROVIDER,
   CLAUDE_READ_ONLY_ALLOWED_TOOLS,
   CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS,
+  CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
   CLAUDE_T3_MCP_TOOL_WILDCARD,
   ClaudeAdapterV2Driver,
   ClaudeAgentSdkQueryRunner,
+  ClaudeBackgroundWorkBlocksQueryReplacementError,
   ClaudeProviderCapabilitiesV2,
   claudeEffectiveQueryPolicyKey,
   claudePromptUuid,
@@ -138,6 +141,7 @@ function makeClaudeTestTurnInput(input: {
   readonly providerTurnOrdinal?: number;
   readonly messageCreatedBy?: ProviderAdapterV2TurnInput["message"]["createdBy"];
   readonly messageCreationSource?: ProviderAdapterV2TurnInput["message"]["creationSource"];
+  readonly modelSelection?: ModelSelection;
   readonly runtimePolicy?: ProviderAdapterV2RuntimePolicy;
 }): ProviderAdapterV2TurnInput {
   return {
@@ -156,7 +160,7 @@ function makeClaudeTestTurnInput(input: {
       text: input.text,
       attachments: input.attachments,
     },
-    modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+    modelSelection: input.modelSelection ?? CLAUDE_TEST_MODEL_SELECTION,
     runtimePolicy: input.runtimePolicy ?? CLAUDE_TEST_RUNTIME_POLICY,
   };
 }
@@ -361,6 +365,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       headers: {
         Authorization: "Bearer secret-claude-token",
       },
+      timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
     },
   } as const;
 
@@ -554,6 +559,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
             headers: {
               Authorization: "Bearer secret-claude-token",
             },
+            timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
           },
         },
       });
@@ -1503,7 +1509,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
 
-  it.effect("titles Claude Read and search tools with their path and query", () =>
+  it.effect("titles Claude reads, searches, and skills with what they act on", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeWakeHarness;
@@ -1521,6 +1527,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           { id: "image", name: "Read", input: { file_path: " /workspace/reference.png " } },
           { id: "text", name: "Read", input: { file_path: "/workspace/README.md" } },
           { id: "search", name: "Grep", input: { pattern: "TODO", path: "/workspace/src" } },
+          { id: "skill", name: "Skill", input: { skill: "full-send" } },
         ];
         yield* Queue.offer(
           harness.sdkMessages,
@@ -1578,6 +1585,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(titleOf("image"), "Read /workspace/reference.png");
         assert.equal(titleOf("text"), "Read /workspace/README.md");
         assert.equal(titleOf("search"), "Searched TODO in src");
+        assert.equal(titleOf("skill"), "Skill: full-send");
       }),
     ).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );
@@ -3960,6 +3968,280 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect.each(["requested", "observed-before", "observed-after", "inherit"] as const)(
+    "records the subagent model from %s without inheriting the parent override",
+    (source) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarness;
+          const now = yield* DateTime.now;
+          const toolUseId = "toolu-subagent-model";
+          const parentModel = "claude-opus-4-6";
+          const observedModel = "claude-haiku-4-5-20251001";
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-subagent-model"),
+              text: "Spawn a Haiku subagent.",
+              attachments: [],
+              modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: parentModel },
+            }),
+          );
+          const observed = claudeSdkFrame({
+            type: "assistant",
+            parent_tool_use_id: toolUseId,
+            message: { model: observedModel, content: [] },
+            uuid: "00000000-0000-4000-8000-000000000206",
+            session_id: WAKE_NATIVE_SESSION,
+          });
+          if (source === "observed-before") yield* Queue.offer(harness.sdkMessages, observed);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "assistant",
+              parent_tool_use_id: null,
+              message: {
+                model: parentModel,
+                content: [
+                  {
+                    type: "tool_use",
+                    id: toolUseId,
+                    name: "Agent",
+                    input: {
+                      description: "Haiku puzzle",
+                      subagent_type: "general-purpose",
+                      model: source === "inherit" ? "inherit" : "haiku",
+                      prompt: "Solve the puzzle.",
+                    },
+                  },
+                ],
+              },
+              uuid: "00000000-0000-4000-8000-000000000209",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_started",
+              task_id: "task-subagent-model",
+              tool_use_id: toolUseId,
+              description: "Haiku puzzle",
+              task_type: "local_agent",
+              uuid: "00000000-0000-4000-8000-000000000207",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          if (source === "observed-after") yield* Queue.offer(harness.sdkMessages, observed);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000000208",
+              result: "Spawned the subagent.",
+            }),
+          );
+          yield* awaitUntil(() => harness.terminalEvents().length === 1, "subagent model turn");
+          const subagents = harness.events.filter((event) => event.type === "subagent.updated");
+          const initialModel =
+            source === "observed-before"
+              ? observedModel
+              : source === "inherit"
+                ? parentModel
+                : "haiku";
+          assert.equal(subagents[0]?.subagent.model, initialModel);
+          assert.equal(
+            subagents.at(-1)?.subagent.model,
+            source.startsWith("observed") ? observedModel : initialModel,
+          );
+          const child = harness.events.find((event) => event.type === "app_thread.created");
+          assert.equal(child?.appThread.modelSelection?.model, initialModel);
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
+
+  it.effect("hangs a subagent's own subagent off it and wakes the root only for its end", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const CHILD_TASK_ID = "task-nested-child";
+        const CHILD_TOOL_USE_ID = "toolu-nested-child";
+        const CHILD_SUMMARY = "CHILD_DONE";
+        const GRANDCHILD_TASK_ID = "task-nested-grandchild";
+        const GRANDCHILD_TOOL_USE_ID = "toolu-nested-grandchild";
+        const SUBAGENT_MODEL = "claude-haiku-4-5-20251001";
+        const taskStarted = (input: {
+          readonly taskId: string;
+          readonly toolUseId: string;
+          readonly spawnDepth: number;
+          readonly uuid: string;
+        }) =>
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_started",
+            task_id: input.taskId,
+            tool_use_id: input.toolUseId,
+            description: `Agent ${input.taskId}`,
+            subagent_type: "general-purpose",
+            task_type: "local_agent",
+            prompt: `Run ${input.taskId}.`,
+            spawn_depth: input.spawnDepth,
+            uuid: input.uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+        const taskNotification = (input: {
+          readonly taskId: string;
+          readonly toolUseId: string;
+          readonly summary: string;
+          readonly uuid: string;
+        }) =>
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_notification",
+            task_id: input.taskId,
+            tool_use_id: input.toolUseId,
+            status: "completed",
+            output_file: `/tmp/${input.taskId}.output`,
+            summary: input.summary,
+            uuid: input.uuid,
+            session_id: WAKE_NATIVE_SESSION,
+          });
+
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const latestSubagent = (taskId: string) =>
+          harness.events
+            .flatMap((event) =>
+              event.type === "subagent.updated" && event.subagent.nativeTaskRef?.nativeId === taskId
+                ? [event.subagent]
+                : [],
+            )
+            .at(-1);
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-nested-wake-a"),
+            text: "Start a background agent that starts its own.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          taskStarted({
+            taskId: CHILD_TASK_ID,
+            toolUseId: CHILD_TOOL_USE_ID,
+            spawnDepth: 1,
+            uuid: "00000000-0000-4000-8000-000000000a01",
+          }),
+        );
+        // Only the child's own snapshot carries the Agent call that starts the
+        // grandchild, and with it the child's model.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: SUBAGENT_MODEL,
+              id: "msg_nested_child",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: GRANDCHILD_TOOL_USE_ID,
+                  name: "Agent",
+                  input: { prompt: "Run the grandchild.", run_in_background: true },
+                },
+              ],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+            parent_tool_use_id: CHILD_TOOL_USE_ID,
+            uuid: "00000000-0000-4000-8000-000000000a02",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          taskStarted({
+            taskId: GRANDCHILD_TASK_ID,
+            toolUseId: GRANDCHILD_TOOL_USE_ID,
+            spawnDepth: 2,
+            uuid: "00000000-0000-4000-8000-000000000a03",
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000a04",
+            result: "Started the agent.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
+        const child = latestSubagent(CHILD_TASK_ID);
+        const grandchild = latestSubagent(GRANDCHILD_TASK_ID);
+        assert.equal(child?.model, SUBAGENT_MODEL);
+        assert.equal(grandchild?.parentNodeId, child?.id);
+        assert.equal(grandchild?.model, SUBAGENT_MODEL, "a nested subagent runs on its owner's");
+
+        // The grandchild's end goes to the child; only the child's end wakes
+        // the root, and names the wake.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          taskNotification({
+            taskId: GRANDCHILD_TASK_ID,
+            toolUseId: GRANDCHILD_TOOL_USE_ID,
+            summary: "GRANDCHILD_DONE",
+            uuid: "00000000-0000-4000-8000-000000000a05",
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          taskNotification({
+            taskId: CHILD_TASK_ID,
+            toolUseId: CHILD_TOOL_USE_ID,
+            summary: CHILD_SUMMARY,
+            uuid: "00000000-0000-4000-8000-000000000a06",
+          }),
+        );
+        yield* awaitUntil(() => harness.continuationRequests.length > 0, "continuation request");
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.equal(harness.continuationRequests[0]?.detail, CHILD_SUMMARY);
+
+        // The continuation drain completes both cards.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000a07",
+            result: "The agent finished.",
+            origin: { kind: "task-notification" },
+          }),
+        );
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-nested-wake-b"),
+            text: "Background task completed.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 2, "continuation terminal");
+        assert.equal(latestSubagent(CHILD_TASK_ID)?.status, "completed");
+        assert.equal(latestSubagent(GRANDCHILD_TASK_ID)?.status, "completed");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("extracts text from direct content-block subagent results", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -4916,6 +5198,169 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.isFalse(yield* hasWorkForThread(harness.providerThread));
         assert.lengthOf(harness.terminalEvents(), 1);
         assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("refuses a model change that would kill a running background subagent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const SUBAGENT_TASK_ID = "task-model-change-running-subagent";
+        const SUBAGENT_TOOL_USE_ID = "toolu-model-change-running-subagent";
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-v2-model-change-running-subagent-",
+        });
+        const processQueues: Array<Queue.Queue<SDKMessage>> = [];
+        const events: Array<ProviderAdapterV2Event> = [];
+        const adapter = makeClaudeAdapterV2({
+          instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          idAllocator,
+          continuationRequests: { offer: () => Effect.void },
+          queryRunner: {
+            allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),
+            open: () =>
+              Effect.gen(function* () {
+                const sdkMessages = yield* Queue.unbounded<SDKMessage>();
+                processQueues.push(sdkMessages);
+                return {
+                  messages: Stream.fromQueue(sdkMessages),
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Queue.shutdown(sdkMessages),
+                };
+              }),
+            forkSession: () => Effect.die("unused forkSession"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const threadId = ThreadId.make("thread-claude-model-change-running-subagent");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(
+            "provider-session-claude-model-change-running-subagent",
+          ),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        const terminals = () =>
+          events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "turn.terminal" }> =>
+              event.type === "turn.terminal",
+          );
+        const now = yield* DateTime.now;
+
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-model-change-running-subagent-a"),
+            text: "Spawn a background subagent and stop.",
+            attachments: [],
+          }),
+        );
+        const firstProcess = processQueues[0]!;
+        yield* Queue.offer(
+          firstProcess,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_started",
+            task_id: SUBAGENT_TASK_ID,
+            tool_use_id: SUBAGENT_TOOL_USE_ID,
+            description: "Background research",
+            subagent_type: "general-purpose",
+            task_type: "local_agent",
+            prompt: "Research, then report.",
+            uuid: "00000000-0000-4000-8000-000000000901",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* Queue.offer(
+          firstProcess,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000902",
+            result: "Spawned the subagent in the background.",
+          }),
+        );
+        yield* awaitUntil(() => terminals().length === 1, "first turn terminal");
+        const settledTurn = terminals()[0]!;
+
+        // The subagent runs inside the first CLI process. Another model needs
+        // another process, so the turn must not start and close this one.
+        const switchTurn = (attempt: string) =>
+          runtime.startTurn({
+            ...makeClaudeTestTurnInput({
+              threadId,
+              providerThread: { ...providerThread, status: "active" },
+              now,
+              attemptId: RunAttemptId.make(attempt),
+              text: "Switch model while the subagent runs.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+            }),
+            modelSelection: { ...CLAUDE_TEST_MODEL_SELECTION, model: "claude-haiku-4-5-20251001" },
+          });
+        const refused = yield* switchTurn("attempt-claude-model-change-running-subagent-b").pipe(
+          Effect.flip,
+        );
+        assert.equal(
+          makeProviderFailure({ cause: refused, class: "provider_error" }).message,
+          new ClaudeBackgroundWorkBlocksQueryReplacementError().message,
+        );
+        assert.lengthOf(processQueues, 1);
+
+        // Stop ends the background work, so the switch may replace the process.
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId: settledTurn.providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        yield* switchTurn("attempt-claude-model-change-running-subagent-c");
+        assert.lengthOf(processQueues, 2);
+
+        // The stopped subagent never reports its end, so it must not block
+        // later changes on the replacement process either.
+        yield* Queue.offer(
+          processQueues[1]!,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000903",
+            result: "Switched model.",
+          }),
+        );
+        yield* awaitUntil(() => terminals().length === 2, "switched turn terminal");
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread: { ...providerThread, status: "active" },
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-model-change-running-subagent-d"),
+            text: "Switch back.",
+            attachments: [],
+            providerTurnOrdinal: 3,
+          }),
+        );
+        assert.lengthOf(processQueues, 3);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );

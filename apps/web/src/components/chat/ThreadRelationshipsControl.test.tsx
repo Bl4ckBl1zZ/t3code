@@ -184,4 +184,28 @@ describe("ThreadRelationshipsPanel", () => {
     expect(markup).toContain("Parent thread");
     expect(markup).not.toContain("data-thread-relationships-subagents-toggle");
   });
+
+  it("labels the parent row with the parent's own status, not the current thread's", () => {
+    const shell = (id: string, status: string, parentThreadId: string | null) => ({
+      environmentId: ENVIRONMENT_ID,
+      source: {
+        id: id as ThreadId,
+        title: id === CURRENT_THREAD_ID ? "Current fork" : "Parent conversation",
+        status,
+        lineage: {
+          parentThreadId,
+          relationshipToParent: parentThreadId === null ? null : "fork",
+        },
+        forkedFrom: null,
+      } as unknown as OrchestrationV2ThreadShell,
+    });
+    testState.shells = [
+      shell(CURRENT_THREAD_ID, "running", "thread:parent"),
+      shell("thread:parent", "completed", null),
+    ];
+    const markup = renderPanel();
+    expect(markup).toContain("Parent conversation");
+    expect(markup).toContain("Done");
+    expect(markup).not.toContain("Running");
+  });
 });

@@ -93,8 +93,8 @@ but the new thread does not reuse the worktree created for the thread that just 
 
 A `when` expression is evaluated against context keys describing the current UI state. The keys
 the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`,
-`modelPickerOpen`, `usagePageOpen`, `editableFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
-field, the composer, or another editor has the keyboard. The default `mod+1`…`mod+9` thread and model jumps
+`modelPickerOpen`, `usagePageOpen`, `editableFocus`, `composerFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
+field, the composer, or another editor has the keyboard; `composerFocus` only while the composer does. The default `mod+1`…`mod+9` thread and model jumps
 are limited to `isDesktop`, so a browser keeps those keys for switching tabs. The set is open and grows over time, so treat that as the current list rather
 than a fixed one. Any key the running app does not supply evaluates to `false`.
 
@@ -117,6 +117,10 @@ Examples:
 finished, it stops the background commands and agents the turn left running in Codex
 and Claude conversations. It has no default shortcut; assign one in
 **Settings → Keybindings**.
+
+`thread.editQueuedMessage` (`alt+arrowup` by default, `Option+Up` on macOS) opens the most
+recently queued message for editing. It only runs from the composer with the cursor at the start of
+the draft, so elsewhere the key keeps moving the cursor.
 
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
 bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive

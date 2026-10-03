@@ -5,6 +5,7 @@ import {
   isParentThreadRelationship,
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
+  threadRelationshipRowStatus,
   type ThreadRelationshipEdge,
 } from "@t3tools/client-runtime/state/thread-relationships";
 import {
@@ -78,6 +79,45 @@ function statusDotClass(status: string | null): string {
   if (status === "failed" || status === "error") return "bg-destructive";
   if (status === "completed") return "bg-success";
   return "bg-muted-foreground/45";
+}
+
+function relationshipStatusLabel(status: string | null): string {
+  switch (status) {
+    case "preparing":
+    case "starting":
+      return "Starting";
+    case "running":
+    case "in_progress":
+      return "Running";
+    case "pending":
+    case "queued":
+      return "Queued";
+    case "waiting":
+    case "blocked":
+      return "Waiting";
+    case "completed":
+      return "Done";
+    case "failed":
+    case "error":
+      return "Failed";
+    case "cancelled":
+    case "interrupted":
+      return "Stopped";
+    case "rolled_back":
+      return "Reverted";
+    case "resolved_native":
+      return "Resolved (native)";
+    case "resolved_portable":
+      return "Resolved (portable)";
+    case "consumed":
+      return "Consumed";
+    case "superseded":
+      return "Superseded";
+    case "idle":
+      return "Idle";
+    default:
+      return "Unknown";
+  }
 }
 
 function relationshipOrbState(status: string | null): AgentOrbState {
@@ -257,6 +297,7 @@ export function ThreadRelationshipsPanel(props: {
           const isSubagent = edge.kind === "subagent";
           const isMergeTarget = threadId === mergeTargetThreadId;
           const isParent = isParentThreadRelationship(edge, props.threadId);
+          const status = threadRelationshipRowStatus(graph, { threadId, edge });
           const showOrb = isSubagent && !isParent;
           const RelationshipIcon = isParent ? CornerLeftUpIcon : GitForkIcon;
           const relationship = relationshipLabel(edge, props.threadId);
@@ -306,14 +347,14 @@ export function ThreadRelationshipsPanel(props: {
             <>
               <span className="relative grid size-4 shrink-0 place-items-center">
                 {showOrb ? (
-                  <AgentOrb seed={threadId} size={16} state={relationshipOrbState(edge.status)} />
+                  <AgentOrb seed={threadId} size={16} state={relationshipOrbState(status)} />
                 ) : (
                   <>
                     <RelationshipIcon className={THREAD_RELATIONSHIP_ICON_CLASS} />
                     <span
                       className={cn(
                         "absolute -bottom-1 -right-1 size-2 rounded-full border-2 border-card",
-                        statusDotClass(edge.status),
+                        statusDotClass(status),
                       )}
                       aria-hidden="true"
                     />
@@ -349,6 +390,12 @@ export function ThreadRelationshipsPanel(props: {
                   ) : null}
                 </span>
               ) : null}
+              <span
+                className="shrink-0 text-[11px] leading-4 text-muted-foreground"
+                data-thread-relationship-status
+              >
+                {relationshipStatusLabel(status)}
+              </span>
               <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
             </>
           );

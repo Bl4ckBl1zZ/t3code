@@ -1,6 +1,12 @@
 import { ProviderDriverKind } from "@t3tools/contracts";
 
+import { claudeCompactAfterResumeWakeInput } from "./claude_compact_after_resume_wake/input.ts";
+import { assertClaudeCompactAfterResumeWakeOutput } from "./claude_compact_after_resume_wake/output.ts";
 import { claudeIdleResumeInput } from "./claude_idle_resume/input.ts";
+import { claudeMcpToolPresentationInput } from "./claude_mcp_tool_presentation/input.ts";
+import { assertClaudeMcpToolPresentationOutput } from "./claude_mcp_tool_presentation/output.ts";
+import { claudeNestedSubagentModelInput } from "./claude_nested_subagent_model/input.ts";
+import { assertClaudeNestedSubagentModelOutput } from "./claude_nested_subagent_model/output.ts";
 import { assertClaudeIdleResumeOutput } from "./claude_idle_resume/output.ts";
 import { claudeLocalBashTaskInput } from "./claude_local_bash_task/input.ts";
 import { assertClaudeLocalBashTaskOutput } from "./claude_local_bash_task/output.ts";
@@ -67,6 +73,8 @@ import { threadRollbackAfterRestartInput } from "./thread_rollback_after_restart
 import { assertPiThreadRollbackOutput } from "./thread_rollback/pi_output.ts";
 import { threadRollbackAfterStopInput } from "./thread_rollback_after_stop/input.ts";
 import { assertPiThreadRollbackAfterStopOutput } from "./thread_rollback_after_stop/pi_output.ts";
+import { assertThreadRollbackToStoppedTurnOutput } from "./thread_rollback_to_stopped_turn/codex_output.ts";
+import { threadRollbackToStoppedTurnInput } from "./thread_rollback_to_stopped_turn/input.ts";
 import { assertTodoListOutput } from "./todo_list/codex_output.ts";
 import { assertTodoListCursorOutput } from "./todo_list/cursor_output.ts";
 import { assertTodoListGrokOutput } from "./todo_list/grok_output.ts";
@@ -74,8 +82,7 @@ import { todoListInput } from "./todo_list/input.ts";
 import { assertToolCallReadOnlyClaudeOutput } from "./tool_call_read_only/claude_output.ts";
 import { assertToolCallReadOnlyCursorOutput } from "./tool_call_read_only/cursor_output.ts";
 import { toolCallReadOnlyInput } from "./tool_call_read_only/input.ts";
-import { assertToolCallReadOnlyOnRequestClaudeOutput } from "./tool_call_read_only_on_request/claude_output.ts";
-import { assertToolCallReadOnlyOnRequestOutput } from "./tool_call_read_only_on_request/codex_output.ts";
+import { assertToolCallReadOnlyOnRequestOutput } from "./tool_call_read_only_on_request/output.ts";
 import { toolCallReadOnlyOnRequestInput } from "./tool_call_read_only_on_request/input.ts";
 import { assertToolCallRestrictedGranularClaudeOutput } from "./tool_call_restricted_granular/claude_output.ts";
 import { assertToolCallRestrictedGranularOutput } from "./tool_call_restricted_granular/codex_output.ts";
@@ -136,6 +143,51 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         transcriptFile: new URL("./claude_idle_resume/claude_transcript.ndjson", import.meta.url),
         modelSelection: CLAUDE_MODEL_SELECTION,
         assertOutput: assertClaudeIdleResumeOutput,
+      },
+    ],
+  },
+  {
+    name: "claude_compact_after_resume_wake",
+    buildInput: claudeCompactAfterResumeWakeInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        transcriptFile: new URL(
+          "./claude_compact_after_resume_wake/claude_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CLAUDE_MODEL_SELECTION,
+        assertOutput: assertClaudeCompactAfterResumeWakeOutput,
+      },
+    ],
+  },
+  {
+    name: "claude_nested_subagent_model",
+    buildInput: claudeNestedSubagentModelInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        transcriptFile: new URL(
+          "./claude_nested_subagent_model/claude_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CLAUDE_MODEL_SELECTION,
+        assertOutput: assertClaudeNestedSubagentModelOutput,
+      },
+    ],
+  },
+  {
+    name: "claude_mcp_tool_presentation",
+    buildInput: claudeMcpToolPresentationInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        transcriptFile: new URL(
+          "./claude_mcp_tool_presentation/claude_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CLAUDE_MODEL_SELECTION,
+        assertOutput: assertClaudeMcpToolPresentationOutput,
       },
     ],
   },
@@ -294,7 +346,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         ),
         modelSelection: CLAUDE_MODEL_SELECTION,
         runtimePolicyOverride: READ_ONLY_ON_REQUEST_POLICY,
-        assertOutput: assertToolCallReadOnlyOnRequestClaudeOutput,
+        assertOutput: assertToolCallReadOnlyOnRequestOutput,
       },
       {
         driver: ProviderDriverKind.make("grok"),
@@ -910,6 +962,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES = [
         ),
         modelSelection: CODEX_MODEL_SELECTION,
         assertOutput: assertThreadRollbackAfterRestartOutput,
+      },
+    ],
+  },
+  {
+    name: "thread_rollback_to_stopped_turn",
+    buildInput: threadRollbackToStoppedTurnInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL(
+          "./thread_rollback_to_stopped_turn/codex_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CODEX_MODEL_SELECTION,
+        runtimePolicyOverride: WORKSPACE_NEVER_POLICY,
+        assertOutput: assertThreadRollbackToStoppedTurnOutput,
       },
     ],
   },

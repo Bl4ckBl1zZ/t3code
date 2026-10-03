@@ -265,8 +265,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       if (item.sequence <= sequence) {
         continue;
       }
+      // An event type from a newer server still moves the resume cursor past it.
       sequence = item.sequence;
 
+      if (item.kind === "unknown-event") {
+        yield* Effect.logDebug("Skipped a thread event type this client does not know.").pipe(
+          Effect.annotateLogs({
+            environmentId,
+            threadId,
+            // Bounded: the type comes from a newer server and is not validated here.
+            eventType: item.eventType.slice(0, 64),
+            sequence: item.sequence,
+          }),
+        );
+        continue;
+      }
       if (item.event.type === "thread.deleted") {
         yield* SubscriptionRef.set(lastSequence, sequence);
         yield* setDeleted();

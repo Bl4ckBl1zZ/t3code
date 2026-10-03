@@ -1,19 +1,27 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  MessageId,
   NodeId,
   OpenCodeSettings,
+  ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
+  RunAttemptId,
+  RunId,
   ThreadId,
   type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
 import type { OpenCodeRuntimeShape } from "../../provider/opencodeRuntime.ts";
@@ -34,6 +42,48 @@ import {
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+const OPENCODE_TEST_SETTINGS = Schema.decodeUnknownSync(OpenCodeSettings)({});
+
+const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "t3-opencode-v2-adapter-",
+}).pipe(Layer.provide(NodeServices.layer));
+
+/**
+ * A native event stream the test feeds by hand. `push` resolves once the
+ * adapter has finished handling the event and asked for the next one.
+ */
+function asyncEventStream() {
+  const values: Array<{ value: unknown; handled: () => void }> = [];
+  const waiters: Array<(value: IteratorResult<unknown>) => void> = [];
+  let previousHandled: (() => void) | undefined;
+  return {
+    push(value: unknown) {
+      return new Promise<void>((handled) => {
+        const waiter = waiters.shift();
+        if (waiter) {
+          previousHandled = handled;
+          waiter({ done: false, value });
+        } else values.push({ value, handled });
+      });
+    },
+    stream: {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => {
+            previousHandled?.();
+            const entry = values.shift();
+            if (entry !== undefined) {
+              previousHandled = entry.handled;
+              return Promise.resolve({ done: false as const, value: entry.value });
+            }
+            return new Promise<IteratorResult<unknown>>((resolve) => waiters.push(resolve));
+          },
+        };
+      },
+    },
+  };
+}
 
 function runtimePolicy(
   runtimeMode: ProviderAdapterV2RuntimePolicy["runtimeMode"],
@@ -187,6 +237,169 @@ describe("OpenCodeAdapterV2", () => {
         ),
       ),
     ),
+  );
+
+  // Event order from a live OpenCode 1.18.32 run of a `task` call with
+  // background=true: the task part completes at launch, the root session
+  // settles, and the child session stays busy until its own work ends.
+  it.effect("reports a background task child as pending work after the root turn settles", () =>
+    Effect.gen(function* () {
+      const idAllocator = yield* IdAllocatorV2;
+      const serverConfig = yield* ServerConfig;
+      const nativeEvents = asyncEventStream();
+      const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
+      const root = "ses_root";
+      const child = "ses_child";
+      const client = {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
+          get: async () => ({
+            data: { id: child, parentID: root, permission: [], time: { created: 2, updated: 2 } },
+          }),
+          update: async () => ({ data: { id: child, parentID: root } }),
+          promptAsync: async () => ({ data: true }),
+          abort: async () => ({ data: true }),
+        },
+      } as unknown as OpencodeClient;
+      const unused = (operation: string) => () => Effect.die(`${operation} is not used`);
+      const instanceId = ProviderInstanceId.make("opencode");
+      const threadId = ThreadId.make("thread-opencode-background-child");
+      const modelSelection = { instanceId, model: "anthropic/claude-sonnet" };
+      const policy = runtimePolicy("full-access", { cwd: "/workspace" });
+      const adapter = makeOpenCodeAdapterV2({
+        instanceId,
+        settings: OPENCODE_TEST_SETTINGS,
+        environment: {},
+        runtime: {
+          startOpenCodeServerProcess: unused("startOpenCodeServerProcess"),
+          connectToOpenCodeServer: () =>
+            Effect.succeed({
+              url: "test://opencode",
+              version: "test",
+              exitCode: null,
+              external: true,
+            }),
+          runOpenCodeCommand: unused("runOpenCodeCommand"),
+          createOpenCodeSdkClient: () => client,
+          loadOpenCodeInventory: unused("loadOpenCodeInventory"),
+          loadInventoryFromCli: unused("loadInventoryFromCli"),
+        },
+        idAllocator,
+        serverConfig,
+      });
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-opencode-background-child"),
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const hasPendingBackgroundWork = session.hasPendingBackgroundWork;
+      if (hasPendingBackgroundWork === undefined) {
+        return yield* Effect.die("OpenCode runtime must expose hasPendingBackgroundWork.");
+      }
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const now = yield* DateTime.now;
+      yield* session.startTurn({
+        appThread: {
+          id: threadId,
+          projectId: ProjectId.make("project-opencode-background-child"),
+          title: "background child",
+          providerInstanceId: instanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: providerThread.id,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdBy: "user",
+          creationSource: "web",
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+        threadId,
+        runId: RunId.make("run-opencode-background-child"),
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: RunAttemptId.make("attempt-opencode-background-child"),
+        rootNodeId: NodeId.make("node-opencode-background-child"),
+        providerThread,
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: MessageId.make("message-opencode-background-child"),
+          text: "sleep in the background",
+          attachments: [],
+        },
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const terminal = yield* session.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      const taskPart = (status: "running" | "completed") => ({
+        type: "message.part.updated",
+        properties: {
+          sessionID: root,
+          part: {
+            id: "prt_task",
+            sessionID: root,
+            messageID: "msg_root_assistant",
+            type: "tool",
+            tool: "task",
+            callID: "call_task",
+            state: {
+              status,
+              input: {
+                description: "Background sleep task",
+                prompt: "sleep",
+                subagent_type: "general",
+              },
+              title: "Background sleep task",
+              metadata: { parentSessionId: root, sessionId: child, background: true },
+              time: { start: 3, ...(status === "completed" ? { end: 3 } : {}) },
+              ...(status === "completed" ? { output: "Background task started" } : {}),
+            },
+          },
+        },
+      });
+      const status = (sessionID: string, type: "busy" | "idle") => ({
+        type: "session.status",
+        properties: { sessionID, status: { type } },
+      });
+
+      yield* push(status(root, "busy"));
+      yield* push(taskPart("running"));
+      yield* push({
+        type: "session.created",
+        properties: {
+          sessionID: child,
+          info: { id: child, parentID: root, time: { created: 2, updated: 2 } },
+        },
+      });
+      yield* push(status(child, "busy"));
+      yield* push(taskPart("completed"));
+      yield* push(status(root, "idle"));
+      assert.equal(Option.getOrUndefined(yield* Fiber.join(terminal))?.status, "completed");
+      assert.isTrue(yield* hasPendingBackgroundWork, "the running child must pin idle release");
+
+      yield* push(status(child, "idle"));
+      yield* push({ type: "session.idle", properties: { sessionID: child } });
+      assert.isFalse(yield* hasPendingBackgroundWork, "an idle child must not pin idle release");
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(idAllocatorLayer, serverConfigLayer))),
   );
 
   it("maps native permission families to orchestration request kinds", () => {
