@@ -66,7 +66,6 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProjectMutationError,
-  ProjectId,
   ProjectProvisionError,
   ProviderUploadFeedbackError,
   RelayClientInstallFailedError,
@@ -122,6 +121,7 @@ import {
   shellStreamItemsFromInitialSnapshot,
   shellStreamItemsFromResumeSnapshot,
 } from "./orchestration-v2/ShellStream.ts";
+import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
 import {
   decideThreadResume,
   threadReplayEncodedBytes,
@@ -171,7 +171,6 @@ import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts
 import * as ProjectService from "./project/ProjectService.ts";
 import * as NewProject from "./project/NewProject.ts";
 import * as ScratchProject from "./project/ScratchProject.ts";
-import { randomUuidV4 } from "./orchestration-v2/RandomUuid.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import {
@@ -753,47 +752,12 @@ const makeWsRpcLayer = (
       const newProjectsRoot = path.resolve(config.baseDir, "projects");
       const gitVcsDriver = yield* GitVcsDriver.GitVcsDriver;
       const createNewProject = (input: ProjectCreateNewInput) =>
-        Effect.gen(function* () {
-          const folder = yield* NewProject.createNewProjectFolder({
-            root: newProjectsRoot,
-            name: input.name,
-          }).pipe(
-            Effect.provideService(GitVcsDriver.GitVcsDriver, gitVcsDriver),
-            Effect.provideService(FileSystem.FileSystem, fileSystem),
-            Effect.provideService(Path.Path, path),
-            Effect.mapError(
-              (cause) =>
-                new ProjectProvisionError({
-                  message: "Failed to create the project folder.",
-                  cause,
-                }),
-            ),
-          );
-          const uuid = yield* randomUuidV4;
-          const projectId = ProjectId.make(uuid);
-          yield* projectService
-            .create({
-              commandId: CommandId.make(`server:project-create-new:${uuid}`),
-              projectId,
-              title: input.name,
-              workspaceRoot: folder.workspaceRoot,
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) => new ProjectProvisionError({ message: cause.message, cause }),
-              ),
-              // Only a rejected create means no project uses the folder. An
-              // interrupt can land after the command is accepted, so keep it then.
-              Effect.tapError(() =>
-                fileSystem.remove(folder.workspaceRoot, { recursive: true }).pipe(Effect.ignore),
-              ),
-            );
-          return {
-            projectId,
-            workspaceRoot: folder.workspaceRoot,
-            ...(folder.commitError === undefined ? {} : { commitError: folder.commitError }),
-          };
-        });
+        NewProject.createNewProject({ root: newProjectsRoot, name: input.name }).pipe(
+          Effect.provideService(GitVcsDriver.GitVcsDriver, gitVcsDriver),
+          Effect.provideService(ProjectService.ProjectService, projectService),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
 
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
@@ -1103,15 +1067,41 @@ const makeWsRpcLayer = (
           const enrichmentRefreshes = Stream.fromSubscription(enrichmentChanges).pipe(
             Stream.filter((change) => change.repositoryIdentityResolved),
             Stream.groupedWithin(64, Duration.millis(25)),
+            // Build the refresh from the identities the changes carry. A full
+            // snapshot load here read every thread shell and re-enriched every
+            // project, for every subscriber, on every change.
             Stream.mapEffect((changes) =>
-              loadSnapshot().pipe(
-                Effect.map(({ snapshot }) =>
-                  shellStreamItemFromEnrichmentRefresh({
-                    snapshot,
-                    changes: Array.from(changes),
-                  }),
-                ),
-              ),
+              Effect.gen(function* () {
+                const identities = new Map(
+                  Array.from(changes, (change) => [
+                    change.workspaceRoot,
+                    change.enrichment.repositoryIdentity,
+                  ]),
+                );
+                const snapshotSequence = yield* applicationEvents.latestApplicationSequence;
+                const projects =
+                  (yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment()).flatMap(
+                    (project) =>
+                      identities.has(project.workspaceRoot)
+                        ? [
+                            {
+                              ...project,
+                              repositoryIdentity: identities.get(project.workspaceRoot) ?? null,
+                            },
+                          ]
+                        : [],
+                  );
+                return shellStreamItemFromEnrichmentRefresh({
+                  snapshot: {
+                    schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+                    snapshotSequence,
+                    projects,
+                    threads: [],
+                    archivedThreads: [],
+                  },
+                  changes: Array.from(changes),
+                });
+              }),
             ),
           );
 

@@ -241,6 +241,27 @@ describe("thread undo shortcut", () => {
   });
 });
 
+describe("edit queued message shortcut", () => {
+  for (const platform of ["MacIntel", "Win32", "Linux"]) {
+    it(`edits the last queued message with Alt+ArrowUp from the composer on ${platform}`, () => {
+      const input = event({ key: "ArrowUp", altKey: true });
+      assert.strictEqual(
+        resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: { composerFocus: true },
+        }),
+        "thread.editQueuedMessage",
+      );
+      assert.isNull(
+        resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: { composerFocus: false },
+        }),
+      );
+    });
+  }
+});
+
 describe("split/new/close terminal shortcuts", () => {
   it("requires terminalFocus for default split/new/close bindings", () => {
     assert.isFalse(

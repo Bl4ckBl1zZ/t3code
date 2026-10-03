@@ -1,4 +1,5 @@
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
+import { buildCodexInitializeParams } from "../../provider/Layers/CodexProvider.ts";
 import {
   codexMcpToolPresentation,
   codexMcpIntentTitle,
@@ -198,11 +199,6 @@ const decodeCodexBackgroundTerminalTerminateResponse = Schema.decodeUnknownEffec
 const decodeCodexBackgroundTerminalsListResponse = Schema.decodeUnknownEffect(
   CodexBackgroundTerminalsListResponse,
 );
-const CODEX_CLIENT_INFO = {
-  name: "t3code_desktop",
-  title: "T3 Code Desktop",
-  version: "0.1.0",
-} as const;
 const CODEX_CLIENT_CAPABILITIES = {
   experimentalApi: true,
   // Nothing reads per-turn diffs; the checkpoint diff is computed from git.
@@ -1725,7 +1721,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }
 
           yield* client.request("initialize", {
-            clientInfo: CODEX_CLIENT_INFO,
+            // Codex uses the client name as the request originator, so sessions
+            // identify themselves exactly like the provider probe.
+            clientInfo: buildCodexInitializeParams().clientInfo,
             capabilities: CODEX_CLIENT_CAPABILITIES,
           });
           yield* client.notify("initialized", undefined);
@@ -5560,6 +5558,24 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     providerTurnId: turnInput.providerTurnId,
                     cause,
                   }),
+              ),
+            ),
+          // Dropping this connection's subscription lets the shared app-server
+          // shut the native thread (and its MCP servers) down once it is idle.
+          // `notLoaded` / `notSubscribed` mean there is nothing left to unload.
+          unloadThread: (unloadInput) =>
+            Effect.gen(function* () {
+              const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
+              yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+            }).pipe(
+              Effect.mapError((cause) =>
+                cause._tag === "ProviderAdapterProtocolError"
+                  ? cause
+                  : new ProviderAdapterProtocolError({
+                      driver: CODEX_PROVIDER,
+                      detail: `Failed to unload Codex thread for provider thread ${unloadInput.providerThread.id}`,
+                      payload: normalizeCodexCause(cause),
+                    }),
               ),
             ),
           interruptTurn: (turnInput) =>

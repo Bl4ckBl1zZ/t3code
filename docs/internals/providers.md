@@ -218,6 +218,13 @@ query stream closes ([`ClaudeAdapterV2.ts`][claudeadapter], `sweepBackgroundTask
 reconciliation ([`ProviderRuntimeRecoveryService.ts`][recovery]), which retires background items whose
 run has already completed — the per-run sweep never reaches those.
 
+The provider transcript cannot record that a restart killed that work, so the model would keep
+waiting for it. Recovery records what it cancelled on the provider thread's latest started run
+(`run.background-work-cancelled`, stored as `restartCancelledBackgroundWork`), and the next prompted
+turn on the same provider thread prepends a short note naming it
+([`RestartBackgroundNote.ts`][restartnote]). Turns on another provider, compactions and restart
+continuations neither carry nor consume the note.
+
 `backgroundProcessCount` on the thread shell is read from SQL, because `getThreadShell` is what feeds
 the live shell streams behind the sidebar. Its freshness rests on that startup reconciliation rather
 than on the read path: a background command dies with its CLI process, and the reconciler retires
@@ -244,3 +251,4 @@ cannot disagree with the timeline.
 [bgtail]: ../../apps/server/src/orchestration-v2/Adapters/backgroundTail.ts
 [claudeadapter]: ../../apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
 [recovery]: ../../apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts
+[restartnote]: ../../apps/server/src/orchestration-v2/RestartBackgroundNote.ts

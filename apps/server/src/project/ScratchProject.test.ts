@@ -148,13 +148,16 @@ it.layer(NodeServices.layer)("ScratchProject", (it) => {
       );
 
       // The second id shares the first's short prefix, the third tries to
-      // climb out of the scratch root, and the fourth pastes a long token.
+      // climb out of the scratch root, the fourth pastes a long token, and the
+      // fifth normalizes to the second's characters, so both of its names are
+      // taken.
       const text = "Convert these PNGs to WebP, please!";
       const starts = [
         { id: "a1b2c3d4-scratch-thread", text },
         { id: "a1b2c3d4-other", text },
         { id: "../../escape", text },
         { id: "f00dcafe-long", text: "x".repeat(300) },
+        { id: "A1B2C3D4:other", text },
       ];
       const folders: Array<string> = [];
       for (const start of starts) {
@@ -172,6 +175,8 @@ it.layer(NodeServices.layer)("ScratchProject", (it) => {
       assert.match(names[1] ?? "", /-convert-these-pngs-to-webp-a1b2c3d4other$/);
       assert.match(names[2] ?? "", /-convert-these-pngs-to-webp-escape$/);
       assert.match(names[3] ?? "", /^\d{4}-\d{2}-\d{2}-x{48}-f00dcafe$/);
+      assert.match(names[4] ?? "", /-convert-these-pngs-to-webp-a1b2c3d4other-[0-9a-f]{8}$/);
+      assert.equal(new Set(folders).size, starts.length);
       for (const folder of folders) {
         assert.equal(path.dirname(folder), scratchRoot);
         assert.isTrue(yield* fileSystem.exists(folder));

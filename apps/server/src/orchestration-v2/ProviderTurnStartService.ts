@@ -32,6 +32,10 @@ import { makeProviderFailure } from "./ProviderFailure.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { canRouteRelatedSubagent, RunExecutionServiceV2 } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import {
+  pendingRestartCancelledBackgroundWork,
+  restartCancelledBackgroundWorkNote,
+} from "./RestartBackgroundNote.ts";
 
 export class ProviderTurnStartError extends Schema.TaggedErrorClass<ProviderTurnStartError>()(
   "ProviderTurnStartError",
@@ -589,6 +593,48 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         canRouteRelatedSubagent(subagent.status),
       );
+      // Delivered once: this run's provider turn marks the work as told.
+      const restartCancelledWork = pendingRestartCancelledBackgroundWork({
+        runs: projection.runs,
+        providerTurns: projection.providerTurns,
+        compactionMessageIds: new Set(
+          projection.messages
+            .filter(
+              (candidate) =>
+                candidate.attachments.length === 0 &&
+                candidate.text.trim().toLowerCase() === "/compact",
+            )
+            .map((candidate) => candidate.id),
+        ),
+        continuationMessageIds: new Set([
+          ...projection.runs.flatMap((candidate) =>
+            candidate.restartContinuation === undefined
+              ? []
+              : [candidate.restartContinuation.messageId],
+          ),
+          ...(message.restartContinuation === true ? [message.id] : []),
+        ]),
+        run,
+        runAttemptIds: projection.attempts
+          .filter((candidate) => candidate.runId === run.id)
+          .map((candidate) => candidate.id),
+      });
+      const restartNote =
+        restartCancelledWork.length === 0
+          ? null
+          : restartCancelledBackgroundWorkNote(restartCancelledWork);
+      const providerText =
+        effectiveHandoffs.length === 0
+          ? restartNote === null
+            ? message.text
+            : `${restartNote}\n\nUser message:\n${message.text}`
+          : [
+              ...(restartNote === null ? [] : [restartNote, ""]),
+              providerMessageWithContextHandoffs({
+                handoffs: effectiveHandoffs,
+                userText: message.text,
+              }),
+            ].join("\n");
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
@@ -649,15 +695,7 @@ export const layer: Layer.Layer<
           // Attachment paths and captured-window data follow handoff context,
           // outside the historical summary.
           text: appendSnapShotContext(
-            appendUploadedFilesBlock(
-              effectiveHandoffs.length === 0
-                ? message.text
-                : providerMessageWithContextHandoffs({
-                    handoffs: effectiveHandoffs,
-                    userText: message.text,
-                  }),
-              uploads.promptBlock,
-            ),
+            appendUploadedFilesBlock(providerText, uploads.promptBlock),
             message.attachments,
           ),
           attachments: uploads.inlineAttachments,

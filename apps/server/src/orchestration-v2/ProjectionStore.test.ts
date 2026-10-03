@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Statement from "effect/unstable/sql/Statement";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -28,6 +29,7 @@ import {
   isTurnItemAtOrBeforeRun,
   ProjectionStoreV2,
   layer as projectionStoreLayer,
+  layerMemory,
   threadShellFromProjection,
 } from "./ProjectionStore.ts";
 
@@ -154,6 +156,40 @@ const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate
   return threadId;
 });
 
+// Recovery records the work, then a run.updated snapshot taken before it lands.
+const restartCancelledWorkSurvivesStaleRunUpdate = Effect.gen(function* () {
+  const store = yield* ProjectionStoreV2;
+  const threadId = yield* addRolledBackRecoveryCandidate("restart-cancelled-work-stale-update");
+  const run = (yield* store.getThreadProjection(threadId)).runs[0]!;
+  const now = yield* DateTime.now;
+  const work = [{ kind: "subagent" as const, label: "Background subagent test" }];
+  yield* store.apply({
+    id: EventId.make("event:restart-cancelled-work-stale-update:recorded"),
+    type: "run.background-work-cancelled",
+    threadId,
+    runId: run.id,
+    providerInstanceId,
+    occurredAt: now,
+    payload: { runId: run.id, restartCancelledBackgroundWork: work },
+  });
+  yield* store.apply({
+    id: EventId.make("event:restart-cancelled-work-stale-update:completed"),
+    type: "run.updated",
+    threadId,
+    runId: run.id,
+    providerInstanceId,
+    occurredAt: now,
+    payload: { ...run, status: "completed", completedAt: now },
+  });
+  const updated = (yield* store.getThreadProjection(threadId)).runs[0];
+  assert.equal(updated?.status, "completed");
+  assert.deepEqual(updated?.restartCancelledBackgroundWork, work);
+});
+
+it.effect("memory projection keeps restart-cancelled work through a stale run.updated", () =>
+  restartCancelledWorkSurvivesStaleRunUpdate.pipe(Effect.provide(layerMemory)),
+);
+
 it("includes imported runless history when selecting fork context through a run", () => {
   const firstRunId = RunId.make("run:projection-imported-fork:1");
   const secondRunId = RunId.make("run:projection-imported-fork:2");
@@ -197,6 +233,43 @@ it("includes imported runless history when selecting fork context through a run"
 });
 
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {
+  it.effect(
+    "keeps restart-cancelled work through a stale run.updated",
+    () => restartCancelledWorkSurvivesStaleRunUpdate,
+  );
+  it.effect("records restart-cancelled work without regressing a run that completed since", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const threadId = yield* addRolledBackRecoveryCandidate("restart-cancelled-work");
+      const run = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      const now = yield* DateTime.now;
+      // Recovery read the run as waiting; its checkpoint completed it before the commit.
+      yield* store.apply({
+        id: EventId.make("event:restart-cancelled-work:completed"),
+        type: "run.updated",
+        threadId,
+        runId: run.id,
+        providerInstanceId,
+        occurredAt: now,
+        payload: { ...run, status: "completed", completedAt: now },
+      });
+      const work = [{ kind: "subagent" as const, label: "Background subagent test" }];
+      yield* store.apply({
+        id: EventId.make("event:restart-cancelled-work:recorded"),
+        type: "run.background-work-cancelled",
+        threadId,
+        runId: run.id,
+        providerInstanceId,
+        occurredAt: now,
+        payload: { runId: run.id, restartCancelledBackgroundWork: work },
+      });
+      const recorded = (yield* store.getThreadProjection(threadId)).runs[0];
+      assert.equal(recorded?.status, "completed");
+      assert.deepEqual(recorded?.restartCancelledBackgroundWork, work);
+      const [turnStartRun] = (yield* store.getTurnStartContext(threadId, run.id)).runs;
+      assert.deepEqual(turnStartRun?.restartCancelledBackgroundWork, work);
+    }),
+  );
   it.effect("limits turn-start history to the requested runs, including an empty selection", () =>
     Effect.gen(function* () {
       const store = yield* ProjectionStoreV2;
@@ -405,6 +478,146 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       );
       assert.equal(shell?.status, "waiting");
       assert.isNull(shell?.activeRunId);
+
+      // A held queue waits for the user, so both shells present the run before
+      // it rather than reporting queued work.
+      const heldRunId = RunId.make("run:projection-shell-interruptible:held");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-interruptible:held"),
+        type: "run.created",
+        threadId,
+        runId: heldRunId,
+        driver,
+        occurredAt: now,
+        payload: {
+          ...run,
+          id: heldRunId,
+          ordinal: 2,
+          userMessageId: MessageId.make("message:projection-shell-interruptible:held"),
+          rootNodeId: null,
+          status: "queued",
+          queueHeld: true,
+          startedAt: null,
+        },
+      });
+      const heldProjection = yield* projectionStore.getThreadProjection(threadId);
+      const heldSqlShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      for (const heldShell of [heldSqlShell, threadShellFromProjection(heldProjection)]) {
+        assert.equal(heldShell?.latestRunId, runId);
+        assert.equal(heldShell?.status, "waiting");
+      }
+
+      // With only held runs, nothing has executed: both shells read idle.
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-interruptible:held-first"),
+        type: "run.updated",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: now,
+        payload: { ...run, status: "queued", queueHeld: true, startedAt: null },
+      });
+      const onlyHeldProjection = yield* projectionStore.getThreadProjection(threadId);
+      const onlyHeldSqlShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      for (const onlyHeldShell of [
+        onlyHeldSqlShell,
+        threadShellFromProjection(onlyHeldProjection),
+      ]) {
+        assert.isNull(onlyHeldShell?.latestRunId);
+        assert.equal(onlyHeldShell?.status, "idle");
+      }
+    }),
+  );
+
+  it.effect("keeps shell failure lookups on the thread's own turn items", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-shell-failure-lookup");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-failure-lookup:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:projection-shell-failure-lookup"),
+          title: "Failed shell run",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      const runId = RunId.make("run:projection-shell-failure-lookup");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-failure-lookup:run"),
+        type: "run.created",
+        threadId,
+        runId,
+        driver,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:projection-shell-failure-lookup"),
+          rootNodeId: null,
+          activeAttemptId: null,
+          status: "failed",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const record: Statement.Transformer = (statement) =>
+        Effect.sync(() => {
+          queries.push(statement.compile());
+          return statement;
+        });
+      const shell = yield* projectionStore
+        .getShellSnapshot()
+        .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+      assert.isTrue(shell.threads.some((thread) => thread.id === threadId));
+      const shellQuery = queries.find(([query]) =>
+        query.includes("AS blocking_failure_payload_json"),
+      );
+      assert.isDefined(shellQuery);
+      const plan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${shellQuery![0]}`,
+        shellQuery![1],
+      );
+      // A failed run's root node is often null, and every runless item shares that
+      // node_id, so a node_ordinal lookup walks the whole history once per thread.
+      const itemLookups = plan.filter((row) => row.detail.startsWith("SEARCH item "));
+      assert.lengthOf(itemLookups, 2);
+      assert.isTrue(itemLookups.every((row) => row.detail.includes("turn_items_thread_run_idx")));
     }),
   );
 

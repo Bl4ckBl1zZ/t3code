@@ -13,7 +13,7 @@ import {
   PlayIcon,
   XIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type Ref, useImperativeHandle, useMemo, useState } from "react";
 
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
@@ -22,7 +22,12 @@ import type { ChatMessage } from "../../types";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
+export interface QueuedRunsControlHandle {
+  editLatest: (repeat: boolean) => boolean;
+}
+
 export function QueuedRunsControl(props: {
+  readonly ref?: Ref<QueuedRunsControlHandle>;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly optimisticMessages: ReadonlyArray<Pick<ChatMessage, "id" | "inputIntent" | "text">>;
@@ -65,6 +70,17 @@ export function QueuedRunsControl(props: {
       pending: true,
     })),
   ];
+
+  useImperativeHandle(props.ref, () => ({
+    // Declines while a queued message is already open for editing, so the key
+    // keeps moving the composer caret.
+    editLatest(repeat) {
+      const latest = queued.at(-1);
+      if (!latest || editing !== null || busyRunId !== null) return false;
+      if (!repeat) setEditing({ runId: latest.run.id, draft: latest.text });
+      return true;
+    },
+  }));
 
   if (items.length === 0) return null;
 

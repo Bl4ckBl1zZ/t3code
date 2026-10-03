@@ -2381,6 +2381,9 @@ function useWorkHistoryExpansion(key: string, defaultExpanded: boolean) {
   return [expanded, toggle] as const;
 }
 
+// A collapsed SimpleWorkEntryRow: its size-5 icon plus py-0.5.
+const compactWorkEntryHeight = 24;
+
 function ExpandedToolHistory({
   entries,
   anchorKey,
@@ -2390,8 +2393,9 @@ function ExpandedToolHistory({
   anchorKey: string;
   label: string;
 }) {
-  const { workGroupHistory, workspaceRoot } = use(TimelineRowCtx);
+  const { workGroupHistory, workspaceRoot, alwaysExpandActivity } = use(TimelineRowCtx);
   const listRef = useRef<LegendListRef>(null);
+  const [expandedContentHeight, setExpandedContentHeight] = useState(0);
   const [initialScrollIndex] = useState(() =>
     restoreWorkGroupAnchor(entries, workGroupHistory.get(anchorKey)?.anchor),
   );
@@ -2426,6 +2430,20 @@ function ExpandedToolHistory({
     setRestoring(false);
     savePosition();
   }, [initialScrollIndex, savePosition]);
+  const updateExpandedContentHeight = useCallback(() => {
+    const state = listRef.current?.getState();
+    if (!state) return;
+    let height = 0;
+    for (const entry of entries) {
+      // Same default as the row's own disclosure state.
+      if (!(workGroupHistory.get(`entry:${entry.id}`)?.expanded ?? alwaysExpandActivity)) continue;
+      // Each open row adds room for its details, including while scrolled out of view.
+      const size = state.sizes.get(entry.id);
+      if (size !== undefined) height += Math.max(0, size - compactWorkEntryHeight);
+    }
+    setExpandedContentHeight(height);
+  }, [alwaysExpandActivity, entries, workGroupHistory]);
+  useLayoutEffect(updateExpandedContentHeight, [updateExpandedContentHeight]);
   return (
     <div className="overflow-hidden rounded-md border border-border/50">
       <LegendList
@@ -2433,7 +2451,9 @@ function ExpandedToolHistory({
         data={entries}
         keyExtractor={(item) => item.id}
         estimatedItemSize={40}
-        style={{ height: Math.min(320, Math.max(80, entries.length * 40)) }}
+        style={{
+          height: Math.min(320, Math.max(80, entries.length * 40)) + expandedContentHeight,
+        }}
         {...(initialScrollIndex ? { initialScrollIndex } : {})}
         {...(restoring && initialScrollIndex
           ? { alwaysRender: { indices: [initialScrollIndex.index] } }
@@ -2442,6 +2462,7 @@ function ExpandedToolHistory({
         maintainScrollAtEnd={append.follow ? { animated: false, on: { dataChange: true } } : false}
         onLoad={handleLoad}
         onScroll={savePosition}
+        onItemSizeChanged={updateExpandedContentHeight}
         tabIndex={0}
         role="region"
         aria-label={label}

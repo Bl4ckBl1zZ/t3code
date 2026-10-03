@@ -159,6 +159,59 @@ it.effect("routes shared-runtime events only to their owning root run", () =>
   }),
 );
 
+it("leaves a child thread created after the root turn ended to the run that is live then", () => {
+  const threadId = ThreadId.make("thread:late-child");
+  const rootProviderTurnId = ProviderTurnId.make("provider-turn:late-child");
+  const identity: ProviderEventRouteIdentity = {
+    threadId,
+    runId: RunId.make("run:late-child"),
+    attemptId: RunAttemptId.make("attempt:late-child"),
+    providerThreadId: ProviderThreadId.make("provider-thread:late-child"),
+  };
+  const childCreated = (childThreadId: ThreadId): ProviderAdapterV2Event =>
+    ({
+      type: "app_thread.created",
+      driver,
+      appThread: {
+        id: childThreadId,
+        lineage: {
+          parentThreadId: threadId,
+          relationshipToParent: "subagent",
+          rootThreadId: threadId,
+        },
+      },
+    }) as ProviderAdapterV2Event;
+  const earlyChild = ThreadId.make("thread:late-child:early");
+  const lateChild = ThreadId.make("thread:late-child:late");
+
+  const initial = makeProviderEventRoutingState({
+    identity,
+    providerTurnId: rootProviderTurnId,
+  });
+  const [earlyAccepted, live] = routeProviderEvent(childCreated(earlyChild), identity, initial);
+  assert.isTrue(earlyAccepted);
+  const [terminalAccepted, ended] = routeProviderEvent(
+    {
+      type: "turn.terminal",
+      driver,
+      providerThreadId: identity.providerThreadId,
+      providerTurnId: rootProviderTurnId,
+      runOrdinal: 1,
+      status: "completed",
+      failure: null,
+      threadDisposition: "reusable",
+    },
+    identity,
+    live,
+  );
+  assert.isTrue(terminalAccepted);
+  // A child the root launched before it ended stays with this run.
+  assert.isTrue(ended.ownedThreadIds.has(earlyChild));
+  const [lateAccepted, afterLate] = routeProviderEvent(childCreated(lateChild), identity, ended);
+  assert.isFalse(lateAccepted);
+  assert.isFalse(afterLate.ownedThreadIds.has(lateChild));
+});
+
 it("does not route a superseded attempt through a reused provider thread", () => {
   const threadId = ThreadId.make("thread:shared-runtime:restart");
   const providerThreadId = ProviderThreadId.make("provider-thread:shared-runtime:restart");
@@ -193,12 +246,13 @@ it("does not route a superseded attempt through a reused provider thread", () =>
   assert.isFalse(routeProviderEvent(oldTurnEvent, newAttempt, newState)[0]);
 });
 
-it("does not carry interrupted child ownership into later attempts", () => {
+it("does not carry interrupted or still-running child ownership into later attempts", () => {
   assert.isFalse(canRouteRelatedSubagent("interrupted"));
   assert.isFalse(canRouteRelatedSubagent("failed"));
   assert.isFalse(canRouteRelatedSubagent("cancelled"));
   assert.isTrue(canRouteRelatedSubagent("completed"));
-  assert.isTrue(canRouteRelatedSubagent("running"));
+  // The launching run still ingests a running subagent's child thread.
+  assert.isFalse(canRouteRelatedSubagent("running"));
 
   const threadId = ThreadId.make("thread:related-child:next-attempt");
   const childThreadId = ThreadId.make("thread:related-child:interrupted");

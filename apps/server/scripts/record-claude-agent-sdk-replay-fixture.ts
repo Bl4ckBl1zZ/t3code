@@ -61,6 +61,8 @@ import {
   WORKSPACE_NEVER_POLICY,
   WEB_SEARCH_PROMPT,
 } from "../src/orchestration-v2/testkit/fixtures/shared.ts";
+import { CLAUDE_MCP_TOOL_PRESENTATION_PROMPT } from "../src/orchestration-v2/testkit/fixtures/claude_mcp_tool_presentation/input.ts";
+import { CLAUDE_NESTED_SUBAGENT_MODEL_PROMPT } from "../src/orchestration-v2/testkit/fixtures/claude_nested_subagent_model/input.ts";
 import {
   validateClaudeReplayRecordingSelection,
   type ClaudeRecordingQueryMode,
@@ -161,6 +163,20 @@ const CLAUDE_RECORDINGS = {
   subagent: {
     prompts: [SUBAGENT_PROMPT],
     defaultTranscriptFile: "fixtures/subagent/claude_transcript.ndjson",
+    queryMode: "streaming",
+    enableTools: true,
+  },
+  claude_nested_subagent_model: {
+    prompts: [CLAUDE_NESTED_SUBAGENT_MODEL_PROMPT],
+    defaultTranscriptFile: "fixtures/claude_nested_subagent_model/claude_transcript.ndjson",
+    queryMode: "streaming",
+    enableTools: true,
+  },
+  // Needs the claude.ai Firecrawl connector on the recording account. Claude
+  // Code describes MCP tool uses in an undeclared `tool_use_meta` field.
+  claude_mcp_tool_presentation: {
+    prompts: [CLAUDE_MCP_TOOL_PRESENTATION_PROMPT],
+    defaultTranscriptFile: "fixtures/claude_mcp_tool_presentation/claude_transcript.ndjson",
     queryMode: "streaming",
     enableTools: true,
   },

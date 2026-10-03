@@ -65,7 +65,10 @@ import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
-import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
+import {
+  ThreadCommandExecutor,
+  layer as threadCommandExecutorLayer,
+} from "./ThreadCommandExecutor.ts";
 import {
   applyToProjection,
   emptyProjection,
@@ -600,7 +603,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const providerSwitchService = yield* ProviderSwitchServiceV2;
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
-  const threadDispatch = yield* makeKeyedSerialExecutor<ThreadId>();
+  const threadDispatch = yield* ThreadCommandExecutor;
 
   const mapDispatchError =
     (command: OrchestrationV2Command) =>
@@ -1408,7 +1411,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const nextCohort = {
         disposition: nextDisposition,
         nextGeneration: cohort?.nextGeneration ?? 1,
-        settledDeliveryCount: cohort?.settledDeliveryCount ?? 0,
         delivery: null,
       } as const;
       yield* emitEvent({
@@ -2867,17 +2869,51 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
         });
 
+      // A selection the provider applies on its next turn restarts the run when
+      // the provider can restart it. Otherwise the steer joins the running turn
+      // and the selection waits for the next one, rather than failing the steer.
+      const turnCapabilities = session.providerSession.capabilities.turns;
+      const selectionMustApplyNow =
+        selectionChanged &&
+        (providerInstanceChanged || selectionTransition?.type !== "apply_on_next_turn");
       const steeringPolicy = yield* enforceCommandPolicy(input.command)(
         commandPolicy.decideSteeringExecution({
           commandId: input.command.commandId,
           threadId: input.command.threadId,
           providerInstanceId: targetRun.providerInstanceId,
           capabilities: session.providerSession.capabilities,
-          forceRestart: input.forceRestart || selectionChanged,
+          forceRestart:
+            input.forceRestart ||
+            selectionMustApplyNow ||
+            (selectionChanged &&
+              turnCapabilities.supportsInterrupt &&
+              turnCapabilities.supportsSteeringByInterruptRestart),
         }),
       );
 
       if (steeringPolicy === "active_steering") {
+        // The steer's selection becomes the saved next-turn choice, even when it
+        // matches the running run again. The saved choice may name another
+        // instance, so it moves with the steer.
+        const instanceChanged =
+          input.projection.thread.providerInstanceId !== input.modelSelection.instanceId;
+        if (
+          instanceChanged ||
+          !modelSelectionsEqual(input.projection.thread.modelSelection, input.modelSelection)
+        ) {
+          yield* emitEvent({
+            type: instanceChanged ? "thread.provider-switched" : "thread.model-selection-updated",
+            threadId: input.command.threadId,
+            providerInstanceId: input.modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              ...input.projection.thread,
+              providerInstanceId: input.modelSelection.instanceId,
+              modelSelection: input.modelSelection,
+              updatedAt: now,
+            },
+          });
+        }
         yield* appendSteeringMessage({
           runId: targetRun.id,
           nodeId: rootNodeId,
@@ -6949,18 +6985,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
 
       const now = yield* DateTime.now;
-      if (projection.thread.rollbackFailure != null) {
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "thread.metadata-updated",
-          threadId: command.threadId,
-          providerInstanceId: projection.thread.providerInstanceId,
-          occurredAt: now,
-          payload: { ...projection.thread, rollbackFailure: null, updatedAt: now },
-        });
-      }
+      // This rollback becomes the only one whose failure the thread records.
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: projection.thread.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          ...projection.thread,
+          rollbackRequestId: command.commandId,
+          rollbackFailure: null,
+          updatedAt: now,
+        },
+      });
       yield* emit(
         events,
         command,
@@ -7128,8 +7168,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (deliveryRun !== undefined) {
         // The wake is running or already terminal. The terminal-run listener
         // owns reconciliation; a sibling that wins the parent lock first stays
-        // pending for its one successor rather than creating a competing
-        // delivery.
+        // pending for the successor that listener reserves, rather than
+        // creating a competing delivery.
         return {
           task: {
             ...input.updatedTask,
@@ -7168,24 +7208,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       };
     }
 
-    const settledDeliveryCount = cohort?.settledDeliveryCount ?? 0;
-    if (settledDeliveryCount >= 2) {
-      // A cohort permits one initial delivery and one successor. Keep the
-      // result pending and inspectable instead of recursively re-arming the
-      // parent for every child that finishes after that bounded handoff.
-      return {
-        task: {
-          ...input.updatedTask,
-          completionDelivery: {
-            state: "pending" as const,
-            observedByRunId: null,
-          },
-        },
-        parentRun: undefined,
-        message: undefined,
-        offer: false,
-      };
-    }
     const generation = cohort?.nextGeneration ?? 1;
     const messageId = yield* mapDelegatedCompletionError(
       idAllocator.allocate.message({
@@ -7196,7 +7218,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const nextCohort: OrchestrationV2DelegatedCompletionCohort = {
       disposition: "open" as const,
       nextGeneration: generation + 1,
-      settledDeliveryCount,
       delivery: {
         generation,
         messageId,
@@ -7478,7 +7499,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
    * Reconciles a cohort once its delivery run reaches a terminal state. Tasks
    * the run actually carried become "delivered" (or return to "pending" if the
    * run was cancelled), and any task that piled up while it ran is armed as one
-   * bounded successor delivery rather than a turn each.
+   * successor delivery rather than a turn each.
    */
   const finalizeDelegatedCompletionDelivery = (threadId: ThreadId, runId: RunId) =>
     Effect.gen(function* () {
@@ -7537,12 +7558,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               nextTaskStates.get(task.id)?.state === "pending"),
         )
         .map((task) => task.id);
-      const settledDeliveryCount = (cohort.settledDeliveryCount ?? 0) + 1;
+      // Results that arrived while this delivery was outstanding go out
+      // together in one successor. Each child becomes pending once, so a
+      // cohort's successors are bounded by its children.
       const canReserveFollowUp =
         cohort.disposition === "open" &&
         projection.thread.archivedAt === null &&
         projection.thread.deletedAt === null &&
-        settledDeliveryCount < 2 &&
         pendingTaskIds.length > 0;
       const nextDelivery = canReserveFollowUp
         ? {
@@ -7568,7 +7590,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...parentRun,
         delegatedCompletion: {
           ...cohort,
-          settledDeliveryCount,
           nextGeneration: nextDelivery === null ? cohort.nextGeneration : cohort.nextGeneration + 1,
           delivery: nextDelivery,
         },
@@ -8296,7 +8317,9 @@ export const layer: Layer.Layer<
   | ProjectionStoreV2
   | RuntimePolicyV2
   | ThreadForkServiceV2
-> = Layer.effect(OrchestratorV2, makeOrchestrator());
+> = Layer.effect(OrchestratorV2, makeOrchestrator()).pipe(
+  Layer.provide(threadCommandExecutorLayer),
+);
 
 export const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
   OrchestratorV2,

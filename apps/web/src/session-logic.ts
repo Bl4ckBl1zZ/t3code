@@ -18,6 +18,7 @@ import { resolveOrchestrationV2ItemAttempt } from "@t3tools/shared/orchestration
 import {
   classifyToolActivity,
   collectToolFilePaths,
+  dynamicToolTitle,
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
@@ -27,6 +28,7 @@ import type {
   ThreadPendingUserInput,
 } from "@t3tools/client-runtime/state/thread-requests";
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "@t3tools/client-runtime/state/shell";
+import { threadRuntimeHasInterruptibleRun } from "@t3tools/client-runtime/state/thread-execution";
 
 import type { ChatMessage, ProposedPlan, SessionPhase, TurnDiffSummary } from "./types";
 import * as DateTime from "effect/DateTime";
@@ -544,18 +546,20 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         data: { toolName: item.toolName ?? undefined, input: item.input },
       });
       const [readPath] = collectToolFilePaths({ input: item.input });
+      // Items stored before the server titled skill calls carry no title.
+      const toolTitle = title ?? dynamicToolTitle(item.toolName, item.input) ?? null;
       return {
         ...common,
         label:
           resolveT3McpToolPresentation(item.toolName ?? title, item.status, item.input)
             ?.displayName ??
-          title ??
+          toolTitle ??
           (classified === "read"
             ? formatReadToolLabel(readPath ?? "")
             : classified === "search"
               ? (formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call")
               : (item.toolName ?? "Tool call")),
-        toolTitle: title ?? item.toolName ?? "Tool",
+        toolTitle: toolTitle ?? item.toolName ?? "Tool",
         ...(item.toolSurface ? { toolSurface: item.toolSurface } : {}),
         ...(item.toolIcon ? { toolIcon: item.toolIcon } : {}),
         ...(item.toolSource ? { toolSource: item.toolSource } : {}),
@@ -841,6 +845,22 @@ export function derivePhase(runtime: ThreadRuntimeSummary | null): SessionPhase 
     return "connecting";
   if (runtime.status === "running" || runtime.status === "waiting") return "running";
   return "ready";
+}
+
+/**
+ * Whether web and desktop offer Stop for the active thread. The server settles
+ * a preparing or starting run on `run.interrupt` (Orchestrator.dispatchRunInterrupt),
+ * so Stop must not wait for the phase to reach "running". A queued thread offers
+ * Stop only while an earlier run is still interruptible; Stop targets that run.
+ */
+export function deriveCanInterruptRunningThread(
+  hasActiveThread: boolean,
+  runtime: ThreadRuntimeSummary | null,
+): boolean {
+  return (
+    hasActiveThread &&
+    (derivePhase(runtime) === "running" || threadRuntimeHasInterruptibleRun(runtime))
+  );
 }
 
 export type { TurnDiffSummary };

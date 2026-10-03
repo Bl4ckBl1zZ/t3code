@@ -95,6 +95,7 @@ import {
   createModelSelection,
   formatModelSlugName,
   resolvePromptInjectedEffort,
+  resolveSelectableModel,
 } from "@t3tools/shared/model";
 import { liveBackgroundProcessesFromTimeline } from "@t3tools/shared/backgroundProcess";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
@@ -147,6 +148,7 @@ import {
   derivePendingApprovals,
   derivePendingUserInputs,
   derivePhase,
+  deriveCanInterruptRunningThread,
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveRevertTurnCountByUserMessageId,
   deriveActiveWorkStartedAt,
@@ -381,7 +383,7 @@ import {
   shouldShowThreadErrorBanner,
   ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
-import { QueuedRunsControl } from "./chat/QueuedRunsControl";
+import { QueuedRunsControl, type QueuedRunsControlHandle } from "./chat/QueuedRunsControl";
 import {
   resolveDisplayedThreadPr,
   threadChangeRequestSnapshotsAtom,
@@ -1580,6 +1582,7 @@ function ChatViewContent(props: ChatViewProps) {
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const composerRef = useComposerHandleContext() ?? localComposerRef;
+  const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
@@ -2720,6 +2723,10 @@ function ChatViewContent(props: ChatViewProps) {
       ? "only"
       : "hidden";
   const phase = derivePhase(activeRuntime);
+  const canInterruptRunningThread = deriveCanInterruptRunningThread(
+    activeThread !== undefined,
+    activeRuntime,
+  );
   const pendingRequests = useMemo(
     () =>
       serverProjection === null
@@ -3319,13 +3326,10 @@ function ChatViewContent(props: ChatViewProps) {
   }, [environmentId, gitStatusCwd, reportedIsRepo]);
   const isGitRepo = reportedIsRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
   // A provider-native subagent cannot take messages: a status bar replaces the
-  // composer and its context strip. While the subagent asks for an approval
-  // or an answer, the composer that renders those stays below the bar,
-  // without the thread settings that belong to the provider.
+  // composer and its context strip. Its approvals and questions are asked on
+  // the top-level parent thread.
   const showProviderSubagentBar = isProviderSubagent;
-  const providerSubagentNeedsResponse =
-    isProviderSubagent && (pendingApprovals.length > 0 || pendingUserInputs.length > 0);
-  const composerMounted = !showProviderSubagentBar || providerSubagentNeedsResponse;
+  const composerMounted = !showProviderSubagentBar;
   const providerSubagentEntry = useMemo(
     () =>
       showProviderSubagentBar && activeProviderStatus !== null
@@ -3334,8 +3338,16 @@ function ChatViewContent(props: ChatViewProps) {
     [activeProviderStatus, showProviderSubagentBar],
   );
   const providerSubagentModels = activeProviderStatus?.models ?? EMPTY_PROVIDER_MODELS;
+  // Providers can report a dated id or alias (claude-haiku-4-5-20251001).
+  const providerSubagentModelSlug = activeProviderStatus
+    ? resolveSelectableModel(
+        activeProviderStatus.driver,
+        activeThread?.modelSelection.model,
+        providerSubagentModels,
+      )
+    : null;
   const providerSubagentCatalogModel = providerSubagentModels.find(
-    (model) => model.slug === activeThread?.modelSelection.model,
+    (model) => model.slug === providerSubagentModelSlug,
   );
   const providerSubagentModelLabel = providerSubagentCatalogModel
     ? getTriggerDisplayModelName(providerSubagentCatalogModel)
@@ -3649,11 +3661,16 @@ function ChatViewContent(props: ChatViewProps) {
 
   const interruptContextRef = useRef({
     activeThread,
-    phase,
+    canInterruptRunningThread,
     canStopBackgroundWork,
     setThreadError,
   });
-  interruptContextRef.current = { activeThread, phase, canStopBackgroundWork, setThreadError };
+  interruptContextRef.current = {
+    activeThread,
+    canInterruptRunningThread,
+    canStopBackgroundWork,
+    setThreadError,
+  };
   const onInterrupt = useCallback(async () => {
     const { activeThread, setThreadError } = interruptContextRef.current;
     if (!activeThread) return;
@@ -6172,6 +6189,7 @@ function ChatViewContent(props: ChatViewProps) {
         previewOpen: previewPanelOpen,
         terminalOpen: Boolean(terminalUiState.terminalOpen),
         editableFocus: isEditableFocused(event.target),
+        composerFocus: document.activeElement?.getAttribute("data-testid") === "composer-editor",
         modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
       };
 
@@ -6311,10 +6329,21 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
+      if (command === "thread.editQueuedMessage") {
+        if (!isServerThread) return;
+        // Anywhere else in the draft the key keeps moving the caret, so a
+        // second press from the first paragraph reaches the queue.
+        if (!composerRef.current?.isCaretAtStart()) return;
+        if (!queuedRunsControlRef.current?.editLatest(event.repeat)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       if (command === "thread.stop") {
         if (
           !interruptContextRef.current.activeThread ||
-          (interruptContextRef.current.phase !== "running" &&
+          (!interruptContextRef.current.canInterruptRunningThread &&
             !interruptContextRef.current.canStopBackgroundWork)
         )
           return;
@@ -8642,6 +8671,7 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : null}
                   {isServerThread && activeThread ? (
                     <QueuedRunsControl
+                      ref={queuedRunsControlRef}
                       environmentId={activeThread.environmentId}
                       threadId={activeThread.id}
                       optimisticMessages={optimisticUserMessages}
@@ -8675,7 +8705,6 @@ function ChatViewContent(props: ChatViewProps) {
                           ) : null}
                           {!composerMounted ? null : (
                             <ChatComposer
-                              hideThreadSettings={isProviderSubagent}
                               readingTimeline={composerReadingTimeline}
                               restingControlsHost={restingControlsHost}
                               expandedTaskDrawer={tasksDrawerExpanded}
@@ -8726,6 +8755,7 @@ function ChatViewContent(props: ChatViewProps) {
                                 isLocalDraftThread && activeProject === null
                               }
                               phase={phase}
+                              canInterrupt={canInterruptRunningThread}
                               isConnecting={isConnecting}
                               isSendBusy={isSendBusy}
                               sendDisabledReason={feedbackUploading ? "Sending feedback" : null}

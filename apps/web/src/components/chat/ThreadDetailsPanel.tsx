@@ -14,7 +14,11 @@ import {
   useT3ProjectFilePreviewUrl,
   useT3ProjectFileScripts,
 } from "../../hooks/useT3ProjectFileScripts";
-import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
+import {
+  shouldShowEnvironmentIndicator,
+  type EnvMode,
+  type EnvironmentOption,
+} from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
 import GitActionsControl from "../GitActionsControl";
@@ -137,6 +141,14 @@ function ThreadDetailsContent(
   const knownTerminalSessions = useKnownTerminalSessions({
     environmentId: props.environmentId,
     threadId: props.threadId,
+  });
+  // Same rule as the composer strip: a lone remote machine still gets a row,
+  // shown as a static label because there is nothing to pick.
+  const canPickEnvironment = props.availableEnvironments.length > 1;
+  const showEnvironment = shouldShowEnvironmentIndicator({
+    activeEnvironment:
+      props.availableEnvironments.find((env) => env.environmentId === props.environmentId) ?? null,
+    canPickEnvironment,
   });
   // Single-run scripts render as stop buttons while their run is live, so the
   // control needs the thread's terminal sessions to know what is running.
@@ -269,7 +281,7 @@ function ThreadDetailsContent(
           ) : null}
 
           <div className="flex flex-col px-2 pb-2.5">
-            {density === "full" && props.availableEnvironments.length > 1 ? (
+            {density === "full" && showEnvironment ? (
               <BranchToolbarEnvironmentSelector
                 displayMode="panel"
                 autoEnvironmentLabel={props.autoEnvironmentLabel}
@@ -277,7 +289,7 @@ function ThreadDetailsContent(
                 envLocked={props.envLocked}
                 environmentId={props.environmentId}
                 availableEnvironments={props.availableEnvironments}
-                onEnvironmentChange={props.onEnvironmentChange}
+                {...(canPickEnvironment ? { onEnvironmentChange: props.onEnvironmentChange } : {})}
               />
             ) : null}
 
