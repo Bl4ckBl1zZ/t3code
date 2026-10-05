@@ -21,7 +21,10 @@ describe("projectThreadAwarenessV2", () => {
   const updatedAt = DateTime.makeUnsafe(NOW);
   const v2Thread = (
     overrides: Partial<
-      Pick<OrchestrationV2ThreadShell, "status" | "pendingRuntimeRequest" | "lineage">
+      Pick<
+        OrchestrationV2ThreadShell,
+        "status" | "pendingBackgroundTasks" | "pendingRuntimeRequest" | "lineage"
+      >
     > = {},
   ) => ({
     id: "thread-2" as ThreadId,
@@ -46,6 +49,27 @@ describe("projectThreadAwarenessV2", () => {
         thread: v2Thread(),
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
+  });
+
+  it.each([
+    ["only a dev server", "completed", [{ taskId: "dev", kind: "command" }]],
+    ["a monitor", "running", [{ taskId: "watch", kind: "monitor" }]],
+    [
+      "a dev server and a subagent",
+      "running",
+      [
+        { taskId: "dev", kind: "command" },
+        { taskId: "review", kind: "subagent" },
+      ],
+    ],
+  ] as const)("reports a completed run waiting on %s as %s", (_case, phase, tasks) => {
+    expect(
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({ status: "completed", pendingBackgroundTasks: tasks }),
+      }),
+    ).toMatchObject({ phase });
   });
 
   it.each(["running", "completed", "failed"] as const)(

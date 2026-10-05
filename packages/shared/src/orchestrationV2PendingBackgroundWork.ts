@@ -30,6 +30,32 @@ const SETTLED_FOR_BACKGROUND_WAIT_RUN_STATUSES = new Set<string>([
 /** Shell rows carry a name, not a transcript: a long command is cut to this. */
 const DESCRIPTION_MAX_LENGTH = 200;
 
+/**
+ * Whether background work left behind by a completed run holds back its
+ * completion (the sidebar's Background state, the completion alert, automatic
+ * settlement). Commands, such as dev servers and other long-lived shells, do
+ * not: the agent is done and may leave them running for hours. Subagents and
+ * monitors do, because they wake the agent and it continues. Work the server
+ * cannot name, including kinds this build does not know, holds as the
+ * conservative choice.
+ */
+export function backgroundWorkHoldsCompletion(
+  tasks: ReadonlyArray<Pick<PendingBackgroundWorkTask, "kind">>,
+): boolean {
+  return tasks.some((task) => backgroundWorkKindHoldsCompletion(task.kind));
+}
+
+function backgroundWorkKindHoldsCompletion(kind: PendingBackgroundWorkTask["kind"]): boolean {
+  switch (kind) {
+    case "command":
+      return false;
+    case "subagent":
+    case "monitor":
+    case "background_task":
+      return true;
+  }
+}
+
 /** A command item as the list reads it. Every field past status is optional on the wire. */
 export type PendingBackgroundWorkCommand = {
   readonly id: string;

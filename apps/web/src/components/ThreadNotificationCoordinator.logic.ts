@@ -1,4 +1,5 @@
 import type { RunId } from "@t3tools/contracts";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 import type { SidebarThreadSummary } from "../types";
 import { isSidebarSubagentThread, resolveSidebarThreadStatus } from "./Sidebar.logic";
@@ -16,6 +17,7 @@ export type ThreadNotificationThread = Pick<
   | "hasPendingUserInput"
   | "backgroundProcessCount"
   | "activeAgentCount"
+  | "pendingBackgroundTasks"
 >;
 
 export interface ThreadNotificationMemory {
@@ -63,8 +65,15 @@ export function resolveThreadNotificationEvents(
       status === "input" || status === "approval" || status === "failed" || status === "limited"
         ? `${thread.latestRun?.runId ?? ""}:${status}`
         : null;
+    // Waiting only on commands (a dev server) is done; subagents and monitors
+    // wake the agent. Servers that predate the named list keep waiting.
+    const settled =
+      status === "ready" ||
+      (status === "background" &&
+        thread.pendingBackgroundTasks !== undefined &&
+        !backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks));
     const completion =
-      status === "ready" && thread.latestRun?.status === "completed"
+      settled && thread.latestRun?.status === "completed"
         ? thread.latestRun.runId
         : (prior?.completion ?? null);
     next.set(key, { attention, completion });

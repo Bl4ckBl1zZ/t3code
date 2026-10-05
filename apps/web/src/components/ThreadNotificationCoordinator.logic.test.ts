@@ -18,6 +18,8 @@ function thread(
     readonly archived?: boolean;
     readonly subagent?: boolean;
     readonly backgroundProcessCount?: number;
+    readonly activeAgentCount?: number;
+    readonly pendingBackgroundTasks?: ThreadNotificationThread["pendingBackgroundTasks"];
     readonly usageLimited?: boolean;
   } = {},
 ): ThreadNotificationThread {
@@ -51,7 +53,10 @@ function thread(
     hasPendingApprovals: input.approval ?? false,
     hasPendingUserInput: input.userInput ?? false,
     backgroundProcessCount: input.backgroundProcessCount ?? 0,
-    activeAgentCount: 0,
+    activeAgentCount: input.activeAgentCount ?? 0,
+    ...(input.pendingBackgroundTasks === undefined
+      ? {}
+      : { pendingBackgroundTasks: input.pendingBackgroundTasks }),
   };
 }
 
@@ -96,6 +101,32 @@ describe("resolveThreadNotificationEvents", () => {
     expect(
       step(background.next, thread({ status: "completed" })).events.map((event) => event.kind),
     ).toEqual(["completion"]);
+  });
+
+  it("calls a thread completed when it only left a dev server running", () => {
+    const running = step(new Map(), thread());
+    const devServer = step(
+      running.next,
+      thread({
+        status: "completed",
+        backgroundProcessCount: 1,
+        pendingBackgroundTasks: [{ taskId: "dev", kind: "command" }],
+      }),
+    );
+    expect(devServer.events.map((event) => event.kind)).toEqual(["completion"]);
+    // A monitor wakes the agent, so it still holds the completion.
+    const watching = step(
+      running.next,
+      thread({
+        status: "completed",
+        backgroundProcessCount: 2,
+        pendingBackgroundTasks: [
+          { taskId: "dev", kind: "command" },
+          { taskId: "watch", kind: "monitor" },
+        ],
+      }),
+    );
+    expect(watching.events).toEqual([]);
   });
 
   it("does not call interrupted runs completed", () => {
