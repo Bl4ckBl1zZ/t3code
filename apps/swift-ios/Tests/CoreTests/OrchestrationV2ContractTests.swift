@@ -26,6 +26,27 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(OrchestrationV2Run.self, from: JSONEncoder().encode(fixture.run)), fixture.run)
     }
 
+    func testOnDemandTurnItemDetailContracts() throws {
+        struct Fixture: Decodable {
+            let wireItems: [OrchestrationV2TurnItem]
+            let result: OrchestrationV2GetTurnItemResult
+            let missing: OrchestrationV2GetTurnItemResult
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/turnItemDetail.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.wireItems.map(\.outputOmitted), [true, true])
+        XCTAssertTrue(fixture.wireItems.allSatisfy(ThreadTurnItemDetail.needsFetch))
+        let fetched = try XCTUnwrap(fixture.result.item)
+        XCTAssertFalse(fetched.outputOmitted)
+        XCTAssertEqual(ThreadTurnItemDetail.outputText(fetched), "12 tests passed")
+        XCTAssertNil(fixture.missing.item)
+        // Re-encoding keeps the flag, so a cached projection still knows to fetch.
+        let roundTripped = try JSONDecoder().decode(
+            OrchestrationV2TurnItem.self, from: JSONEncoder().encode(fixture.wireItems[0])
+        )
+        XCTAssertTrue(roundTripped.outputOmitted)
+    }
+
     /// Every turn item type the contract defines, as of the generated fixture.
     /// Kept explicit so adding a contract variant without a Swift case fails
     /// loudly rather than silently decoding to `.unknown`.

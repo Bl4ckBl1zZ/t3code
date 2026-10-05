@@ -422,8 +422,12 @@ public enum ThreadActivityInspector {
             }
 
         case let .dynamicTool(_, input, output):
-            addBlock(&blocks, "Input", input)
-            addBlock(&blocks, "Output", output)
+            addBlock(&blocks, "Input", ThreadTurnItemDetail.formatToolValue(input))
+            // A withheld output arrives as a one-line summary; the open row
+            // fetches the real one instead of showing that.
+            if !item.outputOmitted {
+                addBlock(&blocks, "Output", ThreadTurnItemDetail.formatToolValue(output))
+            }
 
         case let .approvalRequest(_, _, prompt, _):
             addBlock(&blocks, "Prompt", prompt, monospaced: false)
@@ -592,27 +596,6 @@ public enum ThreadActivityInspector {
         blocks.append(.init(label: label, value: value, monospaced: monospaced))
     }
 
-    /// Provider-defined payloads (dynamic tool input and output) arrive as raw
-    /// JSON. A JSON string renders as its text; anything else is pretty-printed.
-    private static func addBlock(
-        _ blocks: inout [ThreadActivityInspectorBlock],
-        _ label: String,
-        _ value: JSONValue?,
-        monospaced: Bool = true
-    ) {
-        guard let value else { return }
-        switch value {
-        case .null:
-            return
-        case let .string(text):
-            addBlock(&blocks, label, text, monospaced: monospaced)
-        default:
-            blocks.append(
-                .init(label: label, value: stringify(value, indent: 0), monospaced: monospaced)
-            )
-        }
-    }
-
     // MARK: - Duration
 
     /// An item that started but has not completed is still running, so its
@@ -670,6 +653,11 @@ public enum ThreadActivityInspector {
             ],
             indent: 0
         )
+    }
+
+    /// Provider-defined JSON, indented the way the web client shows it.
+    static func prettyJSON(_ value: JSONValue) -> String {
+        stringify(value, indent: 0)
     }
 
     /// `JSON.stringify(value, null, 2)`, which `JSONSerialization.prettyPrinted`

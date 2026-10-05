@@ -187,6 +187,15 @@ public protocol FeatureClient: AnyObject {
         threadID: String,
         file: FeatureReviewFile
     ) async throws -> FeatureReviewFileContents?
+    /// The full turn item behind a work-log row whose output the wire withheld
+    /// (`outputOmitted`). `threadID` routes to the environment; `sourceThreadID`
+    /// is the row's source thread (a wire id), which differs for inherited rows.
+    func loadTurnItem(
+        threadID: String,
+        sourceThreadID: String,
+        itemID: String,
+        revision: String
+    ) async throws -> OrchestrationV2TurnItem?
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus
     /// Streams the change request matching each thread's branch, keyed by
@@ -509,6 +518,15 @@ public extension FeatureClient {
 
     func loadReview(threadID: String, checkpointID: String) async throws -> FeatureReview {
         throw FeatureCapabilityUnavailable("Checkpoint diff")
+    }
+
+    func loadTurnItem(
+        threadID _: String,
+        sourceThreadID _: String,
+        itemID _: String,
+        revision _: String
+    ) async throws -> OrchestrationV2TurnItem? {
+        throw FeatureCapabilityUnavailable("Tool output")
     }
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus {

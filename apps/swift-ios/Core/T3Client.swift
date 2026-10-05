@@ -1635,6 +1635,29 @@ public actor T3Client {
         )
     }
 
+    // MARK: Turn item detail
+
+    /// One timeline item with the input and output the wire projection
+    /// withheld (`outputOmitted`). `threadID` is the item's source thread, a
+    /// wire id; `revision` only keys the server's cache. `nil` when the item
+    /// no longer exists.
+    public func turnItem(
+        threadID: String,
+        itemID: String,
+        revision: String?
+    ) async throws -> OrchestrationV2TurnItem? {
+        var payload: [String: JSONValue] = [
+            "threadId": .string(threadID),
+            "itemId": .string(itemID),
+        ]
+        if let revision { payload["revision"] = .string(revision) }
+        return try await rpc.request(
+            RPCMethod.getTurnItem.rawValue,
+            payload: .object(payload),
+            as: OrchestrationV2GetTurnItemResult.self
+        ).item
+    }
+
     // MARK: Terminal
 
     public func openTerminal(
@@ -2156,6 +2179,7 @@ public enum RPCMethod: String, Sendable {
     case getTurnDiff = "orchestration.getTurnDiff"
     case getFullThreadDiff = "orchestration.getFullThreadDiff"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
+    case getTurnItem = "orchestration.getTurnItem"
     case searchThreads = "orchestration.searchThreads"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"

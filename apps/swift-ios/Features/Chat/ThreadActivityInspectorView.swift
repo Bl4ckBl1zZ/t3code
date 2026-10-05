@@ -27,6 +27,9 @@ struct ThreadActivityInspectorView: View {
     let currentWireThreadID: String
     let activitySourceThreadID: String
     var workspaceRoot: String?
+    /// Stands in for output the wire withheld while it loads, or says why it
+    /// never arrived. `nil` once the fetched output is in `model`.
+    var outputState: ThreadTurnItemOutputState? = nil
     var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
     var onOpenURL: (URL) -> Void = { _ in }
     var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
@@ -40,6 +43,10 @@ struct ThreadActivityInspectorView: View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(model.blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
+            }
+
+            if let outputState {
+                section("Output") { outputStateText(outputState) }
             }
 
             if let ending = model.ending {
@@ -100,6 +107,21 @@ struct ThreadActivityInspectorView: View {
         } else {
             text
         }
+    }
+
+    /// Static text, never a spinner: a slow server must not keep the
+    /// transcript repainting.
+    private func outputStateText(_ state: ThreadTurnItemOutputState) -> some View {
+        let (text, color): (String, Color) = switch state {
+        case .loading: ("Loading output…", T3Colors.textTertiary)
+        case let .failed(message): ("Couldn’t load output: \(message)", T3Colors.danger)
+        case .empty: ("No output.", T3Colors.textTertiary)
+        }
+        return Text(verbatim: text)
+            .font(ChatTimelineStyle.small)
+            .foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func endingColor(_ tone: ThreadActivityInspectorEnding.Tone) -> Color {
@@ -322,9 +344,30 @@ private struct InspectorBlockText: View {
         return block.value.count > Self.collapsedLineLimit * 60
     }
 
+    /// Fetched output runs to 256 KB. Collapsed, only the lines that can show
+    /// are handed to text layout.
+    private var displayedValue: String {
+        guard !isExpanded, isLong else { return block.value }
+        let value = block.value
+        var end = value.startIndex
+        for _ in 0..<Self.collapsedLineLimit {
+            guard let newline = value[end...].firstIndex(of: "\n") else {
+                end = value.endIndex
+                break
+            }
+            end = value.index(after: newline)
+        }
+        let limit = value.index(
+            value.startIndex,
+            offsetBy: Self.collapsedLineLimit * 120,
+            limitedBy: end
+        ) ?? end
+        return String(value[..<limit])
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(verbatim: block.value)
+            Text(verbatim: displayedValue)
                 .font(block.monospaced ? ChatTimelineStyle.smallMono : ChatTimelineStyle.small)
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(isExpanded ? nil : Self.collapsedLineLimit)

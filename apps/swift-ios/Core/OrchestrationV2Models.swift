@@ -517,6 +517,10 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
     public var toolSurface: String? = nil
     public var toolIcon: ToolActivityIcon? = nil
     public var toolSource: ToolActivitySource? = nil
+    /// The server withheld this command or tool output on the wire; fetch it
+    /// with `orchestration.getTurnItem`. Older servers never set it, so their
+    /// rows keep whatever output they shipped inline.
+    public var outputOmitted: Bool = false
 
     public init(type: String, base: OrchestrationV2TurnItemBase, payload: Payload) {
         self.type = type
@@ -566,7 +570,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case streaming, planId, markdown, steps, explanation
         case requestId, questions, requestKind, prompt, options
         case fileName, additions, deletions, diffStr, oldStr, newStr, changes
-        case input, output, exitCode
+        case input, output, exitCode, outputOmitted
         case pattern, results, patterns
         case checkpointId, scopeId, files, restoredFileCount, rolledBackRunCount
         case message, failure, retry
@@ -588,6 +592,9 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             toolSurface = try container.decodeIfPresent(String.self, forKey: .toolSurface)
             toolIcon = try container.decodeIfPresent(ToolActivityIcon.self, forKey: .toolIcon)
             toolSource = try container.decodeIfPresent(ToolActivitySource.self, forKey: .toolSource)
+        }
+        if type == "dynamic_tool" || type == "command_execution" {
+            outputOmitted = try container.decodeIfPresent(Bool.self, forKey: .outputOmitted) ?? false
         }
 
         switch type {
@@ -750,6 +757,9 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             try container.encodeIfPresent(toolIcon, forKey: .toolIcon)
             try container.encodeIfPresent(toolSource, forKey: .toolSource)
         }
+        if outputOmitted {
+            try container.encode(true, forKey: .outputOmitted)
+        }
 
         switch payload {
         case let .userMessage(messageID, intent, text, attachments):
@@ -853,6 +863,12 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             break
         }
     }
+}
+
+/// `orchestration.getTurnItem`'s reply: the persisted item, size-bounded, or
+/// `nil` once it is gone.
+public struct OrchestrationV2GetTurnItemResult: Codable, Equatable, Sendable {
+    public let item: OrchestrationV2TurnItem?
 }
 
 public struct OrchestrationV2ProjectedTurnItem: Codable, Equatable, Sendable, Identifiable {

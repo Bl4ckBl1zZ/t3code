@@ -731,6 +731,14 @@ public struct ThreadDetailView: View {
                 onOpenDiff: openDiff,
                 onRetrySend: { model.retryOutbox() },
                 onRetryTurn: retryLastMessage,
+                loadTurnItem: { [client = model.client, threadID = thread.id] sourceThreadID, itemID, revision in
+                    try await client.loadTurnItem(
+                        threadID: threadID,
+                        sourceThreadID: sourceThreadID,
+                        itemID: itemID,
+                        revision: revision
+                    )
+                },
                 citationNavigation: model.pendingAssistantCitation.flatMap { request in
                     request.citation.threadId == (thread.wireID ?? thread.id) && request.citation.environmentId == threadEnvironment?.id ? request : nil
                 },
@@ -2125,6 +2133,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let onOpenDiff: (String, String?) -> Void
     var onRetrySend: () -> Void = {}
     var onRetryTurn: (() -> Void)? = nil
+    /// Fetches output the wire withheld from a work-log row, while it is open.
+    var loadTurnItem: ThreadTurnItemDetailStore.Loader? = nil
     var citationNavigation: AssistantCitationNavigationRequest? = nil
     var onCitationComplete: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
     var onOpenCitation: (AssistantCitation) -> Void = { _ in }
@@ -2176,6 +2186,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         transcript?.floatingBottomInset = bottomContentInset
         context.coordinator.onReadingHistoryChanged = onReadingHistoryChanged
         context.coordinator.onActivityBelowChanged = onActivityBelowChanged
+        context.coordinator.turnItemDetails.loader = loadTurnItem
         context.coordinator.update(
             threadID: threadID,
             detail: detail,
@@ -2291,6 +2302,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         }
         private let citationHighlight = AssistantCitationHighlight()
         private let workLogHistory = ThreadWorkLogHistoryStore()
+        let turnItemDetails = ThreadTurnItemDetailStore()
         private var citationRequest: AssistantCitationNavigationRequest?
         private var citationCompletion: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
         private var citationPages = Set<String>()
@@ -2428,6 +2440,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 let context = rowContext
                 let highlight = citationHighlight
                 let toolHistory = workLogHistory
+                let toolDetails = turnItemDetails
                 cell.contentConfiguration = UIHostingConfiguration {
                     ThreadTimelineEntryView(
                         entry: entry,
@@ -2454,6 +2467,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.assistantCitationContext, context.citationContext)
                     .environment(\.assistantCitationHighlight, highlight)
                     .environment(\.threadWorkLogHistory, toolHistory)
+                    .environment(\.threadTurnItemDetails, toolDetails)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
                     .environment(\.openURL, OpenURLAction { url in

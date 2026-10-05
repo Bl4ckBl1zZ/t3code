@@ -87,6 +87,8 @@ import {
   OrchestrationV2ThreadProjection,
   OrchestrationV2Run,
   OrchestrationV2ConversationMessage,
+  OrchestrationV2GetTurnItemResult,
+  OrchestrationV2TurnItem as OrchestrationV2TurnItemSchema,
   PlanId,
   ProjectId,
   ProjectIconOverride,
@@ -2012,3 +2014,45 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(orchestrationProtocolPath, orchestrationProtocolFixture);
+
+// On-demand tool output: the wire withholds command and tool output and flags
+// it, and `orchestration.getTurnItem` returns the full item. The Swift client
+// decodes both and must keep the flag so it knows to fetch.
+const turnItemDetailPath = NodePath.join(NodePath.dirname(outputPath), "turnItemDetail.json");
+const omittedCommand: OrchestrationV2TurnItem = {
+  ...base("item-command-omitted"),
+  type: "command_execution",
+  input: "vp test",
+  outputOmitted: true,
+  exitCode: 0,
+};
+const omittedTool: OrchestrationV2TurnItem = {
+  ...base("item-tool-omitted"),
+  type: "dynamic_tool",
+  toolName: "read_file",
+  input: { summary: '{"path":"src/index.ts"}', truncated: true },
+  output: { summary: "export const value = 1;", truncated: true },
+  outputOmitted: true,
+};
+const encodeTurnItem = Schema.encodeSync(OrchestrationV2TurnItemSchema);
+const encodeTurnItemResult = Schema.encodeSync(OrchestrationV2GetTurnItemResult);
+const turnItemDetailFixture = `${JSON.stringify(
+  {
+    wireItems: [omittedCommand, omittedTool].map((item) => encodeTurnItem(item)),
+    result: encodeTurnItemResult({
+      item: { ...omittedCommand, outputOmitted: undefined, output: "12 tests passed" },
+    }),
+    missing: encodeTurnItemResult({ item: null }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(turnItemDetailPath) ||
+    NodeFS.readFileSync(turnItemDetailPath, "utf8") !== turnItemDetailFixture
+  ) {
+    console.error("[swift-fixtures] turnItemDetail.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(turnItemDetailPath, turnItemDetailFixture);

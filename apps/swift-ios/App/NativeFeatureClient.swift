@@ -2048,6 +2048,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return Self.checkpointReview(diff, cwd: try? workspaceContext(route: route).cwd)
     }
 
+    func loadTurnItem(
+        threadID: String,
+        sourceThreadID: String,
+        itemID: String,
+        revision: String
+    ) async throws -> OrchestrationV2TurnItem? {
+        let route = try checkpointRoute(for: threadID)
+        return try await route.client.turnItem(
+            threadID: sourceThreadID,
+            itemID: itemID,
+            revision: revision
+        )
+    }
+
     /// The open thread's projection is already in hand; anything else is read
     /// fresh. Same rule as ``providerSessionIDs(for:)``, and for the same
     /// reason: a stale projection would resolve the checkpoint to the wrong

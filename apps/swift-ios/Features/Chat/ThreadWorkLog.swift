@@ -1021,6 +1021,7 @@ struct ThreadWorkLog: View {
 
     /// `nil` until the reader touches the fold, so the preference decides it.
     @SwiftUI.Environment(\.threadWorkLogHistory) private var sharedHistory
+    @SwiftUI.Environment(\.threadTurnItemDetails) private var turnItemDetails
     @State private var localHistory = ThreadWorkLogHistoryStore()
     private var history: ThreadWorkLogHistory {
         (sharedHistory ?? localHistory).entry("\(currentThreadID):\(rows.first?.id ?? "empty")")
@@ -1149,26 +1150,26 @@ struct ThreadWorkLog: View {
         } else if row.item.type == "error" {
             ProviderErrorCallout(row: row, onRetry: onRetryTurn)
         } else {
+            // Rows with nothing to show offer no disclosure, so they never
+            // open to an empty panel.
+            let canExpand = ThreadTurnItemDetail.hasDetail(row.item)
+            let isExpanded = canExpand && isRowExpanded(row.id)
             VStack(alignment: .leading, spacing: 0) {
                 WorkLogRowButton(
                     row: row,
                     workspaceRoot: workspaceRoot,
-                    isExpanded: isRowExpanded(row.id),
+                    isExpanded: isExpanded,
+                    canExpand: canExpand,
                     onToggle: { toggleRow(row.id) },
                     onCopy: { copy(row) }
                 )
 
-                if isRowExpanded(row.id) {
-                    ThreadActivityInspectorView(
-                        model: ThreadActivityInspector.build(
-                            row: row.projectedItem,
-                            support: itemSupport(row.projectedItem),
-                            currentThreadID: currentThreadID,
-                            currentWireThreadID: currentWireThreadID
-                        ),
+                if isExpanded {
+                    WorkLogRowInspector(
+                        row: row,
+                        support: itemSupport(row.projectedItem),
                         currentThreadID: currentThreadID,
                         currentWireThreadID: currentWireThreadID,
-                        activitySourceThreadID: row.projectedItem.sourceThreadId,
                         workspaceRoot: workspaceRoot,
                         onOpenFile: onOpenFile,
                         onOpenURL: onOpenURL,
@@ -1235,8 +1236,9 @@ struct ThreadWorkLog: View {
     }
 
     private func copy(_ row: ThreadWorkLogRow) {
+        // Copies the fetched output too once the row has loaded it.
         let model = ThreadActivityInspector.build(
-            row: row.projectedItem,
+            row: turnItemDetails?.resolve(row.projectedItem).row ?? row.projectedItem,
             support: itemSupport(row.projectedItem),
             currentThreadID: currentThreadID,
             currentWireThreadID: currentWireThreadID
@@ -1303,10 +1305,50 @@ private struct WorkLogRowText: View {
     }
 }
 
+/// An open work row: the inspector over the row's item, with the output the
+/// wire withheld fetched while it stays open.
+private struct WorkLogRowInspector: View {
+    let row: ThreadWorkLogRow
+    let support: ThreadActivityItemSupport
+    let currentThreadID: String
+    let currentWireThreadID: String
+    let workspaceRoot: String?
+    let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
+    let onOpenURL: (URL) -> Void
+    let onRollback: (ThreadActivityRollbackTarget) -> Void
+
+    @SwiftUI.Environment(\.threadTurnItemDetails) private var details
+
+    var body: some View {
+        let resolved = details?.resolve(row.projectedItem) ?? (row: row.projectedItem, output: nil)
+        ThreadActivityInspectorView(
+            model: ThreadActivityInspector.build(
+                row: resolved.row,
+                support: support,
+                currentThreadID: currentThreadID,
+                currentWireThreadID: currentWireThreadID
+            ),
+            currentThreadID: currentThreadID,
+            currentWireThreadID: currentWireThreadID,
+            activitySourceThreadID: row.projectedItem.sourceThreadId,
+            workspaceRoot: workspaceRoot,
+            outputState: resolved.output,
+            onOpenFile: onOpenFile,
+            onOpenURL: onOpenURL,
+            onRollback: onRollback
+        )
+        .task(id: ThreadTurnItemDetailStore.key(row.projectedItem)) {
+            await details?.load(row.projectedItem)
+        }
+    }
+}
+
 private struct WorkLogRowButton: View {
     let row: ThreadWorkLogRow
     let workspaceRoot: String?
     let isExpanded: Bool
+    /// False when opening the row would show nothing: no chevron, no toggle.
+    let canExpand: Bool
     let onToggle: () -> Void
     let onCopy: () -> Void
 
@@ -1340,7 +1382,8 @@ private struct WorkLogRowButton: View {
     }
 
     var body: some View {
-        Button(action: onToggle) {
+        // Still a button without detail: long-press copy works on every row.
+        Button { if canExpand { onToggle() } } label: {
             HStack(spacing: 8) {
                 ThreadToolActivityIcon(icon: row.waiting == nil ? row.activityIcon : nil, fallback: symbolName)
                     .font(ChatTimelineStyle.bodyStrong)
@@ -1360,7 +1403,10 @@ private struct WorkLogRowButton: View {
                         status: row.trailingStatus,
                         failureTint: isDestructive ? T3Colors.danger : T3Colors.textTertiary
                     )
+                    // Hidden rather than removed, so trailing glyphs stay
+                    // in one column down the log.
                     TimelineDisclosureChevron(isExpanded: isExpanded)
+                        .opacity(canExpand ? 1 : 0)
                 }
             }
             .frame(minHeight: T3Metrics.minimumTapTarget)
@@ -1375,8 +1421,9 @@ private struct WorkLogRowButton: View {
             }
         }
         .accessibilityLabel(accessibilityText)
-        .accessibilityValue([row.trailingStatus?.accessibilityLabel, isExpanded ? "Expanded" : "Collapsed"].compactMap { $0 }.joined(separator: ", "))
-        .accessibilityHint("Double tap to show full details.")
+        .accessibilityValue([row.trailingStatus?.accessibilityLabel, canExpand ? (isExpanded ? "Expanded" : "Collapsed") : nil].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityRemoveTraits(canExpand ? [] : .isButton)
+        .accessibilityHint(canExpand ? "Double tap to show full details." : "")
         .accessibilityAction(named: "Copy details", onCopy)
     }
 }

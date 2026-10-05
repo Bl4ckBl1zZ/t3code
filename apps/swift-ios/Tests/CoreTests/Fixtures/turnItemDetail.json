@@ -1,0 +1,76 @@
+{
+  "wireItems": [
+    {
+      "id": "item-command-omitted",
+      "threadId": "thread-v2",
+      "runId": "run-1",
+      "nodeId": "node-1",
+      "providerThreadId": "provider-thread-1",
+      "providerTurnId": "provider-turn-1",
+      "nativeItemRef": null,
+      "parentItemId": null,
+      "ordinal": 25,
+      "status": "completed",
+      "title": null,
+      "startedAt": "2026-06-20T00:00:00.000Z",
+      "completedAt": "2026-06-20T00:00:00.000Z",
+      "updatedAt": "2026-06-20T00:00:00.000Z",
+      "type": "command_execution",
+      "input": "vp test",
+      "outputOmitted": true,
+      "exitCode": 0
+    },
+    {
+      "id": "item-tool-omitted",
+      "threadId": "thread-v2",
+      "runId": "run-1",
+      "nodeId": "node-1",
+      "providerThreadId": "provider-thread-1",
+      "providerTurnId": "provider-turn-1",
+      "nativeItemRef": null,
+      "parentItemId": null,
+      "ordinal": 26,
+      "status": "completed",
+      "title": null,
+      "startedAt": "2026-06-20T00:00:00.000Z",
+      "completedAt": "2026-06-20T00:00:00.000Z",
+      "updatedAt": "2026-06-20T00:00:00.000Z",
+      "type": "dynamic_tool",
+      "toolName": "read_file",
+      "input": {
+        "summary": "{\"path\":\"src/index.ts\"}",
+        "truncated": true
+      },
+      "output": {
+        "summary": "export const value = 1;",
+        "truncated": true
+      },
+      "outputOmitted": true
+    }
+  ],
+  "result": {
+    "item": {
+      "id": "item-command-omitted",
+      "threadId": "thread-v2",
+      "runId": "run-1",
+      "nodeId": "node-1",
+      "providerThreadId": "provider-thread-1",
+      "providerTurnId": "provider-turn-1",
+      "nativeItemRef": null,
+      "parentItemId": null,
+      "ordinal": 25,
+      "status": "completed",
+      "title": null,
+      "startedAt": "2026-06-20T00:00:00.000Z",
+      "completedAt": "2026-06-20T00:00:00.000Z",
+      "updatedAt": "2026-06-20T00:00:00.000Z",
+      "type": "command_execution",
+      "input": "vp test",
+      "output": "12 tests passed",
+      "exitCode": 0
+    }
+  },
+  "missing": {
+    "item": null
+  }
+}
