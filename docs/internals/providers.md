@@ -251,6 +251,23 @@ every item that outlived one before any client reads. The query selects the live
 count, so the monitor-folding rule stays in `orchestrationV2BackgroundProcessCount` and the sidebar
 cannot disagree with the timeline.
 
+The same rows also feed `pendingBackgroundTasks`, the named list of what a settled thread still runs
+([`orchestrationV2PendingBackgroundWork.ts`][pendingwork], `derivePendingBackgroundWork`): each live
+background command as `command`, a monitor as its own `monitor` entry, each delegated agent as
+`subagent`. It is derived, never persisted, and empty while a run is in flight. Clients read its kinds
+through `backgroundWorkHoldsCompletion`: subagents and monitors wake the agent, so they hold the
+thread in Background and hold back its completion alert and automatic settlement; a command such as a
+dev server does not. Unlike upstream, no adapter reports a separate provider-thread roster: Claude
+and Codex already project that work as live background items.
+
+Stop on a settled thread interrupts the provider turn the work belongs to, and every other provider
+thread with pending work and a live session (a Codex dev server left before a switch to Claude), as
+long as its provider can end work after a turn settled (Codex, Claude). Once each interrupt returns,
+the effect worker dispatches `thread.background-work.settle` through `BackgroundWorkSettleDispatch`,
+which marks interrupted whatever the thread still shows on that provider thread, or on one with no
+live session, for the stopped run and older ones (`pendingBackgroundTurnItems`). A Stop whose session
+is gone settles directly.
+
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
@@ -271,3 +288,4 @@ cannot disagree with the timeline.
 [claudeadapter]: ../../apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
 [recovery]: ../../apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts
 [restartnote]: ../../apps/server/src/orchestration-v2/RestartBackgroundNote.ts
+[pendingwork]: ../../packages/shared/src/orchestrationV2PendingBackgroundWork.ts
