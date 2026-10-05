@@ -47,7 +47,8 @@ mobile client, tapping either pill opens the conversation's details, which list 
 sidebar, a conversation waiting on a subagent or a monitor shows a hollow, breathing dot — distinct
 from the filled dot of a conversation that is generating right now, and from no dot at all. It
 means: idle at the moment, but this one will speak again by itself. Hover it to see what it is
-waiting on.
+waiting on. On iPhone and iPad, such a conversation shows **Background** on Home, and its header
+names what it is waiting on, such as "Waiting on subagent Review Diff".
 
 A command the agent leaves running when it is done, such as a dev server, does not hold the
 conversation: it reads as finished, shows as done until you open it, and sends the usual completion

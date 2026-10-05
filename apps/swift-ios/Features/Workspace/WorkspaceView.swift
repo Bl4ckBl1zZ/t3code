@@ -2690,7 +2690,7 @@ struct FeatureThreadRow: View, Equatable {
                 values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
             }
         case .inbox:
-            values.append(thread.homeStatusLabel ?? "Ready")
+            values.append(thread.backgroundWorkStatusTitle ?? thread.homeStatusLabel ?? "Ready")
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }
@@ -2698,7 +2698,7 @@ struct FeatureThreadRow: View, Equatable {
                 values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
             }
         case .rich, .slim:
-            values.append(thread.homeStatusLabel ?? "Ready")
+            values.append(thread.backgroundWorkStatusTitle ?? thread.homeStatusLabel ?? "Ready")
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }
