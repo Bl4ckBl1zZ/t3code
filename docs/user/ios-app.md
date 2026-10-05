@@ -52,6 +52,10 @@ sheets use the system glass material.
   task, without sending your message twice.
 - **Unavailable threads.** An offline, archived or unavailable thread says so, with **Reconnect**,
   **Unarchive** or **Try Again**.
+- **Agents.** An agent's row shows its model, the provider account when you have more than one,
+  and its project, branch or folder when they differ from the thread's, with up to three lines of
+  its latest progress or result. Tap it to open the agent's thread; Back returns to the thread that
+  started it.
 - **Hardware keyboard shortcuts:**
 
   | Shortcut                            | Action                                  |
@@ -68,6 +72,11 @@ sheets use the system glass material.
 - **Opening.** Details opens at half height.
 - **Tools.** **Files**, **Review**, **Source Control**, **Terminal** and linked pull requests open
   inside it and expand it to full height. Tap back to return to the details.
+- **Review.** Review opens on **Changes**: everything on the branch since it left its base,
+  including what is not committed yet. Switch to **Uncommitted** from its **⋯** menu.
+- **Watching pull requests.** In **Linked Pull Requests**, an open pull request's menu offers
+  **Watch for Changes**. The agent then wakes when checks finish, someone comments, or the branch
+  conflicts, and the row reads **Watching** until you choose **Stop Watching**.
 - **Rename and delete.** Rename the thread or delete it from the thread section. Deleting asks for
   confirmation.
 - **Errors.** When a git action fails, the alert names what went wrong, such as **Couldn't Push**.
