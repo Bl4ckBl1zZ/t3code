@@ -58,8 +58,10 @@ Your own browser panel remains available.
 
 **Pull request merge method** sets which method a pull request's merge starts with: **Merge**,
 **Squash**, or **Rebase**. Web and desktop expose the machine default in **Settings → General**
-and a per-project choice in project settings. The machine default **Last used** keeps the method
-you last picked on each device; a project's **Machine default** removes its override. Picking a
+and a per-project choice in project settings. On iOS, set the machine default in **Settings →
+Servers → Default Merge Method**; the iOS merge sheet follows both defaults. The machine default
+**Last used** keeps the method you last picked on each device; a project's **Machine default**
+removes its override. Picking a
 method in a pull request's menu applies to that merge and becomes your last used method. When a
 repository does not allow the chosen method, the merge uses one it does.
 

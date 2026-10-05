@@ -11,6 +11,7 @@ struct SettingsServersView: View {
     @State private var removalTarget: FeatureEnvironment?
     @State private var confirmingDisconnect = false
     @State private var switchingID: String?
+    @State private var mergeMethodError: String?
 
     private var environments: [FeatureEnvironment] { model.snapshot.environments }
     private var activeEnvironment: FeatureEnvironment? { environments.first(where: \.isActive) }
@@ -31,9 +32,24 @@ struct SettingsServersView: View {
                 }
             }
 
-            if activeEnvironment != nil {
-                Section("This Server") {
+            if let activeEnvironment {
+                Section {
                     routeLink(.devices)
+                    if mergeMethodSupported(activeEnvironment) {
+                        SettingsMergeMethodPicker(
+                            environmentID: activeEnvironment.id,
+                            saved: model.snapshot.preferencesByEnvironment?[activeEnvironment.id]?.pullRequestMergeMethod,
+                            manager: (model.client as? any FeatureServerSettingsManaging) ?? EmptyFeatureServerSettingsManager.shared,
+                            error: $mergeMethodError
+                        )
+                    }
+                } header: {
+                    Text("This Server")
+                } footer: {
+                    if mergeMethodSupported(activeEnvironment) {
+                        SettingsFooter(text: "Merges start with this method unless the project sets its own. Last Used reuses this device's last choice.",
+                            error: mergeMethodError)
+                    }
                 }
             }
 
@@ -168,11 +184,63 @@ struct SettingsServersView: View {
         }
     }
 
+    private func mergeMethodSupported(_ environment: FeatureEnvironment) -> Bool {
+        environment.supportsPullRequests == true
+            && model.snapshot.preferencesByEnvironment?[environment.id]?.supportsPullRequestMergeMethod == true
+    }
+
     private func routeLink(_ route: SettingsRoute) -> some View {
         NavigationLink(value: route) { routeLabel(route) }
     }
 
     private func routeLabel(_ route: SettingsRoute) -> some View {
         SettingsTileLabel(title: route.title, systemImage: route.systemImage, tint: route.tint)
+    }
+}
+
+/// The merge method this server's pull requests start with, unless a project
+/// sets its own. "Last Used" leaves it to the method last chosen on each device.
+private struct SettingsMergeMethodPicker: View {
+    let environmentID: String
+    let saved: String?
+    let manager: any FeatureServerSettingsManaging
+    @Binding var error: String?
+    /// The value just picked, shown until the server's answer replaces it.
+    @State private var pending: String?? = nil
+
+    init(environmentID: String, saved: String?, manager: any FeatureServerSettingsManaging, error: Binding<String?>) {
+        self.environmentID = environmentID
+        self.saved = saved
+        self.manager = manager
+        _error = error
+    }
+
+    var body: some View {
+        Picker(selection: Binding(get: { pending ?? saved }, set: write)) {
+            Text("Last Used").tag(String?.none)
+            ForEach(["merge", "squash", "rebase"], id: \.self) { method in
+                Text(PullRequestActionLogic.methodLabel(method)).tag(Optional(method))
+            }
+        } label: {
+            SettingsTileLabel(title: "Default Merge Method", systemImage: "arrow.triangle.merge", tint: .purple)
+        }
+        .pickerStyle(.menu)
+        .accessibilityHint("The merge method pull requests on this server start with")
+    }
+
+    private func write(_ method: String?) {
+        guard method != (pending ?? saved) else { return }
+        pending = .some(method)
+        error = nil
+        Task {
+            do {
+                try await manager.updateServerSettings(environmentID: environmentID,
+                    patch: ServerSettingsPatchInput(pullRequestMergeMethod: .some(method)))
+            } catch {
+                self.error = "Couldn't save the merge method. \(error.localizedDescription)"
+                PlatformHapticEngine.shared.play(.error)
+            }
+            pending = nil
+        }
     }
 }

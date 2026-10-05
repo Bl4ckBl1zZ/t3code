@@ -1417,6 +1417,17 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
     /// subscription as the rest of this struct so the row stays honest when
     /// another client changes it.
     public var claudeAutoCompactWindow: String
+    /// Whether the server stores a default merge method. Nil on older servers,
+    /// which hide the setting and merge with this device's last choice.
+    public var supportsPullRequestMergeMethod: Bool? = nil
+    /// The machine's merge method ("merge", "squash" or "rebase"); nil reuses
+    /// the method last chosen on each device.
+    public var pullRequestMergeMethod: String? = nil
+
+    mutating func setPullRequestMergeMethod(_ method: String?, supported: Bool) {
+        supportsPullRequestMergeMethod = supported ? true : nil
+        pullRequestMergeMethod = supported ? method : nil
+    }
 
     public init(
         defaultWorkspaceMode: FeatureWorkspaceMode = .local,

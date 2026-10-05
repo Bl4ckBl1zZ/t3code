@@ -1455,6 +1455,47 @@ if (process.argv.includes("--check")) {
   NodeFS.writeFileSync(autoPullFixturePath, autoPullFixture);
 }
 
+// Merge method defaults: the machine's method, one project's override, and a
+// patch that sets the machine and resets another project with null.
+const mergeDefaultsFixturePath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "pullRequestMergeDefaults.json",
+);
+const mergeDefaultsFixture = `${JSON.stringify(
+  {
+    patch: Schema.encodeSync(ServerSettingsPatch)({
+      pullRequestMergeMethod: "squash",
+      projectPullRequestMergeMethodOverrides: {
+        [ProjectId.make("rebased")]: "rebase",
+        [ProjectId.make("reset")]: null,
+      },
+    }),
+    settings: Schema.encodeSync(ServerSettings)(
+      Schema.decodeSync(ServerSettings)({
+        pullRequestMergeMethod: "squash",
+        projectPullRequestMergeMethodOverrides: { rebased: "rebase" },
+      }),
+    ),
+    capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
+      repositoryIdentity: true,
+      pullRequestMergeMethodDefaults: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(mergeDefaultsFixturePath) ||
+    NodeFS.readFileSync(mergeDefaultsFixturePath, "utf8") !== mergeDefaultsFixture
+  ) {
+    console.error("[swift-fixtures] pullRequestMergeDefaults.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(mergeDefaultsFixturePath, mergeDefaultsFixture);
+}
+
 const browserAccessFixturePath = NodePath.join(
   NodePath.dirname(outputPath),
   "projectBrowserAccess.json",

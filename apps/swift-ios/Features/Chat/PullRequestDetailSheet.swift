@@ -115,7 +115,7 @@ struct PullRequestDetailSheet: View {
         }
         .sheet(item: $selectedAction) { action in
             if let detail = overview?.detail, let run = access.runAction {
-                PullRequestActionSheet(action: action, detail: detail, perform: { try await run(detail.number, detail.url, $0) }) {
+                PullRequestActionSheet(action: action, detail: detail, defaultMergeMethod: access.mergeMethodDefault(), perform: { try await run(detail.number, detail.url, $0) }) {
                     Task { await load(force: action == .approveWorkflows || action == .updateBranch) }
                 }
             }

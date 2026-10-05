@@ -22,6 +22,14 @@ enum FeaturePullRequestActionPhase {
     case sent, done, failed
 }
 
+/// The server's merge method for a pull request's project: that project's
+/// override, else the machine's default. Nil when neither is set, or the
+/// server predates the setting, so a merge falls back to this device's choice.
+@MainActor
+protocol FeaturePullRequestMergeDefaultsReading: AnyObject {
+    func pullRequestMergeMethodDefault(scope: FeaturePullRequestScope) -> String?
+}
+
 /// The same detail, label and reviewed-stack screens work from a thread or a
 /// project. A workspace browse never creates a dummy thread just to read a PR.
 @MainActor
@@ -42,6 +50,8 @@ struct FeaturePullRequestAccess {
     let setLabels: (Int, [String], Bool) async throws -> Void
     let stack: (Int) async throws -> PullRequestStack?
     let runStackAction: (Int, PullRequestStack, String, String?) async throws -> Void
+    /// See ``FeaturePullRequestMergeDefaultsReading``.
+    let mergeMethodDefault: () -> String?
 
     init(client: any FeatureClient, threadID: String) {
         scope = .thread(threadID)
@@ -66,6 +76,8 @@ struct FeaturePullRequestAccess {
         setLabels = { try await client.setPullRequestLabels(threadID: threadID, number: $0, labels: $1, applied: $2) }
         stack = { try await client.pullRequestStack(threadID: threadID, number: $0) }
         runStackAction = { try await client.runPullRequestStackAction(threadID: threadID, number: $0, stack: $1, action: $2, mergeMethod: $3) }
+        let defaults = client as? any FeaturePullRequestMergeDefaultsReading
+        mergeMethodDefault = { defaults?.pullRequestMergeMethodDefault(scope: .thread(threadID)) }
     }
 
     /// `onAction` hears each action as it is sent and once the host answers,
@@ -106,6 +118,8 @@ struct FeaturePullRequestAccess {
         setLabels = { try await manager.setProjectPullRequestLabels(scope: scope, number: $0, labels: $1, applied: $2) }
         stack = { try await manager.projectPullRequestStack(scope: scope, number: $0) }
         runStackAction = { try await manager.runProjectPullRequestStackAction(scope: scope, number: $0, stack: $1, action: $2, mergeMethod: $3) }
+        let defaults = manager as? any FeaturePullRequestMergeDefaultsReading
+        mergeMethodDefault = { defaults?.pullRequestMergeMethodDefault(scope: .project(scope)) }
     }
 }
 

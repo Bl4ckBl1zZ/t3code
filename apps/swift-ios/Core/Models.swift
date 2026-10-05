@@ -70,6 +70,9 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let projectDefaults: Bool?
         public let projectBrowserAccess: Bool?
         public let projectAutoPull: Bool?
+        /// Whether server settings carry `pullRequestMergeMethod` and
+        /// `projectPullRequestMergeMethodOverrides`.
+        public var pullRequestMergeMethodDefaults: Bool? = nil
         public let fileDocumentPreviews: Bool?
         public let agentSessionImport: Bool?
         public let providerTerminalEnvironment: Bool?
@@ -102,6 +105,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case projectDefaults
             case projectBrowserAccess
             case projectAutoPull
+            case pullRequestMergeMethodDefaults
             case fileDocumentPreviews
             case agentSessionImport, providerTerminalEnvironment
             case projectIcons
@@ -141,6 +145,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             projectDefaults = try container.decodeIfPresent(Bool.self, forKey: .projectDefaults)
             projectBrowserAccess = try container.decodeIfPresent(Bool.self, forKey: .projectBrowserAccess)
             projectAutoPull = try container.decodeIfPresent(Bool.self, forKey: .projectAutoPull)
+            pullRequestMergeMethodDefaults = try container.decodeIfPresent(Bool.self, forKey: .pullRequestMergeMethodDefaults)
             fileDocumentPreviews = try container.decodeIfPresent(Bool.self, forKey: .fileDocumentPreviews)
             agentSessionImport = try container.decodeIfPresent(Bool.self, forKey: .agentSessionImport)
             providerTerminalEnvironment = try container.decodeIfPresent(Bool.self, forKey: .providerTerminalEnvironment)

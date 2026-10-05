@@ -320,6 +320,11 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let defaultAutoPull: Bool
     public let projectAgentBrowserAccessOverrides: [String: Bool]
     public let projectAutoPullOverrides: [String: Bool]
+    /// The merge method a pull request starts with on this machine; `nil`
+    /// reuses the method last chosen on this device. Absent on older servers.
+    public let pullRequestMergeMethod: String?
+    /// Per-project merge methods, laid over `pullRequestMergeMethod`.
+    public let projectPullRequestMergeMethodOverrides: [String: String]
     public let environmentIcon: String?
     public let usageLimitSources: [String: UsageLimitSourceConfig]?
     public let usagePriceOverrides: [String: UsageModelPriceOverride]?
@@ -372,6 +377,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         defaultAutoPull: Bool = false,
         projectAutoPullOverrides: [String: Bool] = [:],
         projectAgentBrowserAccessOverrides: [String: Bool] = [:],
+        pullRequestMergeMethod: String? = nil,
+        projectPullRequestMergeMethodOverrides: [String: String] = [:],
         environmentIcon: String? = nil,
         usageLimitSources: [String: UsageLimitSourceConfig]? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
@@ -399,6 +406,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.defaultAutoPull = defaultAutoPull
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
+        self.pullRequestMergeMethod = pullRequestMergeMethod
+        self.projectPullRequestMergeMethodOverrides = projectPullRequestMergeMethodOverrides
         self.environmentIcon = environmentIcon
         self.usageLimitSources = usageLimitSources
         self.usagePriceOverrides = usagePriceOverrides
@@ -430,6 +439,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case defaultModelSelection
         case defaultProjectScripts, projectScriptOverrides
         case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
+        case pullRequestMergeMethod, projectPullRequestMergeMethodOverrides
         case environmentIcon
         case usageLimitSources
         case usagePriceOverrides
@@ -467,6 +477,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         defaultAutoPull = try container.decodeIfPresent(Bool.self, forKey: .defaultAutoPull) ?? false
         projectAgentBrowserAccessOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAgentBrowserAccessOverrides) ?? [:]
         projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
+        pullRequestMergeMethod = try container.decodeIfPresent(String.self, forKey: .pullRequestMergeMethod)
+        projectPullRequestMergeMethodOverrides = try container.decodeIfPresent([String: String].self, forKey: .projectPullRequestMergeMethodOverrides) ?? [:]
         environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
         usageLimitSources = try container.decodeIfPresent([String: UsageLimitSourceConfig].self, forKey: .usageLimitSources)
         usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
@@ -518,6 +530,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(defaultAutoPull, forKey: .defaultAutoPull)
         try container.encode(projectAgentBrowserAccessOverrides, forKey: .projectAgentBrowserAccessOverrides)
         try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
+        try container.encode(pullRequestMergeMethod, forKey: .pullRequestMergeMethod)
+        try container.encode(projectPullRequestMergeMethodOverrides, forKey: .projectPullRequestMergeMethodOverrides)
         try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
         try container.encodeIfPresent(usageLimitSources, forKey: .usageLimitSources)
         try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
@@ -563,6 +577,10 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var defaultAutoPull: Bool?
     public var projectAgentBrowserAccessOverrides: [String: Bool?]?
     public var projectAutoPullOverrides: [String: Bool?]?
+    /// Outer nil omits it; a present nil restores the device's last-used method.
+    public var pullRequestMergeMethod: String??
+    /// A present nil entry resets that project to the machine's method.
+    public var projectPullRequestMergeMethodOverrides: [String: String?]?
     public var providerInstances: [String: JSONValue]?
     public var customModelsByDriver: [String: [JSONValue]]?
     /// A present nil entry resets one model. Omitted models are unchanged.
@@ -591,6 +609,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         defaultAutoPull: Bool? = nil,
         projectAutoPullOverrides: [String: Bool?]? = nil,
         projectAgentBrowserAccessOverrides: [String: Bool?]? = nil,
+        pullRequestMergeMethod: String?? = nil,
+        projectPullRequestMergeMethodOverrides: [String: String?]? = nil,
         providerInstances: [String: JSONValue]? = nil,
         customModelsByDriver: [String: [JSONValue]]? = nil,
         environmentIcon: String?? = nil,
@@ -613,6 +633,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         self.defaultAutoPull = defaultAutoPull
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
+        self.pullRequestMergeMethod = pullRequestMergeMethod
+        self.projectPullRequestMergeMethodOverrides = projectPullRequestMergeMethodOverrides
         self.providerInstances = providerInstances
         self.customModelsByDriver = customModelsByDriver
         self.environmentIcon = environmentIcon
@@ -644,6 +666,10 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         if let defaultAutoPull { fields["defaultAutoPull"] = .bool(defaultAutoPull) }
         if let projectAgentBrowserAccessOverrides { fields["projectAgentBrowserAccessOverrides"] = .object(projectAgentBrowserAccessOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
         if let projectAutoPullOverrides { fields["projectAutoPullOverrides"] = .object(projectAutoPullOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
+        if let pullRequestMergeMethod { fields["pullRequestMergeMethod"] = pullRequestMergeMethod.map(JSONValue.string) ?? .null }
+        if let projectPullRequestMergeMethodOverrides {
+            fields["projectPullRequestMergeMethodOverrides"] = .object(projectPullRequestMergeMethodOverrides.mapValues { $0.map(JSONValue.string) ?? .null })
+        }
         if let environmentIcon { fields["environmentIcon"] = environmentIcon.map(JSONValue.string) ?? .null }
         if let enableHermes { fields["enableHermes"] = .bool(enableHermes) }
         if let enableAgentBrowserAccess {

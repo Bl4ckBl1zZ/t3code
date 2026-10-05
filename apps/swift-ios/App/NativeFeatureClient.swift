@@ -15,7 +15,7 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeatureWorkspaceAssetResolving,
+    FeatureDocumentAttachmentResolving, FeatureAgentSetupTerminalProviding, FeatureAgentSessionImporting, FeaturePullRequestThreadPreparing, FeatureProjectCreationClient, FeatureProjectIconManaging, FeatureProjectPullRequestManaging, FeaturePullRequestCodeReading, FeaturePullRequestReviewWriting, FeaturePullRequestCacheInvalidating, FeaturePullRequestMergeDefaultsReading, FeatureWorkspaceAssetResolving,
     FeatureNativeAppIconResolving, FeatureProjectFaviconResolving, FeatureThreadRoleAssigning, FeatureUsageReading, FeatureUsageLimitsReading,
     T3ConnectCapable
 {
@@ -2423,6 +2423,27 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await route.client.submitPullRequestReview(projectID: route.projectID, repository: route.repository, host: route.host, number: number, submission: submission)
     }
 
+    func pullRequestMergeMethodDefault(scope: FeaturePullRequestScope) -> String? {
+        let environmentID: String
+        let projectWireID: String
+        switch scope {
+        case let .project(project):
+            guard let route = try? projectRoute(for: project.projectID) else { return nil }
+            environmentID = route.environmentID
+            projectWireID = route.wireID
+        case let .thread(threadID):
+            guard let route = try? threadRoute(for: threadID),
+                  let thread = shellsByEnvironmentID[route.environmentID]?.threads.first(where: { $0.id == route.wireID })
+            else { return nil }
+            environmentID = route.environmentID
+            projectWireID = thread.projectId
+        }
+        guard let config = serverConfigsByEnvironmentID[environmentID],
+              config.environment?.capabilities.pullRequestMergeMethodDefaults == true,
+              let settings = config.settings else { return nil }
+        return settings.projectPullRequestMergeMethodOverrides[projectWireID] ?? settings.pullRequestMergeMethod
+    }
+
     func projectPullRequestOverview(scope: FeaturePullRequestProjectScope, number: Int) async throws -> FeaturePullRequestOverview {
         let (route, repository) = try projectPullRequestRoute(scope)
         let detail = try await route.client.pullRequestDetail(projectID: route.wireID, repository: repository, host: scope.host, number: number)
@@ -4651,12 +4672,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 case .local: .local
                 case .worktree: .worktree
                 }
-            preferences[environment.id] = FeatureEnvironmentPreferences(
+            var mapped = FeatureEnvironmentPreferences(
                 defaultWorkspaceMode: defaultWorkspaceMode,
                 newWorktreesStartFromOrigin: serverSettings.newWorktreesStartFromOrigin,
                 enableAgentBrowserAccess: serverSettings.enableAgentBrowserAccess,
                 claudeAutoCompactWindow: serverSettings.claudeAutoCompactWindow
             )
+            mapped.setPullRequestMergeMethod(serverSettings.pullRequestMergeMethod,
+                supported: serverConfigsByEnvironmentID[environment.id]?.environment?.capabilities.pullRequestMergeMethodDefaults == true)
+            preferences[environment.id] = mapped
         }
         return FeatureSnapshot(
             connection: FeatureConnection(
@@ -6993,6 +7017,10 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         if patch.continueThreadsAfterServerUpdate != nil, sourceConfig.environment?.capabilities.threadRestartContinuation != true {
             throw FeatureCapabilityUnavailable("Restart recovery")
         }
+        if patch.pullRequestMergeMethod != nil || patch.projectPullRequestMergeMethodOverrides != nil,
+           sourceConfig.environment?.capabilities.pullRequestMergeMethodDefaults != true {
+            throw FeatureCapabilityUnavailable("Merge method defaults")
+        }
         setServerConfig(sourceConfig, environmentID: environmentID)
         let settings = try await client.updateServerSettings(patch: patch)
         // Fold the server's answer into the cached config now. The active
@@ -7027,12 +7055,15 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         if !failedTargets.isEmpty {
             throw SharedSettingsWriteFailure(machines: failedTargets)
         }
-        return FeatureEnvironmentPreferences(
+        var preferences = FeatureEnvironmentPreferences(
             defaultWorkspaceMode: settings.defaultThreadEnvMode == .worktree ? .worktree : .local,
             newWorktreesStartFromOrigin: settings.newWorktreesStartFromOrigin,
             enableAgentBrowserAccess: settings.enableAgentBrowserAccess,
             claudeAutoCompactWindow: settings.claudeAutoCompactWindow
         )
+        preferences.setPullRequestMergeMethod(settings.pullRequestMergeMethod,
+            supported: sourceConfig.environment?.capabilities.pullRequestMergeMethodDefaults == true)
+        return preferences
     }
     func sharedSettingsMismatches(environmentID: String) async throws -> [FeatureSharedSettingsMismatch] {
         let source = try await providerModelConfiguration(environmentID: environmentID)

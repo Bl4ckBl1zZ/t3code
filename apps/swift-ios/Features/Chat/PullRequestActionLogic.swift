@@ -99,6 +99,36 @@ enum PullRequestActionLogic {
     static func mergeMethods(_ detail: PullRequestDetail) -> [String] {
         (detail.capabilities?.mergeMethods ?? []).filter { ["merge", "squash", "rebase"].contains($0) && detail.mergeCapabilities?[$0] == true }
     }
+    /// The merge method a merge starts with: the one already chosen for this
+    /// pull request, then the server's project or machine default, then the
+    /// method last used on this device, each only if the repository allows it,
+    /// and otherwise the first it does.
+    static func resolveMergeMethod(allowed: [String], current: String?, projectDefault: String?, lastUsed: String?) -> String? {
+        [current, projectDefault, lastUsed].compactMap { $0 }.first { allowed.contains($0) } ?? allowed.first
+    }
+
+    /// The one-tap actions a list row offers: the next step for its state and a
+    /// way to close it. GitHub only, where the row's state is enough to know
+    /// what the host offers; nothing on a merged pull request.
+    static func quickActions(_ entry: PullRequestListEntry) -> [NativePullRequestAction] {
+        guard entry.provider == "github", entry.state != .merged else { return [] }
+        if entry.state == .closed { return [.reopen] }
+        return entry.isDraft ? [.ready, .close] : [.merge, .close]
+    }
+
+    static let stackedQuickMergeRefusal = "Open this pull request to merge its stack."
+
+    /// Why a row's quick merge will not run, read from the detail at the tap:
+    /// the row alone cannot tell whether this viewer may merge or how.
+    static func quickMergeRefusal(_ detail: PullRequestDetail) -> String? {
+        if offered(detail).contains(.merge) { return nil }
+        if detail.state == .open, !detail.isDraft, mergeMethods(detail).isEmpty,
+           detail.capabilities?.actions.contains("merge") == true {
+            return "No merge method is available for this repository."
+        }
+        return "This pull request cannot be merged."
+    }
+
     static func updateMethods(_ detail: PullRequestDetail) -> [String] {
         (detail.capabilities?.updateMethods ?? []).filter { ["merge", "rebase"].contains($0) && detail.viewerPermissions?.updateMethods?.contains($0) == true }
     }
@@ -160,5 +190,20 @@ enum PullRequestActionLogic {
         case "rebase": "Rebase on Base Branch"
         default: method.capitalized
         }
+    }
+}
+
+/// The merge method last chosen on this device, which a merge falls back to
+/// when the server sets no default for the project or machine.
+enum PullRequestMergeMethodMemory {
+    private static let key = "swift-ios.pullRequests.lastMergeMethod"
+
+    static func lastUsed(_ defaults: UserDefaults = .standard) -> String? {
+        defaults.string(forKey: key)
+    }
+
+    static func remember(_ method: String, _ defaults: UserDefaults = .standard) {
+        guard ["merge", "squash", "rebase"].contains(method) else { return }
+        defaults.set(method, forKey: key)
     }
 }

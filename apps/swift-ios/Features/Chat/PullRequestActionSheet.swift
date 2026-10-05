@@ -6,6 +6,8 @@ import SwiftUI
 struct PullRequestActionSheet: View {
     let action: NativePullRequestAction
     let detail: PullRequestDetail
+    /// The server's project or machine merge method, when it sets one.
+    var defaultMergeMethod: String? = nil
     let perform: (PullRequestActionRequest) async throws -> Void
     let completed: () -> Void
     @State private var method = ""
@@ -18,6 +20,11 @@ struct PullRequestActionSheet: View {
         case .updateBranch: PullRequestActionLogic.updateMethods(detail)
         default: []
         }
+    }
+    private var initialMethod: String {
+        guard action == .merge || action == .enableAutoMerge else { return methods.first ?? "" }
+        return PullRequestActionLogic.resolveMergeMethod(allowed: methods, current: detail.autoMergeMethod,
+            projectDefault: defaultMergeMethod, lastUsed: PullRequestMergeMethodMemory.lastUsed()) ?? ""
     }
     private var title: String {
         action.label.replacingOccurrences(of: "…", with: "")
@@ -66,7 +73,7 @@ struct PullRequestActionSheet: View {
                 )
             )
             .interactiveDismissDisabled(pending)
-            .onAppear { if !methods.contains(method) { method = detail.autoMergeMethod.flatMap { methods.contains($0) ? $0 : nil } ?? methods.first ?? "" } }
+            .onAppear { if !methods.contains(method) { method = initialMethod } }
         }
         .presentationDetents([.medium])
         .t3GlassSheetBackground()
@@ -81,6 +88,7 @@ struct PullRequestActionSheet: View {
                 try await perform(.init(action: action.rawValue,
                     mergeMethod: action == .merge || action == .enableAutoMerge ? method : nil,
                     updateMethod: action == .updateBranch ? method : nil))
+                if action == .merge || action == .enableAutoMerge { PullRequestMergeMethodMemory.remember(method) }
                 // The merged state is what the reader came for; say it landed.
                 if action == .merge { T3HUD.show("Merged #\(detail.number)", systemImage: "arrow.triangle.merge") }
                 else { PlatformHapticEngine.shared.play(.success) }
