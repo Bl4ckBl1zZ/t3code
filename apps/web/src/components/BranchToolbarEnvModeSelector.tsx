@@ -57,7 +57,10 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
 }: BranchToolbarEnvModeSelectorProps) {
   const workspacePath = displayMode === "panel" ? (activeWorktreePath ?? workspaceRoot) : null;
   const workspaceDisplayName = resolveWorkspaceDisplayName(workspacePath);
-  const workspaceKind = activeWorktreePath ? "Worktree" : "Project folder";
+  // The panel names the workspace kind only when it is not the project folder.
+  const workspaceKind = activeWorktreePath ? "Worktree" : null;
+  const selectWorkspaceKind =
+    effectiveEnvMode === "worktree" && !activeWorktreePath ? "Create" : workspaceKind;
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
   const envModeItems = useMemo(
     () => [
@@ -142,7 +145,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           {workspaceDisplayName ??
             resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)}
         </span>
-        {displayMode === "panel" ? (
+        {displayMode === "panel" && workspaceKind ? (
           <span className="shrink-0 text-[10px] font-normal text-muted-foreground/70">
             {workspaceKind}
           </span>
@@ -220,9 +223,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
               <SelectValue />
             </span>
           </span>
-          {displayMode === "panel" ? (
+          {displayMode === "panel" && selectWorkspaceKind ? (
             <span className="shrink-0 text-[10px] font-normal text-muted-foreground/70">
-              {effectiveEnvMode === "worktree" && !activeWorktreePath ? "Create" : workspaceKind}
+              {selectWorkspaceKind}
             </span>
           ) : null}
         </TooltipTrigger>

@@ -130,7 +130,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --workspace-titlebar-control-gap: 0.75rem;
   --workspace-titlebar-scroll-fade-height: 1.5rem;
   --chat-content-max-width: 46rem;
-  --thread-details-panel-width: 19.5rem;
+  --thread-details-panel-width: 17.5rem;
   /* The prompt on phones: iOS zooms into any input under 16px on focus. */
   --font-size-prompt-touch: max(var(--font-size-prompt, 1rem), 16px);
   /* Horizontal gutter shared by the page header and the chat column, clear of
@@ -883,19 +883,39 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     max-width: var(--chat-content-max-width);
   }
 
+  /* --chat-lane-inset-end: room ChatCanvas gives up on the right so the
+     centered conversation clears the docked workspace card. */
   .messages-timeline-row-frame {
     padding-inline-start: 0.75rem;
-    padding-inline-end: 0.75rem;
+    padding-inline-end: calc(0.75rem + var(--chat-lane-inset-end, 0px));
   }
 
   .chat-scroll-to-bottom {
     inset-inline-start: 0;
-    inset-inline-end: 0;
+    inset-inline-end: var(--chat-lane-inset-end, 0px);
   }
 
   .chat-composer-horizontal-inset {
     padding-inline-start: calc(env(safe-area-inset-left) + 0.75rem);
-    padding-inline-end: calc(env(safe-area-inset-right) + 0.75rem);
+    padding-inline-end: calc(
+      env(safe-area-inset-right) + 0.75rem + var(--chat-lane-inset-end, 0px)
+    );
+  }
+
+  /* Docking or undocking the card moves the lane once, with panel motion on.
+     ChatCanvas sets data-lane-shifting only for that transition, so resizes
+     never trail behind the pointer. */
+  [data-panel-animations="true"]
+    [data-chat-canvas][data-lane-shifting]
+    .messages-timeline-row-frame,
+  [data-panel-animations="true"]
+    [data-chat-canvas][data-lane-shifting]
+    .chat-composer-horizontal-inset {
+    transition: padding-inline-end var(--panel-animation-duration) ease-out;
+  }
+
+  [data-panel-animations="true"] [data-chat-canvas][data-lane-shifting] .chat-scroll-to-bottom {
+    transition: inset-inline-end var(--panel-animation-duration) ease-out;
   }
 
   .chat-composer-glass-shell {
@@ -1398,12 +1418,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   @media (min-width: 40rem) {
     .messages-timeline-row-frame {
       padding-inline-start: 1.25rem;
-      padding-inline-end: 1.25rem;
+      padding-inline-end: calc(1.25rem + var(--chat-lane-inset-end, 0px));
     }
 
     .chat-composer-horizontal-inset {
       padding-inline-start: calc(env(safe-area-inset-left) + 1.25rem);
-      padding-inline-end: calc(env(safe-area-inset-right) + 1.25rem);
+      padding-inline-end: calc(
+        env(safe-area-inset-right) + 1.25rem + var(--chat-lane-inset-end, 0px)
+      );
     }
   }
 

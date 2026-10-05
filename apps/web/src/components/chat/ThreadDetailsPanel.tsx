@@ -215,22 +215,9 @@ function ThreadDetailsContent(
         />
       ) : null}
       {!props.isProjectlessConversation ? (
-        <section
-          aria-labelledby={density === "full" ? "thread-details-workspace-heading" : undefined}
-          aria-label={density === "full" ? undefined : "Workspace"}
-        >
-          {density === "full" ? (
-            <div className="flex min-h-10 items-center justify-between gap-3 px-3.5 pb-1 pt-3">
-              <h3
-                id="thread-details-workspace-heading"
-                className="text-[11px] font-medium text-muted-foreground"
-              >
-                Workspace
-              </h3>
-            </div>
-          ) : (
-            <div className="h-2" aria-hidden />
-          )}
+        // The rows name themselves; the card carries no section labels.
+        <section aria-label="Workspace">
+          <div className="h-2" aria-hidden />
 
           {connectionIssue ? (
             <div className="mx-3 mb-2 rounded-xl border border-warning/30 bg-warning/6 p-3">
@@ -351,22 +338,9 @@ function ThreadDetailsContent(
 
       {!props.isProjectlessConversation && props.gitCwd ? (
         <section
-          aria-labelledby={
-            density === "full" ? "thread-details-version-control-heading" : undefined
-          }
-          aria-label={density === "full" ? undefined : "Version Control"}
-          className={density === "full" ? "border-t border-border/65" : undefined}
+          aria-label="Version Control"
+          className={density === "full" ? "border-t border-border/65 pt-2" : undefined}
         >
-          {density === "full" ? (
-            <div className="px-3.5 pb-1 pt-3">
-              <h3
-                id="thread-details-version-control-heading"
-                className="text-[11px] font-medium text-muted-foreground"
-              >
-                Version Control
-              </h3>
-            </div>
-          ) : null}
           <div className="flex flex-col px-2 pb-2.5">
             {props.isGitRepo ? (
               <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />

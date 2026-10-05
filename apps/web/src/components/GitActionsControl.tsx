@@ -1678,7 +1678,7 @@ export default function GitActionsControl({
                 isPanel
                   ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS
                   : "h-auto min-h-7 max-w-72 py-1 sm:h-auto sm:min-h-6",
-                isPanel && "h-auto min-h-9 py-1 disabled:opacity-100 sm:h-auto sm:min-h-9",
+                isPanel && "h-auto min-h-8 py-1 disabled:opacity-100 sm:h-auto sm:min-h-8",
               )}
               disabled
               size="xs"

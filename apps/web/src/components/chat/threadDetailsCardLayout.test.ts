@@ -5,20 +5,19 @@ import {
   resolveThreadDetailsCardLayout,
 } from "./threadDetailsCardLayout";
 
+const lane = { padding: 20, minChatWidth: 640 };
 const resolve = (width: number, height: number) =>
-  resolveThreadDetailsCardLayout({
-    container: { width, height },
-    chat: { left: (width - 736) / 2, width: 736 },
+  resolveThreadDetailsCardLayout({ container: { width, height }, lane });
+
+describe("workspace card", () => {
+  it("pins to the top right at a fixed width", () => {
+    expect(resolve(1600, 900)).toEqual({ x: 1308, y: 12, width: 280, height: 876 });
+    expect(resolve(1344, 900)).toMatchObject({ x: 1052, width: 280 });
   });
 
-describe("floating details card", () => {
-  it("uses the right margin without reserving chat space", () => {
-    expect(resolve(1600, 900)).toEqual({ x: 1276, y: 12, width: 312, height: 876 });
-    expect(resolve(1344, 900)?.width).toBe(280);
-  });
-
-  it("becomes a popover when the margin cannot hold readable controls", () => {
-    expect(resolve(1200, 900)).toBeNull();
+  it("becomes a popover when a readable chat lane cannot fit beside it", () => {
+    expect(resolve(984, 900)).toMatchObject({ x: 692 });
+    expect(resolve(983, 900)).toBeNull();
   });
 
   it("becomes a popover when the canvas is too short for readable controls", () => {

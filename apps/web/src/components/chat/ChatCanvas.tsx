@@ -1,11 +1,26 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type CSSProperties,
+} from "react";
 
+import { usePanelAnimationSettings } from "../../panelAnimations";
 import { ChatCanvasContext } from "./ChatCanvasContext";
-import { resolveChatCanvasLayout } from "./chatCanvasLayout";
+import {
+  MIN_DOCKED_CHAT_WIDTH,
+  resolveChatCanvasLayout,
+  type ChatCanvasDetailsCard,
+} from "./chatCanvasLayout";
 
 /**
- * Owns the available conversation space. Floating cards (thread details) read
- * the lane geometry from here and use what is left; they never reserve space.
+ * Owns the available conversation space. The docked workspace card only
+ * reports where it sits; the canvas decides when the conversation lane moves
+ * over to make room for it.
  */
 export function ChatCanvas({
   children,
@@ -19,6 +34,25 @@ export function ChatCanvas({
     padding: 20,
     maxChatWidth: 768,
   });
+  const [detailsCard, setDetailsCard] = useState<ChatCanvasDetailsCard | null>(null);
+  const reportDetailsCard = useCallback((next: ChatCanvasDetailsCard | null) => {
+    setDetailsCard((current) => (current?.left === next?.left ? current : next));
+  }, []);
+  // Docking or undocking the card is a state change the lane may animate
+  // (with panel motion on). Resizes move the lane without a transition.
+  const docked = detailsCard !== null;
+  const [laneShift, setLaneShift] = useState({ docked, shifting: false });
+  if (laneShift.docked !== docked) setLaneShift({ docked, shifting: true });
+  const { durationMs: panelAnimationDurationMs } = usePanelAnimationSettings();
+  useEffect(() => {
+    if (!laneShift.shifting) return;
+    const timer = window.setTimeout(
+      () =>
+        setLaneShift((current) => (current.shifting ? { ...current, shifting: false } : current)),
+      panelAnimationDurationMs + 50,
+    );
+    return () => window.clearTimeout(timer);
+  }, [laneShift, panelAnimationDurationMs]);
   useLayoutEffect(() => {
     const element = elementRef.current;
     const probe = widthProbeRef.current;
@@ -48,15 +82,22 @@ export function ChatCanvas({
   }, []);
   const context = useMemo(() => {
     const container = { width: measurements.width, height: measurements.height };
-    return { container, layout: resolveChatCanvasLayout({ ...measurements, container }) };
-  }, [measurements]);
+    return {
+      container,
+      lane: { padding: measurements.padding, minChatWidth: MIN_DOCKED_CHAT_WIDTH },
+      layout: resolveChatCanvasLayout({ ...measurements, container, detailsCard }),
+      reportDetailsCard,
+    };
+  }, [measurements, detailsCard, reportDetailsCard]);
   return (
     <ChatCanvasContext value={context}>
       <div
         {...props}
         ref={elementRef}
         data-chat-canvas
+        data-lane-shifting={laneShift.shifting || undefined}
         className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+        style={{ "--chat-lane-inset-end": `${context.layout.chat.insetEnd}px` } as CSSProperties}
       >
         {/* The lane is as wide as the wider of the timeline and the composer,
             each capped by the Chat width setting. */}

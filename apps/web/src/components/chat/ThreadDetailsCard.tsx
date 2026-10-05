@@ -13,9 +13,9 @@ import {
 } from "./threadDetailsCardLayout";
 
 /**
- * One card owns its placement: inline in the chat canvas' right margin when
- * that margin can hold it, otherwise a popover under the header toggle. It
- * folds content only when that content cannot fit its height.
+ * One card owns its placement: docked at the chat canvas' top right while a
+ * readable chat lane fits beside it, otherwise a popover under the header
+ * toggle. It folds content only when that content cannot fit its height.
  */
 export function ThreadDetailsCard({
   threadRef,
@@ -32,7 +32,7 @@ export function ThreadDetailsCard({
 }) {
   const canvas = useChatCanvas();
   const placement = canvas
-    ? resolveThreadDetailsCardLayout({ container: canvas.container, chat: canvas.layout.chat })
+    ? resolveThreadDetailsCardLayout({ container: canvas.container, lane: canvas.lane })
     : null;
   const mode: ThreadPanelPresentation = placement ? "inline" : "popover";
   const inlineOpen = useRightPanelStore((state) =>
@@ -52,6 +52,13 @@ export function ThreadDetailsCard({
   // A popover hangs below the header over the canvas, so the canvas bounds it too.
   const height = placement?.height ?? Math.max(0, (canvas?.container.height ?? 0) - 52);
   const density = resolveThreadDetailsCardDensity(height, contentHeights);
+  // While docked and open, the canvas moves chat over to clear the card.
+  const reportDetailsCard = canvas?.reportDetailsCard;
+  const dockedLeft = placement && inlineOpen ? placement.x : null;
+  useLayoutEffect(() => {
+    reportDetailsCard?.(dockedLeft === null ? null : { left: dockedLeft });
+  }, [reportDetailsCard, dockedLeft]);
+  useLayoutEffect(() => () => reportDetailsCard?.(null), [reportDetailsCard]);
   useLayoutEffect(() => {
     onPresentationChange(mode);
     if (mode === "inline" && popoverOpen) {
@@ -107,7 +114,8 @@ export function ThreadDetailsCard({
         inlineOpen ? (
           <aside
             aria-label="Thread details"
-            className="absolute z-20"
+            // With panel motion on, the card fades in while chat moves over.
+            className="absolute z-20 [[data-panel-animations=true]_&]:transition-opacity [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out [[data-panel-animations=true]_&]:starting:opacity-0"
             style={{
               left: placement.x,
               top: placement.y,

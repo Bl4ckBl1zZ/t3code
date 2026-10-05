@@ -23,11 +23,11 @@ const THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS = `${THREAD_DETAILS_PANEL_
 
 const THREAD_DETAILS_PANEL_SPLIT_GROUP_SURFACE_CLASS = `${THREAD_DETAILS_PANEL_HOVER_SURFACE_CLASS} has-[[data-popup-open]]:bg-black/[0.055] dark:has-[[data-popup-open]]:bg-white/[0.075]`;
 
-export const THREAD_DETAILS_PANEL_ROW_CLASS = `h-9 w-full min-w-0 justify-start rounded-lg border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 sm:h-9 sm:text-[13px] ${THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS}`;
+export const THREAD_DETAILS_PANEL_ROW_CLASS = `h-8 w-full min-w-0 justify-start rounded-lg border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 sm:h-8 sm:text-[13px] ${THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS}`;
 
 export const THREAD_DETAILS_PANEL_SELECT_ROW_CLASS = `${THREAD_DETAILS_PANEL_ROW_CLASS} pe-0 before:pointer-events-none before:absolute before:inset-0 [&_[data-slot=select-icon]]:-me-px [&_[data-slot=select-icon]]:relative [&_[data-slot=select-icon]]:flex [&_[data-slot=select-icon]]:h-full [&_[data-slot=select-icon]]:w-8 [&_[data-slot=select-icon]]:shrink-0 [&_[data-slot=select-icon]]:items-center [&_[data-slot=select-icon]]:justify-center [&_[data-slot=select-icon]]:before:absolute [&_[data-slot=select-icon]]:before:-left-px [&_[data-slot=select-icon]]:before:top-1/2 [&_[data-slot=select-icon]]:before:h-4 [&_[data-slot=select-icon]]:before:w-px [&_[data-slot=select-icon]]:before:-translate-y-1/2 [&_[data-slot=select-icon]]:before:bg-border/65 [&_[data-slot=select-icon]>svg]:me-0 [&_[data-slot=select-icon]>svg]:size-4 [&_[data-slot=select-icon]>svg]:text-muted-foreground [&_[data-slot=select-icon]>svg]:opacity-100`;
 
-export const THREAD_DETAILS_PANEL_LINK_ROW_CLASS = `flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-start rounded-lg border border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 disabled:cursor-not-allowed disabled:opacity-55 sm:h-9 sm:text-[13px] ${THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS}`;
+export const THREAD_DETAILS_PANEL_LINK_ROW_CLASS = `flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-start rounded-lg border border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 disabled:cursor-not-allowed disabled:opacity-55 sm:h-8 sm:text-[13px] ${THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS}`;
 
 // No transition on the group: its halves are Buttons whose background snaps, so an eased group
 // tint would land frames later and the hover would visibly commit in two steps. An open menu in
@@ -42,11 +42,11 @@ export const THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS = `group/thread-details
  * indents the whole row by one gap width. Nothing here paints a shadow layer, so
  * drop the pseudo instead of just clearing its shadow.
  */
-export const THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS = `flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-start rounded-e-none border border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 shadow-none before:hidden disabled:cursor-not-allowed disabled:opacity-55 sm:h-9 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_TARGET_HOVER_SURFACE_CLASS}`;
+export const THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS = `flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-start rounded-e-none border border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 shadow-none before:hidden disabled:cursor-not-allowed disabled:opacity-55 sm:h-8 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_TARGET_HOVER_SURFACE_CLASS}`;
 
-export const THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS = `h-9 w-8 shrink-0 rounded-s-none border-transparent bg-transparent px-0 text-[13px] font-medium text-foreground/80 shadow-none before:shadow-none sm:h-9 sm:w-8 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_TARGET_HOVER_SURFACE_CLASS}`;
+export const THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS = `h-8 w-8 shrink-0 rounded-s-none border-transparent bg-transparent px-0 text-[13px] font-medium text-foreground/80 shadow-none before:shadow-none sm:h-8 sm:w-8 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_TARGET_HOVER_SURFACE_CLASS}`;
 
-export const THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS = `h-9 w-full min-w-0 justify-start rounded-lg border border-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 sm:h-9 sm:text-[13px]`;
+export const THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS = `h-8 w-full min-w-0 justify-start rounded-lg border border-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-foreground/80 sm:h-8 sm:text-[13px]`;
 
 export const THREAD_DETAILS_PANEL_ICON_CLASS = "size-4 shrink-0 text-muted-foreground";
 
@@ -56,9 +56,9 @@ export const THREAD_DETAILS_PANEL_ICON_ACTION_CLASS = `size-6 justify-center rou
 
 export const THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS = `group/thread-details-action flex w-full items-center rounded-lg ${THREAD_DETAILS_PANEL_SPLIT_GROUP_SURFACE_CLASS}`;
 
-export const THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS = `h-9 min-w-0 flex-1 justify-start rounded-e-none border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} pr-2 text-[13px] font-medium text-foreground/80 sm:h-9 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS}`;
+export const THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS = `h-8 min-w-0 flex-1 justify-start rounded-e-none border-transparent bg-transparent ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} pr-2 text-[13px] font-medium text-foreground/80 sm:h-8 sm:text-[13px] ${THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS}`;
 
-export const THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS = `h-9 w-8 rounded-s-none border-transparent bg-transparent px-0 sm:h-9 sm:w-8 ${THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS}`;
+export const THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS = `h-8 w-8 rounded-s-none border-transparent bg-transparent px-0 sm:h-8 sm:w-8 ${THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS}`;
 
 export const THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS = "h-4 w-px shrink-0 bg-border/65";
 
