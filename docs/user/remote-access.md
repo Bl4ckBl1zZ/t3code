@@ -300,10 +300,11 @@ it without a Connect button. Its switch stays locked until a later check finds t
 compatible; update the older side, then switch the machine back on. A server that does not report
 a protocol version is treated as compatible.
 
-The iOS app does the same for a server it finds on another version, when you pair it or when it
-refuses a reconnect: the server is switched off and shows **Not supported**, and its details give
-the reason. Switching it back on checks the server again first. See
-[Keeping T3 Code in Sync](./updating.md#a-server-too-old-to-connect) for updating it from the app.
+The iOS app does the same when a saved server refuses a reconnect because it moved to another
+version, or when you pair an outdated server it can update: the server is switched off and shows
+**Not supported**, and its details give the reason. Switching it back on checks the server again
+first. See [Keeping T3 Code in Sync](./updating.md#a-server-too-old-to-connect) for updating it from
+the app.
 
 To forget an environment on this device instead, open its **⋯** menu and choose **Remove from this
 device…**. Removing asks first, because it deletes the pairing, credentials, and cached threads

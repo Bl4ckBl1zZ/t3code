@@ -165,6 +165,31 @@ final class EnvironmentCompatibilityTests: XCTestCase {
         XCTAssertEqual(announced, "env-1")
     }
 
+    func testPairingAServerThisAppCannotUpdateIsRefusedBeforeTheExchange() async throws {
+        let store = EnvironmentStore(fileURL: directory.appendingPathComponent("environments.json"))
+        let credentials = InMemoryCredentialStore()
+        let transport = CompatibilityTestTransport(version: OrchestrationProtocol.version + 1)
+        let service = PairingService(
+            transport: transport,
+            environmentStore: store,
+            credentialStore: credentials
+        )
+
+        do {
+            _ = try await service.pair(url: "http://192.168.1.4:3773/#token=pair-once")
+            XCTFail("A newer server must be refused.")
+        } catch let error as EnvironmentIncompatibleError {
+            XCTAssertFalse(error.issue.serverUpdateRequired)
+        }
+
+        let paths = await transport.paths
+        XCTAssertEqual(paths, ["/.well-known/t3/environment"])
+        let saved = try await store.load()
+        XCTAssertTrue(saved.isEmpty)
+        let credential = await credentials.credential(for: "env-1")
+        XCTAssertNil(credential)
+    }
+
     func testSwitchingAnIncompatibleEnvironmentOnChecksTheServerAgain() async throws {
         let store = EnvironmentStore(fileURL: directory.appendingPathComponent("environments.json"))
         var outdated = environment("env-1")
@@ -231,6 +256,7 @@ private actor CompatibilityTestTransport: HTTPTransport {
     private var version: Int?
     private let selfUpdate: String?
     private let desktopAppUpdate: Bool?
+    private(set) var paths: [String] = []
 
     init(version: Int?, selfUpdate: String? = nil, desktopAppUpdate: Bool? = nil) {
         self.version = version
@@ -243,6 +269,7 @@ private actor CompatibilityTestTransport: HTTPTransport {
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        paths.append(request.url?.path ?? "")
         let body: String
         if request.url?.path == "/.well-known/t3/environment" {
             body = Self.descriptorJSON(

@@ -80,9 +80,9 @@ In the native iOS app, such a server shows **Not supported** in **Settings → S
 details explain why. When the server runs in the desktop app and accepts remote updates, the details
 offer **Update Server**, which updates and restarts it and switches it back on once it returns on a
 compatible version. Any other server, and a server newer than the app, gets instructions instead:
-update the machine (or the app), then switch the server back on in its details to check again. The
-iOS app keeps a server it paired on an older version, switched off, so you can update it from there.
-Through T3 Connect, an incompatible machine is refused with the reason instead.
+update the machine (or the app), then switch the server back on in its details to check again. As on
+web and desktop, pairing saves only a server the app can update; any other incompatible server is
+refused with the reason. Through T3 Connect, an incompatible machine is refused with the reason.
 
 ## After the Update
 

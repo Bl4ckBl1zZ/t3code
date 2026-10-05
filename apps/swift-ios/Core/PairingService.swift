@@ -126,6 +126,13 @@ public actor PairingService {
         if let expectedEnvironmentID, descriptor.environmentId != expectedEnvironmentID {
             throw PairingRouteError.differentEnvironment(descriptor.label)
         }
+        // Say so before minting a session against a server this build cannot
+        // talk to. An outdated server this app can update is still saved,
+        // switched off, so it can be updated from Settings.
+        let compatibilityIssue = OrchestrationProtocol.compatibilityIssue(with: descriptor)
+        if let compatibilityIssue, !compatibilityIssue.serverUpdateRequired {
+            throw EnvironmentIncompatibleError(compatibilityIssue)
+        }
         let access = try await exchange(target: target, client: client)
         guard access.tokenType == "Bearer" else {
             throw HTTPError.status(
@@ -166,10 +173,7 @@ public actor PairingService {
                 descriptor: descriptor
             )
         }
-        // A server on another orchestration protocol is saved switched off
-        // with the reason, rather than refused, so an outdated one can still
-        // be updated from Settings.
-        if let issue = OrchestrationProtocol.compatibilityIssue(with: descriptor) {
+        if let issue = compatibilityIssue {
             environment.unsupportedReason = issue.reason
             environment.serverUpdateRequired = issue.serverUpdateRequired
             environment.isEnabled = false

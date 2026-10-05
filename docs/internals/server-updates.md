@@ -101,8 +101,8 @@ the descriptor round trip: the socket names the client's protocol and the server
 
 The SwiftUI iOS client mirrors this by hand (`apps/swift-ios/Core/EnvironmentCompatibility.swift`).
 `OrchestrationProtocol.compatibilityIssue(with:)` applies the same rule (a missing version is
-compatible). Pairing saves an incompatible host switched off with `unsupportedReason`, and a
-client whose socket redial fails reads the public descriptor before redialing, so a host that was
+compatible). Pairing saves an incompatible host it can update switched off with
+`unsupportedReason` and refuses any other before the token exchange, and a client whose socket redial fails reads the public descriptor before redialing, so a host that was
 updated past the app is switched off instead of retried forever. Switching such an environment on
 reads the descriptor again first. `EnvironmentRuntime.updateOutdatedServer` updates only
 desktop-managed hosts that advertise `desktopAppUpdate`, over a socket that names no protocol,
