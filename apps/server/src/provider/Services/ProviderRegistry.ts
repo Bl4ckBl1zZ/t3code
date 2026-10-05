@@ -49,6 +49,19 @@ export interface ProviderRegistryShape {
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
   /**
+   * Scan one instance's skills and slash commands for a workspace and store
+   * them as that instance's `workspaceSnapshots` entry for `cwd`. A cwd that
+   * was already scanned is returned as-is unless `fresh`, which also
+   * invalidates the instance's discovery caches and re-reads its machine
+   * snapshot first.
+   */
+  readonly refreshWorkspaceSnapshot: (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly cwd: string;
+    readonly fresh?: boolean;
+  }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+  /**
    * Resolve the maintenance capabilities owned by one live provider instance.
    * Falls back to manual-only capabilities when the instance is not live.
    */

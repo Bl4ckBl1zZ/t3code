@@ -307,6 +307,8 @@ import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
+  resolveProviderSkillsForCwd,
+  resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -1109,32 +1111,58 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     threadIsAuthoritative: threadOwnsModelSelection,
     settings,
   });
+  // Skills and slash commands follow this thread's workspace once the
+  // selected instance has scanned it; until then the machine lists apply.
   const selectedProviderStatus = useMemo(() => {
     const snapshot = selectedProviderEntry?.snapshot;
     if (!snapshot) return null;
-    const workspace = snapshot.workspaceSnapshots?.find((entry) => entry.cwd === gitCwd);
-    return workspace
-      ? { ...snapshot, slashCommands: workspace.slashCommands, skills: workspace.skills }
-      : snapshot;
+    return {
+      ...snapshot,
+      slashCommands: resolveProviderSlashCommandsForCwd(snapshot, gitCwd),
+      skills: resolveProviderSkillsForCwd(snapshot, gitCwd),
+    };
   }, [selectedProviderEntry, gitCwd]);
-  const refreshWorkspace = useAtomCommand(serverEnvironment.refreshProviders, {
+  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
+  const workspaceRefreshKeyRef = useRef<string | null>(null);
+  const hadWorkspaceSnapshotRef = useRef(false);
   useEffect(() => {
-    if (!gitCwd || selectedProvider !== "antigravity" || !selectedProviderEntry?.snapshot.enabled)
+    const hasWorkspaceSnapshot = Boolean(
+      gitCwd &&
+      selectedProviderEntry?.snapshot.workspaceSnapshots?.some(
+        (snapshot) => snapshot.cwd === gitCwd,
+      ),
+    );
+    // A fresh rescan or rebuilt instance dropped this cwd: scan it again.
+    if (hadWorkspaceSnapshotRef.current && !hasWorkspaceSnapshot) {
+      workspaceRefreshKeyRef.current = null;
+    }
+    hadWorkspaceSnapshotRef.current = hasWorkspaceSnapshot;
+  }, [gitCwd, selectedProviderEntry]);
+  useEffect(() => {
+    if (!gitCwd || !selectedProviderEntry?.snapshot.enabled) return;
+    const instanceId = selectedProviderEntry.instanceId;
+    const key = `${environmentId}:${instanceId}:${gitCwd}`;
+    if (workspaceRefreshKeyRef.current === key) return;
+    workspaceRefreshKeyRef.current = key;
+    if (
+      selectedProviderEntry.snapshot.workspaceSnapshots?.some((snapshot) => snapshot.cwd === gitCwd)
+    ) {
       return;
-    void refreshWorkspace({
-      environmentId,
-      input: { instanceId: selectedInstanceId, cwd: gitCwd },
-    });
-  }, [
-    environmentId,
-    selectedInstanceId,
-    selectedProvider,
-    selectedProviderEntry?.snapshot.enabled,
-    gitCwd,
-    refreshWorkspace,
-  ]);
+    }
+    const forgetKey = () => {
+      if (workspaceRefreshKeyRef.current === key) workspaceRefreshKeyRef.current = null;
+    };
+    void refreshProviders({ environmentId, input: { instanceId, cwd: gitCwd } }).then((result) => {
+      const scanned =
+        result._tag === "Success" &&
+        result.value.providers
+          .find((provider) => provider.instanceId === instanceId)
+          ?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === gitCwd);
+      if (!scanned) forgetKey();
+    }, forgetKey);
+  }, [environmentId, gitCwd, refreshProviders, selectedProviderEntry]);
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],
     [selectedProviderEntry],

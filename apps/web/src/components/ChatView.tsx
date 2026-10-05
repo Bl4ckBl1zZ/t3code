@@ -1,6 +1,7 @@
 import { shouldRenderPreviewMiniPlayer } from "./ChatView.logic";
 import { useLoadBalancedEnvironment } from "~/hooks/useLoadBalancedEnvironment";
 import { useScratchProject } from "../hooks/useScratchProject";
+import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
@@ -8864,7 +8865,11 @@ function ChatViewContent(props: ChatViewProps) {
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
                 alwaysExpandActivity={alwaysExpandActivity}
-                skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+                skills={
+                  activeProviderStatus
+                    ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
+                    : EMPTY_PROVIDER_SKILLS
+                }
                 providerStatuses={providerStatuses}
                 runs={serverProjection?.runs ?? EMPTY_PROJECTION_RUNS}
                 anchorMessageId={timelineAnchorMessageId}

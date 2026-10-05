@@ -33,9 +33,10 @@ import { ProviderDriverError } from "../Errors.ts";
 import {
   checkOpenCodeProviderStatus,
   makePendingOpenCodeProvider,
+  openCodeSkillsToServerProviderSkills,
 } from "../Layers/OpenCodeProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
-import { OpenCodeRuntime } from "../opencodeRuntime.ts";
+import { loadOpenCodeSkills, OpenCodeRuntime } from "../opencodeRuntime.ts";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -186,6 +187,46 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         Effect.provideService(OpenCodeRuntime, openCodeRuntime),
       );
 
+      // The local branch uses the shared SDK server, not `opencode debug skill`:
+      // the Bun-compiled CLI does not flush more than one 64KB pipe buffer to a
+      // non-TTY stdout, so large inventories arrive truncated. `app.skills`
+      // honors the per-request directory and returns complete results.
+      const loadSkillsForCwd = (cwd: string) =>
+        effectiveConfig.serverUrl.trim().length > 0
+          ? Effect.scoped(
+              Effect.gen(function* () {
+                const server = yield* openCodeRuntime.connectToOpenCodeServer({
+                  binaryPath: effectiveConfig.binaryPath,
+                  directory: cwd,
+                  serverUrl: effectiveConfig.serverUrl,
+                  ...(effectiveConfig.serverPassword
+                    ? { serverPassword: effectiveConfig.serverPassword }
+                    : {}),
+                  environment: processEnv,
+                });
+                return yield* loadOpenCodeSkills(
+                  openCodeRuntime.createOpenCodeSdkClient({
+                    baseUrl: server.url,
+                    directory: cwd,
+                    ...(effectiveConfig.serverPassword
+                      ? { serverPassword: effectiveConfig.serverPassword }
+                      : {}),
+                  }),
+                );
+              }),
+            )
+          : serverOwner.withServer((server) =>
+              loadOpenCodeSkills(
+                openCodeRuntime.createOpenCodeSdkClient({
+                  baseUrl: server.url,
+                  directory: cwd,
+                  ...(server.serverPassword !== undefined
+                    ? { serverPassword: server.serverPassword }
+                    : {}),
+                }),
+              ),
+            );
+
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<OpenCodeSettings>>(
         {
@@ -230,6 +271,27 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         accentColor,
         enabled,
         snapshot,
+        snapshotForCwd: (cwd) =>
+          !effectiveConfig.enabled
+            ? snapshot.getSnapshot
+            : Effect.all([
+                snapshot.getSnapshot,
+                loadSkillsForCwd(cwd).pipe(Effect.timeout("20 seconds")),
+              ]).pipe(
+                Effect.map(([machineSnapshot, skills]) => ({
+                  ...machineSnapshot,
+                  skills: openCodeSkillsToServerProviderSkills(skills),
+                })),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderDriverError({
+                      driver: DRIVER_KIND,
+                      instanceId,
+                      detail: `Failed to probe OpenCode skills for '${cwd}'`,
+                      cause,
+                    }),
+                ),
+              ),
         orchestrationAdapter,
         textGeneration,
       } satisfies ProviderInstance;
