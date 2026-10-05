@@ -19,6 +19,7 @@ import {
   ProviderOptionSelections,
 } from "./model.ts";
 import { ProjectScript } from "./project.ts";
+import { PullRequestMergeMethod } from "./pullRequest.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import {
@@ -1361,6 +1362,17 @@ export const ServerSettings = Schema.Struct({
   projectAutoPullOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /**
+   * The merge method a pull request starts with; `null` reuses the method last chosen on that
+   * client. A project choice overrides it, and resetting one restores inheritance. Server-side so
+   * every client attached to this machine starts a merge the same way.
+   */
+  pullRequestMergeMethod: Schema.NullOr(PullRequestMergeMethod).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  projectPullRequestMergeMethodOverrides: Schema.Record(ProjectId, PullRequestMergeMethod).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -1690,6 +1702,11 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultAutoPull: Schema.optionalKey(Schema.Boolean),
   projectAutoPullOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
+  ),
+  pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
+  /** Sparse: `null` removes that project's override. */
+  projectPullRequestMergeMethodOverrides: Schema.optionalKey(
+    Schema.Record(ProjectId, Schema.NullOr(PullRequestMergeMethod)),
   ),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({

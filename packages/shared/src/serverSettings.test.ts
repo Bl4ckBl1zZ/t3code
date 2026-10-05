@@ -12,6 +12,7 @@ import { createModelSelection } from "./model.ts";
 import {
   applyServerSettingsPatch,
   resolveProjectAutoPull,
+  resolveProjectPullRequestMergeMethod,
   resolveProjectAgentBrowserAccess,
   extractPersistedServerObservabilitySettings,
   isModelSelectionProviderEnabled,
@@ -612,6 +613,35 @@ describe("project automatic pull preferences", () => {
     expect(
       applyServerSettingsPatch(reset, { defaultAutoPull: true }).projectAutoPullOverrides[b],
     ).toBe(false);
+  });
+});
+
+describe("pull request merge method defaults", () => {
+  it("prefers the project, then the machine, then the client's last choice", () => {
+    const a = ProjectId.make("a"),
+      b = ProjectId.make("b");
+    expect(resolveProjectPullRequestMergeMethod(DEFAULT_SERVER_SETTINGS, a)).toBe(null);
+    const machine = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      pullRequestMergeMethod: "squash",
+      projectPullRequestMergeMethodOverrides: { [a]: "rebase" },
+    });
+    expect(resolveProjectPullRequestMergeMethod(machine, a)).toBe("rebase");
+    expect(resolveProjectPullRequestMergeMethod(machine, b)).toBe("squash");
+    const lastUsed = applyServerSettingsPatch(machine, { pullRequestMergeMethod: null });
+    expect(resolveProjectPullRequestMergeMethod(lastUsed, b)).toBe(null);
+  });
+
+  it("sparse edits and resets preserve other project overrides", () => {
+    const a = ProjectId.make("a"),
+      b = ProjectId.make("b");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      projectPullRequestMergeMethodOverrides: { [a]: "squash", [b]: "merge" },
+    });
+    const reset = applyServerSettingsPatch(initial, {
+      projectPullRequestMergeMethodOverrides: { [a]: null },
+    });
+    expect(reset.projectPullRequestMergeMethodOverrides).toEqual({ [b]: "merge" });
+    expect(initial.projectPullRequestMergeMethodOverrides).toEqual({ [a]: "squash", [b]: "merge" });
   });
 });
 

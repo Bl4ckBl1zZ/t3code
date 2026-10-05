@@ -29,6 +29,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
+    pullRequestMergeMethod: "merge",
     ...overrides,
   };
 }
@@ -207,6 +208,15 @@ describe("uiStateStore pure functions", () => {
 });
 
 describe("parsePersistedState", () => {
+  it("hydrates the last selected pull request merge method", () => {
+    expect(parsePersistedState({ pullRequestMergeMethod: "squash" }).pullRequestMergeMethod).toBe(
+      "squash",
+    );
+    expect(
+      parsePersistedState({ pullRequestMergeMethod: "fast-forward" }).pullRequestMergeMethod,
+    ).toBe("merge");
+  });
+
   it("hydrates raw UI-owned state without server entities", () => {
     const parsed = parsePersistedState({
       projectExpandedById: {
@@ -240,6 +250,7 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      pullRequestMergeMethod: "merge",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -374,6 +385,7 @@ describe("uiStateStore persistence", () => {
           "turn-2": true,
         },
       },
+      pullRequestMergeMethod: "merge",
     });
     expect(parsePersistedState(persisted)).toEqual({
       ...state,

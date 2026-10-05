@@ -831,3 +831,28 @@ describe("branch naming settings", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 });
+
+describe("ServerSettings pull request merge methods", () => {
+  it("defaults to the client's last choice with no project overrides", () => {
+    const settings = decodeServerSettings({});
+    expect(settings.pullRequestMergeMethod).toBe(null);
+    expect(settings.projectPullRequestMergeMethodOverrides).toEqual({});
+  });
+
+  it("accepts supported methods and null resets, and rejects unknown methods", () => {
+    expect(
+      decodeServerSettingsPatch({
+        pullRequestMergeMethod: "squash",
+        projectPullRequestMergeMethodOverrides: { project: "rebase", other: null },
+      }),
+    ).toEqual({
+      pullRequestMergeMethod: "squash",
+      projectPullRequestMergeMethodOverrides: { project: "rebase", other: null },
+    });
+    expect(() =>
+      decodeServerSettingsPatch({
+        projectPullRequestMergeMethodOverrides: { project: "fast-forward" },
+      }),
+    ).toThrow();
+  });
+});

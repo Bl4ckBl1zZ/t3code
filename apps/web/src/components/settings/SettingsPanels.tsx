@@ -3,6 +3,7 @@ import { Spinner } from "~/components/ui/spinner";
 import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
 import { ProviderAccountSetup } from "./ProviderAccountSetup";
 import { ProjectAutoPullSettings } from "./ProjectBooleanSettings";
+import { PullRequestMergeMethodSettings } from "./PullRequestMergeMethodSettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { type EnvironmentId } from "@t3tools/contracts";
 import { useEnvironments } from "../../state/environments";
@@ -3198,6 +3199,8 @@ export function GeneralSettingsPanel() {
         />
 
         <ProjectAutoPullSettings />
+
+        <PullRequestMergeMethodSettings />
 
         <SettingsRow
           serverScoped

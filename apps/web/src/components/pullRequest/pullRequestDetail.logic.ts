@@ -11,6 +11,7 @@ import type {
   PullRequestCommit,
   PullRequestDetailView,
   PullRequestMergeability,
+  PullRequestMergeMethod,
   PullRequestReaction,
   PullRequestReviewThread,
   PullRequestState,
@@ -20,6 +21,29 @@ import type {
 } from "@t3tools/contracts";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
+
+export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
+  merge: "Merge",
+  squash: "Squash",
+  rebase: "Rebase",
+};
+
+/**
+ * The merge method a pull request starts with: what the reader picked for this one, then the
+ * project's (or machine's) default, then the method last chosen on this device — each only if the
+ * repository allows it — and otherwise the first one it does.
+ */
+export function resolvePullRequestMergeMethod(
+  allowed: ReadonlyArray<PullRequestMergeMethod>,
+  current: PullRequestMergeMethod | null,
+  projectDefault: PullRequestMergeMethod | null | undefined,
+  lastSelected: PullRequestMergeMethod,
+): PullRequestMergeMethod {
+  for (const method of [current, projectDefault, lastSelected]) {
+    if (method && allowed.includes(method)) return method;
+  }
+  return allowed[0] ?? "merge";
+}
 
 const safeShellArgument = /^[A-Za-z0-9._/@+=,-]+$/;
 const bitbucketRepositoryName = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;

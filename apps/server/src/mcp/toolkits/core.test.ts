@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -162,4 +163,14 @@ it("keeps MCP preference output allowlisted and Unicode-bounded", () => {
     customInstructions: "🙂".repeat(4000),
     truncated: true,
   });
+});
+
+it("reports pull request merge defaults through MCP preferences", () => {
+  const result = EnvironmentHandlers.preferences({
+    ...DEFAULT_SERVER_SETTINGS,
+    pullRequestMergeMethod: "squash",
+    projectPullRequestMergeMethodOverrides: { [ProjectId.make("project")]: "rebase" },
+  });
+  expect(result.pullRequestMergeMethod).toBe("squash");
+  expect(result.projectPullRequestMergeMethodOverrides).toEqual({ project: "rebase" });
 });
