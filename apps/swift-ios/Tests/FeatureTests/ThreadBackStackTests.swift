@@ -53,4 +53,35 @@ final class ThreadBackStackTests: XCTestCase {
         XCTAssertEqual(stack.threadIDs.count, ThreadBackStack.limit)
         XCTAssertEqual(stack.parentID, "t\(ThreadBackStack.limit + 5)")
     }
+
+    func testTheTrailRendersAsARootWithTheRestPushed() {
+        XCTAssertEqual(ThreadBackStack().route(current: "solo").root, "solo")
+        XCTAssertEqual(ThreadBackStack().route(current: "solo").path, [])
+
+        var stack = ThreadBackStack()
+        stack.open("agent", from: "parent")
+        stack.open("agent-of-agent", from: "agent")
+        let route = stack.route(current: "agent-of-agent")
+        XCTAssertEqual(route.root, "parent")
+        XCTAssertEqual(route.path, ["agent", "agent-of-agent"])
+    }
+
+    /// The system's back button and edge swipe write a shorter path; its
+    /// length is the trail level now showing.
+    func testASystemPopReturnsToTheThreadAtThatLevel() {
+        var stack = ThreadBackStack()
+        stack.open("b", from: "a")
+        stack.open("c", from: "b")
+        stack.open("d", from: "c")
+
+        // One level back: path [b, c, d] became [b, c].
+        XCTAssertEqual(stack.popTo(level: 2), "c")
+        XCTAssertEqual(stack.route(current: "c").path, ["b", "c"])
+        // Long-press Back to the root: path became [].
+        XCTAssertEqual(stack.popTo(level: 0), "a")
+        XCTAssertEqual(stack.route(current: "a").path, [])
+        // Nothing left to pop: a write that does not shorten the trail is ignored.
+        XCTAssertNil(stack.popTo(level: 0))
+        XCTAssertNil(stack.popTo(level: 3))
+    }
 }

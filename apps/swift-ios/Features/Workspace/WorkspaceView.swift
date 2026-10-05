@@ -811,28 +811,21 @@ public struct WorkspaceView: View {
 
     // MARK: - Detail
 
+    /// The thread column is a real navigation stack: a thread opened from
+    /// another one is pushed over it, so the system back button names the
+    /// parent and the edge swipe returns to it, in compact and regular width.
     @ViewBuilder
     private func detail(_ tab: MobileWorkspace) -> some View {
-        if let id = selectedThreadIDs[tab],
-           let thread = model.snapshot.threads.first(where: { $0.id == id }) {
-            ThreadDetailView(
-                model: model,
-                thread: thread,
-                submitMessage: submitMessage,
-                onNavigateBack: { navigateBack(in: tab) },
-                // Subagent cards, fork dividers and lineage rows all point at
-                // another thread; an archived target also needs the shelf open
-                // or it lands on a list that does not contain it.
-                onOpenRelatedThread: { threadID, isArchived in
-                    if isArchived { isArchiveExpanded = true }
-                    openRelatedThread(threadID, in: tab)
-                },
-                backTitle: backTitle(in: tab),
-                onStartNewThread: { projectID in
-                    openNewTaskOrProjectCreation(initialProjectID: projectID)
-                }
-            )
-            .id(id)
+        if let route = threadRoute(in: tab),
+           model.snapshot.threads.contains(where: { $0.id == route.root }) {
+            NavigationStack(path: threadPath(for: tab)) {
+                threadDetail(route.root, in: tab)
+                    .navigationDestination(for: ThreadNavigationRoute.self) { pushed in
+                        threadDetail(pushed.threadID, in: tab)
+                    }
+            }
+            // A new root (picked from the list, a deep link) is a new trail.
+            .id(route.root)
         } else {
             ContentUnavailableView {
                 Label(
@@ -1469,6 +1462,50 @@ public struct WorkspaceView: View {
         return true
     }
 
+    @ViewBuilder
+    private func threadDetail(_ id: String, in tab: MobileWorkspace) -> some View {
+        if let thread = model.snapshot.threads.first(where: { $0.id == id }) {
+            ThreadDetailView(
+                model: model,
+                thread: thread,
+                submitMessage: submitMessage,
+                onNavigateBack: { navigateBack(in: tab) },
+                // Subagent cards, fork dividers and lineage rows all point at
+                // another thread; an archived target also needs the shelf open
+                // or it lands on a list that does not contain it.
+                onOpenRelatedThread: { threadID, isArchived in
+                    if isArchived { isArchiveExpanded = true }
+                    openRelatedThread(threadID, in: tab)
+                },
+                onStartNewThread: { projectID in
+                    openNewTaskOrProjectCreation(initialProjectID: projectID)
+                }
+            )
+            .id(id)
+        } else {
+            ContentUnavailableView("Thread Unavailable", systemImage: "exclamationmark.bubble")
+                .background(T3Colors.background)
+        }
+    }
+
+    private func threadRoute(in tab: MobileWorkspace) -> (root: String, path: [String])? {
+        guard let current = selectedThreadIDs[tab] else { return nil }
+        return (threadBackStacks[tab] ?? ThreadBackStack()).route(current: current)
+    }
+
+    /// The pushed part of the thread trail. The system writes a shorter path
+    /// when the back button or the edge swipe pops, which returns the tab to
+    /// that thread.
+    private func threadPath(for tab: MobileWorkspace) -> Binding<[ThreadNavigationRoute]> {
+        Binding(
+            get: { threadRoute(in: tab)?.path.map(ThreadNavigationRoute.init(threadID:)) ?? [] },
+            set: { path in
+                guard let id = threadBackStacks[tab]?.popTo(level: path.count) else { return }
+                selectedThreadIDs[tab] = id
+            }
+        )
+    }
+
     /// Opening from the list, a deep link or a new task starts a fresh trail.
     private func openThread(_ id: String, in tab: MobileWorkspace) {
         threadBackStacks[tab] = nil
@@ -1492,13 +1529,6 @@ public struct WorkspaceView: View {
         } else {
             closeSelectedThread(in: tab)
         }
-    }
-
-    /// The parent's title for the thread's Back button; nil leaves the
-    /// system's Back to the list.
-    private func backTitle(in tab: MobileWorkspace) -> String? {
-        guard let parentID = threadBackStacks[tab]?.parentID else { return nil }
-        return model.snapshot.threads.first { $0.id == parentID }?.title ?? "Back"
     }
 
     private func closeSelectedThread(in tab: MobileWorkspace) {
