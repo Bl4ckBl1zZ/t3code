@@ -1383,6 +1383,64 @@ public struct OrchestrationV2ThreadLinkedPullRequest: Codable, Equatable, Sendab
     }
 }
 
+/// Work a settled thread still runs in the background, as the shell lists it
+/// (`OrchestrationV2PendingBackgroundTask`). Kinds a newer server adds, and an
+/// entry with no kind at all, decode as ``Kind/backgroundTask`` like the
+/// contract's fallback arm, so the list never fails a shell.
+public struct OrchestrationV2PendingBackgroundTask: Codable, Equatable, Hashable, Sendable {
+    public enum Kind: String, Codable, Equatable, Hashable, Sendable {
+        case subagent
+        case command
+        case monitor
+        case backgroundTask = "background_task"
+
+        /// Mirrors `backgroundWorkHoldsCompletion`: commands, such as a dev
+        /// server, do not hold a finished run. Subagents and monitors wake the
+        /// agent, and work the server cannot name holds as the safe choice.
+        public var holdsCompletion: Bool {
+            self != .command
+        }
+    }
+
+    public var taskId: String
+    /// The work's name: a subagent's title, a command's description, a monitor's.
+    public var description: String?
+    public var kind: Kind
+    /// A subagent's own thread, when it has one. Only subagents carry it.
+    public var childThreadId: String?
+
+    public init(taskId: String, description: String? = nil, kind: Kind, childThreadId: String? = nil) {
+        self.taskId = taskId
+        self.description = description
+        self.kind = kind
+        self.childThreadId = kind == .subagent ? childThreadId : nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskId, description, kind, childThreadId
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        taskId = try container.decode(String.self, forKey: .taskId)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        kind = try container.decodeIfPresent(String.self, forKey: .kind)
+            .flatMap(Kind.init(rawValue:)) ?? .backgroundTask
+        // The contract only carries a child thread on subagents.
+        if kind == .subagent {
+            childThreadId = try container.decodeIfPresent(String.self, forKey: .childThreadId)
+        } else {
+            childThreadId = nil
+        }
+    }
+
+    /// Whether any of `tasks` holds the run's completion. Mirrors the shared
+    /// `backgroundWorkHoldsCompletion`.
+    public static func holdCompletion(_ tasks: [Self]) -> Bool {
+        tasks.contains { $0.kind.holdsCompletion }
+    }
+}
+
 public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var projectId: String
@@ -1428,6 +1486,10 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     public var backgroundProcessCount: Int?
     /// Delegated agents still running. Absent on servers that predate the field.
     public var activeAgentCount: Int?
+    /// What the thread still runs once its latest run has settled, named and
+    /// kinded. Empty while a run is in flight. Nil on servers that predate the
+    /// list, where the two counts above are all there is.
+    public var pendingBackgroundTasks: [OrchestrationV2PendingBackgroundTask]? = nil
     public var itemCount: Int
     public var visibleItemCount: Int
     public var createdAt: OrchestrationV2Timestamp

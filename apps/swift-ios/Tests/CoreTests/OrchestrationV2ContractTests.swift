@@ -92,6 +92,39 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertNil(fixture.legacy.latestUserAuthoredMessageAt)
     }
 
+    /// The shell's background roster: a kind from a newer server must decode as
+    /// `background_task` rather than fail the shell, and a server that predates
+    /// the list leaves it nil so callers fall back to the counts.
+    func testThreadShellPendingBackgroundTasks() throws {
+        struct Fixture: Decodable {
+            let legacy: OrchestrationV2ThreadShell
+            let backgroundSubagent: OrchestrationV2ThreadShell
+            let backgroundCommand: OrchestrationV2ThreadShell
+            let backgroundMonitor: OrchestrationV2ThreadShell
+            let backgroundUnknownKind: OrchestrationV2ThreadShell
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/threadShell.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+
+        XCTAssertNil(fixture.legacy.pendingBackgroundTasks)
+        XCTAssertEqual(fixture.backgroundSubagent.pendingBackgroundTasks, [
+            OrchestrationV2PendingBackgroundTask(taskId: "task-subagent", description: "/root/review_diff", kind: .subagent, childThreadId: "thread-child"),
+        ])
+        XCTAssertEqual(fixture.backgroundCommand.pendingBackgroundTasks, [
+            OrchestrationV2PendingBackgroundTask(taskId: "task-command", description: "Start the dev server", kind: .command),
+        ])
+        XCTAssertEqual(fixture.backgroundMonitor.pendingBackgroundTasks?.map(\.kind), [.monitor])
+        XCTAssertEqual(fixture.backgroundUnknownKind.pendingBackgroundTasks, [
+            OrchestrationV2PendingBackgroundTask(taskId: "task-future", description: "Scheduled wakeup", kind: .backgroundTask),
+        ])
+
+        XCTAssertTrue(OrchestrationV2PendingBackgroundTask.holdCompletion(fixture.backgroundSubagent.pendingBackgroundTasks ?? []))
+        XCTAssertFalse(OrchestrationV2PendingBackgroundTask.holdCompletion(fixture.backgroundCommand.pendingBackgroundTasks ?? []))
+        XCTAssertTrue(OrchestrationV2PendingBackgroundTask.holdCompletion(fixture.backgroundMonitor.pendingBackgroundTasks ?? []))
+        XCTAssertTrue(OrchestrationV2PendingBackgroundTask.holdCompletion(fixture.backgroundUnknownKind.pendingBackgroundTasks ?? []))
+    }
+
     /// Every turn item type the contract defines, as of the generated fixture.
     /// Kept explicit so adding a contract variant without a Swift case fails
     /// loudly rather than silently decoding to `.unknown`.

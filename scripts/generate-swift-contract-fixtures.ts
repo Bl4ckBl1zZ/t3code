@@ -2422,6 +2422,30 @@ const shellBase = {
   lastVisitedAt: null,
   deletedAt: null,
 } as const;
+const encodeSettledShell = (
+  pendingBackgroundTasks: OrchestrationV2ThreadShellJson["pendingBackgroundTasks"],
+) =>
+  Schema.encodeSync(OrchestrationV2ThreadShellJson)({
+    ...shellBase,
+    activeRunId: null,
+    status: "completed",
+    latestRunCompletedAt: DateTime.makeUnsafe("2026-06-20T00:06:00.000Z"),
+    ...(pendingBackgroundTasks === undefined ? {} : { pendingBackgroundTasks }),
+  });
+// A kind from a newer server. The schema refuses to encode one, so the entry is
+// written by hand and proven to decode as `background_task` before it ships.
+const unknownKindShell = {
+  ...encodeSettledShell([]),
+  pendingBackgroundTasks: [
+    { taskId: "task-future", description: "Scheduled wakeup", kind: "scheduled_wakeup" },
+  ],
+};
+if (
+  Schema.decodeUnknownSync(OrchestrationV2ThreadShellJson)(unknownKindShell)
+    .pendingBackgroundTasks?.[0]?.kind !== "background_task"
+) {
+  throw new Error("[swift-fixtures] an unknown background kind must decode as background_task");
+}
 const threadShellFixture = `${JSON.stringify(
   {
     stamped: Schema.encodeSync(OrchestrationV2ThreadShellJson)({
@@ -2433,6 +2457,23 @@ const threadShellFixture = `${JSON.stringify(
       latestUserAuthoredMessageAt: null,
     }),
     legacy: Schema.encodeSync(OrchestrationV2ThreadShellJson)(shellBase),
+    // What a settled thread still runs. Only `command` leaves the run finished;
+    // `legacy` above omits the list, as a server that predates it does.
+    backgroundSubagent: encodeSettledShell([
+      {
+        taskId: "task-subagent",
+        description: "/root/review_diff",
+        kind: "subagent",
+        childThreadId: ThreadId.make("thread-child"),
+      },
+    ]),
+    backgroundCommand: encodeSettledShell([
+      { taskId: "task-command", description: "Start the dev server", kind: "command" },
+    ]),
+    backgroundMonitor: encodeSettledShell([
+      { taskId: "task-monitor", description: "Wait for CI", kind: "monitor" },
+    ]),
+    backgroundUnknownKind: unknownKindShell,
   },
   null,
   2,
