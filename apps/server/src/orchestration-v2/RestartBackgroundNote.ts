@@ -4,6 +4,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
+import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 
 type Work = OrchestrationV2RestartCancelledBackgroundWork;
 
@@ -67,8 +68,10 @@ export function restartCancelledBackgroundWorkNote(work: ReadonlyArray<Work>): s
  * Work cancelled by a restart that the run's provider thread has not been told
  * about yet. The note belongs to the provider thread that lost the work: turns
  * on another provider (after a switch) neither owe it nor deliver it. A later
- * run on the same provider thread delivers it once its attempt reaches the
- * provider, so the pending set is derived rather than cleared. Compactions and
+ * completed turn on the same provider thread proves delivery (adapters can
+ * announce a running turn before accepting the prompt), so the pending set is
+ * derived rather than cleared. Runs compare by when they ran, not by ordinal:
+ * a held queue can resume after a later continuation ended. Compactions and
  * restart continuations (which resume the interrupted turn rather than take a
  * prompt) carry no note, and a rolled-back run left native history, so none of
  * them counts as delivery.
@@ -76,14 +79,14 @@ export function restartCancelledBackgroundWorkNote(work: ReadonlyArray<Work>): s
 export function pendingRestartCancelledBackgroundWork(input: {
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly providerTurns: ReadonlyArray<
-    Pick<OrchestrationV2ProviderTurn, "runAttemptId" | "providerThreadId">
+    Pick<OrchestrationV2ProviderTurn, "runAttemptId" | "providerThreadId" | "status">
   >;
   readonly compactionMessageIds: ReadonlySet<string>;
   /** User messages of server-dispatched restart continuations. */
   readonly continuationMessageIds: ReadonlySet<string>;
   readonly run: Pick<
     OrchestrationV2Run,
-    "id" | "ordinal" | "userMessageId" | "providerThreadId" | "activeAttemptId"
+    "id" | "ordinal" | "completedAt" | "userMessageId" | "providerThreadId" | "activeAttemptId"
   >;
   /** Every attempt id of `run`; a steer replaces the attempt but not the run. */
   readonly runAttemptIds: ReadonlyArray<OrchestrationV2Run["activeAttemptId"] & string>;
@@ -95,7 +98,7 @@ export function pendingRestartCancelledBackgroundWork(input: {
   const providerThreadId = input.run.providerThreadId;
   const deliveredAttemptIds = new Set(
     input.providerTurns
-      .filter((turn) => turn.providerThreadId === providerThreadId)
+      .filter((turn) => turn.providerThreadId === providerThreadId && turn.status === "completed")
       .map((turn) => turn.runAttemptId),
   );
   const sameThread = input.runs.filter((run) => run.providerThreadId === providerThreadId);
@@ -116,9 +119,10 @@ export function pendingRestartCancelledBackgroundWork(input: {
   return sameThread
     .filter(
       (source) =>
-        source.ordinal < input.run.ordinal &&
+        source.id !== input.run.id &&
+        runRanAfter(input.run, source) &&
         (source.restartCancelledBackgroundWork?.length ?? 0) > 0 &&
-        !prompted.some((later) => later.ordinal > source.ordinal),
+        !prompted.some((later) => runRanAfter(later, source)),
     )
     .reduce<ReadonlyArray<Work>>(
       (work, source) =>

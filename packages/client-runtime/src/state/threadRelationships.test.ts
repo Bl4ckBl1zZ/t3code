@@ -156,6 +156,36 @@ describe("thread relationships", () => {
     );
   });
 
+  it.each([
+    ["running", "running"],
+    ["completed", "completed"],
+  ])(
+    "shows a subagent whose child thread is %s as %s after its delegated task settled",
+    (childStatus, expected) => {
+      const parent = ThreadId.make("thread-parent");
+      const child = ThreadId.make("thread-child");
+      const graph = deriveThreadRelationshipGraph({
+        threads: [
+          { id: parent, status: "completed", forkedFrom: null, lineage: { parentThreadId: null } },
+          {
+            id: child,
+            status: childStatus,
+            forkedFrom: null,
+            lineage: { parentThreadId: parent, relationshipToParent: "subagent" },
+          },
+        ] as never,
+        projection: {
+          thread: { id: parent },
+          subagents: [{ childThreadId: child, status: "completed" }],
+          contextTransfers: [],
+        } as never,
+      });
+
+      const row = immediateThreadRelationships(graph, parent)[0]!;
+      expect(threadRelationshipRowStatus(graph, row)).toBe(expected);
+    },
+  );
+
   it("keeps the live shell when an archived snapshot contains the same thread id", () => {
     const parent = ThreadId.make("thread-parent");
     const staleParent = ThreadId.make("thread-stale-parent");

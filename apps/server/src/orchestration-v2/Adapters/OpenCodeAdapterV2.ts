@@ -52,6 +52,7 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { mcpToolPresentation } from "../../provider/McpToolPresentation.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
@@ -232,6 +233,7 @@ interface ActiveOpenCodeTurn {
   readonly itemOrdinals: Map<string, number>;
   readonly parts: Map<string, OpenCodePart>;
   readonly partIdsByMessage: Map<string, Set<string>>;
+  mcpServerNames?: ReadonlyArray<string>;
   readonly providerTurn: OrchestrationV2ProviderTurn;
   nextItemOrdinal: number;
   nativeUserMessageId: string | null;
@@ -693,6 +695,9 @@ function toolStatus(part: ToolPart): {
 function toolInput(part: ToolPart): Record<string, unknown> {
   return part.state.input;
 }
+
+// Search results stay on the timeline wire, so keep their text a preview.
+const OPENCODE_SEARCH_PREVIEW_MAX_CHARS = 8_000;
 
 function toolOutput(part: ToolPart): string | undefined {
   if (part.state.status === "completed") return part.state.output;
@@ -1376,9 +1381,44 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           >;
           const input = toolInput(part);
           const output = toolOutput(part);
+          // OpenCode names MCP tools `<server>_<tool>`, so the configured
+          // servers tell an MCP call apart from a native tool.
+          const isNativeTool = part.tool === "code_search" || part.tool === "apply_patch";
+          if (!isNativeTool && part.tool.includes("_") && turn.mcpServerNames === undefined) {
+            const serverNames = yield* runOpenCodeSdk("mcp.status", (signal) =>
+              client.mcp.status(undefined, { signal, throwOnError: true }),
+            ).pipe(
+              Effect.timeout("1 second"),
+              Effect.map((response) => Object.keys(response.data ?? {})),
+              Effect.catch(() => Effect.succeed(undefined)),
+            );
+            if (serverNames !== undefined) turn.mcpServerNames = serverNames;
+          }
+          const matchingServers = turn.mcpServerNames?.filter(
+            (name) =>
+              !isNativeTool && part.tool.startsWith(`${name.replace(/[^a-zA-Z0-9_-]/g, "_")}_`),
+          );
+          const serverName = matchingServers?.length === 1 ? matchingServers[0] : undefined;
           const projectionKind = openCodeToolProjectionKind(part.tool);
           let turnItem: OrchestrationV2TurnItem;
-          if (projectionKind === "command_execution") {
+          if (matchingServers?.length) {
+            turnItem = {
+              ...base,
+              type: "dynamic_tool",
+              ...(serverName === undefined
+                ? {}
+                : mcpToolPresentation({
+                    serverName,
+                    toolName: part.tool.slice(
+                      serverName.replace(/[^a-zA-Z0-9_-]/g, "_").length + 1,
+                    ),
+                    title: toolTitle(part) === part.tool ? undefined : toolTitle(part),
+                  })),
+              toolName: part.tool,
+              input,
+              ...(output === undefined ? {} : { output }),
+            };
+          } else if (projectionKind === "command_execution") {
             turnItem = {
               ...base,
               type: "command_execution",
@@ -1399,6 +1439,13 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                   }),
             };
           } else if (projectionKind === "file_change") {
+            // A failed edit has no diff; keep its error where the diff would be.
+            const diffStr =
+              recordString(
+                part.state.status === "completed" ? part.state.metadata : undefined,
+                "diff",
+                "patch",
+              ) ?? (base.status === "failed" && output?.trim() ? output : undefined);
             turnItem = {
               ...base,
               type: "file_change",
@@ -1409,22 +1456,13 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               ...(recordString(input, "newString", "content", "newText") === undefined
                 ? {}
                 : { newStr: recordString(input, "newString", "content", "newText")! }),
-              ...(recordString(
-                part.state.status === "completed" ? part.state.metadata : undefined,
-                "diff",
-                "patch",
-              ) === undefined
-                ? {}
-                : {
-                    diffStr: recordString(
-                      part.state.status === "completed" ? part.state.metadata : undefined,
-                      "diff",
-                      "patch",
-                    )!,
-                  }),
+              ...(diffStr === undefined ? {} : { diffStr }),
             };
           } else if (projectionKind === "file_search") {
             const pattern = recordString(input, "pattern", "query", "path", "filePath");
+            // OpenCode reports matches as plain text, so keep it as one result row
+            // under the searched path, like the ACP search projection.
+            const searchRoot = (recordString(input, "path", "filePath") ?? pattern)?.trim();
             turnItem = {
               ...base,
               title:
@@ -1432,13 +1470,34 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                 base.title,
               type: "file_search",
               ...(pattern === undefined ? {} : { pattern }),
+              ...(!output?.trim() || searchRoot === undefined
+                ? {}
+                : {
+                    results: [
+                      {
+                        fileName: searchRoot,
+                        preview: output.slice(0, OPENCODE_SEARCH_PREVIEW_MAX_CHARS),
+                      },
+                    ],
+                  }),
             };
           } else if (projectionKind === "web_search") {
             const pattern = recordString(input, "query", "url", "pattern");
+            const url = recordString(input, "url")?.trim();
             turnItem = {
               ...base,
               type: "web_search",
               ...(pattern === undefined ? {} : { patterns: [pattern] }),
+              ...(!output?.trim()
+                ? {}
+                : {
+                    results: [
+                      {
+                        ...(url === undefined ? {} : { url }),
+                        snippet: output.slice(0, OPENCODE_SEARCH_PREVIEW_MAX_CHARS),
+                      },
+                    ],
+                  }),
             };
           } else {
             const readPath = recordString(input, "filePath", "path", "file");

@@ -5,6 +5,7 @@ import {
   isParentThreadRelationship,
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
+  liveThreadRunStatus,
   threadRelationshipRowStatus,
   type ThreadRelationshipEdge,
 } from "@t3tools/client-runtime/state/thread-relationships";
@@ -39,6 +40,7 @@ import { useState, type ReactNode } from "react";
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
 import { AgentElapsed, type AgentElapsedTiming } from "./AgentElapsed";
 import { SubagentTooltipContent } from "./SubagentTooltipContent";
+import { shouldShowInstanceBadge } from "../../providerInstances";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { resolveThreadModelBadge } from "./threadModelBadge";
 import { WorkflowScriptDialog } from "../WorkflowScriptDialog";
@@ -132,6 +134,28 @@ function subagentTiming(subagent: OrchestrationV2Subagent): AgentElapsedTiming {
     status: subagent.status,
     startedAt: subagent.startedAt === null ? null : DateTime.formatIso(subagent.startedAt),
     completedAt: subagent.completedAt === null ? null : DateTime.formatIso(subagent.completedAt),
+  };
+}
+
+/**
+ * A delegated task settles with its first run, but the parent can keep sending
+ * the child follow-ups. While the child thread has a live run, the row's timer
+ * and hover card follow that run instead of the settled task.
+ */
+function liveSubagent(
+  subagent: OrchestrationV2Subagent | undefined,
+  childThread: OrchestrationV2ThreadShell | null | undefined,
+): OrchestrationV2Subagent | undefined {
+  const liveStatus = liveThreadRunStatus(childThread);
+  if (!subagent || !liveStatus) return subagent;
+  return {
+    ...subagent,
+    status: liveStatus === "running" || liveStatus === "waiting" ? liveStatus : "pending",
+    startedAt: childThread?.activityRunStartedAt ?? null,
+    completedAt: null,
+    // The settled task's output belongs to its first run, not this one.
+    progress: undefined,
+    result: null,
   };
 }
 
@@ -305,7 +329,10 @@ export function ThreadRelationshipsPanel(props: {
             title: node?.thread?.title ?? threadId,
             isSubagent,
           });
-          const subagent = showOrb ? subagentByChildThreadId.get(threadId) : undefined;
+          const subagent = liveSubagent(
+            showOrb ? subagentByChildThreadId.get(threadId) : undefined,
+            node?.thread,
+          );
           const phase = workflowPhaseProgress(subagent?.workflow);
           const runScriptPath = subagent?.runHandles?.scriptPath;
           const runSessionUrl = subagent?.runHandles?.sessionUrl;
@@ -327,6 +354,11 @@ export function ThreadRelationshipsPanel(props: {
               modelLabel={modelBadge?.model ?? subagent.model}
               driver={providerEntry?.driverKind ?? subagent.driver}
               providerDisplayName={providerEntry?.displayName}
+              providerAccentColor={providerEntry?.accentColor}
+              showInstanceBadge={
+                providerEntry !== null &&
+                shouldShowInstanceBadge(providerEntry, providerEntryByInstanceId.values())
+              }
               elapsed={<AgentElapsed agent={subagentTiming(subagent)} />}
               status={subagent.status}
               result={subagent.result}

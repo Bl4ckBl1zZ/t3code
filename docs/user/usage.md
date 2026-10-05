@@ -6,8 +6,11 @@ desktop when the terminal is not focused. Customize `usage.open` in
 
 The Usage page combines Codex, Claude Code, and Grok Build activity from your connected
 environments. It reads the providers' local session history and shows API-equivalent token cost,
-processed tokens, cache savings, provider shares, and model breakdowns. Subscription billing is
-separate from the raw token cost shown here.
+processed tokens, cache savings, provider shares, and model breakdowns, with cost split by token
+type and by speed. Subscription billing is separate from the raw token cost shown here.
+**Premium** is what Fast and Ultrafast requests cost above standard rates. Cost that cannot be
+split, such as a provider-reported cost for a model without public rates, shows as **Other**.
+Select a model under **Breakdown** to see its trend, cache hit rate, and cost per million tokens.
 
 Grok Build totals come from persisted session updates. Interactive turns that never wrote a
 completed-turn record will not appear.
@@ -52,7 +55,14 @@ an account. These choices are saved to that environment and control its model pi
 Open **Model prices** from Usage to override an exact model ID’s rates in USD per
 million tokens. These rates recalculate past and future usage, including estimates
 that previously used provider-reported costs. Blank cache rates use the input rate;
-enter `0` for free tokens. Reset a model to return to automatic pricing.
+enter `0` for free tokens. Reset a model to return to automatic pricing. When a model on
+**Usage** has no known price, select it under **Breakdown** and choose **Set price** to open this
+table with that model added.
+
+To count one model as another, such as a preview model under its released name, enter the target
+model ID under **Map to**. The mapped model no longer appears on **Usage**: its tokens and cost
+move to the target model and use the target's price. Clear **Map to** or reset the row to show
+the model on its own again.
 
 Web and desktop can apply edits to several environments. Mixed cells keep each
 environment’s existing rate until you change them. If some saves fail, retry applies

@@ -21,6 +21,7 @@ import {
   getProjectSortTimestamp,
   getSidebarForkParentThreadId,
   hasUnseenCompletion,
+  buildDraftActionMenuItems,
   isContextMenuPointerDown,
   isSidebarLifecycleThread,
   isSidebarNestedLinkClick,
@@ -43,6 +44,7 @@ import {
   shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
   sortInboxThreadsByReturn,
+  sortWorkingThreadsBySend,
   sortLogicalProjectsForSidebar,
   sortSidebarV2ProjectGroups,
   resolveThreadLastVisitedAt,
@@ -1168,6 +1170,27 @@ describe("getVisibleSidebarThreadIds", () => {
         },
       ]),
     ).toEqual([ThreadId.make("thread-12"), ThreadId.make("thread-11")]);
+  });
+});
+
+describe("buildDraftActionMenuItems", () => {
+  it("offers only the copy values the draft has", () => {
+    const items = buildDraftActionMenuItems({ hasPath: false, hasBranch: true, hasProject: true });
+    expect(items[0]).toMatchObject({ id: "copy", disabled: false });
+    expect(items[0]?.children?.map((item) => item.id)).toEqual(["copy-branch"]);
+
+    const noCopy = buildDraftActionMenuItems({
+      hasPath: false,
+      hasBranch: false,
+      hasProject: true,
+    });
+    expect(noCopy[0]).toMatchObject({ id: "copy", disabled: true, children: [] });
+  });
+
+  it("drops project settings without a project and keeps discard last", () => {
+    const items = buildDraftActionMenuItems({ hasPath: true, hasBranch: false, hasProject: false });
+    expect(items.map((item) => item.id)).toEqual(["copy", "discard"]);
+    expect(items.at(-1)).toMatchObject({ label: "Discard draft", destructive: true });
   });
 });
 
@@ -2707,6 +2730,54 @@ describe("Working shelf (beta)", () => {
           entry === waiting ? Date.parse("2026-03-09T11:05:00.000Z") : undefined,
         ).map((entry) => entry.id),
       ).toEqual(["asks-approval", "finished"]);
+    });
+  });
+
+  describe("sortWorkingThreadsBySend", () => {
+    const working = (id: string, latestUserAuthoredMessageAt?: string | null) => ({
+      id: ThreadId.make(id),
+      environmentId: localEnvironmentId,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      latestRun: null,
+      ...(latestUserAuthoredMessageAt === undefined ? {} : { latestUserAuthoredMessageAt }),
+    });
+
+    it("orders by the last message the user sent, not by later runs", () => {
+      const sentFirst = {
+        ...working("sent-first", "2026-06-01T01:00:00.000Z"),
+        // A wake run requested after the other thread's send.
+        latestRun: {
+          ...makeLatestRun({ completedAt: null }),
+          requestedAt: "2026-06-01T04:00:00.000Z",
+        },
+      };
+      const sentLast = working("sent-last", "2026-06-01T02:00:00.000Z");
+      // Launched by an agent: no user message, so creation time is the send.
+      const launched = working("launched", null);
+      expect(
+        sortWorkingThreadsBySend([launched, sentFirst, sentLast]).map((thread) => thread.id),
+      ).toEqual(["sent-last", "sent-first", "launched"]);
+    });
+
+    it("falls back to the latest run request on servers without the stamp", () => {
+      const older = {
+        ...working("older"),
+        latestRun: {
+          ...makeLatestRun({ completedAt: null }),
+          requestedAt: "2026-06-01T01:00:00.000Z",
+        },
+      };
+      const newer = {
+        ...working("newer"),
+        latestRun: {
+          ...makeLatestRun({ completedAt: null }),
+          requestedAt: "2026-06-01T02:00:00.000Z",
+        },
+      };
+      expect(sortWorkingThreadsBySend([older, newer]).map((thread) => thread.id)).toEqual([
+        "newer",
+        "older",
+      ]);
     });
   });
 });

@@ -27,6 +27,7 @@ import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -49,6 +50,7 @@ import type {
   ProviderAdapterV2TurnMessage,
 } from "./ProviderAdapter.ts";
 import { ProviderEventIngestorV2 } from "./ProviderEventIngestor.ts";
+import type { ProjectionStoreV2Error } from "./ProjectionStore.ts";
 import { makeProviderFailure, makeProviderFailureTurnItem } from "./ProviderFailure.ts";
 
 export interface ProviderEventRoutingState {
@@ -435,10 +437,11 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly attempt: OrchestrationV2RunAttempt;
   readonly attemptId: RunAttemptId;
   readonly providerTurnOrdinal: number;
+  readonly nativeThreadHasTurns?: boolean;
   readonly relatedThreadIds?: ReadonlyArray<ThreadId>;
   readonly relatedProviderThreadIds?: ReadonlyArray<ProviderThreadId>;
-  readonly shouldStartProviderTurn?: () => Effect.Effect<boolean, never>;
-  readonly shouldFinalizeRun?: () => Effect.Effect<boolean, never>;
+  readonly shouldStartProviderTurn?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
+  readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
   readonly captureFilesystemCheckpoint?: boolean;
   readonly message: ProviderAdapterV2TurnMessage;
@@ -503,7 +506,7 @@ export const layer: Layer.Layer<
       readonly checkpointScope: OrchestrationV2CheckpointScope;
       readonly providerThread: OrchestrationV2ProviderThread;
       readonly attempt: OrchestrationV2RunAttempt;
-      readonly shouldFinalizeRun?: () => Effect.Effect<boolean, never>;
+      readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
       readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
       readonly openRunOwnedSubagents?: OpenRunOwnedSubagentProjection;
       readonly terminal: ProviderTerminalEvent;
@@ -1113,15 +1116,12 @@ export const layer: Layer.Layer<
                                         checkpointScope: input.checkpointScope,
                                         providerThread,
                                         attempt: input.attempt,
-                                        ...(input.shouldFinalizeRun === undefined
-                                          ? {}
-                                          : { shouldFinalizeRun: input.shouldFinalizeRun }),
-                                        ...(input.hasUnpairedRunInterruptRequest === undefined
-                                          ? {}
-                                          : {
-                                              hasUnpairedRunInterruptRequest:
-                                                input.hasUnpairedRunInterruptRequest,
-                                            }),
+                                        // The failure may be the ownership
+                                        // read itself, so check in the write.
+                                        writeIfRunCurrent: {
+                                          activeAttemptId: input.attempt.id,
+                                          expectedStatus: "running",
+                                        },
                                         openRunOwnedSubagents: openSubagents,
                                         terminal: makeFailedTerminalEvent(
                                           makeProviderFailure({
@@ -1154,10 +1154,13 @@ export const layer: Layer.Layer<
             Effect.forkDetach,
           );
 
-          if (
-            input.shouldStartProviderTurn !== undefined &&
-            !(yield* input.shouldStartProviderTurn())
-          ) {
+          // A failed read fails the start below, so the run is recorded as
+          // failed instead of staying active with no provider turn.
+          const shouldStart =
+            input.shouldStartProviderTurn === undefined
+              ? Exit.succeed(true)
+              : yield* Effect.exit(input.shouldStartProviderTurn());
+          if (Exit.isSuccess(shouldStart) && !shouldStart.value) {
             yield* Fiber.interrupt(providerEventFiber);
             return;
           }
@@ -1166,13 +1169,17 @@ export const layer: Layer.Layer<
           // its already-issued MCP credential valid even when the agent goes
           // a long time between browser-tool calls.
           yield* McpSessionRegistry.touchActiveMcpThread(input.run.threadId);
-          yield* input.session
-            .startTurn({
+          yield* Effect.andThen(
+            shouldStart,
+            input.session.startTurn({
               appThread: input.appThread,
               threadId: input.run.threadId,
               runId: input.run.id,
               runOrdinal: input.run.ordinal,
               providerTurnOrdinal: input.providerTurnOrdinal,
+              ...(input.nativeThreadHasTurns === undefined
+                ? {}
+                : { nativeThreadHasTurns: input.nativeThreadHasTurns }),
               attemptId: input.attemptId,
               rootNodeId: input.rootNode.id,
               providerThread: input.providerThread,
@@ -1182,61 +1189,59 @@ export const layer: Layer.Layer<
               },
               modelSelection: input.modelSelection,
               runtimePolicy: input.runtimePolicy,
-            })
-            .pipe(
-              Effect.catchCause((cause) =>
-                Effect.logError("orchestration V2 provider turn start failed", {
-                  runId: input.run.id,
-                  cause,
-                }).pipe(
-                  Effect.andThen(Fiber.interrupt(providerEventFiber)),
-                  Effect.andThen(Ref.get(latestProviderThread)),
-                  Effect.flatMap((providerThread) =>
-                    Ref.get(latestTurnItemOrdinal).pipe(
-                      Effect.flatMap((latestItemOrdinal) =>
-                        Ref.get(openRunOwnedSubagents).pipe(
-                          Effect.flatMap((openSubagents) =>
-                            writeFinalRunEvents({
-                              run: input.run,
-                              rootNode: input.rootNode,
-                              checkpointScope: input.checkpointScope,
-                              providerThread,
-                              attempt: input.attempt,
-                              ...(input.shouldFinalizeRun === undefined
-                                ? {}
-                                : { shouldFinalizeRun: input.shouldFinalizeRun }),
-                              ...(input.hasUnpairedRunInterruptRequest === undefined
-                                ? {}
-                                : {
-                                    hasUnpairedRunInterruptRequest:
-                                      input.hasUnpairedRunInterruptRequest,
-                                  }),
-                              openRunOwnedSubagents: openSubagents,
-                              terminal: makeFailedTerminalEvent(
-                                makeProviderFailure({
-                                  cause: Cause.squash(cause),
-                                  class: "provider_error",
-                                }),
-                                latestItemOrdinal + 1,
-                              ),
-                              failureItemPersisted: false,
-                            }),
-                          ),
+            }),
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("orchestration V2 provider turn start failed", {
+                runId: input.run.id,
+                cause,
+              }).pipe(
+                Effect.andThen(Fiber.interrupt(providerEventFiber)),
+                Effect.andThen(Ref.get(latestProviderThread)),
+                Effect.flatMap((providerThread) =>
+                  Ref.get(latestTurnItemOrdinal).pipe(
+                    Effect.flatMap((latestItemOrdinal) =>
+                      Ref.get(openRunOwnedSubagents).pipe(
+                        Effect.flatMap((openSubagents) =>
+                          writeFinalRunEvents({
+                            run: input.run,
+                            rootNode: input.rootNode,
+                            checkpointScope: input.checkpointScope,
+                            providerThread,
+                            attempt: input.attempt,
+                            // Checked in the write transaction, not by another
+                            // read that can fail like the one before the start.
+                            writeIfRunCurrent: {
+                              activeAttemptId: input.attempt.id,
+                              expectedStatus: "running",
+                            },
+                            openRunOwnedSubagents: openSubagents,
+                            terminal: makeFailedTerminalEvent(
+                              makeProviderFailure({
+                                cause: Cause.squash(cause),
+                                // A failed ownership read is not the provider's fault.
+                                class: Exit.isFailure(shouldStart) ? "unknown" : "provider_error",
+                              }),
+                              latestItemOrdinal + 1,
+                            ),
+                            failureItemPersisted: false,
+                          }),
                         ),
                       ),
                     ),
                   ),
-                  Effect.mapError(
-                    (writeCause) =>
-                      new RunExecutionStartError({
-                        commandId: input.commandId,
-                        runId: input.run.id,
-                        cause: { start: cause, write: writeCause },
-                      }),
-                  ),
+                ),
+                Effect.mapError(
+                  (writeCause) =>
+                    new RunExecutionStartError({
+                      commandId: input.commandId,
+                      runId: input.run.id,
+                      cause: { start: cause, write: writeCause },
+                    }),
                 ),
               ),
-            );
+            ),
+          );
         }),
     } satisfies RunExecutionServiceV2Shape);
   }),

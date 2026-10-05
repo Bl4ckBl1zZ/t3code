@@ -25,7 +25,6 @@ import {
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type ApplicationStoredEvent,
-  type AuthEnvironmentScope,
   AuthSessionId,
   ProviderSetupError,
   type ProviderInstanceId,
@@ -38,6 +37,8 @@ import {
   type DiscoveredLocalServerList,
   type EditorId,
   type FileManagerRevealKind,
+  type ServerConfig as ClientServerConfig,
+  type ServerConfigStreamEvent,
   type OrchestrationClientOrigin,
   type OrchestrationV2Command,
   type GitActionProgressEvent,
@@ -77,7 +78,6 @@ import {
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   RpcClientId,
-  EnvironmentAuthorizationError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -138,9 +138,9 @@ import { readWorkflowScript } from "./orchestration-v2/WorkflowScriptQuery.ts";
 import * as OrchestrationEventStore from "./persistence/Services/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import {
-  observeRpcEffect as instrumentRpcEffect,
-  observeRpcStream as instrumentRpcStream,
-  observeRpcStreamEffect as instrumentRpcStreamEffect,
+  observeRpcEffect,
+  observeRpcStream,
+  observeRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
@@ -181,7 +181,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
+import { rpcScopeAuthorizationLayer } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
@@ -282,6 +282,94 @@ export const bypassOwnedProviderCachesForRefresh = Effect.fn(
     { concurrency: "unbounded", discard: true },
   );
 });
+
+type EditorDiscovery = Pick<
+  ExternalLauncher.ExternalLauncher["Service"],
+  "resolveAvailableEditors" | "resolveFileManagerRevealKind"
+>;
+
+// The config fields that follow from which editors are installed.
+const resolveEditorConfig = <E, R>(
+  availableEditors: ReadonlyArray<EditorId>,
+  revealKind: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
+) =>
+  Effect.gen(function* () {
+    const fileManagerRevealKind = availableEditors.includes("file-manager")
+      ? yield* revealKind
+      : undefined;
+    return {
+      availableEditors,
+      ...(fileManagerRevealKind === undefined
+        ? {}
+        : {
+            shellRevealInFileManager: true,
+            shellRevealInFileManagerKind: fileManagerRevealKind,
+          }),
+    };
+  });
+
+/**
+ * Live config updates that follow a snapshot of `config`. A busy host can
+ * outlast the snapshot's discovery timeouts, which send no editors, or no
+ * reveal kind for the file manager. The scan keeps running, so once it lands
+ * this resends the config: clients replace theirs on any snapshot. The resent
+ * config is folded from the live updates already sent, so it cannot roll back
+ * a change that landed while the scan ran.
+ */
+export const withLateEditorConfig = <E, R>(
+  config: ClientServerConfig,
+  liveUpdates: Stream.Stream<ServerConfigStreamEvent, E, R>,
+  launcher: EditorDiscovery,
+) => {
+  const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
+    Stream.filter(
+      (editors) =>
+        editors.join() !== config.availableEditors.join() ||
+        (editors.includes("file-manager") && config.shellRevealInFileManagerKind === undefined),
+    ),
+    // Unbounded, unlike the snapshot: the reveal-kind probe is not shared, so
+    // a timeout here would cancel a probe that outlasts it every time.
+    Stream.mapEffect((editors) =>
+      resolveEditorConfig(editors, launcher.resolveFileManagerRevealKind()),
+    ),
+    Stream.filter(
+      (editorConfig) =>
+        editorConfig.availableEditors.join() !== config.availableEditors.join() ||
+        editorConfig.shellRevealInFileManagerKind !== config.shellRevealInFileManagerKind,
+    ),
+    Stream.map((editorConfig) => ({ type: "editorsResolved" as const, editorConfig })),
+  );
+
+  return Stream.merge(liveUpdates, lateEditorConfig).pipe(
+    Stream.mapAccum(
+      (): ClientServerConfig => config,
+      (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
+        switch (event.type) {
+          case "editorsResolved": {
+            const {
+              availableEditors: _editors,
+              shellRevealInFileManager: _reveal,
+              shellRevealInFileManagerKind: _revealKind,
+              ...rest
+            } = current;
+            const next = { ...rest, ...event.editorConfig };
+            return [next, [{ version: 1, type: "snapshot", config: next }]];
+          }
+          case "keybindingsUpdated":
+            return [{ ...current, ...event.payload }, [event]];
+          case "providerStatuses":
+            return [{ ...current, providers: event.payload.providers }, [event]];
+          case "settingsUpdated":
+            return [{ ...current, settings: event.payload.settings }, [event]];
+          // Themes and usage-limit sources never ride in a snapshot; clients
+          // carry their projected values across one.
+          default:
+            return [current, [event]];
+        }
+      },
+    ),
+  );
+};
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -678,59 +766,8 @@ const makeWsRpcLayer = (
       const usage = yield* UsageService.UsageService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const relayClient = yield* RelayClient.RelayClient;
-      const authorizationError = (requiredScope: AuthEnvironmentScope) =>
-        new EnvironmentAuthorizationError({
-          message: `The authenticated token is missing required scope: ${requiredScope}.`,
-          requiredScope,
-        });
-      const authorizeEffect = <A, E, R>(
-        requiredScope: AuthEnvironmentScope,
-        effect: Effect.Effect<A, E, R>,
-      ): Effect.Effect<A, E | EnvironmentAuthorizationError, R> =>
-        currentSession.scopes.includes(requiredScope)
-          ? effect
-          : Effect.fail(authorizationError(requiredScope));
-      const authorizeStream = <A, E, R>(
-        requiredScope: AuthEnvironmentScope,
-        stream: Stream.Stream<A, E, R>,
-      ): Stream.Stream<A, E | EnvironmentAuthorizationError, R> =>
-        currentSession.scopes.includes(requiredScope)
-          ? stream
-          : Stream.fail(authorizationError(requiredScope));
-      const observeRpcEffect = <A, E, R>(
-        method: string,
-        effect: Effect.Effect<A, E, R>,
-        traceAttributes?: Readonly<Record<string, unknown>>,
-      ) =>
-        instrumentRpcEffect(
-          method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
-          traceAttributes,
-        );
-      const observeRpcStream = <A, E, R>(
-        method: string,
-        stream: Stream.Stream<A, E, R>,
-        traceAttributes?: Readonly<Record<string, unknown>>,
-      ) =>
-        instrumentRpcStream(
-          method,
-          authorizeStream(requiredScopeForRpcMethod(method), stream),
-          traceAttributes,
-        );
-      const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
-        method: string,
-        effect: Effect.Effect<
-          Stream.Stream<A, StreamError, StreamContext>,
-          EffectError,
-          EffectContext
-        >,
-        traceAttributes?: Readonly<Record<string, unknown>>,
-      ) =>
-        instrumentRpcStreamEffect(
-          method,
-          authorizeEffect(requiredScopeForRpcMethod(method), effect),
-          traceAttributes,
-        );
+      // RpcScopeAuthorization (WsRpcGroup middleware) checks each RPC's declared
+      // scope before its handler runs.
       const loadAuthAccessSnapshot = () =>
         Effect.all({
           pairingLinks: serverAuth.listPairingLinks(),
@@ -768,14 +805,10 @@ const makeWsRpcLayer = (
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
         const scratchWorkspaceRoot = yield* scratchProject.workspaceRoot;
-        const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
-          externalLauncher.resolveAvailableEditors(),
+        const editorConfig = yield* resolveEditorConfig(
+          yield* resolveAvailableEditorsForConfig(externalLauncher.resolveAvailableEditors()),
+          resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind()),
         );
-        const fileManagerRevealKind = availableEditors.includes("file-manager")
-          ? yield* resolveFileManagerRevealKindForConfig(
-              externalLauncher.resolveFileManagerRevealKind(),
-            )
-          : undefined;
 
         return {
           environment,
@@ -786,7 +819,7 @@ const makeWsRpcLayer = (
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
-          availableEditors,
+          ...editorConfig,
           // Same discovery-with-timeout treatment as editors: a slow probe
           // must not stall server.getConfig, so it degrades to no targets.
           remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
@@ -804,12 +837,6 @@ const makeWsRpcLayer = (
           },
           settings,
           shellResumeCompletionMarker: true,
-          ...(fileManagerRevealKind === undefined
-            ? {}
-            : {
-                shellRevealInFileManager: true,
-                shellRevealInFileManagerKind: fileManagerRevealKind,
-              }),
           threadResumeCompletionMarker: true,
           threadSnapshotWindow: true,
           ...(scratchWorkspaceRoot === undefined ? {} : { scratchWorkspaceRoot }),
@@ -1367,13 +1394,18 @@ const makeWsRpcLayer = (
                 claim === null ? preparedCommand : { ...command, attachments: claim.attachments };
               return yield* startup
                 .enqueueCommand(
-                  threadManagement.dispatch(
-                    ThreadManagementService.withCreationProvenance(claimedCommand, {
-                      createdBy: "user",
-                      creationSource:
-                        "creationSource" in claimedCommand ? claimedCommand.creationSource : "web",
-                    }),
-                  ),
+                  // A retry also restarts the preparation work the launch owns.
+                  claimedCommand.type === "prepared-run.retry"
+                    ? threadLaunch.retryPreparation(claimedCommand)
+                    : threadManagement.dispatch(
+                        ThreadManagementService.withCreationProvenance(claimedCommand, {
+                          createdBy: "user",
+                          creationSource:
+                            "creationSource" in claimedCommand
+                              ? claimedCommand.creationSource
+                              : "web",
+                        }),
+                      ),
                 )
                 .pipe(
                   Effect.tapError(() =>
@@ -1579,6 +1611,24 @@ const makeWsRpcLayer = (
             readWorkflowScript({ scriptPath: input.scriptPath }),
             {
               "rpc.aggregate": "orchestration",
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getTurnItem,
+            threadManagement.getTurnItem(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: "Failed to load turn item",
+                    cause,
+                  }),
+              ),
+            ),
+            {
+              "rpc.aggregate": "orchestrationV2",
+              "orchestration_v2.thread_id": input.threadId,
             },
           ),
         [ORCHESTRATION_V2_WS_METHODS.generateHandoffScript]: (input) =>
@@ -2815,13 +2865,14 @@ const makeWsRpcLayer = (
                 ),
               );
 
+              const snapshotConfig = yield* loadServerConfig;
               return Stream.concat(
                 Stream.make({
                   version: 1 as const,
                   type: "snapshot" as const,
-                  config: yield* loadServerConfig,
+                  config: snapshotConfig,
                 }),
-                liveUpdates,
+                withLateEditorConfig(snapshotConfig, liveUpdates, externalLauncher),
               );
             }),
             { "rpc.aggregate": "server" },
@@ -2941,6 +2992,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
           yield* RpcServer.make(ServerWsRpcGroup, { disableTracing: true }).pipe(
             Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
+            Effect.provide(rpcScopeAuthorizationLayer(session.scopes)),
             Effect.forkScoped,
           );
           // @effect-diagnostics-next-line returnEffectInGen:off

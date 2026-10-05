@@ -1,4 +1,8 @@
-import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ServerInstallation,
+  ServerSelfUpdateCapability,
+} from "@t3tools/contracts";
 import type { ServerUpdateStage, ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import {
   isAtomCommandInterrupted,
@@ -74,6 +78,7 @@ export function ServerUpdateAction({
   environmentId,
   serverLabel,
   selfUpdate,
+  installation,
   desktopAppUpdate = false,
   targetVersion,
   label = "Update",
@@ -81,6 +86,9 @@ export function ServerUpdateAction({
   readonly environmentId: EnvironmentId;
   readonly serverLabel: string;
   readonly selfUpdate: ServerSelfUpdateCapability | null;
+  /** Proven install ownership (capabilities.serverInstallation), so the
+      copied command updates that install rather than a default one. */
+  readonly installation?: ServerInstallation | undefined;
   /** The desktop app supervising this server accepts remote update
       requests (capabilities.desktopAppUpdate). */
   readonly desktopAppUpdate?: boolean;
@@ -92,12 +100,16 @@ export function ServerUpdateAction({
     reportFailure: false,
   });
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
-    target: "update command",
+    target: installation?.kind === "npm-global" ? "update command" : "relaunch command",
     onCopy: ({ command }) => {
       toastManager.add({
         type: "success",
-        title: "Update command copied",
-        description: `Run \`${command}\` on ${serverLabel} to update it.`,
+        title:
+          installation?.kind === "npm-global" ? "Update command copied" : "Relaunch command copied",
+        description:
+          installation?.kind === "npm-global"
+            ? `Run \`${command}\` on ${serverLabel}, then restart t3 with your usual options.`
+            : `Stop t3 on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed t3 command.`,
       });
     },
     onError: (error) => {
@@ -166,10 +178,10 @@ export function ServerUpdateAction({
   }
 
   if (selfUpdate === null) {
-    const command = manualServerUpdateCommand(targetVersion);
+    const command = manualServerUpdateCommand(targetVersion, installation);
     return (
       <Button size="xs" variant="outline" onClick={() => copyToClipboard(command, { command })}>
-        Copy update command
+        {installation?.kind === "npm-global" ? "Copy update command" : "Copy relaunch command"}
       </Button>
     );
   }

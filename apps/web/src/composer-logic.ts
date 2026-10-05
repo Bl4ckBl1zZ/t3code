@@ -27,7 +27,8 @@ export function composerSendRequiresModifier(
 /**
  * Whether Enter submits, and where the result lands. Mobile keeps Enter as a
  * newline (its send button is the only submit path) and Shift+Enter is the way
- * to type one on desktop; Mod+Enter starts a new thread in the background. The
+ * to type one on desktop; Mod+Enter starts a new thread in the background, and
+ * Mod+Alt+Enter on an existing thread sends and opens a fresh new thread. The
  * `sendShortcut` setting can require Mod for every send, or only for multi-line
  * prompts. During a running turn the modified Enter (Shift+Mod when Mod is
  * already the send key) is "alternate": the follow-up action the user did not
@@ -38,6 +39,7 @@ export function composerSubmissionIntentForEnter(input: {
   isMobileViewport: boolean;
   shiftKey: boolean;
   modifierKey: boolean;
+  altKey?: boolean;
   isDraftThread: boolean;
   isRunning?: boolean;
   sendShortcut?: ClientSettings["sendShortcut"];
@@ -45,6 +47,7 @@ export function composerSubmissionIntentForEnter(input: {
 }): ComposerSubmissionIntent | null {
   const requiresModifier = composerSendRequiresModifier(input.sendShortcut, input.prompt ?? "");
   if (input.isMobileViewport || (requiresModifier && !input.modifierKey)) return null;
+  if (input.modifierKey && input.altKey && !input.shiftKey) return "background";
   if (input.shiftKey && !(requiresModifier && input.modifierKey && input.isRunning)) return null;
   if (input.isRunning && input.modifierKey && (!requiresModifier || input.shiftKey)) {
     return "alternate";

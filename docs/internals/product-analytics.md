@@ -94,6 +94,13 @@ In PostHog Data management, use the event and property descriptions from this
 document. Mark the recommended properties as verified. Keep `clientType`
 visible with its legacy description so old reports remain understandable.
 
+## Delivery
+
+A send can fail after PostHog has stored the batch, so every retry is a copy.
+[Delivery](../../apps/server/src/telemetry/AnalyticsService.ts) gives each event a
+uuid when it is recorded, backs off after a failed send, and drops a batch after a
+few tries. Without these limits, one stuck batch was sent every second for days.
+
 ## Collection and release boundary
 
 Client values are best effort. Invalid values are ignored and never reject a

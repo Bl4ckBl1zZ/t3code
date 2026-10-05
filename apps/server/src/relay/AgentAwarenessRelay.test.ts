@@ -192,6 +192,78 @@ describe("AgentAwarenessRelay.publishThread", () => {
   );
 });
 
+describe("AgentAwarenessRelay subagent threads", () => {
+  it.effect.each([
+    { label: "live", archived: false },
+    { label: "archived", archived: true },
+  ])("never publishes tombstones for $label subagent threads", ({ archived }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make("parent-1");
+        const threadId = ThreadId.make("subagent-1");
+        const currentThread = makeThread(threadId, {
+          status: "running",
+          lineage: {
+            rootThreadId: parentThreadId,
+            parentThreadId,
+            relationshipToParent: "subagent",
+          },
+          ...(archived ? { archivedAt: now } : {}),
+        });
+        let publishes = 0;
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = (() => {
+          publishes += 1;
+          return Promise.resolve(Response.json({ ok: true, deliveries: [] }));
+        }) as unknown as typeof fetch;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            globalThis.fetch = originalFetch;
+          }),
+        );
+
+        const secrets = makeMemorySecretStore();
+        const encode = (value: string) => new TextEncoder().encode(value);
+        yield* secrets.set(RELAY_URL_SECRET, encode("https://relay.example.test"));
+        yield* secrets.set(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, encode("relay-credential"));
+        yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("true"));
+
+        const dependencies = Layer.mergeAll(
+          Layer.succeed(ServerSecretStore.ServerSecretStore, secrets),
+          Layer.succeed(ServerEnvironment.ServerEnvironment, {
+            getEnvironmentId: Effect.succeed(environmentId),
+            getDescriptor: Effect.die("unused descriptor"),
+          }),
+          Layer.succeed(ThreadManagement.ThreadManagementService, {
+            getThreadShell: () => Effect.sync(() => currentThread),
+          } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+          Layer.succeed(ProjectService.ProjectService, {
+            getById: () => Effect.succeed(Option.some(makeProject(DateTime.formatIso(now)))),
+          } as unknown as ProjectService.ProjectService["Service"]),
+        );
+
+        yield* Effect.gen(function* () {
+          const relay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+          yield* relay.publishThread(threadId);
+          // Past the tombstone confirmation window, the deferred re-publish
+          // would confirm a tombstone if subagents were not skipped.
+          yield* TestClock.adjust("5 seconds");
+          yield* relay.drain;
+          expect(publishes).toBe(0);
+        }).pipe(
+          Effect.provide(
+            AgentAwarenessRelay.layer.pipe(
+              Layer.provide(dependencies),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+});
+
 describe("startup catch-up", () => {
   // An unlinked relay with publishing off. `link` writes the link secrets and
   // `enablePublishing` the opt-in. Counts link checks (relay URL reads) and

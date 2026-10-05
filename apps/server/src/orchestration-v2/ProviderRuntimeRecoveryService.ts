@@ -1,7 +1,9 @@
+import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import {
   CommandId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2RestartCancelledBackgroundWork,
+  type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   orchestrationV2TurnItemStatusIsTerminal,
   type ProviderThreadId,
@@ -85,6 +87,24 @@ function isNonterminalStatus(status: string): boolean {
 }
 
 /**
+ * A delegate_task child. Its own thread is reconciled and continued on its own
+ * and reports back through the app, so it is not provider work that died with
+ * the process.
+ */
+function isAppOwnedDelegation(task: {
+  readonly origin: OrchestrationV2Subagent["origin"];
+  readonly childThreadId: ThreadId | null;
+}): boolean {
+  return task.origin === "app_owned" && task.childThreadId !== null;
+}
+
+function isAppOwnedDelegationItem(
+  item: OrchestrationV2ThreadProjection["turnItems"][number],
+): boolean {
+  return item.type === "subagent" && isAppOwnedDelegation(item);
+}
+
+/**
  * A provider thread's latest started run: the last turn that provider saw.
  * Restart recovery records the thread's cancelled background work on it, and
  * the next run on the same provider thread delivers it with its input.
@@ -98,7 +118,7 @@ function latestStartedRun(
       run.providerThreadId === providerThreadId &&
       run.status !== "queued" &&
       run.status !== "rolled_back" &&
-      (latest === undefined || run.ordinal > latest.ordinal)
+      (latest === undefined || runRanAfter(run, latest))
         ? run
         : latest,
     undefined,
@@ -147,6 +167,13 @@ export const make = Effect.gen(function* () {
       const requests = projection.runtimeRequests.filter(
         (request) => request.status === "pending" && request.responseMode !== "message",
       );
+      // Delegated task rows, items and nodes stay open: the child settles them.
+      const delegatedTaskNodeIds = new Set<string>([
+        ...(projection.subagents ?? []).filter(isAppOwnedDelegation).map((subagent) => subagent.id),
+        ...(projection.turnItems ?? []).flatMap((item) =>
+          item.type === "subagent" && isAppOwnedDelegation(item) ? [item.subagentId] : [],
+        ),
+      ]);
       const detail = `Cancelled because the server ${trigger === "startup" ? "restarted" : "shut down"} before the provider work completed.`;
       const commandId = CommandId.make(
         `command:runtime-reconcile:${trigger}:${projection.thread.id}:${DateTime.formatIso(now)}`,
@@ -246,6 +273,7 @@ export const make = Effect.gen(function* () {
           (candidate) =>
             candidate.runId === run.id &&
             !durableQuestionNodeIds.has(candidate.id) &&
+            !delegatedTaskNodeIds.has(candidate.id) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -264,6 +292,7 @@ export const make = Effect.gen(function* () {
         for (const subagent of projection.subagents.filter(
           (candidate) =>
             candidate.runId === run.id &&
+            !isAppOwnedDelegation(candidate) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -317,6 +346,7 @@ export const make = Effect.gen(function* () {
           (candidate) =>
             candidate.runId === run.id &&
             (candidate.nodeId === null || !durableQuestionNodeIds.has(candidate.nodeId)) &&
+            !isAppOwnedDelegationItem(candidate) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -369,7 +399,7 @@ export const make = Effect.gen(function* () {
       // subagent row and node it links to.
       for (const item of projection.turnItems) {
         if (item.type !== "subagent" && item.type !== "dynamic_tool") continue;
-        if (!isNonterminalStatus(item.status)) continue;
+        if (!isNonterminalStatus(item.status) || isAppOwnedDelegationItem(item)) continue;
         if (runs.some((run) => run.id === item.runId)) continue;
         recordCancelledBackgroundItem(item);
         const providerInstanceId =

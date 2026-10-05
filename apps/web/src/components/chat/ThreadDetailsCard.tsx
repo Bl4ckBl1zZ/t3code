@@ -129,7 +129,8 @@ export function ThreadDetailsCard({
           collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}
           side="bottom"
           sideOffset={0}
-          positionerClassName="w-[min(var(--thread-details-panel-width),var(--anchor-width))] !transition-none"
+          // A docked workspace panel, so it layers with sheets, below dialogs.
+          positionerClassName="z-(--z-sheet) w-[min(var(--thread-details-panel-width),var(--anchor-width))] !transition-none"
           className="w-full !overflow-visible"
           viewportClassName="!overflow-visible p-2"
         >

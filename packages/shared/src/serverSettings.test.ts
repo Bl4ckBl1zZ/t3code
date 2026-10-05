@@ -573,6 +573,20 @@ it("patches model prices per entry and replaces optional cache rates", () => {
   ).toEqual({ two: first.usagePriceOverrides.two });
 });
 
+it("patches model mappings per entry and removes one with null", () => {
+  const first = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+    usageModelAliases: { "model-preview": "model", "other-preview": "other" },
+  });
+  const second = applyServerSettingsPatch(first, {
+    usageModelAliases: { "model-preview": null },
+  });
+  expect(first.usageModelAliases).toEqual({
+    "model-preview": "model",
+    "other-preview": "other",
+  });
+  expect(second.usageModelAliases).toEqual({ "other-preview": "other" });
+});
+
 describe("project automatic pull preferences", () => {
   it("defaults off and preserves explicit off when the machine default is on", () => {
     const project = ProjectId.make("project");

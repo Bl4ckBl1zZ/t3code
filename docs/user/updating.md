@@ -33,7 +33,8 @@ The update does not remove saved threads, settings, or project files.
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Update server**          | Available for the T3 Code Linux background service and recent desktop-managed servers. Select the button and leave T3 Code open while it prepares, tests, restarts, and reconnects. |
 | **Update the desktop app** | Recent desktop apps accept remote updates. Older apps must be updated on the machine that runs them.                                                                                |
-| **Copy update command**    | Copy the command, open a terminal on the server machine, stop the current T3 Code server, and relaunch it with the copied command and any startup options you normally use.         |
+| **Copy update command**    | Run the command on the server machine to update the detected global npm install, then restart the server with your usual options.                                                   |
+| **Copy relaunch command**  | Stop the current T3 Code server on its machine and relaunch it with the copied command and your usual subcommand and options. This does not update an installed `t3` command.       |
 
 The available action depends on how that server was started. T3 Code does not update connected
 servers silently in the background.
@@ -47,8 +48,10 @@ version is fetched and verified, then **Restarting…** while the server restart
 status appears in the conversation and in Connections, so navigating between them does not lose the
 update. A failure remains visible with its error and an option to retry.
 
-**Copy update command** gives you `npx t3@<client-version>`, which relaunches the server directly
-at the matching version. Add whatever startup options you normally use.
+**Copy relaunch command** gives you `npx t3@<client-version>` (or `pnpm dlx` / `bunx` when the
+server was started that way), which relaunches the server directly at the matching version. Add
+whatever startup options you normally use. **Copy update command** appears instead when the server
+runs from a global npm install, and updates that install in place.
 
 If the server instead runs as the T3 Code background service, update the service on the host and
 pin the same version:

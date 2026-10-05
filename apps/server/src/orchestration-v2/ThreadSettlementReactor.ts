@@ -50,21 +50,24 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
 
-  const wouldSettle = Effect.fn("ThreadSettlementReactor.wouldSettle")(function* (
+  // The shell carries the last message the user wrote, so wakes the agent
+  // started on its own cannot hold a merged thread open.
+  const resolveSettledAt = Effect.fn("ThreadSettlementReactor.resolveSettledAt")(function* (
     thread: OrchestrationV2ThreadShell,
-    pullRequest: SettlementPullRequest,
+    pullRequest: SettlementPullRequest | null,
   ) {
     const current = yield* settingsService.getSettings;
-    return (
-      resolveAutoSettlementAt({
-        thread,
-        pullRequest,
-        now: yield* DateTime.now,
-        autoSettleAfterDays: current.sidebarAutoSettleAfterDays,
-        autoSettleOnMerge: current.sidebarAutoSettleOnMerge,
-      }) !== null
-    );
+    return resolveAutoSettlementAt({
+      thread,
+      pullRequest,
+      now: yield* DateTime.now,
+      autoSettleAfterDays: current.sidebarAutoSettleAfterDays,
+      autoSettleOnMerge: current.sidebarAutoSettleOnMerge,
+    });
   });
+
+  const wouldSettle = (thread: OrchestrationV2ThreadShell, pullRequest: SettlementPullRequest) =>
+    resolveSettledAt(thread, pullRequest).pipe(Effect.map((settledAt) => settledAt !== null));
 
   const lookup = Effect.fn("ThreadSettlementReactor.lookup")(function* (
     thread: OrchestrationV2ThreadShell,
@@ -120,14 +123,7 @@ export const make = Effect.gen(function* () {
       expectedSequence: number,
       pullRequest: SettlementPullRequest | null,
     ) {
-      const current = yield* settingsService.getSettings;
-      const settledAt = resolveAutoSettlementAt({
-        thread,
-        pullRequest,
-        now: yield* DateTime.now,
-        autoSettleAfterDays: current.sidebarAutoSettleAfterDays,
-        autoSettleOnMerge: current.sidebarAutoSettleOnMerge,
-      });
+      const settledAt = yield* resolveSettledAt(thread, pullRequest);
       if (settledAt === null) return false;
       const uuid = yield* crypto.randomUUIDv4;
       yield* engine.dispatch({

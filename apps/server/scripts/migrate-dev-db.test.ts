@@ -14,19 +14,8 @@ const withDatabase = <A, E>(
   effect: Effect.Effect<A, E, SqlClient.SqlClient>,
 ) => effect.pipe(Effect.provide(NodeSqliteClient.layer({ filename: databasePath })));
 
-const threadPayload = (input: {
-  readonly threadId: string;
-  readonly settledAt?: string | null;
-  readonly settledOverride?: string | null;
-}): string =>
-  JSON.stringify({
-    id: input.threadId,
-    settledAt: input.settledAt ?? null,
-    settledOverride: input.settledOverride ?? null,
-  });
-
 /** A migrated source db with one V2 thread per lifecycle state. Only
- * `stopped-thread` qualifies for the clone. */
+ * `stopped-thread` and its fork qualify for the clone. */
 const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(function* (
   baseDir: string,
 ) {
@@ -47,46 +36,76 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
         ('project-kept', 'Kept', '/tmp/kept', '[]', '2026-08-01', '2026-08-01', NULL),
         ('project-deleted', 'Deleted', '/tmp/deleted', '[]', '2026-08-01', '2026-08-02', '2026-08-02')`;
 
+      const forkPayload =
+        '{"lineage":{"parentThreadId":"stopped-thread","relationshipToParent":"fork","rootThreadId":"stopped-thread"}}';
+      const subagentPayload =
+        '{"lineage":{"parentThreadId":"subagent-parent","relationshipToParent":"subagent","rootThreadId":"subagent-parent"},"forkedFrom":{"type":"node","nodeId":"node-1"}}';
+      // Excluded threads are newer than the kept family, so only the filters
+      // can keep them out of a one-family-per-project clone.
       const threads = [
-        // threadId, projectId, settledAt, settledOverride, activeRun, liveSession
-        ["stopped-thread", "project-kept", null, null, false, false],
-        ["running-thread", "project-kept", null, null, true, false],
-        ["settled-thread", "project-kept", "2026-08-01T00:00:00.000Z", "settled", false, false],
-        ["monitored-thread", "project-kept", null, null, false, true],
-        ["deleted-project-thread", "project-deleted", null, null, false, false],
+        // threadId, projectId, latest run status, payload, updatedAt
+        ["stopped-thread", "project-kept", "completed", "{}", "2026-08-01"],
+        ["fork-thread", "project-kept", "completed", forkPayload, "2026-08-02"],
+        ["running-thread", "project-kept", "running", "{}", "2026-08-05"],
+        [
+          "settled-thread",
+          "project-kept",
+          "completed",
+          '{"settledAt":"2026-08-01","settledOverride":"settled"}',
+          "2026-08-05",
+        ],
+        [
+          "limit-thread",
+          "project-kept",
+          "completed",
+          '{"limitRecovery":{"autoResume":true}}',
+          "2026-08-05",
+        ],
+        ["failed-thread", "project-kept", "failed", "{}", "2026-08-05"],
+        ["monitored-thread", "project-kept", "completed", "{}", "2026-08-05"],
+        // Its result never reached the parent, so startup would deliver it.
+        ["subagent-parent", "project-kept", "completed", "{}", "2026-08-05"],
+        ["subagent-child", "project-kept", "completed", subagentPayload, "2026-08-05"],
+        ["deleted-project-thread", "project-deleted", "completed", "{}", "2026-08-05"],
       ] as const;
-      for (const [
-        threadId,
-        projectId,
-        settledAt,
-        settledOverride,
-        activeRun,
-        liveSession,
-      ] of threads) {
+      for (const [threadId, projectId, runStatus, payload, updatedAt] of threads) {
         yield* sql`INSERT INTO orchestration_v2_projection_threads
           (thread_id, project_id, title, default_provider, provider_instance_id, runtime_mode,
            interaction_mode, active_provider_thread_id, created_at, updated_at, archived_at,
            deleted_at, payload_json)
           VALUES (${threadId}, ${projectId}, ${threadId}, 'codex', 'codex', 'full-access',
-           'default', NULL, '2026-08-01', '2026-08-01', NULL, NULL,
-           ${threadPayload({ threadId, settledAt, settledOverride })})`;
-        if (activeRun) {
-          yield* sql`INSERT INTO orchestration_v2_projection_runs
-            (run_id, thread_id, ordinal, provider, provider_thread_id, status, requested_at,
-             completed_at, payload_json)
-            VALUES (${`run-${threadId}`}, ${threadId}, 1, 'codex', NULL, 'running',
-             '2026-08-01', NULL, '{}')`;
-        }
-        if (liveSession) {
-          yield* sql`INSERT INTO orchestration_v2_projection_provider_sessions
-            (provider_session_id, thread_id, provider, status, model, updated_at, payload_json)
-            VALUES (${`session-${threadId}`}, ${threadId}, 'codex', 'ready', NULL,
-             '2026-08-01', '{}')`;
-        }
+           'default', NULL, '2026-08-01', ${updatedAt}, NULL, NULL, ${payload})`;
+        yield* sql`INSERT INTO orchestration_v2_projection_runs
+          (run_id, thread_id, ordinal, provider, provider_thread_id, status, requested_at,
+           completed_at, payload_json)
+          VALUES (${`run-${threadId}`}, ${threadId}, 1, 'codex', NULL, ${runStatus},
+           '2026-08-01', NULL, '{}')`;
         yield* sql`INSERT INTO orchestration_v2_events
           (event_id, command_id, thread_id, event_type, occurred_at, payload_json)
           VALUES (${`event-${threadId}`}, NULL, ${threadId}, 'thread.created', '2026-08-01', '{}')`;
       }
+      // An idle-but-ready session can host monitors and dev servers.
+      yield* sql`INSERT INTO orchestration_v2_projection_provider_sessions
+        (provider_session_id, thread_id, provider, status, model, updated_at, payload_json)
+        VALUES ('session-monitored', 'monitored-thread', 'codex', 'ready', NULL,
+         '2026-08-01', '{}')`;
+      // A provider session shared by two threads names its latest writer.
+      yield* sql`INSERT INTO orchestration_v2_projection_provider_sessions
+        (provider_session_id, thread_id, provider, status, model, updated_at, payload_json)
+        VALUES ('session-shared', 'running-thread', 'codex', 'stopped', NULL,
+         '2026-08-01', '{}')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_provider_session_bindings
+        (provider_session_id, thread_id)
+        VALUES ('session-shared', 'running-thread'), ('session-shared', 'stopped-thread')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_context_transfers
+        (context_transfer_id, source_thread_id, target_thread_id, type, status, updated_at, payload_json)
+        VALUES ('transfer-1', 'settled-thread', 'stopped-thread', 'provider_handoff', 'completed', '2026-08-01', '{}')`;
+      yield* sql`INSERT INTO scheduled_tasks
+        (task_id, title, prompt, enabled, schedule_json, project_id, workspace_strategy_json,
+          model_selection_json, runtime_mode, interaction_mode, created_by, creation_source,
+          created_at, updated_at, last_run_status, run_count)
+        VALUES ('task-1', 'Nightly', 'Run it', 1, '{}', 'project-kept', '{}', '{}',
+          'full-access', 'default', 'user', 'user', '2026-08-01', '2026-08-01', 'never', 0)`;
       yield* sql`INSERT INTO orchestration_events
         (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, actor_kind, payload_json, metadata_json)
         VALUES
@@ -100,7 +119,7 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
 });
 
 it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
-  it.effect("keeps only stopped threads from live projects and clears auth state", () =>
+  it.effect("keeps stopped thread families from live projects and clears pending work", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -109,7 +128,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       const source = yield* createFixtureSource(sourceDir);
 
       const result = yield* runMigrateDevDb(
-        { baseDir: destDir, source, projects: 5, threadsPerProject: 10 },
+        { baseDir: destDir, source, projects: 5, threadsPerProject: 1 },
         { sharedHome: sourceDir },
       );
 
@@ -121,27 +140,36 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
           const threads = yield* sql<{ thread_id: string }>`
             SELECT thread_id FROM orchestration_v2_projection_threads ORDER BY thread_id`;
           const events = yield* sql<{ thread_id: string }>`
-            SELECT thread_id FROM orchestration_v2_events`;
+            SELECT thread_id FROM orchestration_v2_events ORDER BY thread_id`;
           const projectEvents = yield* sql<{ stream_id: string }>`
             SELECT stream_id FROM orchestration_events ORDER BY stream_id`;
-          const [auth] = yield* sql<{ count: number }>`
-            SELECT COUNT(*) AS count FROM auth_sessions`;
-          return { threads, events, projectEvents, authCount: auth?.count ?? 0 };
+          const sessions = yield* sql<{ provider_session_id: string }>`
+            SELECT provider_session_id FROM orchestration_v2_projection_provider_sessions`;
+          const [leftovers] = yield* sql<{ auth: number; tasks: number; transfers: number }>`
+            SELECT
+              (SELECT COUNT(*) FROM auth_sessions) AS auth,
+              (SELECT COUNT(*) FROM scheduled_tasks) AS tasks,
+              (SELECT COUNT(*) FROM orchestration_v2_projection_context_transfers) AS transfers`;
+          return { threads, events, projectEvents, sessions, leftovers };
         }),
       );
       assert.deepStrictEqual(
         kept.threads.map((row) => row.thread_id),
-        ["stopped-thread"],
+        ["fork-thread", "stopped-thread"],
       );
       assert.deepStrictEqual(
         kept.events.map((row) => row.thread_id),
-        ["stopped-thread"],
+        ["fork-thread", "stopped-thread"],
       );
       assert.deepStrictEqual(
         kept.projectEvents.map((row) => row.stream_id),
         ["project-kept"],
       );
-      assert.equal(kept.authCount, 0);
+      assert.deepStrictEqual(
+        kept.sessions.map((row) => row.provider_session_id),
+        ["session-shared"],
+      );
+      assert.deepStrictEqual(kept.leftovers, { auth: 0, tasks: 0, transfers: 0 });
     }),
   );
 

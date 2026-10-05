@@ -8,6 +8,7 @@ import * as RestartContinuationService from "./orchestration-v2/RestartContinuat
 import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
+import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import { ServerSelfUpdateError, EnvironmentHttpApi } from "@t3tools/contracts";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -957,6 +958,7 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provide(
         Layer.mergeAll(
           PullRequestSyncReactor.layer,
+          PullRequestWatchReactor.layer,
           ThreadPullRequestReactor.layer,
           ThreadSettlementReactor.layer,
           RestartContinuationService.layer,

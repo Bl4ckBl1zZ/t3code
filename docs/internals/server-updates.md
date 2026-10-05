@@ -110,9 +110,21 @@ work; no V1 directory or migration is involved.
 After activation, the service dispatches a server-created continuation through normal V2 commands.
 Its marker is consumed in the same transaction as the new message and run. Duplicate deliveries,
 newer work, missing native state, blocking requests and changed provider context are rejected.
-Archive, settle, checkout and provider changes cancel pending markers. Codex sends an empty native
-continuation input; other adapters receive the continuation instruction. A failed resume cannot
-silently fall back to a new provider conversation on this path.
+Archive, settle, checkout and provider changes cancel pending markers. A stop the user requested
+and maintenance turns such as `/compact` are not continued. Queued runs never started, so recovery
+holds them and the continuation runs ahead of the held queue; "newer work" compares when runs ran,
+not their ordinals. Codex sends an empty native continuation input; other adapters receive the
+continuation instruction. A failed resume cannot silently fall back to a new provider conversation
+on this path.
+
+Delegated tasks (`delegate_task` child threads) are reconciled as their own threads, never as the
+parent's background work. The orchestrator settles child results and completion deliveries in a
+startup pass after reconciliation (`recoverDelegatedTasks`), because the terminal-run listener
+ignores reconciliation's cancellations. A child whose restart continuation marker is still pending
+has no result yet; the continuation's run settles it, or clearing the marker does. A child result
+is the run that ended last. Schedulers wait for activation so they cannot start runs that
+reconciliation would then cancel, and provider events after SIGINT/SIGTERM are dropped so a
+provider's own shutdown report cannot race shutdown reconciliation.
 
 PR discovery, snapshot sync, settlement and restart continuation workers are registered before the
 trial prepare boundary and remain parked until activation. Settlement waits for the initial

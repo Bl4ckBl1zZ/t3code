@@ -707,6 +707,45 @@ export function isContextMenuPointerDown(input: {
   return input.isMac && input.button === 0 && input.ctrlKey;
 }
 
+export type DraftActionMenuId =
+  | "copy"
+  | "copy-path"
+  | "copy-branch"
+  | "project-settings"
+  | "discard";
+
+/** Right-click menu for an unsent new-thread draft row in the sidebar. */
+export function buildDraftActionMenuItems(options: {
+  readonly hasPath: boolean;
+  readonly hasBranch: boolean;
+  readonly hasProject: boolean;
+}): ReadonlyArray<ContextMenuItem<DraftActionMenuId>> {
+  return [
+    {
+      id: "copy",
+      label: "Copy",
+      icon: "copy",
+      disabled: !options.hasPath && !options.hasBranch,
+      children: [
+        ...(options.hasPath ? [{ id: "copy-path" as const, label: "Path", icon: "folder" }] : []),
+        ...(options.hasBranch
+          ? [{ id: "copy-branch" as const, label: "Branch", icon: "git-branch" }]
+          : []),
+      ],
+    },
+    ...(options.hasProject
+      ? [{ id: "project-settings" as const, label: "Project settings", icon: "settings" }]
+      : []),
+    {
+      id: "discard",
+      label: "Discard draft",
+      icon: "trash",
+      destructive: true,
+      separatorBefore: true,
+    },
+  ];
+}
+
 // ── Sidebar thread status model ─────────────────────────────────────
 // Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working and background), and "broken" (failed).
@@ -957,6 +996,38 @@ export function sortInboxThreadsByReturn<
   );
 }
 
+/** Working beta: the Working section lists threads newest first by the last
+    message the user sent. Runs ending and wakes (background results, delegated
+    results, PR watches) do not move a row, so the order stays put while agents
+    finish and resume. Servers without the authored stamp fall back to the
+    latest run's request time. */
+export function sortWorkingThreadsBySend<
+  T extends Pick<
+    SidebarThreadSummary,
+    "id" | "environmentId" | "createdAt" | "latestRun" | "latestUserAuthoredMessageAt"
+  >,
+>(threads: readonly T[]): T[] {
+  const timestamps = new Map(
+    threads.map((thread) => [
+      thread,
+      Math.max(
+        toSortableTimestamp(thread.createdAt) ?? 0,
+        toSortableTimestamp(
+          (thread.latestUserAuthoredMessageAt === undefined
+            ? thread.latestRun?.requestedAt
+            : thread.latestUserAuthoredMessageAt) ?? undefined,
+        ) ?? 0,
+      ),
+    ]),
+  );
+  return [...threads].toSorted(
+    (left, right) =>
+      timestamps.get(right)! - timestamps.get(left)! ||
+      left.id.localeCompare(right.id) ||
+      left.environmentId.localeCompare(right.environmentId),
+  );
+}
+
 // Pinned-reorder key math and the keyed sort live in client-runtime
 // (state/thread-sort) so web and mobile compute identical pinned orders.
 export {
@@ -1056,7 +1127,9 @@ export function sortSettledThreadsForSidebar<
     .map(({ thread }) => thread);
 }
 
-/** The timestamp a working thread's elapsed label counts from. */
+/** The timestamp a working thread's elapsed label counts from: when its
+    current work started (request time until adoption). Background wakes do
+    not reset it. Malformed timestamps fall through to the next candidate. */
 export function resolveWorkingStartedAt(
   thread: Pick<SidebarThreadSummary, "latestRun" | "runtime">,
 ): string | null {

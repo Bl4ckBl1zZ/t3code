@@ -6,6 +6,7 @@ import {
   RunId,
   type OrchestrationV2Run,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 import {
   cancelledTurnItemWork,
@@ -37,6 +38,7 @@ function run(
 const turnFor = (source: OrchestrationV2Run) => ({
   runAttemptId: source.activeAttemptId,
   providerThreadId: source.providerThreadId!,
+  status: "completed" as const,
 });
 
 const pendingFor = (
@@ -134,7 +136,15 @@ it("does not repeat the note when a steer restarts the run on a new attempt", ()
       runs: [root, steered],
       providerTurns: [
         turnFor(root),
-        ...(delivered ? [{ runAttemptId: firstAttempt, providerThreadId: claudeThread }] : []),
+        ...(delivered
+          ? [
+              {
+                runAttemptId: firstAttempt,
+                providerThreadId: claudeThread,
+                status: "completed" as const,
+              },
+            ]
+          : []),
       ],
       compactionMessageIds: new Set(),
       continuationMessageIds: new Set(),
@@ -146,4 +156,36 @@ it("does not repeat the note when a steer restarts the run on a new attempt", ()
   assert.deepEqual(pending([firstAttempt, RunAttemptId.make("attempt:2b")], true), []);
   // A first attempt that never reached the provider did not deliver it.
   assert.deepEqual(pending([firstAttempt, RunAttemptId.make("attempt:2b")], false), lost);
+});
+
+it("delivers a resumed queued run's note even after a higher-ordinal run", () => {
+  // Run 3 ran ahead of held run 2; run 2 then resumed and lost background
+  // work in a second restart.
+  const ranFirst = run(3, claudeThread, {
+    completedAt: DateTime.makeUnsafe("2026-10-03T10:00:00.000Z"),
+  });
+  const resumed = run(2, claudeThread, {
+    completedAt: DateTime.makeUnsafe("2026-10-03T10:05:00.000Z"),
+    restartCancelledBackgroundWork: lost,
+  });
+  const next = run(4, claudeThread);
+  assert.deepEqual(pendingFor(next, [resumed, ranFirst, next]), lost);
+});
+
+it("counts only a completed turn as delivering the note", () => {
+  const root = run(1, claudeThread, { restartCancelledBackgroundWork: lost });
+  const cut = run(2, claudeThread);
+  const next = run(3, claudeThread);
+  const pending = (status: "running" | "completed") =>
+    pendingRestartCancelledBackgroundWork({
+      runs: [root, cut, next],
+      providerTurns: [turnFor(root), { ...turnFor(cut), status }],
+      compactionMessageIds: new Set(),
+      continuationMessageIds: new Set(),
+      run: next,
+      runAttemptIds: [next.activeAttemptId!],
+    });
+  // A turn cut before it completed may never have accepted the prompt.
+  assert.deepEqual(pending("running"), lost);
+  assert.deepEqual(pending("completed"), []);
 });

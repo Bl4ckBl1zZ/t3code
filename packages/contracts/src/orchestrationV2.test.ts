@@ -903,3 +903,34 @@ describe("limit recovery choice updates", () => {
     expect(decode({ ...identity, ...choice })).toEqual({ ...identity, ...choice });
   });
 });
+
+it("preserves tool cancellation and denial metadata through persisted and wire schemas", () => {
+  const encodeWire = Schema.encodeSync(OrchestrationV2TurnItemJson);
+  const decodeWire = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
+  for (const kind of ["cancelled", "denied", undefined]) {
+    const item = decodeOrchestrationV2TurnItem({
+      id: "tool-result",
+      threadId: "thread",
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      type: "dynamic_tool",
+      toolName: "task_status",
+      input: { taskId: "child" },
+      status: kind === "cancelled" ? "cancelled" : "failed",
+      ...(kind === undefined ? {} : { toolNonExecutionKind: kind }),
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      output: "Tool did not execute",
+    });
+    const wire = encodeWire(item);
+    expect(wire.toolNonExecutionKind).toBe(kind);
+    expect(decodeWire(wire)).toEqual(item);
+  }
+});

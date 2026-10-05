@@ -1,9 +1,24 @@
 import type { OrchestrationV2Run, OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 
 export const RESTART_CONTINUATION_PROMPT =
   "Continue where you left off before the server restarted. Check the current state before repeating any action.";
 
-/** Recovery only owns the latest uninterrupted provider context, never a newer user turn. */
+/** A native /compact or /logout turn: provider maintenance, not agent work to resume. */
+function isNativeMaintenanceCommand(message: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<unknown>;
+}): boolean {
+  return (
+    message.attachments.length === 0 &&
+    ["/compact", "/logout"].includes(message.text.trim().toLowerCase())
+  );
+}
+
+/**
+ * Recovery only owns the latest uninterrupted provider context, never a newer
+ * user turn. Held queued runs never started; they wait behind the continuation.
+ */
 export function canContinueAfterRestart(
   projection: OrchestrationV2ThreadProjection,
   run: OrchestrationV2Run,
@@ -17,7 +32,12 @@ export function canContinueAfterRestart(
     thread.providerInstanceId !== run.providerInstanceId ||
     thread.activeProviderThreadId !== run.providerThreadId ||
     run.providerThreadId === null ||
-    projection.runs.some((other) => other.ordinal > run.ordinal) ||
+    projection.runs.some(
+      (other) => other.id !== run.id && other.status !== "queued" && runRanAfter(other, run),
+    ) ||
+    projection.messages.some(
+      (message) => message.id === run.userMessageId && isNativeMaintenanceCommand(message),
+    ) ||
     projection.turnItems.some(
       (item) => item.runId === run.id && item.type === "run_interrupt_request",
     ) ||
@@ -43,8 +63,10 @@ export function canContinueAfterRestart(
     run.status === "cancelled" &&
     run.restartContinuation?.status === "pending" &&
     !projection.messages.some((message) => message.id === run.restartContinuation?.messageId) &&
-    !projection.runs.some((other) =>
-      ["preparing", "queued", "starting", "running", "waiting"].includes(other.status),
+    !projection.runs.some(
+      (other) =>
+        ["preparing", "starting", "running", "waiting"].includes(other.status) ||
+        (other.status === "queued" && other.queueHeld !== true),
     )
   );
 }

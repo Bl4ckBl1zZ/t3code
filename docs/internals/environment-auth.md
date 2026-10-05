@@ -119,7 +119,9 @@ authenticate.
 The ticket carries its session's scopes; each RPC method then enforces
 `orchestration:read`, `orchestration:operate`, `terminal:operate`,
 `review:write`, `relay:write`, or `access:read` as appropriate, through
-`RPC_REQUIRED_SCOPES` in `apps/server/src/auth/RpcAuthorization.ts`. Review feedback submission currently dispatches
+`RPC_REQUIRED_SCOPES` in `apps/server/src/auth/RpcAuthorization.ts`. The WebSocket RPC
+group's `RpcScopeAuthorization` middleware checks that scope before any handler runs. Review
+feedback submission currently dispatches
 an orchestration operation, so clients performing it also need
 `orchestration:operate`. Creating a ticket is not authorization to call every
 RPC method.

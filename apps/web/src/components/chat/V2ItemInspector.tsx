@@ -11,15 +11,26 @@ import {
   isBackgroundProcessItem,
   type BackgroundProcessOutcome,
 } from "@t3tools/shared/backgroundProcess";
+import {
+  formatToolValue,
+  turnItemDetailRevision,
+  turnItemNeedsDetailFetch,
+  turnItemOutputText,
+} from "@t3tools/client-runtime/work-log/item-detail";
 import * as DateTime from "effect/DateTime";
 import { ChevronRightIcon, ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
-import { memo, type ReactNode } from "react";
+import { memo, Suspense, use, useMemo, type ReactNode } from "react";
 
+import { useTheme } from "../../hooks/useTheme";
+import { resolveDiffThemeName } from "../../lib/diffRendering";
+import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
+import { useTurnItemDetail } from "../../state/queries";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import ChatMarkdown from "../ChatMarkdown";
+import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 
 interface V2ItemInspectorProps {
@@ -95,15 +106,116 @@ function DataField(props: { readonly label: string; readonly children: ReactNode
   );
 }
 
-function StructuredValue({ value }: { readonly value: unknown }) {
+function JsonTokens({ text }: { readonly text: string }) {
+  const { resolvedTheme } = useTheme();
+  const highlighter = use(getSyntaxHighlighterPromise("json"));
+  const { tokens } = useMemo(
+    () =>
+      highlighter.codeToTokens(text, { lang: "json", theme: resolveDiffThemeName(resolvedTheme) }),
+    [highlighter, text, resolvedTheme],
+  );
+  return tokens.flatMap((line, lineIndex) => [
+    lineIndex > 0 ? "\n" : "",
+    ...line.map((token) => (
+      <span key={token.offset} style={{ color: token.color }}>
+        {token.content}
+      </span>
+    )),
+  ]);
+}
+
+function StructuredValue({
+  value,
+  highlightJson = false,
+}: {
+  readonly value: unknown;
+  readonly highlightJson?: boolean;
+}) {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const isJson = useMemo(() => {
+    if (!highlightJson || !text) return false;
+    try {
+      JSON.parse(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [highlightJson, text]);
   if (!text) return null;
-  return <pre className={TERMINAL_BLOCK_CLASS_NAME}>{text}</pre>;
+  return (
+    <pre className={TERMINAL_BLOCK_CLASS_NAME}>
+      {isJson ? (
+        <RenderErrorBoundary fallback={text}>
+          <Suspense fallback={text}>
+            <JsonTokens text={text} />
+          </Suspense>
+        </RenderErrorBoundary>
+      ) : (
+        text
+      )}
+    </pre>
+  );
+}
+
+interface FetchedOutput {
+  readonly text: string | null;
+  readonly pending: boolean;
+  readonly error: string | null;
+}
+
+/**
+ * The item behind a projected row, with the output the timeline withheld
+ * fetched while the row is open.
+ */
+function useFetchedTurnItem(
+  projectedItem: OrchestrationV2ProjectedTurnItem,
+  environmentId: EnvironmentId,
+) {
+  const wireItem = projectedItem.item;
+  const fetches = turnItemNeedsDetailFetch(wireItem);
+  const detail = useTurnItemDetail(
+    fetches
+      ? {
+          environmentId,
+          threadId: projectedItem.sourceThreadId,
+          itemId: projectedItem.sourceItemId,
+          revision: turnItemDetailRevision(wireItem),
+        }
+      : null,
+  );
+  const fetchedItem = detail.data?.item;
+  const item = fetchedItem?.type === wireItem.type ? fetchedItem : wireItem;
+  const output: FetchedOutput = {
+    text: turnItemOutputText(item),
+    pending: item === wireItem && detail.isPending,
+    error:
+      item !== wireItem
+        ? null
+        : detail.data?.item === null
+          ? "Output is no longer available."
+          : detail.error,
+  };
+  return { item, output };
+}
+
+/** Output the timeline withheld: loading, failed, or nothing yet to show. */
+function OutputPlaceholder({ output }: { readonly output: FetchedOutput }) {
+  return output.pending ? (
+    <span className="text-muted-foreground/60">Loading output…</span>
+  ) : output.error ? (
+    <span className="text-destructive">Couldn&apos;t load output: {output.error}</span>
+  ) : null;
 }
 
 /** The command and what it printed, read top to bottom like a terminal. */
-function CommandTranscript({ item }: { readonly item: OrchestrationV2CommandExecutionItem }) {
-  const output = item.output?.trimEnd() ?? "";
+function CommandTranscript({
+  item,
+  output: fetchedOutput,
+}: {
+  readonly item: OrchestrationV2CommandExecutionItem;
+  readonly output: FetchedOutput;
+}) {
+  const output = fetchedOutput.text?.trimEnd() ?? "";
   const exitLine = commandExitLine(item);
   return (
     <div className="space-y-1">
@@ -112,6 +224,11 @@ function CommandTranscript({ item }: { readonly item: OrchestrationV2CommandExec
         <span className="text-foreground/85">{item.input}</span>
         {output ? (
           `\n${output}`
+        ) : fetchedOutput.pending || fetchedOutput.error ? (
+          <>
+            {"\n"}
+            <OutputPlaceholder output={fetchedOutput} />
+          </>
         ) : orchestrationV2TurnItemStatusIsTerminal(item.status) ? (
           <span className="text-muted-foreground/60">{"\n"}No output</span>
         ) : null}
@@ -126,7 +243,7 @@ function CommandTranscript({ item }: { readonly item: OrchestrationV2CommandExec
 }
 
 export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspectorProps) {
-  const { item } = props.projectedItem;
+  const { item, output } = useFetchedTurnItem(props.projectedItem, props.environmentId);
   const support = useV2ItemSupport({
     environmentId: props.environmentId,
     sourceThreadId: props.projectedItem.sourceThreadId,
@@ -144,7 +261,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
         </div>
       ) : null}
 
-      {item.type === "command_execution" ? <CommandTranscript item={item} /> : null}
+      {item.type === "command_execution" ? <CommandTranscript item={item} output={output} /> : null}
 
       {item.type === "file_change" ? (
         <div className="flex flex-col gap-2">
@@ -186,7 +303,15 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
         </div>
       ) : null}
 
-      {item.type === "file_search" && item.results ? (
+      {item.type === "file_search" && item.pattern?.trim() && !item.results?.length ? (
+        <StructuredValue value={item.pattern} />
+      ) : null}
+
+      {item.type === "web_search" && item.patterns?.length && !item.results?.length ? (
+        <StructuredValue value={item.patterns.join("\n")} />
+      ) : null}
+
+      {item.type === "file_search" && item.results?.length ? (
         <ul className="space-y-1 rounded-md border border-border/45 p-2">
           {item.results.map((result) => (
             <li key={JSON.stringify(result)}>
@@ -203,7 +328,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
         </ul>
       ) : null}
 
-      {item.type === "web_search" && item.results ? (
+      {item.type === "web_search" && item.results?.length ? (
         <ul className="space-y-1.5 rounded-md border border-border/45 p-2">
           {item.results.map((result) => {
             const safeHref = resolveExternalWebLinkHref(result.url);
@@ -233,21 +358,31 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
 
       {item.type === "dynamic_tool" ? (
         <div className="grid gap-2 sm:grid-cols-2">
-          <div>
-            <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
-              Input
-            </p>
-            <StructuredValue value={item.input} />
-          </div>
-          {item.output !== undefined ? (
+          {formatToolValue(item.input) ? (
+            <div>
+              <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
+                Input
+              </p>
+              <StructuredValue value={formatToolValue(item.input)} highlightJson />
+            </div>
+          ) : null}
+          {output.text || output.pending || output.error ? (
             <div>
               <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
                 Output
               </p>
-              <StructuredValue value={item.output} />
+              {output.text ? (
+                <StructuredValue value={output.text} />
+              ) : (
+                <OutputPlaceholder output={output} />
+              )}
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {item.type === "error" && item.failure.message.trim() ? (
+        <StructuredValue value={item.failure.message} />
       ) : null}
 
       {item.type === "checkpoint" ? (

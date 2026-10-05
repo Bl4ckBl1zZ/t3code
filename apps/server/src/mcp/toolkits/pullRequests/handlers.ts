@@ -19,4 +19,14 @@ export const PullRequestsToolkitHandlersLive = PullRequestsToolkit.toLayer({
       const service = yield* PullRequestMcpService;
       return yield* service.list(yield* McpInvocationContext);
     }),
+  watch_pull_request: (input) =>
+    Effect.gen(function* () {
+      const service = yield* PullRequestMcpService;
+      return yield* service.setWatching(yield* McpInvocationContext, input, true);
+    }),
+  unwatch_pull_request: (input) =>
+    Effect.gen(function* () {
+      const service = yield* PullRequestMcpService;
+      return yield* service.setWatching(yield* McpInvocationContext, input, false);
+    }),
 });

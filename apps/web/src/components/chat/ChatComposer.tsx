@@ -2552,13 +2552,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // draft it starts the thread in the background, and on a live thread it
     // takes the non-default follow-up action (steer when follow-ups queue,
     // queue when they steer). A draft has no run to steer, so the two never
-    // apply at once.
+    // apply at once. Mod+Alt+Enter sends in the background everywhere: on a
+    // live thread it keeps that thread running and opens a fresh composer.
     const submissionIntent =
       key === "Enter"
         ? composerSubmissionIntentForEnter({
             isMobileViewport,
             shiftKey: event.shiftKey,
             modifierKey: event.metaKey || event.ctrlKey,
+            altKey: event.altKey,
             isDraftThread: routeKind === "draft",
             isRunning: phase === "running",
             sendShortcut: settings.sendShortcut,

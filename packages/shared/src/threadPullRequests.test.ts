@@ -51,6 +51,34 @@ describe("V2 linked pull requests", () => {
       updateLinkedPullRequests(initial, { unlinkPullRequest: link(2) }).linkedPullRequests,
     ).toEqual([link(1)]);
   });
+  it("keeps a watch across a legacy re-link and drops it when a stack layer is dismissed", () => {
+    const watch = {
+      startedAt: "2026-10-01T00:00:00.000Z",
+      headSha: null,
+      failedChecks: [],
+      passed: false,
+      remarksThrough: "2026-10-01T00:00:00.000Z",
+      remarkIds: [],
+      conflicting: false,
+      wakes: 0,
+    };
+    const linked = updateLinkedPullRequests({}, { linkedPullRequest: link(1) });
+    const watched = {
+      ...linked,
+      linkedPullRequest: link(1),
+      pullRequests: linked.pullRequests.map((entry) => ({ ...entry, watch })),
+    };
+    expect(
+      updateLinkedPullRequests(watched, { linkedPullRequest: link(1) }).pullRequests[0]?.watch,
+    ).toEqual(watch);
+    const stacked = {
+      ...watched,
+      pullRequests: watched.pullRequests.map((entry) => ({ ...entry, source: "stack" as const })),
+    };
+    const dismissed = updateLinkedPullRequests(stacked, { unlinkPullRequest: link(1) });
+    expect(dismissed.pullRequests[0]).toMatchObject({ source: "stack-dismissed" });
+    expect(dismissed.pullRequests[0]?.watch).toBeUndefined();
+  });
   it("respects an empty collection and searches all links", () => {
     expect(linkedPullRequestsOf({ linkedPullRequest: link(1), linkedPullRequests: [] })).toEqual(
       [],

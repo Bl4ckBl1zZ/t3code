@@ -29,6 +29,15 @@ to the web and desktop composer.
 opposite for one message. When sending requires `mod+Enter`, use `mod+Shift+Enter` for the
 opposite action.
 
+In a new thread, `mod+Enter` starts the thread in the background and opens a fresh composer.
+`mod+Alt+Enter` does the same from any thread: it sends, keeps that thread running in the
+background, and opens a fresh new-thread composer.
+
+## Machine
+
+To step a new thread to the next machine instead of opening the machine menu, bind **Composer:
+Cycle Host** (`composer.cycleHost`) in Keybindings. It has no default shortcut.
+
 ## Rule Shape
 
 - `key` (required): shortcut string, like `mod+j`, `ctrl+k`, `cmd+shift+d`
@@ -123,7 +132,8 @@ recently queued message for editing. It only runs from the composer with the cur
 the draft, so elsewhere the key keeps moving the cursor.
 
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
-bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive
+bottom of the sidebar, such as unpin, settle, snooze, archive, or discarding a
+draft. Consecutive
 actions of the same kind undo together. The notice remains available for five
 seconds after the latest action. The default shortcut skips text fields and
 terminals so native undo keeps working there.

@@ -8,6 +8,12 @@ export interface SettlementPullRequest {
   readonly mergedAt?: string | null;
 }
 
+/**
+ * `latestUserAuthoredMessageAt` is the last message the user wrote. Agent,
+ * provider, and server wakes also use the user role, so `latestUserMessageAt`
+ * moves when delegated work or a restart wakes the agent. Optional: shells
+ * from servers that predate it keep the older anchor.
+ */
 export type SettlementThread = Pick<
   OrchestrationV2ThreadShell,
   | "createdAt"
@@ -29,6 +35,7 @@ export type SettlementThread = Pick<
   | "backgroundProcessCount"
   | "activeAgentCount"
   | "pullRequests"
+  | "latestUserAuthoredMessageAt"
 >;
 
 const DAY_MS = 86_400_000;
@@ -113,11 +120,13 @@ export function resolveAutoSettlementAt(input: {
     thread.latestRunStartedAt,
     thread.latestRunCompletedAt,
   ]);
-  const anchor = latest([
-    thread.createdAt,
-    thread.latestUserMessageAt,
-    thread.latestRunRequestedAt,
-  ]);
+  // A merged or closed pull request settles the thread unless the user wrote
+  // to it afterwards. Runs that delegated work, a restart, or another agent
+  // started do not count, so they cannot hold a merged thread open.
+  const anchor =
+    thread.latestUserAuthoredMessageAt === undefined
+      ? latest([thread.createdAt, thread.latestUserMessageAt, thread.latestRunRequestedAt])
+      : latest([thread.createdAt, thread.latestUserAuthoredMessageAt]);
   if (
     pullRequest !== null &&
     (pullRequest.state === "closed" || (pullRequest.state === "merged" && input.autoSettleOnMerge))

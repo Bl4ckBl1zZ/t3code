@@ -2818,7 +2818,8 @@ it.effect(
               return Effect.succeed({
                 comments: [],
                 commentCount: 0,
-                commentsTruncated: false,
+                commentsTruncated: true,
+                reviewThreadsTruncated: true,
                 reviewThreads: [],
                 commits: [],
               });
@@ -2832,10 +2833,12 @@ it.effect(
       assert.strictEqual(coreCalls, 1);
       assert.strictEqual(activityCalls, 0);
 
-      yield* Effect.all([service.activity(reference), service.activity(reference)], {
-        concurrency: 2,
-      });
+      const activities = yield* Effect.all(
+        [service.activity(reference), service.activity(reference)],
+        { concurrency: 2 },
+      );
       assert.strictEqual(activityCalls, 1);
+      assert.isTrue(activities.every((activity) => activity.reviewThreadsTruncated === true));
 
       yield* service.invalidate({ reference });
       yield* service.activity(reference);
@@ -4075,5 +4078,32 @@ it.effect("caches a small replacement after releasing a large diff", () =>
     assert.strictEqual((yield* service.diff(reference)).patch, "@@ small replacement");
     assert.strictEqual((yield* service.diff(reference)).patch, "@@ small replacement");
     assert.strictEqual(reads, 2);
+  }),
+);
+
+it.effect("tells the client when the host has no pull request under that number", () =>
+  Effect.gen(function* () {
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 121 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: "github",
+                operation: "getChangeRequest",
+                reason: "not-found",
+                detail: "Pull request not found. Check the PR number or URL and try again.",
+              }),
+            ),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(service.detail(reference));
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.strictEqual(error._tag === "PullRequestOperationError" && error.reason, "not-found");
   }),
 );

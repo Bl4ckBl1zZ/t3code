@@ -69,6 +69,8 @@ interface CapturedTurn {
   readonly threadId: ThreadId;
   readonly providerThreadId: ProviderThreadId;
   readonly text: string;
+  readonly providerTurnOrdinal?: number;
+  readonly nativeThreadHasTurns?: boolean;
 }
 
 function unimplemented(driver: ProviderDriverKind, detail: string) {
@@ -159,6 +161,10 @@ function makeTestAdapter(input: {
                   threadId: turnInput.threadId,
                   providerThreadId: turnInput.providerThread.id,
                   text: turnInput.message.text,
+                  providerTurnOrdinal: turnInput.providerTurnOrdinal,
+                  ...(turnInput.nativeThreadHasTurns === undefined
+                    ? {}
+                    : { nativeThreadHasTurns: turnInput.nativeThreadHasTurns }),
                 },
               ]);
               const eventTime = yield* DateTime.now;
@@ -722,6 +728,18 @@ describe("orchestration v2 provider switching", () => {
         assert.include(turns[2]?.text ?? "", "claude switched response");
         assert.include(turns[2]?.text ?? "", returnPrompt);
         assert.equal(turns[0]?.providerThreadId, turns[2]?.providerThreadId);
+        // The provider thread has an earlier turn, but its fresh native thread
+        // has none, so the adapter has to create it rather than resume it.
+        assert.deepEqual(
+          [turns[0], turns[2]].map((turn) => [
+            turn?.providerTurnOrdinal,
+            turn?.nativeThreadHasTurns,
+          ]),
+          [
+            [1, undefined],
+            [2, false],
+          ],
+        );
       }),
     ),
   );

@@ -107,6 +107,24 @@ export class PullRequestListFailedError extends Schema.TaggedErrorClass<PullRequ
   }
 }
 
+export class PullRequestWatchFailedError extends Schema.TaggedErrorClass<PullRequestWatchFailedError>()(
+  "PullRequestWatchFailedError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not change whether the pull request is watched.";
+  }
+}
+
+export class PullRequestNotOpenError extends Schema.TaggedErrorClass<PullRequestNotOpenError>()(
+  "PullRequestNotOpenError",
+  { state: Schema.String },
+) {
+  override get message(): string {
+    return `The pull request is ${this.state}, so there is nothing to watch.`;
+  }
+}
+
 export const PullRequestToolError = Schema.Union([
   McpPullRequestCapabilityUnavailableError,
   PullRequestUrlInvalidError,
@@ -116,6 +134,8 @@ export const PullRequestToolError = Schema.Union([
   PullRequestLinkFailedError,
   PullRequestUnlinkFailedError,
   PullRequestListFailedError,
+  PullRequestWatchFailedError,
+  PullRequestNotOpenError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 
@@ -144,9 +164,21 @@ export const UnlinkPullRequestResult = Schema.Struct({
 });
 export type UnlinkPullRequestResult = typeof UnlinkPullRequestResult.Type;
 
+export const WatchPullRequestResult = Schema.Struct({
+  ...PullRequestIdentity,
+  watching: Schema.Boolean.annotate({
+    description: "Whether T3 Code now watches the pull request for this thread.",
+  }),
+  wasWatching: Schema.Boolean.annotate({
+    description: "Whether it was already watched before the call.",
+  }),
+});
+export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
+
 export const ThreadPullRequestEntry = Schema.Struct({
   ...PullRequestIdentity,
   source: ThreadPullRequestLinkSource,
+  watching: Schema.Boolean,
   state: Schema.NullOr(PullRequestState),
   title: Schema.NullOr(Schema.String),
   headBranch: Schema.NullOr(Schema.String),

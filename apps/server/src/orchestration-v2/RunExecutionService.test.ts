@@ -44,6 +44,7 @@ import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
 import type { ProviderAdapterV2Event, ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
 import { ProviderEventIngestorV2 } from "./ProviderEventIngestor.ts";
+import { ProjectionStoreReadError } from "./ProjectionStore.ts";
 import {
   canRouteRelatedSubagent,
   cascadeTerminalizeRunOwnedSubagents,
@@ -365,6 +366,99 @@ it.effect("rechecks run ownership immediately before calling the provider", () =
     assert.equal(yield* Ref.get(guardCalls), 2);
     assert.equal(yield* Ref.get(providerStarts), 0);
   }).pipe(Effect.provide(RunExecutionTestLayer)),
+);
+
+it.effect("fails the run when its ownership check cannot be read before calling the provider", () =>
+  Effect.gen(function* () {
+    const guardCalls = yield* Ref.make(0);
+    const providerStarts = yield* Ref.make(0);
+    const writes = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
+    const threadId = ThreadId.make("thread:run-execution-start-guard-read");
+    const runId = RunId.make("run:run-execution-start-guard-read");
+    const attemptId = RunAttemptId.make("attempt:run-execution-start-guard-read");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const readFailure = new ProjectionStoreReadError({ threadId, cause: "database unavailable" });
+    const testLayer = runExecutionServiceLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
+          Layer.mock(EventSinkV2)({
+            writeIfRunCurrent: (input) =>
+              Ref.update(writes, (current) => [...current, ...input.events]).pipe(
+                Effect.as({ committed: true, storedEvents: [] }),
+              ),
+          }),
+          idAllocatorLayer,
+          Layer.mock(ProviderEventIngestorV2)({ ingestNormalized: () => Effect.succeed([]) }),
+          ServerSettingsService.layerTest(),
+        ),
+      ),
+    );
+
+    yield* Effect.gen(function* () {
+      const runExecution = yield* RunExecutionServiceV2;
+      yield* runExecution.startRootRun({
+        commandId: CommandId.make("command:run-execution-start-guard-read"),
+        appThread: { id: threadId } as OrchestrationV2AppThread,
+        providerSessionId: ProviderSessionId.make("session:run-execution-start-guard-read"),
+        session: {
+          events: Stream.never,
+          startTurn: () => Ref.update(providerStarts, (count) => count + 1),
+        } as unknown as ProviderAdapterV2SessionRuntime,
+        run: { id: runId, threadId, ordinal: 1, providerInstanceId } as OrchestrationV2Run,
+        rootNode: {
+          id: NodeId.make("node:run-execution-start-guard-read"),
+        } as OrchestrationV2ExecutionNode,
+        checkpointScope: {
+          id: CheckpointScopeId.make("checkpoint-scope:run-execution-start-guard-read"),
+        } as OrchestrationV2CheckpointScope,
+        providerThread: {
+          id: ProviderThreadId.make("provider-thread:run-execution-start-guard-read"),
+          driver,
+        } as OrchestrationV2ProviderThread,
+        attempt: { id: attemptId, providerTurnId: null } as OrchestrationV2RunAttempt,
+        attemptId,
+        providerTurnOrdinal: 1,
+        // The preparation check passes; the check right before the provider
+        // call cannot read the run.
+        shouldStartProviderTurn: () =>
+          Ref.getAndUpdate(guardCalls, (calls) => calls + 1).pipe(
+            Effect.flatMap((calls) =>
+              calls === 0 ? Effect.succeed(true) : Effect.fail(readFailure),
+            ),
+          ),
+        // The failure is settled by the guarded write, not by another read.
+        shouldFinalizeRun: () => Effect.fail(readFailure),
+        message: {
+          messageId: MessageId.make("message:run-execution-start-guard-read"),
+          text: "Start while the store is down.",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+        modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+          approvalPolicy: "never",
+          sandboxPolicy: {
+            type: "readOnly",
+            access: { type: "fullAccess" },
+            networkAccess: false,
+          },
+        },
+      });
+    }).pipe(Effect.provide(testLayer));
+
+    assert.equal(yield* Ref.get(guardCalls), 2);
+    assert.equal(yield* Ref.get(providerStarts), 0);
+    const runUpdate = (yield* Ref.get(writes)).find((event) => event.type === "run.updated");
+    assert.equal(
+      runUpdate?.type === "run.updated" ? runUpdate.payload.status : undefined,
+      "failed",
+    );
+  }),
 );
 
 it.effect("refreshes MCP credential liveness before calling the provider", () =>
@@ -1029,6 +1123,27 @@ it.effect("keeps ingesting until the last of several background items terminaliz
       "turn_item:completed",
       "turn_item:completed",
     ]);
+  }),
+);
+
+it.effect("records a finished run as failed when its ownership check cannot be read", () =>
+  Effect.gen(function* () {
+    const observed = yield* runBackgroundItemScenario(
+      "finalize-guard-read-failure",
+      (ids) => [rootTerminalEvent(ids, "completed")],
+      {
+        shouldFinalizeRun: () =>
+          Effect.fail(
+            new ProjectionStoreReadError({
+              threadId: ThreadId.make("thread:finalize-guard-read-failure"),
+              cause: "database unavailable",
+            }),
+          ),
+      },
+    );
+    // The fallback settles through the guarded write instead of the same
+    // failing read, so the run does not stay running.
+    assert.include(observed, "run-current:failed");
   }),
 );
 
@@ -2405,7 +2520,10 @@ function rootTerminalEvent(
 function runBackgroundItemScenario(
   key: string,
   makeEvents: (ids: BackgroundScenarioIds) => ReadonlyArray<ProviderAdapterV2Event>,
-  options?: { readonly keepEventStreamOpen?: boolean },
+  options?: {
+    readonly keepEventStreamOpen?: boolean;
+    readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreReadError>;
+  },
 ) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(key);
@@ -2429,7 +2547,18 @@ function runBackgroundItemScenario(
                 }
                 return [];
               }),
-            writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
+            writeIfRunCurrent: (input) =>
+              Effect.forEach(
+                input.events,
+                (event) =>
+                  event.type === "run.updated" && event.runId === ids.runId
+                    ? Ref.update(observed, (current) => [
+                        ...current,
+                        `run-current:${event.payload.status}`,
+                      ])
+                    : Effect.void,
+                { discard: true },
+              ).pipe(Effect.as({ committed: true, storedEvents: [] })),
           }),
           idAllocatorLayer,
           Layer.mock(ProviderEventIngestorV2)({
@@ -2496,6 +2625,9 @@ function runBackgroundItemScenario(
         } as OrchestrationV2RunAttempt,
         attemptId: ids.attemptId,
         providerTurnOrdinal: 1,
+        ...(options?.shouldFinalizeRun === undefined
+          ? {}
+          : { shouldFinalizeRun: options.shouldFinalizeRun }),
         message: {
           messageId: MessageId.make(`message:${key}:user`),
           text: "Start a background item and finish.",

@@ -2,7 +2,7 @@ import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/con
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
-import { projectTurnItemForWire } from "./WireProjection.ts";
+import { projectTurnItemForDetail, projectTurnItemForWire } from "./WireProjection.ts";
 
 const base = {
   id: TurnItemId.make("tool-1"),
@@ -36,6 +36,8 @@ describe("orchestration V2 wire projection", () => {
     expect(projected.type === "dynamic_tool" ? projected.output : null).toMatchObject({
       truncated: true,
     });
+    // Clients fetch the summarized result on demand, so they need to know it exists.
+    expect(projected).toMatchObject({ outputOmitted: true });
   });
 
   it("keeps small dynamic tool values intact", () => {
@@ -85,7 +87,37 @@ describe("orchestration V2 wire projection", () => {
   it("leaves a successful command unflagged and output-free", () => {
     const item = { ...command, exitCode: 0, output: "done" } satisfies OrchestrationV2TurnItem;
     const { output: _output, ...expected } = item;
-    expect(projectTurnItemForWire(item)).toEqual(expected);
+    expect(projectTurnItemForWire(item)).toEqual({ ...expected, outputOmitted: true });
+  });
+
+  it.each([undefined, "", "  \n"])("does not offer to fetch blank output %#", (output) => {
+    const item = {
+      ...command,
+      exitCode: 0,
+      ...(output === undefined ? {} : { output }),
+    } satisfies OrchestrationV2TurnItem;
+    expect(projectTurnItemForWire(item)).not.toHaveProperty("outputOmitted");
+  });
+
+  it.each([
+    ["echo ok", "echo ok"],
+    ["a".repeat(262_143) + "😀", "a".repeat(262_143) + "\n… output truncated for transport"],
+  ])("bounds fetched command input without changing persistence, case %#", (input, expected) => {
+    const item = { ...command, input, output: "ok" } satisfies OrchestrationV2TurnItem;
+    const projected = projectTurnItemForDetail(item);
+    expect(projected).toMatchObject({ input: expected, output: "ok" });
+    expect(item.input).toBe(input);
+  });
+
+  it("returns a fetched dynamic tool's full result, bounded for the wire", () => {
+    const output = { content: [{ type: "text", text: "first line\n" + "x".repeat(100_000) }] };
+    const item = { ...base, output } satisfies OrchestrationV2TurnItem;
+    expect(projectTurnItemForDetail(item)).toMatchObject({ output });
+    const huge = { ...base, output: "y".repeat(300_000) } satisfies OrchestrationV2TurnItem;
+    const projected = projectTurnItemForDetail(huge);
+    expect(projected.type === "dynamic_tool" ? projected.output : null).toMatch(
+      /… output truncated for transport$/u,
+    );
   });
 
   it("sends only the last line of a background command that is still running", () => {

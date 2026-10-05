@@ -9,6 +9,8 @@ import {
   PullRequestLinkFailedError,
   PullRequestUnlinkFailedError,
   PullRequestListFailedError,
+  PullRequestNotOpenError,
+  PullRequestWatchFailedError,
   type Project,
   type PullRequestTargetInput,
   type PullRequestToolError,
@@ -16,6 +18,7 @@ import {
   type UnlinkPullRequestResult,
   type ListThreadPullRequestsResult,
   type ThreadPullRequestEntry,
+  type WatchPullRequestResult,
   type OrchestrationV2ThreadShell,
   type SourceControlProviderKind,
 } from "@t3tools/contracts";
@@ -24,6 +27,7 @@ import { allThreadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
 import {
   resolveThreadPullRequestChains,
   threadPullRequestKeyOf,
+  threadPullRequestKeysEqual,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequestChains";
 import * as Context from "effect/Context";
@@ -49,6 +53,12 @@ export class PullRequestMcpService extends Context.Service<
     readonly list: (
       scope: McpInvocationScope,
     ) => Effect.Effect<ListThreadPullRequestsResult, PullRequestToolError>;
+    /** Starts or stops the server watching a pull request, linking an unlinked one first. */
+    readonly setWatching: (
+      scope: McpInvocationScope,
+      input: PullRequestTargetInput,
+      watching: boolean,
+    ) => Effect.Effect<WatchPullRequestResult, PullRequestToolError>;
   }
 >()("t3/mcp/PullRequestMcpService") {}
 
@@ -95,6 +105,7 @@ export function listV2ThreadPullRequests(
         number: link.number,
         url: link.url,
         source: link.source,
+        watching: link.watch !== undefined,
         state: link.snapshot?.state ?? null,
         title: link.snapshot?.title ?? null,
         headBranch: link.snapshot?.headBranch ?? null,
@@ -174,6 +185,53 @@ export const make = Effect.gen(function* () {
       }
       return { target, wasLinked };
     });
+  /**
+   * One command links an unlinked pull request and watches it, and the result reports the
+   * state the thread holds afterwards.
+   */
+  const setWatching = Effect.fn("PullRequestMcpService.setWatching")(function* (
+    scope: McpInvocationScope,
+    input: PullRequestTargetInput,
+    watching: boolean,
+  ) {
+    const thread = yield* requireThread(scope);
+    const project = yield* projects.getById(thread.projectId).pipe(
+      Effect.map(Option.getOrUndefined),
+      Effect.mapError((cause) => new PullRequestWatchFailedError({ cause })),
+    );
+    const target = yield* resolvePullRequestTarget(input, project);
+    const watchedLink = (shell: OrchestrationV2ThreadShell) =>
+      visibleThreadPullRequests(allThreadPullRequestsOf(shell)).find((link) =>
+        threadPullRequestKeysEqual(link, target),
+      );
+    const before = watchedLink(thread);
+    const state = before?.snapshot?.state;
+    if (watching && state !== undefined && state !== "open") {
+      return yield* new PullRequestNotOpenError({ state });
+    }
+    const uuid = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+    yield* threads
+      .dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make(`mcp:pr-watch:${uuid}`),
+        threadId: scope.threadId,
+        host: target.host,
+        repository: target.repository,
+        number: target.number,
+        watching,
+        ...(watching ? { link: { url: target.url, source: "agent" as const } } : {}),
+      })
+      .pipe(Effect.mapError((cause) => new PullRequestWatchFailedError({ cause })));
+    const after = yield* requireThread(scope);
+    return {
+      host: target.host,
+      repository: target.repository,
+      number: target.number,
+      url: target.url,
+      watching: watchedLink(after)?.watch !== undefined,
+      wasWatching: before?.watch !== undefined,
+    };
+  });
   return PullRequestMcpService.of({
     link: (scope, input) =>
       mutate(scope, input, false).pipe(
@@ -189,6 +247,7 @@ export const make = Effect.gen(function* () {
         })),
       ),
     list: (scope) => requireThread(scope).pipe(Effect.map(listV2ThreadPullRequests)),
+    setWatching,
   });
 });
 export const layer = Layer.effect(PullRequestMcpService, make);

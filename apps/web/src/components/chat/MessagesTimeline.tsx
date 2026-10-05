@@ -39,6 +39,7 @@ import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type EnvironmentId,
   type MessageId,
   type OrchestrationV2CommandExecutionItem,
@@ -52,6 +53,7 @@ import {
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
+import { turnItemHasDetail } from "@t3tools/client-runtime/work-log/item-detail";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { parseDelegatedTaskWakeMessage } from "@t3tools/shared/delegatedTaskWake";
 import { dynamicToolInputPreview } from "@t3tools/shared/dynamicToolPreview";
@@ -105,6 +107,7 @@ import {
   MousePointerClickIcon,
   PaintbrushIcon,
   ReplyIcon,
+  RotateCcwIcon,
   MinusIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -113,7 +116,9 @@ import {
   XIcon,
   ZapIcon,
 } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide";
 import { Button, InlineButton } from "../ui/button";
+import { MorphIcon } from "~/components/MorphIcon";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { MessageAttachmentPlacement } from "./MessageAttachmentPlacement";
 import { MessageFileAttachmentTile } from "./MessageFileAttachmentTile";
@@ -151,7 +156,7 @@ import {
 } from "./MessagesTimeline.logic";
 import { formatOrchestrationV2TimelineDayLabel } from "@t3tools/shared/orchestrationV2Timeline";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipTrigger, TooltipScrollDismissArea } from "../ui/tooltip";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -260,6 +265,8 @@ interface TimelineRowSharedState {
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
   /** Opens work groups on arrival instead of showing only the newest entry. */
   alwaysExpandActivity: boolean;
+  retryableWorkspacePreparationRunIds: ReadonlySet<RunId>;
+  onRetryWorkspacePreparation: ((runId: RunId) => void) | null;
 }
 
 interface TimelineRowActivityState {
@@ -281,6 +288,7 @@ const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 const EMPTY_TIMELINE_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
+const EMPTY_RUN_IDS: ReadonlySet<RunId> = new Set();
 
 // ---------------------------------------------------------------------------
 // Props (public API)
@@ -347,6 +355,9 @@ interface MessagesTimelineProps {
   onManualNavigation: () => void;
   hideEmptyPlaceholder?: boolean;
   topFadeEnabled?: boolean;
+  /** Runs whose failed workspace preparation can be retried, keyed by run id. */
+  retryableWorkspacePreparationRunIds?: ReadonlySet<RunId>;
+  onRetryWorkspacePreparation?: (runId: RunId) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +410,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onManualNavigation,
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
+  retryableWorkspacePreparationRunIds = EMPTY_RUN_IDS,
+  onRetryWorkspacePreparation,
 }: MessagesTimelineProps) {
   const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(new Set());
   const [expandedAttemptIds, setExpandedAttemptIds] = useState<ReadonlySet<RunAttemptId>>(
@@ -687,6 +700,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleTurnFold,
       onToggleAttemptFold,
       alwaysExpandActivity,
+      retryableWorkspacePreparationRunIds,
+      onRetryWorkspacePreparation: onRetryWorkspacePreparation ?? null,
     }),
     [
       workGroupHistory,
@@ -715,6 +730,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
+      retryableWorkspacePreparationRunIds,
+      onRetryWorkspacePreparation,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -784,7 +801,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   return (
     <TimelineRowCtx value={sharedState}>
       <TimelineRowActivityCtx value={activityState}>
-        <div
+        <TooltipScrollDismissArea
           ref={setTimelineViewportElement}
           className="relative h-full min-h-0"
           data-assistant-citation-viewport="true"
@@ -842,7 +859,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               });
             }}
           />
-        </div>
+        </TooltipScrollDismissArea>
       </TimelineRowActivityCtx>
     </TimelineRowCtx>
   );
@@ -1653,7 +1670,6 @@ function TimelineRowTimestamp({
 
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
-  const Icon = row.expanded ? ChevronDownIcon : ChevronRightIcon;
 
   return (
     <div className="group/timeline-row relative flex items-center gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
@@ -1665,7 +1681,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-xs text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <span>{row.label}</span>
-        <Icon className="size-3.5" />
+        <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
       </button>
       <TimelineRowTimestamp
         createdAt={row.createdAt}
@@ -3611,6 +3627,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // A failed turn's error stays readable in the transcript: wrap it, keep its
   // time visible, and tell the user when a usage limit resets.
   const failedError = item?.type === "error" && item.status === "failed" ? item : null;
+  const retryPreparationRunId =
+    failedError !== null &&
+    failedError.runId !== null &&
+    failedError.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE &&
+    ctx.retryableWorkspacePreparationRunIds.has(failedError.runId)
+      ? failedError.runId
+      : null;
+  const onRetryWorkspacePreparation = ctx.onRetryWorkspacePreparation;
   const usageLimitResetTime =
     failedError?.failure.class === "usage_limit" && failedError.failure.resetAt
       ? formatUpcomingTimestamp(failedError.failure.resetAt, ctx.timestampFormat)
@@ -3636,7 +3660,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
-  const canExpand = expandedBody !== null || workEntry.projectedItem !== undefined;
+  // Projected rows expand to the item inspector, so only offer a disclosure
+  // when it has something to show, even if that output still has to load.
+  const canExpand =
+    workEntry.projectedItem === undefined
+      ? expandedBody !== null
+      : turnItemHasDetail(workEntry.projectedItem.item);
   const showFailedIndicator =
     !showWarningIndicator &&
     (backgroundView !== null
@@ -3872,6 +3901,24 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           view={backgroundView}
           className="ps-6.5 pe-9"
         />
+      ) : null}
+      {retryPreparationRunId !== null && onRetryWorkspacePreparation !== null ? (
+        <div
+          className="ms-6.5 pt-1 pb-0.5"
+          onClick={stopRowToggle}
+          onPointerDown={stopRowToggle}
+          onKeyDown={stopRowToggle}
+        >
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => onRetryWorkspacePreparation(retryPreparationRunId)}
+          >
+            <RotateCcwIcon aria-hidden />
+            Retry
+          </Button>
+        </div>
       ) : null}
       {expanded && canExpand ? (
         <div

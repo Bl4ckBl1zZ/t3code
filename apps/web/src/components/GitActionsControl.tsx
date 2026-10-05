@@ -1161,12 +1161,14 @@ export default function GitActionsControl({
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const gitStatusForActions = gitStatus;
 
-  // The panel row labels whichever diff it opens, which is the branch range
-  // once the working tree is clean.
+  // Matches the diff panel's Changes view. Older servers only report the working tree
+  // or committed branch range, whichever the panel used to open.
   const changeStat = useMemo(
     () => resolveThreadChangeStat(gitStatusForActions),
     [gitStatusForActions],
   );
+  const branchChanges = gitStatusForActions?.branchChanges;
+  const changesTotals = branchChanges ?? changeStat;
 
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
@@ -1863,16 +1865,20 @@ export default function GitActionsControl({
           disabled={!onOpenChanges}
           onClick={onOpenChanges}
           title={
-            changeStat?.scope === "branch"
-              ? "Committed on this branch, versus its base"
-              : "Uncommitted working tree changes"
+            branchChanges
+              ? branchChanges.baseRef
+                ? `Everything changed since ${branchChanges.baseRef}, uncommitted included`
+                : "Uncommitted changes"
+              : changeStat?.scope === "branch"
+                ? "Committed on this branch, versus its base"
+                : "Uncommitted working tree changes"
           }
         >
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
           <span className="flex-1 text-left">Changes</span>
           <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
-            <span className="text-diff-addition">+{changeStat?.insertions ?? 0}</span>
-            <span className="text-diff-deletion">-{changeStat?.deletions ?? 0}</span>
+            <span className="text-diff-addition">+{changesTotals?.insertions ?? 0}</span>
+            <span className="text-diff-deletion">-{changesTotals?.deletions ?? 0}</span>
           </span>
         </Button>
       ) : null}

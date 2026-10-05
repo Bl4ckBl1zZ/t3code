@@ -1,5 +1,7 @@
 import { shouldRenderPreviewMiniPlayer } from "./ChatView.logic";
 import { useLoadBalancedEnvironment } from "~/hooks/useLoadBalancedEnvironment";
+import { useScratchProject } from "../hooks/useScratchProject";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { latestWorkspaceMutationId } from "../hooks/useWorkspaceMutationRefresh";
@@ -23,7 +25,7 @@ import type { AssistantCitation } from "@t3tools/contracts";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { assistantCitationFromLocation } from "~/lib/assistantCitationNavigation";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
-import { resolveEnvironmentMachineKind, type EnvironmentMachineKind } from "@t3tools/contracts";
+import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { ComposerTasksBadge, ComposerTasksDrawer } from "./chat/ComposerTasksBadge";
 import {
   appendCodexArtifactTemplateUsePrompt,
@@ -223,6 +225,7 @@ import {
 } from "../previewStateStore";
 import { resolveEndpointReachability } from "../browser/browserTargetResolver";
 import { addBrowserSurface } from "./preview/addBrowserSurface";
+import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
 import { closePreviewSession } from "./preview/closePreviewSession";
 import { openPreviewSession } from "./preview/openPreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
@@ -254,7 +257,10 @@ import {
 } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
+import {
+  decodeProjectScriptKeybindingRule,
+  keybindingValueForCommand,
+} from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
   buildProjectScript,
@@ -266,7 +272,11 @@ import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
+import {
+  deriveProviderInstanceEntries,
+  NO_PROVIDER_MODEL_SELECTION,
+  shouldShowInstanceBadge,
+} from "../providerInstances";
 import {
   useClientSettings,
   useClientSettingsHydrated,
@@ -330,6 +340,7 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
+import { workspacePreparationRetryRunIds } from "@t3tools/client-runtime/state/turn-item-presentation";
 import { hermesEnvironment } from "../state/hermes";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
@@ -370,7 +381,11 @@ import {
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
 import { NoActiveThreadState } from "./NoActiveThreadState";
-import { resolveEffectiveEnvMode, resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
+import {
+  type EnvironmentOption,
+  resolveEffectiveEnvMode,
+  resolveLocalCheckoutBranchMismatch,
+} from "./BranchToolbar.logic";
 import {
   getProviderStatusBannerKey,
   ProviderStatusBanner,
@@ -493,6 +508,8 @@ const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const VISIT_DISPATCH_THROTTLE_MS = 10_000;
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PROJECTION_RUNS: OrchestrationV2ThreadProjection["runs"] = [];
+/** Runs with a workspace preparation retry in flight, across ChatView instances. */
+const retryingWorkspacePreparationRunIds = new Set<RunId>();
 const EMPTY_ATTACHMENT_IDS: string[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const EMPTY_TURN_DIFF_SUMMARIES: ReadonlyArray<TurnDiffSummary> = [];
@@ -1413,6 +1430,9 @@ function ChatViewContent(props: ChatViewProps) {
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
+  const removeKeybinding = useAtomCommand(serverEnvironment.removeKeybinding, {
+    reportFailure: false,
+  });
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
@@ -1970,6 +1990,34 @@ function ChatViewContent(props: ChatViewProps) {
   // from the thread they captured before mutating per-thread UI state.
   const activeThreadKeyRef = useRef(activeThreadKey);
   activeThreadKeyRef.current = activeThreadKey;
+  const retryWorkspacePreparation = useAtomCommand(threadEnvironment.retryWorkspacePreparation);
+  const retryableRunIdsKey = useMemo(
+    () =>
+      [
+        ...workspacePreparationRetryRunIds(
+          serverProjection?.runs ?? EMPTY_PROJECTION_RUNS,
+          serverVisibleTurnItems.map((row) => row.item),
+        ),
+      ].join("\n"),
+    [serverProjection?.runs, serverVisibleTurnItems],
+  );
+  // Keyed by content so the timeline context only changes when a retry appears or clears.
+  const retryableWorkspacePreparationRunIds = useMemo(
+    () => new Set(retryableRunIdsKey === "" ? [] : (retryableRunIdsKey.split("\n") as RunId[])),
+    [retryableRunIdsKey],
+  );
+  const onRetryWorkspacePreparation = useCallback(
+    (runId: RunId) => {
+      // One retry per failed run: a second click lands after the run is preparing again.
+      if (!activeThreadRef || retryingWorkspacePreparationRunIds.has(runId)) return;
+      retryingWorkspacePreparationRunIds.add(runId);
+      void retryWorkspacePreparation({
+        environmentId: activeThreadRef.environmentId,
+        input: { threadId: activeThreadRef.threadId, runId },
+      }).finally(() => retryingWorkspacePreparationRunIds.delete(runId));
+    },
+    [activeThreadRef, retryWorkspacePreparation],
+  );
   const changeRequestSnapshotByKey = useAtomValue(threadChangeRequestSnapshotsAtom);
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
@@ -2027,6 +2075,14 @@ function ChatViewContent(props: ChatViewProps) {
     [activePullRequestSurfaceId],
   );
   const activePreviewState = useThreadPreviewState(activeThreadRef);
+  const activePreviewServerEpoch = activePreviewState.serverEpoch;
+  const resolvePreviewRuntimeTabId = useMemo(
+    () =>
+      activeThreadRef
+        ? (tabId: string) => previewRuntimeTabId(activeThreadRef, activePreviewServerEpoch, tabId)
+        : undefined,
+    [activeThreadRef, activePreviewServerEpoch],
+  );
   const activePreviewMiniPlayer = usePreviewMiniPlayerStore((state) =>
     selectThreadPreviewMiniPlayer(state.byThreadKey, activeThreadRef),
   );
@@ -2303,34 +2359,56 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [retryEnvironment],
   );
+  const { scratchWorkspaceRootFor, openScratchProject } = useScratchProject();
+  const activeProjectIsScratch =
+    activeProject !== null &&
+    isScratchProject(
+      activeProject,
+      environmentById.get(activeProject.environmentId)?.serverConfig?.scratchWorkspaceRoot ?? null,
+    );
   const logicalProjectEnvironments = useMemo(() => {
     if (!activeProject) return [];
-    const logicalKey = deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
-    const memberProjects = allProjects.filter(
-      (p) => deriveLogicalProjectKeyFromSettings(p, projectGroupingSettings) === logicalKey,
-    );
-    const seen = new Set<string>();
-    const envs: Array<{
-      environmentId: EnvironmentId;
-      projectId: ProjectId;
-      label: string;
-      isPrimary: boolean;
-      machineKind: EnvironmentMachineKind;
-    }> = [];
-    for (const p of memberProjects) {
-      if (seen.has(p.environmentId)) continue;
-      seen.add(p.environmentId);
-      const isPrimary = p.environmentId === primaryEnvironmentId;
-      const label = environmentById.get(p.environmentId)?.label ?? p.environmentId;
+    const envs: EnvironmentOption[] = [];
+    const pushEnvironment = (environmentId: EnvironmentId, projectId: ProjectId | null) => {
+      const environment = environmentById.get(environmentId) ?? null;
       envs.push({
-        environmentId: p.environmentId,
-        projectId: p.id,
-        label,
-        isPrimary,
-        machineKind: resolveEnvironmentMachineKind(
-          environmentById.get(p.environmentId)?.serverConfig ?? null,
-        ),
+        environmentId,
+        projectId,
+        label: environment?.label ?? environmentId,
+        isPrimary: environmentId === primaryEnvironmentId,
+        machineKind: resolveEnvironmentMachineKind(environment?.serverConfig ?? null),
       });
+    };
+    if (activeProjectIsScratch && draftId) {
+      // Each machine keeps its own "No project" folder at its own path, so they
+      // never group as one logical project. Offer every machine that has one.
+      for (const environment of environments) {
+        const scratchRoot = scratchWorkspaceRootFor(environment.environmentId);
+        // Keep the current machine visible so an offline source can still switch away.
+        if (scratchRoot === null && environment.environmentId !== activeProject.environmentId)
+          continue;
+        const scratchProject =
+          environment.environmentId === activeProject.environmentId
+            ? activeProject
+            : allProjects.find(
+                (p) =>
+                  p.environmentId === environment.environmentId && isScratchProject(p, scratchRoot),
+              );
+        pushEnvironment(environment.environmentId, scratchProject?.id ?? null);
+      }
+    } else {
+      const logicalKey = deriveLogicalProjectKeyFromSettings(
+        activeProject,
+        projectGroupingSettings,
+      );
+      const seen = new Set<string>();
+      for (const p of allProjects) {
+        if (seen.has(p.environmentId)) continue;
+        if (deriveLogicalProjectKeyFromSettings(p, projectGroupingSettings) !== logicalKey)
+          continue;
+        seen.add(p.environmentId);
+        pushEnvironment(p.environmentId, p.id);
+      }
     }
     // Sort: primary first, then alphabetical
     envs.sort((a, b) => {
@@ -2338,8 +2416,21 @@ function ChatViewContent(props: ChatViewProps) {
       return a.label.localeCompare(b.label);
     });
     return envs;
-  }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
+  }, [
+    activeProject,
+    activeProjectIsScratch,
+    allProjects,
+    draftId,
+    environments,
+    projectGroupingSettings,
+    primaryEnvironmentId,
+    environmentById,
+    scratchWorkspaceRootFor,
+  ]);
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
+  // Auto balance retargets to an existing project; a machine's "No project"
+  // folder may not exist until it is picked.
+  const canAutoBalanceEnvironments = hasMultipleEnvironments && !activeProjectIsScratch;
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
       if (!canCheckoutPullRequestIntoThread) {
@@ -2571,6 +2662,7 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatch && activeThread ? activeThread.environmentId : null;
   const serverUpdateEnvironmentId = activeThread?.environmentId ?? null;
   const versionMismatchSelfUpdate = resolveServerSelfUpdateCapability(serverConfig);
+  const versionMismatchInstallation = serverConfig?.environment.capabilities.serverInstallation;
   const versionMismatchDesktopAppUpdate = supportsDesktopAppUpdate(serverConfig);
   const serverUpdateState = useAtomValue(
     serverEnvironment.updateStateAtom(serverUpdateEnvironmentId),
@@ -2665,6 +2757,7 @@ function ChatViewContent(props: ChatViewProps) {
               environmentId={serverUpdateEnvironmentId}
               serverLabel={versionMismatchServerLabel}
               selfUpdate={versionMismatchSelfUpdate}
+              installation={versionMismatchInstallation}
               desktopAppUpdate={versionMismatchDesktopAppUpdate}
               targetVersion={versionMismatch.clientVersion}
               {...(updateFailed ? { label: "Retry update" } : {})}
@@ -2694,6 +2787,7 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatchDismissKey,
     serverUpdateEnvironmentId,
     versionMismatchSelfUpdate,
+    versionMismatchInstallation,
     versionMismatchDesktopAppUpdate,
     versionMismatchServerLabel,
   ]);
@@ -3330,13 +3424,22 @@ function ChatViewContent(props: ChatViewProps) {
   // the top-level parent thread.
   const showProviderSubagentBar = isProviderSubagent;
   const composerMounted = !showProviderSubagentBar;
-  const providerSubagentEntry = useMemo(
-    () =>
-      showProviderSubagentBar && activeProviderStatus !== null
-        ? (deriveProviderInstanceEntries([activeProviderStatus])[0] ?? null)
-        : null,
-    [activeProviderStatus, showProviderSubagentBar],
-  );
+  const providerSubagentBadge = useMemo(() => {
+    if (!showProviderSubagentBar || activeProviderStatus === null) {
+      return { entry: null, showInstanceBadge: false };
+    }
+    const entries = deriveProviderInstanceEntries(providerStatuses);
+    const entry =
+      entries.find((candidate) => candidate.instanceId === activeProviderStatus.instanceId) ??
+      deriveProviderInstanceEntries([activeProviderStatus])[0] ??
+      null;
+    return {
+      entry,
+      // Several accounts on this provider: badge the glyph, as the composer does.
+      showInstanceBadge: entry !== null && shouldShowInstanceBadge(entry, entries),
+    };
+  }, [activeProviderStatus, providerStatuses, showProviderSubagentBar]);
+  const providerSubagentEntry = providerSubagentBadge.entry;
   const providerSubagentModels = activeProviderStatus?.models ?? EMPTY_PROVIDER_MODELS;
   // Providers can report a dated id or alias (claude-haiku-4-5-20251001).
   const providerSubagentModelSlug = activeProviderStatus
@@ -3363,11 +3466,6 @@ function ChatViewContent(props: ChatViewProps) {
     isProjectlessConversation: isHermesConversation,
     persistInActiveThreads: settings.persistComposerContextStrip,
   });
-  // Mirrors resolveThreadChangeStat: a clean working tree means the panel opens
-  // the branch range, which is what the "Changes" row then counts.
-  const initialDiffPanelGitScope =
-    gitStatusQuery.data?.hasWorkingTreeChanges === true ? "unstaged" : "branch";
-  const diffPanelGitStatusResolutionKey = gitStatusQuery.data ? "resolved" : "pending";
   const terminalShortcutLabelOptions = useMemo(
     () => ({
       context: {
@@ -3446,7 +3544,7 @@ function ChatViewContent(props: ChatViewProps) {
     clientSettingsHydrated &&
     draftId &&
     !envLocked &&
-    hasMultipleEnvironments &&
+    canAutoBalanceEnvironments &&
     loadBalancingSettings.loadBalancingEnabled &&
     draftThread?.environmentSelection !== "manual" &&
     (!composerHasAttachments || Boolean(draftThread?.loadBalancedEnvironmentId)) &&
@@ -3503,7 +3601,7 @@ function ChatViewContent(props: ChatViewProps) {
     const target = logicalProjectEnvironments.find(
       (environment) => environment.environmentId === loadBalancing.environmentId,
     );
-    if (!target) return;
+    if (!target?.projectId) return;
     const current = useComposerDraftStore.getState().getDraftSession(draftId);
     const content = useComposerDraftStore.getState().getComposerDraft(draftId);
     const currentModel = deriveEffectiveComposerModelState({
@@ -3594,23 +3692,97 @@ function ChatViewContent(props: ChatViewProps) {
           : "Auto balance"
     : undefined;
 
-  // Handle environment change for draft threads.  When the user picks a
+  // The machine an in-flight switch is heading to; a newer switch replaces it.
+  const environmentChangeRef = useRef<{ readonly environmentId: EnvironmentId } | null>(null);
+  const [isEnvironmentChanging, setIsEnvironmentChanging] = useState(false);
+  useLayoutEffect(() => {
+    return () => {
+      environmentChangeRef.current = null;
+      setIsEnvironmentChanging(false);
+    };
+  }, [draftId, activeProjectKey]);
+
+  // Handle environment change for draft threads. When the user picks a
   // different environment we update the draft context to point at the physical
-  // project in that environment while keeping the same logical project.
+  // project in that environment while keeping the same logical project. A
+  // "No project" draft moves to the destination machine's own scratch folder,
+  // creating it first when that machine has none yet.
   const onEnvironmentChange = useCallback(
     (nextEnvironmentId: EnvironmentId) => {
-      if (envLocked || !draftId) return;
+      if (envLocked || !draftId || sendInFlightRef.current) return;
+      const originalDraft = getDraftSession(draftId);
+      if (!originalDraft || originalDraft.promotedTo) return;
       const target = logicalProjectEnvironments.find(
         (env) => env.environmentId === nextEnvironmentId,
       );
       if (!target) return;
-      setDraftThreadContext(draftId, {
-        projectRef: scopeProjectRef(target.environmentId, target.projectId),
-        environmentSelection: "manual",
-        loadBalancedEnvironmentId: null,
-      });
+      const request = { environmentId: target.environmentId };
+      environmentChangeRef.current = request;
+      setIsEnvironmentChanging(false);
+      const retarget = (project: (typeof allProjects)[number]) => {
+        const currentDraft = getDraftSession(draftId);
+        if (
+          environmentChangeRef.current !== request ||
+          sendInFlightRef.current ||
+          !currentDraft ||
+          currentDraft.promotedTo ||
+          currentDraft.environmentId !== originalDraft.environmentId ||
+          currentDraft.projectId !== originalDraft.projectId
+        )
+          return;
+        const projectRef = scopeProjectRef(target.environmentId, project.id);
+        if (activeProjectIsScratch) {
+          // Scratch projects are machine-local, so move their logical mapping too.
+          setLogicalProjectDraftThreadId(
+            deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings),
+            projectRef,
+            draftId,
+            { environmentSelection: "manual", loadBalancedEnvironmentId: null },
+          );
+        } else {
+          setDraftThreadContext(draftId, {
+            projectRef,
+            environmentSelection: "manual",
+            loadBalancedEnvironmentId: null,
+          });
+        }
+      };
+      const finish = () => {
+        if (environmentChangeRef.current === request) {
+          environmentChangeRef.current = null;
+          setIsEnvironmentChanging(false);
+        }
+      };
+      if (target.projectId !== null) {
+        const project = allProjects.find(
+          (project) =>
+            project.environmentId === target.environmentId && project.id === target.projectId,
+        );
+        if (project) retarget(project);
+        finish();
+        return;
+      }
+      // Keep send disabled until the destination Scratch project is ready.
+      setIsEnvironmentChanging(true);
+      void openScratchProject(target.environmentId, "Could not switch machine")
+        .then((project) => {
+          if (project) retarget(project);
+        })
+        .finally(finish);
     },
-    [draftId, envLocked, logicalProjectEnvironments, setDraftThreadContext],
+    [
+      activeProjectIsScratch,
+      allProjects,
+      draftId,
+      envLocked,
+      getDraftSession,
+      logicalProjectEnvironments,
+      openScratchProject,
+      projectGroupingSettings,
+      sendInFlightRef,
+      setDraftThreadContext,
+      setLogicalProjectDraftThreadId,
+    ],
   );
 
   const activeTerminalGroup =
@@ -4023,13 +4195,16 @@ function ChatViewContent(props: ChatViewProps) {
           scriptId: script.id,
         },
       });
-      if (writeResult._tag === "Failure" && !isAtomCommandInterrupted(writeResult)) {
+      if (writeResult._tag === "Failure") {
         clearProjectScriptRunPending(scriptRunScope);
-        const error = squashAtomCommandFailure(writeResult);
-        setThreadError(
-          activeThreadId,
-          error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
-        );
+        if (!isAtomCommandInterrupted(writeResult)) {
+          const error = squashAtomCommandFailure(writeResult);
+          setThreadError(
+            activeThreadId,
+            error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
+          );
+        }
+        // A command that never reached the terminal has no server to preview.
         return;
       }
 
@@ -4048,6 +4223,15 @@ function ChatViewContent(props: ChatViewProps) {
         useRightPanelStore
           .getState()
           .openBrowser({ environmentId, threadId: activeThreadId }, previewResult.value.tabId);
+      } else if (!isAtomCommandInterrupted(previewResult)) {
+        const error = squashAtomCommandFailure(previewResult);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not open preview",
+            description: error instanceof Error ? error.message : "An unexpected error occurred.",
+          }),
+        );
       }
     },
     [
@@ -4126,18 +4310,74 @@ function ChatViewContent(props: ChatViewProps) {
         command: input.keybindingCommand,
       });
 
-      if (isElectron && keybindingRule) {
-        return mapAtomCommandResult(
-          await upsertKeybinding({
-            environmentId,
-            input: keybindingRule,
-          }),
-          () => undefined,
-        );
+      if (!isElectron) return updateResult;
+
+      // A cleared or changed shortcut must not leave its old rule behind, unless
+      // the same action still exists (and keeps its shortcut) somewhere else.
+      const scriptId = input.keybindingCommand
+        ? projectScriptIdFromCommand(input.keybindingCommand)
+        : null;
+      if (!keybindingRule && !input.previousScripts.some((script) => script.id === scriptId)) {
+        return updateResult;
       }
-      return updateResult;
+      const retainedElsewhere =
+        !input.nextScripts.some((script) => script.id === scriptId) &&
+        ((supportsActionDefaults &&
+          (settings.defaultProjectScripts.some((script) => script.id === scriptId) ||
+            Object.entries(settings.projectScriptOverrides).some(
+              ([projectId, scripts]) =>
+                projectId !== input.projectId && scripts?.some((script) => script.id === scriptId),
+            ))) ||
+          allProjects.some(
+            (other) =>
+              other.environmentId === environmentId &&
+              other.id !== input.projectId &&
+              (supportsActionDefaults
+                ? resolveProjectScripts(settings, other)
+                : other.scripts
+              ).some((script) => script.id === scriptId),
+          ));
+      if (!keybindingRule && retainedElsewhere) return updateResult;
+
+      const previousRules = (serverConfigs.get(environmentId)?.keybindings ?? []).flatMap(
+        (binding) => {
+          if (binding.command !== input.keybindingCommand || binding.whenAst) return [];
+          const previous = decodeProjectScriptKeybindingRule({
+            keybinding: keybindingValueForCommand([binding], input.keybindingCommand),
+            command: input.keybindingCommand,
+          });
+          return previous ? [previous] : [];
+        },
+      );
+      const previous = previousRules.at(-1);
+      for (const rule of keybindingRule ? previousRules.slice(0, -1) : previousRules) {
+        const result = await removeKeybinding({ environmentId, input: rule });
+        if (result._tag === "Failure") return mapAtomCommandResult(result, () => undefined);
+      }
+      return keybindingRule
+        ? mapAtomCommandResult(
+            await upsertKeybinding({
+              environmentId,
+              input:
+                previous && previous.key !== keybindingRule.key
+                  ? { ...keybindingRule, replace: previous }
+                  : keybindingRule,
+            }),
+            () => undefined,
+          )
+        : updateResult;
     },
-    [environmentId, supportsActionDefaults, updateActionSettings, updateProject, upsertKeybinding],
+    [
+      allProjects,
+      environmentId,
+      removeKeybinding,
+      serverConfigs,
+      settings,
+      supportsActionDefaults,
+      updateActionSettings,
+      updateProject,
+      upsertKeybinding,
+    ],
   );
   const saveProjectScript = useCallback(
     async (input: NewProjectScriptInput): Promise<AtomCommandResult<void, unknown>> => {
@@ -6329,6 +6569,21 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
+      if (command === "composer.cycleHost") {
+        if (envLocked || !draftId || !hasMultipleEnvironments) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        // Step from where a pending switch is heading, so repeated presses keep advancing.
+        const currentId = environmentChangeRef.current?.environmentId ?? activeThreadEnvironmentId;
+        const index = logicalProjectEnvironments.findIndex(
+          (env) => env.environmentId === currentId,
+        );
+        const next = logicalProjectEnvironments[(index + 1) % logicalProjectEnvironments.length];
+        if (next) onEnvironmentChange(next.environmentId);
+        return;
+      }
+
       if (command === "thread.editQueuedMessage") {
         if (!isServerThread) return;
         // Anywhere else in the draft the key keeps moving the caret, so a
@@ -6392,6 +6647,12 @@ function ChatViewContent(props: ChatViewProps) {
     toggleThreadPanel,
     toggleTerminalVisibility,
     composerRef,
+    draftId,
+    activeThreadEnvironmentId,
+    envLocked,
+    hasMultipleEnvironments,
+    logicalProjectEnvironments,
+    onEnvironmentChange,
   ]);
 
   const guardCheckpointRestore = useCallback((): boolean => {
@@ -6712,6 +6973,7 @@ function ChatViewContent(props: ChatViewProps) {
       isSendBusy ||
       isConnecting ||
       activeEnvironmentUnavailable ||
+      environmentChangeRef.current !== null ||
       sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
@@ -6893,10 +7155,17 @@ function ChatViewContent(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
-      await onSubmitPlanFollowUp({
+      const followUpSent = await onSubmitPlanFollowUp({
         text: followUp.text,
         interactionMode: followUp.interactionMode,
       });
+      if (
+        followUpSent &&
+        submissionIntent === "background" &&
+        activeThreadKeyRef.current === activeThreadKey
+      ) {
+        handleNewThreadInActiveProject();
+      }
       return;
     }
     const standaloneSlashCommand =
@@ -7356,6 +7625,14 @@ function ChatViewContent(props: ChatViewProps) {
             },
           });
         }
+        if (
+          submissionIntent === "background" &&
+          !isLocalDraftThread &&
+          activeThreadKeyRef.current === activeThreadKey
+        ) {
+          // An existing thread keeps running; open a fresh composer like a draft does.
+          handleNewThreadInActiveProject();
+        }
       }
     }
 
@@ -7612,19 +7889,19 @@ function ChatViewContent(props: ChatViewProps) {
   }: {
     text: string;
     interactionMode: "default" | "plan";
-  }) {
+  }): Promise<boolean> {
     if (!activeThread || !isServerThread || isSendBusy || isConnecting || sendInFlightRef.current) {
-      return;
+      return false;
     }
 
     const trimmed = text.trim();
     if (!trimmed) {
-      return;
+      return false;
     }
 
     const sendCtx = composerRef.current?.getSendContext();
     if (!sendCtx?.providerAvailable) {
-      return;
+      return false;
     }
     const {
       selectedProvider: ctxSelectedProvider,
@@ -7734,7 +8011,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       sendInFlightRef.current = false;
       resetLocalDispatch();
-      return;
+      return true;
     }
 
     setOptimisticUserMessages((existing) =>
@@ -7749,6 +8026,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     sendInFlightRef.current = false;
     resetLocalDispatch();
+    return false;
   }
 
   const onImplementPlanInNewThread = useCallback(async () => {
@@ -8201,10 +8479,9 @@ function ChatViewContent(props: ChatViewProps) {
     ) : renderedRightPanelSurface?.kind === "diff" ? (
       <Suspense fallback={null}>
         <DiffPanel
-          key={`${activeThreadKey}:${diffPanelGitStatusResolutionKey}`}
+          key={activeThreadKey}
           mode="embedded"
           composerDraftTarget={composerDraftTarget}
-          initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
     ) : renderedRightPanelSurface?.kind === "thread-pull-requests" ? (
@@ -8321,7 +8598,10 @@ function ChatViewContent(props: ChatViewProps) {
     isGitRepo,
     envLocked,
     autoEnvironmentLabel,
-    onAutoEnvironment: loadBalancingSettings.loadBalancingEnabled ? onAutoEnvironment : undefined,
+    onAutoEnvironment:
+      loadBalancingSettings.loadBalancingEnabled && !activeProjectIsScratch
+        ? onAutoEnvironment
+        : undefined,
     availableEnvironments: logicalProjectEnvironments,
     onEnvironmentChange,
     onEnvModeChange,
@@ -8595,6 +8875,8 @@ function ChatViewContent(props: ChatViewProps) {
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
                 hideEmptyPlaceholder={isDraftHeroState}
                 topFadeEnabled={!hasTimelineTopBanner}
+                retryableWorkspacePreparationRunIds={retryableWorkspacePreparationRunIds}
+                onRetryWorkspacePreparation={onRetryWorkspacePreparation}
               />
 
               {/* floating pills above the composer: scroll-to-end, working-tree status, working subagents, background commands */}
@@ -8654,7 +8936,7 @@ function ChatViewContent(props: ChatViewProps) {
                   {isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
-                        className="pb-8"
+                        className="pb-4"
                         style={
                           forceExpandedMobileComposer
                             ? { viewTransitionName: MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME }
@@ -8693,6 +8975,7 @@ function ChatViewContent(props: ChatViewProps) {
                           {showProviderSubagentBar ? (
                             <ProviderSubagentBar
                               provider={providerSubagentEntry}
+                              showInstanceBadge={providerSubagentBadge.showInstanceBadge}
                               modelLabel={providerSubagentModelLabel}
                               effortLabel={providerSubagentEffortLabel}
                               status={providerSubagentStatus}
@@ -8758,7 +9041,13 @@ function ChatViewContent(props: ChatViewProps) {
                               canInterrupt={canInterruptRunningThread}
                               isConnecting={isConnecting}
                               isSendBusy={isSendBusy}
-                              sendDisabledReason={feedbackUploading ? "Sending feedback" : null}
+                              sendDisabledReason={
+                                isEnvironmentChanging
+                                  ? "Preparing machine"
+                                  : feedbackUploading
+                                    ? "Sending feedback"
+                                    : null
+                              }
                               isPreparingWorktree={isPreparingWorktree}
                               environmentUnavailable={activeEnvironmentUnavailableState}
                               activePendingApproval={activePendingApproval}
@@ -8881,7 +9170,8 @@ function ChatViewContent(props: ChatViewProps) {
                                   : {})}
                                 autoEnvironmentLabel={autoEnvironmentLabel}
                                 onAutoEnvironment={
-                                  loadBalancingSettings.loadBalancingEnabled
+                                  loadBalancingSettings.loadBalancingEnabled &&
+                                  !activeProjectIsScratch
                                     ? onAutoEnvironment
                                     : undefined
                                 }
@@ -9010,6 +9300,7 @@ function ChatViewContent(props: ChatViewProps) {
           pendingSurfaceIds={pendingFileSurfaceIds}
           previewSessions={activePreviewState.sessions}
           desktopByTabId={activePreviewState.desktopByTabId}
+          previewRuntimeTabId={resolvePreviewRuntimeTabId}
           terminalLabelsById={activeTerminalLabelsById}
           onActivate={activateRightPanelSurface}
           onCloseSurface={closeRightPanelSurface}
@@ -9051,6 +9342,7 @@ function ChatViewContent(props: ChatViewProps) {
             pendingSurfaceIds={pendingFileSurfaceIds}
             previewSessions={activePreviewState.sessions}
             desktopByTabId={activePreviewState.desktopByTabId}
+            previewRuntimeTabId={resolvePreviewRuntimeTabId}
             terminalLabelsById={activeTerminalLabelsById}
             onActivate={activateRightPanelSurface}
             onCloseSurface={closeRightPanelSurface}

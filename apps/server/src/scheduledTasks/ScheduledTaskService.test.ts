@@ -105,6 +105,8 @@ it.effect("sends a schedule's prompt verbatim and names the schedule on the mess
       // The agent reads the prompt the user wrote, with no synthetic prefix.
       assert.equal(sends[0]?.text, "Sweep the PRs");
       assert.equal(sends[0]?.scheduledTaskId, created.task.id);
+      // Queued, never steered: steering would cancel a running tool in the thread.
+      assert.equal(sends[0]?.mode, "queue");
     }).pipe(Effect.provide(makeDispatchCapturingLayer(sends)));
   }),
 );

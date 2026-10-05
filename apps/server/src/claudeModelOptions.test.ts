@@ -101,6 +101,15 @@ describe("compileClaudeModelSelection", () => {
     ).toEqual({ fastMode: false });
   });
 
+  it("compiles an omitted fast mode as Normal so it matches an explicit Normal", () => {
+    const omitted = compileClaudeModelSelection(selection("claude-opus-4-6", []));
+    const explicit = compileClaudeModelSelection(
+      selection("claude-opus-4-6", [{ id: "fastMode", value: false }]),
+    );
+    expect(omitted.settings).toEqual({ fastMode: false });
+    expect(omitted.queryIdentity).toBe(explicit.queryIdentity);
+  });
+
   it("uses the model default SDK effort alongside prompt-injected effort", () => {
     expect(
       compileClaudeModelSelection(

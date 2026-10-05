@@ -106,4 +106,41 @@ describe("restart continuation ownership", () => {
       ),
     ).toBe(false);
   });
+  it("continues past a held queue, which waits behind the continuation", () => {
+    const projection = fixture();
+    const held = { ...run, id: "held", ordinal: 2, status: "queued", queueHeld: true };
+    expect(
+      canContinueAfterRestart(
+        { ...projection, runs: [run, { ...held, queueHeld: false }] } as never,
+        run,
+        "prepare",
+      ),
+    ).toBe(true);
+    const pending = {
+      ...run,
+      status: "cancelled" as const,
+      completedAt: DateTime.makeUnsafe(1_000),
+      restartContinuation: { messageId: "continuation", reason: "restart", status: "pending" },
+    } as OrchestrationV2Run;
+    expect(
+      canContinueAfterRestart({ ...projection, runs: [pending, held] } as never, pending, "resume"),
+    ).toBe(true);
+    // A queue that is not held would start on its own instead.
+    expect(
+      canContinueAfterRestart(
+        { ...projection, runs: [pending, { ...held, queueHeld: false }] } as never,
+        pending,
+        "resume",
+      ),
+    ).toBe(false);
+  });
+  it("does not continue a native maintenance command", () => {
+    const compact = { ...run, userMessageId: "compact" } as OrchestrationV2Run;
+    const projection = {
+      ...fixture(),
+      runs: [compact],
+      messages: [{ id: "compact", text: "/compact", attachments: [] }],
+    } as unknown as OrchestrationV2ThreadProjection;
+    expect(canContinueAfterRestart(projection, compact, "prepare")).toBe(false);
+  });
 });

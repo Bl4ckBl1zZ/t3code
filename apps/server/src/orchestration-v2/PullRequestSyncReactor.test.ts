@@ -6,6 +6,8 @@ import {
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2Command,
+  type OrchestrationV2DomainEvent,
+  type PullRequestRef,
   type PullRequestSummary,
   type PullRequestStack,
 } from "@t3tools/contracts";
@@ -13,6 +15,7 @@ import { updateLinkedPullRequests } from "@t3tools/shared/threadPullRequests";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
 import {
@@ -68,6 +71,12 @@ function harness(
   read: Effect.Effect<PullRequestSummary> = Effect.succeed(overview),
   nativeStack: PullRequestStack | null = null,
   merges: Stream.Stream<PullRequestMergeEvent> = Stream.empty,
+  extra: {
+    readonly domainEvents?: Stream.Stream<OrchestrationV2DomainEvent>;
+    readonly invalidate?: (input: {
+      readonly reference?: PullRequestRef | undefined;
+    }) => Effect.Effect<void>;
+  } = {},
 ) {
   let shells = initial;
   const summary = vi.fn(() => read);
@@ -89,7 +98,7 @@ function harness(
   );
   const layer = Layer.mergeAll(
     Layer.mock(ThreadManagementService)({
-      streamDomainEvents: Stream.empty,
+      streamDomainEvents: extra.domainEvents ?? Stream.empty,
       getShellSnapshot: () =>
         Effect.succeed({
           threads: shells,
@@ -103,7 +112,7 @@ function harness(
     Layer.mock(PullRequestService)({
       summary,
       stack: stackRead,
-      invalidate: () => Effect.void,
+      invalidate: extra.invalidate ?? (() => Effect.void),
       subscribeMerges: Effect.succeed(merges),
     }),
     NodeServices.layer,
@@ -235,5 +244,78 @@ it.effect("a merge notification refreshes an otherwise idle merged link", () =>
     yield* reactor.drain;
     expect(h.shells()[0]?.pullRequests?.[0]?.snapshot?.title).toBe("Confirmed merge");
     expect(h.summary).toHaveBeenCalledTimes(1);
+  }).pipe(Effect.scoped),
+);
+
+const commandRan = (threadId: string, input: string) =>
+  ({
+    type: "turn-item.updated",
+    threadId: ThreadId.make(threadId),
+    payload: { type: "command_execution", input },
+  }) as unknown as OrchestrationV2DomainEvent;
+
+const runEnded = (threadId: string) =>
+  ({
+    type: "run.updated",
+    threadId: ThreadId.make(threadId),
+    payload: { status: "completed" },
+  }) as unknown as OrchestrationV2DomainEvent;
+
+it.effect("re-reads open links fresh only when a run that ran a merge command ends", () =>
+  Effect.gen(function* () {
+    const openSnapshot = { ...overview, isDraft: false, closedAt: null, syncedAt: at };
+    const withOpenSnapshot = (thread: OrchestrationV2ThreadShell, number: number) => {
+      const linked = {
+        ...thread,
+        ...updateLinkedPullRequests(
+          {},
+          {
+            linkPullRequest: { ...ref, number, url: `https://github.com/org/repo/pull/${number}` },
+          },
+          at,
+        ),
+      } as OrchestrationV2ThreadShell;
+      return {
+        ...linked,
+        pullRequests:
+          linked.pullRequests?.map((link) => ({
+            ...link,
+            snapshot: { ...openSnapshot, number },
+          })) ?? [],
+      } as OrchestrationV2ThreadShell;
+    };
+    const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+    const invalidated: Array<number> = [];
+    const agentInvalidated = yield* Deferred.make<void>();
+    const h = harness(
+      [withOpenSnapshot(shell("other"), 2), withOpenSnapshot(shell("agent"), 1)],
+      Effect.succeed(overview),
+      null,
+      Stream.empty,
+      {
+        domainEvents: Stream.fromQueue(domainEvents),
+        invalidate: ({ reference }) =>
+          Effect.suspend(() => {
+            invalidated.push(reference?.number ?? -1);
+            return reference?.number === 1
+              ? Deferred.succeed(agentInvalidated, undefined)
+              : Effect.void;
+          }),
+      },
+    );
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.start();
+    yield* reactor.drain;
+
+    yield* Queue.offerAll(domainEvents, [
+      // A run that only reads its pull request costs no fresh host read when it ends.
+      commandRan("other", "gh pr view 2"),
+      runEnded("other"),
+      commandRan("agent", "gh pr merge 1 --squash 2>&1 | tail -3"),
+      runEnded("agent"),
+    ]);
+    yield* Deferred.await(agentInvalidated);
+    yield* reactor.drain;
+    expect(invalidated).toEqual([1]);
   }).pipe(Effect.scoped),
 );

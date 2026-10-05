@@ -214,6 +214,14 @@ that driver; an explicit `providerInstanceId` is honored exactly and fails
 when unavailable. Selecting a different provider without a model uses that
 provider's first advertised model.
 
+Each delegated review round uses a new `delegate_task` call with the original brief,
+prior findings, responses, and unresolved objections. Track each round by its own `taskId` and use
+a distinct `clientRequestId` per round, stable across retries of that round.
+`childThreadId` is backing storage, not a target for another review round through
+`t3_thread_send`. Ordinary thread messaging remains available for user-requested
+conversations; it does not reopen a completed task. There is no task-level follow-up
+API for preserving the same reviewer session.
+
 Delegation requires an active parent run owned by the MCP credential's
 provider session. The request becomes the V2 command
 `delegated_task.request`.
@@ -246,9 +254,12 @@ summary and the durable `subagent_result` context transfer ID when available.
 
 ### `task_cancel`
 
-Interrupts the active child run through the normal V2 `run.interrupt` command.
-It is idempotent for terminal tasks and accepts an optional cancellation
-reason.
+Interrupts the active child run through the normal V2 `run.interrupt` command
+and disposes automatic parent delivery. For a terminal task, it returns the
+existing status and disposes delivery without interrupting later child-thread runs,
+even when `task_status` reports `hasPendingChildRuns: true`. Published task results
+remain available. It accepts an optional cancellation reason. Use
+`t3_thread_interrupt` to stop a later active run.
 
 ### `create_threads`
 

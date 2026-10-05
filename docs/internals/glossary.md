@@ -49,7 +49,7 @@ A user-visible log item attached to a thread. In [the contracts][1], activities 
 
 ### Orchestration
 
-Orchestration is the server-side domain layer that turns runtime activity into stable app state. The main entry point is [OrchestrationEngine.ts][7], with core logic in [decider.ts][8] and [projector.ts][4].
+Orchestration is the server-side domain layer that turns runtime activity into stable app state. Threads run on orchestration V2: the entry point is [Orchestrator.ts][27], which commits through [EventSink.ts][28] into [ProjectionStore.ts][29], with side effects run by [EffectWorker.ts][30]. The project aggregate still runs on [OrchestrationEngine.ts][7], [decider.ts][8], and [projector.ts][4].
 
 #### Aggregate
 
@@ -65,33 +65,29 @@ Examples include `thread.create`, `thread.turn.start`, and `thread.checkpoint.re
 A persisted fact that something already happened. In [the contracts][1], events are the source of truth, and [projector.ts][4] shows how they are applied.
 Examples include `thread.created`, `thread.message-sent`, and `thread.turn-diff-completed`.
 
-#### Decider
+#### Orchestrator
 
-The pure orchestration logic that turns commands plus current state into events. The core implementation is in [decider.ts][8], with preconditions in [commandInvariants.ts][9].
+The service that serializes thread commands and decides their events from current state, without I/O. See [Orchestrator.ts][27]. The project aggregate keeps its pure decider in [decider.ts][8], with preconditions in [commandInvariants.ts][9].
 
 #### Projection
 
-A read-optimized view derived from events. See [projector.ts][4], [ProjectionPipeline.ts][11], and [ProjectionSnapshotQuery.ts][10].
-
-#### Projector
-
-The logic that applies domain events to the read model or projection tables. See [projector.ts][4] and [ProjectionPipeline.ts][11].
+A persisted view of current state, committed in the same transaction as the events that change it. Thread projections live in [ProjectionStore.ts][29]; the project read model in [ProjectionPipeline.ts][11] and [ProjectionSnapshotQuery.ts][10].
 
 #### Read model
 
-The current materialized view of orchestration state. In [the contracts][1], it holds projects, threads, messages, activities, checkpoints, and session state. See [ProjectionSnapshotQuery.ts][10] and [OrchestrationEngine.ts][7].
+The current materialized view of orchestration state that clients render: projects, threads, runs, messages, turn items, checkpoints, and provider sessions. See [ProjectionStore.ts][29].
 
-#### Reactor
+#### Command receipt
 
-A side-effecting service that handles follow-up work after events or runtime signals. Examples include [CheckpointReactor.ts][6], [ProviderCommandReactor.ts][12], and [ProviderRuntimeIngestion.ts][5].
+A durable record of a command's result, used to make retries idempotent. It commits with the command's events.
 
-#### Receipt
+#### Outbox effect
 
-A typed signal emitted when an async milestone completes, such as `checkpoint.baseline.captured`, `checkpoint.diff.finalized`, or `turn.processing.quiesced`. Receipts are a test-only mechanism: the production `RuntimeReceiptBusLive` publish is a no-op and only the test layer is PubSub-backed. Do not build production behavior on them. See [RuntimeReceiptBus.ts][13] and [CheckpointReactor.ts][6].
+Side-effect intent committed with the events, such as starting a provider turn or capturing a checkpoint. See [EventSink.ts][28].
 
-#### Quiesced
+#### Effect worker
 
-"Quiesced" means a turn has gone quiet and stable: follow-up work such as [CheckpointReactor.ts][6] has settled. It appears in [the receipt schema][13], so in practice it is something tests wait on rather than a production signal.
+The worker that runs outbox effects after commit and feeds their results back as commands. Tests drain it (`OrchestrationEffectWorkerV2.drain`) instead of sleeping. See [EffectWorker.ts][30].
 
 ### Provider runtime
 
@@ -169,9 +165,9 @@ desktop ships T3 Code already matching it.
 
 - If you see `requested`, think "intent recorded".
 - If you see `completed`, think "result applied".
-- If you see `receipt`, think "async milestone signal, for tests".
+- If you see `receipt`, think "idempotent record of a command's result".
 - If you see `checkpoint`, think "workspace snapshot for diff/restore".
-- If you see `quiesced`, think "all relevant follow-up work has gone idle".
+- If you see `outbox`, think "side effect committed with the events, run after commit".
 
 ## Related Docs
 
@@ -206,3 +202,7 @@ desktop ships T3 Code already matching it.
 [24]: ./overview.md
 [25]: ../../apps/server/src/environmentTheme.ts
 [26]: ../user/environment-theme.md
+[27]: ../../apps/server/src/orchestration-v2/Orchestrator.ts
+[28]: ../../apps/server/src/orchestration-v2/EventSink.ts
+[29]: ../../apps/server/src/orchestration-v2/ProjectionStore.ts
+[30]: ../../apps/server/src/orchestration-v2/EffectWorker.ts

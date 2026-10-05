@@ -14,11 +14,11 @@ import { projectEnvironment } from "../state/projects";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useNewThreadHandler } from "./useHandleNewThread";
 
-function reportScratchFailure(error: unknown) {
+function reportScratchFailure(title: string, error: unknown) {
   toastManager.add(
     stackedThreadToast({
       type: "error",
-      title: "Could not start without a project",
+      title,
       description: error instanceof Error ? error.message : "An error occurred.",
     }),
   );
@@ -62,11 +62,14 @@ export function useScratchProject() {
 
   /** Resolves to the scratch project once it is in this client's store. */
   const openScratchProject = useCallback(
-    async (environmentId: EnvironmentId): Promise<EnvironmentProject | null> => {
+    async (
+      environmentId: EnvironmentId,
+      failureTitle = "Could not start without a project",
+    ): Promise<EnvironmentProject | null> => {
       const result = await ensureScratch({ environmentId, input: {} });
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
-          reportScratchFailure(squashAtomCommandFailure(result));
+          reportScratchFailure(failureTitle, squashAtomCommandFailure(result));
         }
         return null;
       }
@@ -74,7 +77,7 @@ export function useScratchProject() {
       // the create event to reach the store before targeting one.
       return waitForProject(scopeProjectRef(environmentId, result.value.projectId)).catch(
         (error: unknown) => {
-          reportScratchFailure(error);
+          reportScratchFailure(failureTitle, error);
           return null;
         },
       );
@@ -87,7 +90,7 @@ export function useScratchProject() {
       const project = await openScratchProject(environmentId);
       if (project) {
         await handleNewThread(scopeProjectRef(project.environmentId, project.id)).catch(
-          reportScratchFailure,
+          (error: unknown) => reportScratchFailure("Could not start without a project", error),
         );
       }
     },

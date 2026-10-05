@@ -531,6 +531,35 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         assert.isNull(onlyHeldShell?.latestRunId);
         assert.equal(onlyHeldShell?.status, "idle");
       }
+
+      // A wake run counts from the start of the work it continues.
+      const later = DateTime.add(now, { minutes: 5 });
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-interruptible:wake"),
+        type: "run.updated",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        occurredAt: later,
+        payload: {
+          ...run,
+          status: "running",
+          requestedAt: later,
+          startedAt: later,
+          workStartedAt: now,
+        },
+      });
+      const wakeProjection = yield* projectionStore.getThreadProjection(threadId);
+      const wakeSqlShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      for (const wakeShell of [wakeSqlShell, threadShellFromProjection(wakeProjection)]) {
+        assert.equal(
+          wakeShell?.activityRunStartedAt && DateTime.toEpochMillis(wakeShell.activityRunStartedAt),
+          DateTime.toEpochMillis(now),
+        );
+      }
     }),
   );
 
@@ -618,6 +647,46 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       const itemLookups = plan.filter((row) => row.detail.startsWith("SEARCH item "));
       assert.lengthOf(itemLookups, 2);
       assert.isTrue(itemLookups.every((row) => row.detail.includes("turn_items_thread_run_idx")));
+    }),
+  );
+
+  it.effect("reads one turn item with its full output, scoped to its thread", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-turn-item-read");
+      const itemId = TurnItemId.make("turn-item:projection-turn-item-read");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-turn-item-read:item"),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: itemId,
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "completed",
+          title: "echo ok",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "command_execution",
+          input: "echo ok",
+          output: "ok",
+        },
+      });
+
+      const stored = yield* projectionStore.getTurnItem({ threadId, itemId });
+      assert.strictEqual(stored?.type === "command_execution" ? stored.output : undefined, "ok");
+      assert.isNull(
+        yield* projectionStore.getTurnItem({ threadId: ThreadId.make("thread:other"), itemId }),
+      );
     }),
   );
 
@@ -1290,6 +1359,85 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         (yield* projectionStore.getThreadShell(threadId))?.latestVisibleMessage,
         expected,
       );
+    }),
+  );
+
+  it.effect("stamps the last message the user wrote, not later wakes", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-user-authored");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-user-authored:created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:projection-user-authored"),
+          title: "User authored",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      const sent = DateTime.add(now, { seconds: 1 });
+      const woke = DateTime.add(now, { seconds: 2 });
+      // A wake (background result, PR watch) is a user-role message the server wrote.
+      for (const message of [
+        { suffix: "sent", createdBy: "user" as const, at: sent },
+        { suffix: "wake", createdBy: "system" as const, at: woke },
+      ]) {
+        yield* projectionStore.apply({
+          id: EventId.make(`event:projection-user-authored:${message.suffix}`),
+          type: "message.updated",
+          threadId,
+          occurredAt: message.at,
+          payload: {
+            createdBy: message.createdBy,
+            creationSource: message.createdBy === "user" ? "web" : "server",
+            id: MessageId.make(`message:projection-user-authored:${message.suffix}`),
+            threadId,
+            runId: null,
+            nodeId: null,
+            role: "user",
+            text: message.suffix,
+            attachments: [],
+            streaming: false,
+            createdAt: message.at,
+            updatedAt: message.at,
+          },
+        });
+      }
+
+      const fromProjection = threadShellFromProjection(
+        yield* projectionStore.getThreadProjection(threadId),
+      );
+      const fromSnapshot = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      for (const shell of [fromProjection, fromSnapshot]) {
+        assert.equal(DateTime.formatIso(shell!.latestUserMessageAt!), DateTime.formatIso(woke));
+        assert.equal(
+          DateTime.formatIso(shell!.latestUserAuthoredMessageAt!),
+          DateTime.formatIso(sent),
+        );
+      }
     }),
   );
 

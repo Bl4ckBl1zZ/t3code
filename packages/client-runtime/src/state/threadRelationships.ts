@@ -92,11 +92,14 @@ export function deriveThreadRelationshipGraph(input: {
     const ownerThreadId = input.projection.thread.id;
     for (const subagent of input.projection.subagents) {
       if (subagent.childThreadId === null) continue;
+      // The subagent record settles with the delegated task's first run, but the
+      // parent can keep sending the child follow-ups. A live run on the child
+      // thread outranks that settled status.
       addEdge({
         sourceThreadId: ownerThreadId,
         targetThreadId: subagent.childThreadId,
         kind: "subagent",
-        status: subagent.status,
+        status: liveThreadRunStatus(threadsById.get(subagent.childThreadId)) ?? subagent.status,
       });
     }
     for (const transfer of input.projection.contextTransfers) {
@@ -187,6 +190,18 @@ export function isParentThreadRelationship(
 }
 
 /** An incoming parent row shows its own status, not the child's edge status. */
+const LIVE_THREAD_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
+
+/** The status of a thread's live run, or null when it has none. */
+export function liveThreadRunStatus(
+  thread: Pick<OrchestrationV2ThreadShell, "status"> | null | undefined,
+): "preparing" | "starting" | "running" | "waiting" | null {
+  const status = thread?.status;
+  return status !== undefined && LIVE_THREAD_RUN_STATUSES.has(status)
+    ? (status as "preparing" | "starting" | "running" | "waiting")
+    : null;
+}
+
 export function threadRelationshipRowStatus(
   graph: ThreadRelationshipGraph,
   row: Pick<ThreadRelationshipWalkRow, "threadId" | "edge">,

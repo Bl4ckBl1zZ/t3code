@@ -19,7 +19,8 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { Code2, Eye, FolderTree, Globe2 } from "lucide-react";
+import { FolderTree, Globe2 } from "lucide-react";
+import { Code2, Eye } from "lucide";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -30,6 +31,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { serverEnvironment } from "~/state/server";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import { MediaActions, type MediaActionSource } from "../media/MediaActions";
+import { MorphIcon } from "../MorphIcon";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
@@ -1202,7 +1204,7 @@ export default function FilePreviewPanel({
                     variant="ghost"
                     size="sm"
                   >
-                    {rendered ? <Code2 className="size-3.5" /> : <Eye className="size-3.5" />}
+                    <MorphIcon className="size-3.5" icon={rendered ? Code2 : Eye} />
                   </Toggle>
                 }
               />

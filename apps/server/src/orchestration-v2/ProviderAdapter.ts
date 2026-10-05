@@ -413,6 +413,8 @@ export interface ProviderAdapterV2TurnInput {
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly runOrdinal: number;
+  /** Whether the current native session has an accepted turn; omitted when unknown. */
+  readonly nativeThreadHasTurns?: boolean;
   readonly providerTurnOrdinal: number;
   readonly attemptId: RunAttemptId;
   readonly rootNodeId: NodeId;
