@@ -487,6 +487,10 @@ struct HomePlaceholderRow: View {
 struct HomeBatchAvailability: Equatable {
     var canSnooze = false
     var canSettle = false
+    /// The ways back: reopen a settled thread, unsnooze a snoozed one. Same
+    /// rules as the row menu's Reopen and Unsnooze.
+    var canUnsettle = false
+    var canWake = false
     var canArchive = false
     var canPin = false
     var canUnpin = false
@@ -514,6 +518,25 @@ struct HomeBatchAvailability: Equatable {
             && !thread.isEffectivelySettled(at: now, changeRequest: changeRequest)
     }
 
+    static func canUnsettle(
+        _ thread: FeatureThread,
+        in workspace: MobileWorkspace,
+        now: Date,
+        changeRequest: FeaturePullRequest?
+    ) -> Bool {
+        workspace != .chat
+            && !thread.isArchived
+            && thread.canShelveSettled
+            && thread.isEffectivelySettled(at: now, changeRequest: changeRequest)
+    }
+
+    static func canWake(_ thread: FeatureThread, in workspace: MobileWorkspace, now: Date) -> Bool {
+        workspace != .chat
+            && !thread.isArchived
+            && thread.canShelveSnoozed
+            && thread.isEffectivelySnoozed(at: now)
+    }
+
     static func resolve(
         _ threads: [FeatureThread],
         workspace: MobileWorkspace,
@@ -526,6 +549,10 @@ struct HomeBatchAvailability: Equatable {
             if canSettle(thread, in: workspace, now: now, changeRequest: changeRequests[thread.id]) {
                 result.canSettle = true
             }
+            if canUnsettle(thread, in: workspace, now: now, changeRequest: changeRequests[thread.id]) {
+                result.canUnsettle = true
+            }
+            if canWake(thread, in: workspace, now: now) { result.canWake = true }
             if !thread.isArchived, thread.canArchive { result.canArchive = true }
             if thread.pinnedAt == nil { result.canPin = true } else { result.canUnpin = true }
         }

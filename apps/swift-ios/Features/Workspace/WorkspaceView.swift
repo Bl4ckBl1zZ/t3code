@@ -683,32 +683,51 @@ public struct WorkspaceView: View {
         } else {
             if workspace != .chat {
                 Menu {
-                    ForEach(SnoozePresets.resolve()) { preset in
-                        Button {
-                            // Recomputed at tap time, like the row menu.
-                            guard let until = SnoozePresets.snoozedUntil(actionID: SnoozePresets.actionID(for: preset)) else { return }
-                            snoozeSelection(until: until)
-                        } label: {
-                            Text(preset.label)
-                            Text(preset.whenLabel)
+                    if availability.canWake {
+                        Button("Unsnooze", systemImage: "bell", action: wakeSelection)
+                            .accessibilityIdentifier("workspace-batch-unsnooze")
+                        Divider()
+                    }
+                    Group {
+                        ForEach(SnoozePresets.resolve()) { preset in
+                            Button {
+                                // Recomputed at tap time, like the row menu.
+                                guard let until = SnoozePresets.snoozedUntil(actionID: SnoozePresets.actionID(for: preset)) else { return }
+                                snoozeSelection(until: until)
+                            } label: {
+                                Text(preset.label)
+                                Text(preset.whenLabel)
+                            }
+                        }
+                        Divider()
+                        Button("Custom…", systemImage: "calendar") {
+                            customSnoozeTargets = CustomSnoozeTargets(threadIDs: batchSelection.sorted(), isBatch: true)
                         }
                     }
-                    Divider()
-                    Button("Custom…", systemImage: "calendar") {
-                        customSnoozeTargets = CustomSnoozeTargets(threadIDs: batchSelection.sorted(), isBatch: true)
-                    }
+                    .disabled(!availability.canSnooze)
                 } label: {
                     Label("Snooze", systemImage: "moon.zzz")
                 }
-                .disabled(!availability.canSnooze)
+                .disabled(!availability.canSnooze && !availability.canWake)
                 .accessibilityIdentifier("workspace-batch-snooze")
                 Spacer()
-                Button {
-                    settleSelection()
-                } label: {
-                    Label("Settle", systemImage: "checkmark")
+                // Like Pin and Unpin: Reopen takes the slot once nothing
+                // selected is left to settle.
+                if availability.canSettle || !availability.canUnsettle {
+                    Button {
+                        settleSelection()
+                    } label: {
+                        Label("Settle", systemImage: "checkmark")
+                    }
+                    .disabled(!availability.canSettle)
+                } else {
+                    Button {
+                        unsettleSelection()
+                    } label: {
+                        Label("Reopen", systemImage: "arrow.counterclockwise")
+                    }
+                    .accessibilityIdentifier("workspace-batch-reopen")
                 }
-                .disabled(!availability.canSettle)
                 Spacer()
             }
             Button {
@@ -796,6 +815,36 @@ public struct WorkspaceView: View {
         runBatch(failureMessage: "Threads that can't be settled, or failed to update, remain selected.") { id in
             guard settleable.contains(id) else { return false }
             return await model.setSettled(id, settled: true)
+        }
+    }
+
+    /// The reverse of ``settleSelection()``, through the row menu's Reopen.
+    private func unsettleSelection() {
+        let now = Date.now
+        let reopenable = Set(model.snapshot.threads.filter {
+            HomeBatchAvailability.canUnsettle(
+                $0,
+                in: workspace,
+                now: now,
+                changeRequest: model.changeRequestsByThreadID[$0.id]
+            )
+        }.map(\.id))
+        runBatch(failureMessage: "Threads that can't be reopened, or failed to update, remain selected.") { id in
+            guard reopenable.contains(id) else { return false }
+            return await model.setSettled(id, settled: false)
+        }
+    }
+
+    /// The reverse of ``snoozeSelection(until:)``, through the row menu's
+    /// Unsnooze. Threads that are not snoozed stay selected.
+    private func wakeSelection() {
+        let now = Date.now
+        let snoozed = Set(model.snapshot.threads.filter {
+            HomeBatchAvailability.canWake($0, in: workspace, now: now)
+        }.map(\.id))
+        runBatch(failureMessage: "Threads that aren't snoozed, or failed to update, remain selected.") { id in
+            guard snoozed.contains(id) else { return false }
+            return await model.setSnoozed(id, until: nil)
         }
     }
 

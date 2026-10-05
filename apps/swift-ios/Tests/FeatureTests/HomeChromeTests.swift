@@ -305,6 +305,50 @@ final class HomeChromeTests: XCTestCase {
         XCTAssertTrue(availability.canArchive)
     }
 
+    func testSettledAndSnoozedSelectionsOfferTheWayBack() {
+        let now = Date.now
+        var settled = thread("settled")
+        settled.isSettled = true
+        var snoozed = thread("snoozed")
+        snoozed.snoozedUntil = now.addingTimeInterval(3600)
+        snoozed.snoozedAt = now
+        let availability = HomeBatchAvailability.resolve(
+            [settled, snoozed],
+            workspace: .code,
+            now: now,
+            changeRequests: [:]
+        )
+        XCTAssertTrue(availability.canUnsettle)
+        XCTAssertTrue(availability.canWake)
+        XCTAssertTrue(availability.canSettle, "The snoozed thread can still settle")
+
+        let onlySettled = HomeBatchAvailability.resolve([settled], workspace: .code, now: now, changeRequests: [:])
+        XCTAssertFalse(onlySettled.canSettle, "Reopen takes the Settle slot")
+        XCTAssertTrue(onlySettled.canUnsettle)
+        XCTAssertFalse(onlySettled.canWake)
+    }
+
+    func testTheWayBackFollowsTheRowMenusRules() {
+        let now = Date.now
+        var expired = thread("expired")
+        expired.snoozedUntil = now.addingTimeInterval(-60)
+        XCTAssertFalse(HomeBatchAvailability.canWake(expired, in: .code, now: now), "An expired snooze is already awake")
+        var asking = thread("asking", state: .waitingForInput)
+        asking.snoozedUntil = now.addingTimeInterval(3600)
+        XCTAssertFalse(HomeBatchAvailability.canWake(asking, in: .code, now: now), "A thread asking for something is not hidden")
+        var archived = thread("archived", isArchived: true)
+        archived.isSettled = true
+        XCTAssertFalse(HomeBatchAvailability.canUnsettle(archived, in: .code, now: now, changeRequest: nil))
+        var unsupported = thread("old server", supportsSettlement: nil, supportsSnooze: nil)
+        unsupported.isSettled = true
+        unsupported.snoozedUntil = now.addingTimeInterval(3600)
+        XCTAssertFalse(HomeBatchAvailability.canUnsettle(unsupported, in: .code, now: now, changeRequest: nil))
+        XCTAssertFalse(HomeBatchAvailability.canWake(unsupported, in: .code, now: now))
+        var chat = thread("chat", workInboxRole: "chat")
+        chat.isSettled = true
+        XCTAssertFalse(HomeBatchAvailability.canUnsettle(chat, in: .chat, now: now, changeRequest: nil))
+    }
+
     func testWorkMainThreadNeverParks() {
         let main = thread("main", workInboxRole: "main")
         XCTAssertFalse(HomeBatchAvailability.canSnooze(main, in: .work))

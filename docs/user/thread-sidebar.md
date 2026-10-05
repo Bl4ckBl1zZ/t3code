@@ -134,6 +134,8 @@ Threads with unsent text or attachments show a **Draft** badge. Long-press a thr
 Choose **⋯ → Select Threads** on Home, choose **Select** from a row’s menu, or swipe across rows
 with two fingers, then select rows to snooze, settle, archive, pin or unpin, or delete together from
 the bar at the bottom. Each action is available when it applies to at least one selected thread.
+**Snooze → Unsnooze** wakes the snoozed threads in the selection, and **Reopen** replaces
+**Settle** when the selection holds settled threads and none left to settle.
 Delete asks for confirmation; unpin follows your confirmation preference.
 Successful rows leave the selection. Failed rows stay selected so you can retry. Deleting thread
 history does not remove worktree files from the environment. Threads that cannot be snoozed,
