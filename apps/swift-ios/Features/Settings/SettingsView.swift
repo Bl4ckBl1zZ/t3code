@@ -435,6 +435,9 @@ struct SettingsServerStatus: Equatable {
         for environment: FeatureEnvironment,
         connection: FeatureConnection.State
     ) -> SettingsServerStatus {
+        if environment.unsupportedReason != nil {
+            return .init(title: "Not supported", symbol: "exclamationmark.triangle", color: T3Colors.warning)
+        }
         guard environment.isEnabled else {
             return .init(title: "Off", symbol: "power", color: T3Colors.textTertiary)
         }

@@ -87,6 +87,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var fallbackPollingTask: Task<Void, Never>?
     private var configurationTask: Task<Void, Never>?
     private var aggregateRefreshTask: Task<Void, Never>?
+    private var compatibilityTask: Task<Void, Never>?
     private var aggregateRefreshID: UUID?
     private var shellPublishTask: Task<Void, Never>?
     private var archivedRefreshTask: Task<Void, Never>?
@@ -155,6 +156,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         fallbackPollingTask?.cancel()
         configurationTask?.cancel()
         aggregateRefreshTask?.cancel()
+        compatibilityTask?.cancel()
         shellPublishTask?.cancel()
         archivedRefreshTask?.cancel()
         detailRefreshTask?.cancel()
@@ -166,6 +168,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func initialSnapshot() async throws -> FeatureSnapshot {
+        startCompatibilityWatch()
         let environments = try await liveEnvironments()
         guard let activeClient = try await runtime.activeClient() else {
             await clearActiveEnvironment()
@@ -248,6 +251,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         guard descriptor.environmentId == credential.environmentID else {
             throw T3ConnectRelayError.environmentMismatch
         }
+        // A machine on another orchestration protocol cannot be used from
+        // this build; say why rather than saving a connection that never opens.
+        if let issue = OrchestrationProtocol.compatibilityIssue(with: descriptor) {
+            throw EnvironmentIncompatibleError(issue)
+        }
         let identity = PairingClientIdentity.current
         let authorization = try await t3ConnectController.managedAuthorizer.exchange(
             credential,
@@ -304,6 +312,46 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         startPolling(activated, reason: "activate-environment")
     }
 
+    /// Follows environments the runtime switched off (a server on another
+    /// protocol refused the connection) or back on (an update finished), so
+    /// they leave or rejoin Home without a user action.
+    private func startCompatibilityWatch() {
+        guard compatibilityTask == nil else { return }
+        let changes = runtime.compatibilityChanges
+        compatibilityTask = Task { [weak self] in
+            for await environmentID in changes {
+                guard let self else { return }
+                await self.environmentCompatibilityChanged(environmentID)
+            }
+        }
+    }
+
+    private func environmentCompatibilityChanged(_ environmentID: String) async {
+        guard let activeEnvironment, activeEnvironment.id != environmentID else {
+            // The server in use was switched off, or one came back with none
+            // active: pick the active server again.
+            if activeEnvironment?.id == environmentID {
+                await clearActiveEnvironment(disconnectClient: false)
+            }
+            if let snapshot = try? await initialSnapshot() {
+                continuation.yield(.snapshot(snapshot))
+            }
+            return
+        }
+        guard let environments = try? await liveEnvironments(),
+              self.activeEnvironment?.id == activeEnvironment.id else { return }
+        rebuildEntityIndexes(environments)
+        let connection = latestSnapshot?.connection
+        publish(
+            makeSnapshot(
+                environments: environments,
+                activeEnvironment: activeEnvironment,
+                connectionState: connection?.state ?? .disconnected,
+                connectionDetail: connection?.detail
+            )
+        )
+    }
+
     /// Saved environments the user has not switched off. Every catalog read
     /// that drives connections and home goes through here, so a switched-off
     /// environment never connects and its threads stay out of home.
@@ -343,6 +391,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func environmentRouteInUse(id: String) async -> String? {
         await runtime.routeInUse(environmentID: id)
+    }
+
+    func updateOutdatedEnvironment(
+        id: String,
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        guard desktopUpdatesInFlight.insert(id).inserted else {
+            throw FeatureCapabilityUnavailable("An update is already running for this environment")
+        }
+        defer { desktopUpdatesInFlight.remove(id) }
+        return try await runtime.updateOutdatedServer(environmentID: id, progress: progress)
     }
 
     func removeEnvironment(id: String) async throws {
@@ -4494,6 +4553,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) -> Bool {
         previous.connection == next.connection
             && previous.environments == next.environments
+            && previous.switchedOffEnvironments == next.switchedOffEnvironments
             && previous.providers == next.providers
             && previous.providersByEnvironment == next.providersByEnvironment
             && previous.preferencesByEnvironment == next.preferencesByEnvironment
@@ -4755,7 +4815,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     private func mapEnvironment(_ environment: Environment, activeID: String?) -> FeatureEnvironment {
-        FeatureEnvironment(
+        var mapped = FeatureEnvironment(
             id: environment.id,
             name: environment.label,
             // The address the user saved, which a learned route ranked ahead
@@ -4774,6 +4834,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             supportsCustomModelDefinitions: environment.descriptor?.capabilities.customModelDefinitions,
             supportsProjectIcons: environment.descriptor?.capabilities.projectIcons
         )
+        mapped.unsupportedReason = environment.unsupportedReason
+        mapped.serverUpdateRequired = environment.serverUpdateRequired
+        return mapped
     }
 
     // MARK: - V2 projection mapping

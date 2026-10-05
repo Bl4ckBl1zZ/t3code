@@ -8,6 +8,11 @@ public actor T3Client {
         _ activeRoute: EnvironmentRoute,
         _ reported: [ServerDirectEndpoint]
     ) async -> Void
+    /// Reports a server whose orchestration protocol this build cannot speak.
+    public typealias CompatibilityReporter = @Sendable (
+        _ environmentID: String,
+        _ issue: EnvironmentCompatibilityIssue
+    ) async -> Void
 
     /// The environment as saved when this client was made. Requests go over
     /// `routeSelector`, which follows later route edits without a new client.
@@ -28,7 +33,9 @@ public actor T3Client {
         managedAuthorization: (any ManagedEnvironmentAuthorizing)? = nil,
         rpcConnectionWaitTimeout: Duration = .seconds(4),
         connectionIdentity: ClientConnectionIdentity = .current,
-        routeLearner: RouteLearner? = nil
+        routeLearner: RouteLearner? = nil,
+        compatibilityReporter: CompatibilityReporter? = nil,
+        namesOrchestrationProtocol: Bool = true
     ) {
         self.environment = environment
         self.routeLearner = routeLearner
@@ -48,11 +55,27 @@ public actor T3Client {
             }
         )
         self.routeSelector = routeSelector
+        let dials = DialCounter()
         self.rpc = WebSocketRPCClient(
             connector: webSocketConnector,
             connectionWaitTimeout: rpcConnectionWaitTimeout
         ) {
-            try await routeSelector.connect { environment in
+            let isRedial = dials.next() > 1
+            return try await routeSelector.connect { environment in
+                // A server on another protocol refuses the upgrade, which
+                // looks like any failed dial. Before redialing, its public
+                // descriptor says whether that is why, so the environment is
+                // switched off with the reason instead of retried forever.
+                if isRedial, namesOrchestrationProtocol, let compatibilityReporter,
+                   let descriptor = try? await api.descriptor(
+                       at: environment.httpBaseURL,
+                       timeoutInterval: 5
+                   ),
+                   descriptor.environmentId == environment.id,
+                   let issue = OrchestrationProtocol.compatibilityIssue(with: descriptor) {
+                    await compatibilityReporter(environment.id, issue)
+                    throw EnvironmentIncompatibleError(issue)
+                }
                 let ticket: WebSocketTicket
                 do {
                     ticket = try await api.webSocketTicket(for: environment)
@@ -85,8 +108,11 @@ public actor T3Client {
                 query.append(contentsOf: connectionIdentity.queryItems)
                 // Named so a server that has moved past this protocol turns the
                 // upgrade away instead of handing us frames we cannot decode.
+                // An update-only client for an outdated server names none.
                 query.removeAll { $0.name == OrchestrationProtocol.queryItemName }
-                query.append(OrchestrationProtocol.queryItem)
+                if namesOrchestrationProtocol {
+                    query.append(OrchestrationProtocol.queryItem)
+                }
                 components.queryItems = query
                 guard let url = components.url else { throw PairingURLError.invalidURL }
                 return url
@@ -200,9 +226,43 @@ public actor T3Client {
         guard let descriptor = config.environment, descriptor.capabilities.desktopAppUpdate == true else {
             throw RPCError.remote("Update the desktop app on that machine to enable remote updates.")
         }
-        var updatePayload: [String: JSONValue] = ["targetVersion": .string(descriptor.serverVersion)]
-        if descriptor.capabilities.threadRestartContinuation == true &&
-            (config.settings?.continueThreadsAfterServerUpdate ?? false) {
+        return try await runDesktopAppUpdate(
+            targetVersion: descriptor.serverVersion,
+            continueRunningThreads: descriptor.capabilities.threadRestartContinuation == true
+                && (config.settings?.continueThreadsAfterServerUpdate ?? false),
+            progress: progress
+        )
+    }
+
+    /// Updates a desktop-hosted server too old for this app to connect to.
+    /// Its capabilities come from the public descriptor, because such a server
+    /// never delivers a config; only the update RPCs cross the socket, whose
+    /// shapes have not changed across protocol versions. Use a client made
+    /// with `namesOrchestrationProtocol: false`, or the server refuses the
+    /// socket.
+    public func updateOutdatedDesktopApp(
+        descriptor: EnvironmentDescriptor,
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        guard OrchestrationProtocol.canUpdateFromApp(descriptor) else {
+            throw RPCError.remote(
+                "Update T3 Code on \(descriptor.label) manually; it cannot be updated from this app."
+            )
+        }
+        return try await runDesktopAppUpdate(
+            targetVersion: descriptor.serverVersion,
+            continueRunningThreads: false,
+            progress: progress
+        )
+    }
+
+    private func runDesktopAppUpdate(
+        targetVersion: String,
+        continueRunningThreads: Bool,
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        var updatePayload: [String: JSONValue] = ["targetVersion": .string(targetVersion)]
+        if continueRunningThreads {
             updatePayload["continueRunningThreads"] = .bool(true)
         }
         let payload = JSONValue.object(updatePayload)
@@ -1988,6 +2048,11 @@ public actor EnvironmentRuntime {
     private let webSocketConnector: any WebSocketConnecting
     private let managedAuthorization: (any ManagedEnvironmentAuthorizing)?
     private var clients: [String: T3Client] = [:]
+    /// Ids of environments whose compatibility state changed outside a user
+    /// action (a refused connection, an update that finished), so the app can
+    /// move them in or out of Home.
+    public nonisolated let compatibilityChanges: AsyncStream<String>
+    private let compatibilityContinuation: AsyncStream<String>.Continuation
 
     public init(
         environmentStore: EnvironmentStore = EnvironmentStore(),
@@ -2002,6 +2067,9 @@ public actor EnvironmentRuntime {
         self.webSocketConnector = webSocketConnector
         self.managedAuthorization = managedAuthorization
         supportsManagedAuthorization = managedAuthorization != nil
+        let changes = AsyncStream<String>.makeStream()
+        compatibilityChanges = changes.stream
+        compatibilityContinuation = changes.continuation
     }
 
     /// Guards the one-time React Native import so concurrent readers cannot run
@@ -2051,10 +2119,115 @@ public actor EnvironmentRuntime {
     /// connection and keeps its record and credential, so switching it back
     /// on needs no new pairing.
     public func setEnabled(id: String, enabled: Bool) async throws {
+        if enabled,
+           let environment = try await environmentStore.load().first(where: { $0.id == id }),
+           environment.unsupportedReason != nil {
+            // Locked until a check finds the versions compatible again.
+            guard let descriptor = await reachableDescriptor(for: environment) else {
+                throw RPCError.remote(
+                    "Couldn't check \(environment.label) right now. Try again when it is reachable."
+                )
+            }
+            if let issue = OrchestrationProtocol.compatibilityIssue(with: descriptor) {
+                try await environmentStore.setCompatibility(id: id, issue: issue)
+                throw EnvironmentIncompatibleError(issue)
+            }
+            try await environmentStore.setCompatibility(id: id, issue: nil)
+        }
         try await environmentStore.setEnabled(id: id, enabled: enabled)
         if !enabled, let client = clients.removeValue(forKey: id) {
             await client.disconnect()
         }
+    }
+
+    /// The public descriptor from the first saved route that answers as this
+    /// environment. Sends no credential.
+    public func reachableDescriptor(for environment: Environment) async -> EnvironmentDescriptor? {
+        let api = EnvironmentAPI(transport: httpTransport, credentials: credentialStore)
+        for route in environment.routes {
+            if let descriptor = try? await api.descriptor(at: route.httpBaseURL, timeoutInterval: 8),
+               descriptor.environmentId == environment.id {
+                return descriptor
+            }
+        }
+        return nil
+    }
+
+    /// Switches an environment off because its server speaks an orchestration
+    /// protocol this build cannot, keeping the reason for Settings.
+    public func markIncompatible(environmentID: String, issue: EnvironmentCompatibilityIssue) async {
+        do {
+            try await environmentStore.setCompatibility(id: environmentID, issue: issue)
+        } catch {
+            ConnectionLog.logger.warning(
+                "[conn] compatibility-save-failed env=\(environmentID, privacy: .public)"
+            )
+            return
+        }
+        ConnectionLog.logger.warning(
+            "[conn] incompatible env=\(environmentID, privacy: .public) update=\(issue.serverUpdateRequired)"
+        )
+        if let client = clients.removeValue(forKey: environmentID) {
+            // Called from inside that client's dial; stop it without waiting.
+            Task { await client.disconnect() }
+        }
+        compatibilityContinuation.yield(environmentID)
+    }
+
+    /// Updates a desktop-hosted server too old for this app to connect to,
+    /// then waits for it to come back compatible and switches it on again.
+    /// The update runs over a socket that names no protocol, which the old
+    /// server accepts; servers this app cannot update throw with manual
+    /// guidance.
+    public func updateOutdatedServer(
+        environmentID: String,
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        guard let environment = try await environmentStore.load()
+            .first(where: { $0.id == environmentID }) else {
+            throw RPCError.remote("Environment \(environmentID) is not saved.")
+        }
+        guard let descriptor = await reachableDescriptor(for: environment) else {
+            throw RPCError.remote("\(environment.label) did not answer on any saved route.")
+        }
+        if OrchestrationProtocol.compatibilityIssue(with: descriptor) == nil {
+            // Updated some other way: just switch it back on.
+            try await switchBackOn(environmentID)
+            return descriptor.serverVersion
+        }
+        let updater = T3Client(
+            environment: environment,
+            credentialStore: credentialStore,
+            httpTransport: httpTransport,
+            webSocketConnector: webSocketConnector,
+            managedAuthorization: managedAuthorization,
+            namesOrchestrationProtocol: false
+        )
+        do {
+            _ = try await updater.updateOutdatedDesktopApp(descriptor: descriptor, progress: progress)
+        } catch {
+            await updater.disconnect()
+            throw error
+        }
+        await updater.disconnect()
+        await progress("restarting")
+        // The host restarts onto the new version and may answer on another route.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(240))
+        while ContinuousClock.now < deadline {
+            if let resumed = await reachableDescriptor(for: environment),
+               OrchestrationProtocol.compatibilityIssue(with: resumed) == nil {
+                try await switchBackOn(environmentID)
+                return resumed.serverVersion
+            }
+            try await Task.sleep(for: .seconds(2))
+        }
+        throw RPCError.remote("\(descriptor.label) did not come back on a compatible T3 Code version.")
+    }
+
+    private func switchBackOn(_ environmentID: String) async throws {
+        try await environmentStore.setCompatibility(id: environmentID, issue: nil)
+        try await environmentStore.setEnabled(id: environmentID, enabled: true)
+        compatibilityContinuation.yield(environmentID)
     }
 
     public func activeClient() async throws -> T3Client? {
@@ -2077,6 +2250,7 @@ public actor EnvironmentRuntime {
             label: identity.label,
             deviceType: identity.deviceType
         )
+        try requireCompatible(environment)
         try await environmentStore.setActiveEnvironment(id: environment.id)
         return await clientAfterRouteEdit(environment)
     }
@@ -2098,8 +2272,22 @@ public actor EnvironmentRuntime {
             label: identity.label,
             deviceType: identity.deviceType
         )
+        try requireCompatible(environment)
         try await environmentStore.setActiveEnvironment(id: environment.id)
         return await clientAfterRouteEdit(environment)
+    }
+
+    /// Pairing saves a server on another protocol switched off; tell the user
+    /// why instead of connecting to it, and let Settings show it.
+    private func requireCompatible(_ environment: Environment) throws {
+        guard let reason = environment.unsupportedReason else { return }
+        compatibilityContinuation.yield(environment.id)
+        throw EnvironmentIncompatibleError(
+            EnvironmentCompatibilityIssue(
+                reason: reason,
+                serverUpdateRequired: environment.serverUpdateRequired
+            )
+        )
     }
 
     /// Pairs another address of a saved environment and adds it as a route.
@@ -2415,8 +2603,25 @@ public actor EnvironmentRuntime {
                     activeRoute: activeRoute,
                     reported: reported
                 )
+            },
+            compatibilityReporter: { [weak self] environmentID, issue in
+                await self?.markIncompatible(environmentID: environmentID, issue: issue)
             }
         )
+    }
+}
+
+/// Counts socket dials for one client, so only redials pay for a
+/// compatibility check.
+private final class DialCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count
     }
 }
 

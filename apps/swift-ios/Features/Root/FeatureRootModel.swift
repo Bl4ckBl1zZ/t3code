@@ -64,6 +64,8 @@ public final class FeatureRootModel {
     public private(set) var isLoading = true
     public private(set) var isPerformingAction = false
     public private(set) var isManagingConnections = false
+    /// Outdated-server updates in progress: environment id to current stage.
+    public private(set) var serverUpdateStages: [String: String] = [:]
     /// The failure the root alert shows. Setting it clears `errorTitle`, so a
     /// caller that names what failed sets the message first, then the title.
     public var errorMessage: String? {
@@ -285,6 +287,36 @@ public final class FeatureRootModel {
 
     public func environmentRouteInUse(_ id: String) async -> String? {
         await client.environmentRouteInUse(id: id)
+    }
+
+    /// Updates an outdated server this app cannot connect to and switches it
+    /// back on. `serverUpdateStages[id]` holds the current stage while it runs.
+    @discardableResult
+    public func updateOutdatedEnvironment(_ id: String) async -> Bool {
+        guard serverUpdateStages[id] == nil else { return false }
+        serverUpdateStages[id] = "starting"
+        defer { serverUpdateStages[id] = nil }
+        // Not `perform`: this runs for minutes and must not mark every other
+        // action busy meanwhile.
+        do {
+            _ = try await client.updateOutdatedEnvironment(id: id) { [weak self] stage in
+                guard let self else { return }
+                await self.noteServerUpdateStage(stage, environmentID: id)
+            }
+            install(try await client.initialSnapshot())
+            clearDetails()
+            return true
+        } catch {
+            if !Self.isBenignCancellation(error) {
+                reportFailure(error.localizedDescription, title: "Couldn't Update Server")
+            }
+            return false
+        }
+    }
+
+    private func noteServerUpdateStage(_ stage: String, environmentID: String) {
+        guard serverUpdateStages[environmentID] != nil else { return }
+        serverUpdateStages[environmentID] = stage
     }
 
     public func disconnect() async {

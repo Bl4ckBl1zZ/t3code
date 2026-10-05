@@ -199,6 +199,34 @@ public actor EnvironmentStore {
         return document.environments
     }
 
+    /// Records the result of a protocol check. An incompatible environment is
+    /// switched off (and stops being the active one) with the reason kept for
+    /// Settings; a compatible result clears the reason but leaves the switch
+    /// to the caller. Returns the saved environment.
+    @discardableResult
+    public func setCompatibility(
+        id: String,
+        issue: EnvironmentCompatibilityIssue?
+    ) throws -> Environment? {
+        var document = try loadDocument()
+        guard let index = document.environments.firstIndex(where: { $0.id == id }) else {
+            return nil
+        }
+        var environment = document.environments[index]
+        environment.unsupportedReason = issue?.reason
+        environment.serverUpdateRequired = issue?.serverUpdateRequired ?? false
+        if issue != nil {
+            environment.isEnabled = false
+        }
+        guard environment != document.environments[index] else { return environment }
+        document.environments[index] = environment
+        if !environment.isEnabled, document.activeEnvironmentID == id {
+            document.activeEnvironmentID = document.environments.first(where: \.isEnabled)?.id
+        }
+        try save(document)
+        return environment
+    }
+
     /// Saves the addresses a server reports as learned routes. Runs the merge
     /// against the saved record inside this actor so a concurrent route edit
     /// is never overwritten. Returns the new routes, or nil when nothing

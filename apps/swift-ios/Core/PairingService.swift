@@ -166,6 +166,17 @@ public actor PairingService {
                 descriptor: descriptor
             )
         }
+        // A server on another orchestration protocol is saved switched off
+        // with the reason, rather than refused, so an outdated one can still
+        // be updated from Settings.
+        if let issue = OrchestrationProtocol.compatibilityIssue(with: descriptor) {
+            environment.unsupportedReason = issue.reason
+            environment.serverUpdateRequired = issue.serverUpdateRequired
+            environment.isEnabled = false
+        } else {
+            environment.unsupportedReason = nil
+            environment.serverUpdateRequired = false
+        }
         let credential = EnvironmentCredential(
             accessToken: access.accessToken,
             expiresAt: Date().addingTimeInterval(access.expiresIn),
@@ -178,7 +189,7 @@ public actor PairingService {
         try await credentialStore.setCredential(credential, for: credentialID)
         do {
             try await environmentStore.upsert(environment)
-            if try await environmentStore.activeEnvironmentID() == nil {
+            if environment.isEnabled, try await environmentStore.activeEnvironmentID() == nil {
                 try await environmentStore.setActiveEnvironment(id: environment.id)
             }
         } catch {

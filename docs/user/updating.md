@@ -76,6 +76,14 @@ the update, waits for it to come back on a compatible version, and then switches
 connects. This works for a machine you just paired and for one T3 Connect reports as outdated. A
 server that cannot update itself is not saved when you pair it; update it on its own machine first.
 
+In the native iOS app, such a server shows **Not supported** in **Settings → Servers**, and its
+details explain why. When the server runs in the desktop app and accepts remote updates, the details
+offer **Update Server**, which updates and restarts it and switches it back on once it returns on a
+compatible version. Any other server, and a server newer than the app, gets instructions instead:
+update the machine (or the app), then switch the server back on in its details to check again. The
+iOS app keeps a server it paired on an older version, switched off, so you can update it from there.
+Through T3 Connect, an incompatible machine is refused with the reason instead.
+
 ## After the Update
 
 Keep the web or desktop app open while the server restarts. The update completes only after the

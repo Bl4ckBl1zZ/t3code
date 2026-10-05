@@ -56,6 +56,10 @@ struct SettingsServerDetailView: View {
 
     @ViewBuilder
     private func content(_ environment: FeatureEnvironment) -> some View {
+        if let reason = environment.unsupportedReason {
+            compatibilitySection(environment, reason: reason)
+        }
+
         Section {
             Toggle(isOn: enabledBinding(environment)) {
                 SettingsTileLabel(
@@ -90,6 +94,53 @@ struct SettingsServerDetailView: View {
                         Text("\(environment.name) will need a new pairing code to be added again.")
                     }
             }
+        }
+    }
+
+    /// Why the server is switched off for an incompatible version, and the
+    /// way out: an in-app update for a desktop-hosted server, otherwise
+    /// switching it back on after updating by hand.
+    @ViewBuilder
+    private func compatibilitySection(_ environment: FeatureEnvironment, reason: String) -> some View {
+        let stage = model.serverUpdateStages[environment.id]
+        Section {
+            Label {
+                Text(reason)
+                    .foregroundStyle(T3Colors.textPrimary)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(T3Colors.warning)
+            }
+            if environment.serverUpdateRequired {
+                Button {
+                    Task { await model.updateOutdatedEnvironment(environment.id) }
+                } label: {
+                    HStack {
+                        Text(stage.map(Self.updateStageTitle) ?? "Update Server")
+                        Spacer()
+                        if stage != nil {
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(stage != nil)
+            }
+        } header: {
+            Text("Not Supported")
+        } footer: {
+            Text(environment.serverUpdateRequired
+                ? "T3 Code on \(environment.name) updates and restarts, then this server switches back on."
+                : "After updating, switch this server back on to check again.")
+        }
+    }
+
+    private static func updateStageTitle(_ stage: String) -> String {
+        switch stage {
+        case "downloading": "Downloading Update…"
+        case "installing": "Installing Update…"
+        case "resuming": "Restarting Server…"
+        case "restarting": "Waiting for Server…"
+        default: "Updating Server…"
         }
     }
 

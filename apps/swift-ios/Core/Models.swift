@@ -13,7 +13,14 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
     /// empty: an environment saved before routes existed decodes as one route
     /// whose credential stays under the environment id.
     public var routes: [EnvironmentRoute] {
-        didSet { if routes.isEmpty { routes = oldValue } }
+        didSet {
+            if routes.isEmpty {
+                routes = oldValue
+            } else if EnvironmentRoutes.endpointKey(routes) != EnvironmentRoutes.endpointKey(oldValue) {
+                unsupportedReason = nil
+                serverUpdateRequired = false
+            }
+        }
     }
     public var descriptor: EnvironmentDescriptor?
     /// False when the user switched this environment off on this device. It
@@ -21,6 +28,14 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
     /// home until switched back on. Catalogs saved before the switch existed
     /// decode as on.
     public var isEnabled: Bool
+    /// Why this build cannot talk to the server, when its protocol check
+    /// failed. Such an environment stays switched off until a later check
+    /// finds it compatible. Cleared when a saved route is added or changed,
+    /// so the new address is checked; reordering and learning keep it.
+    public var unsupportedReason: String?
+    /// The rejection came from an outdated server that can be updated from
+    /// this app.
+    public var serverUpdateRequired: Bool
 
     /// The preferred route's address. A client routed through another route
     /// (`routed(through:)`) sees that route's address here.
@@ -72,6 +87,8 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
         self.routes = routes
         self.descriptor = descriptor
         self.isEnabled = isEnabled
+        unsupportedReason = nil
+        serverUpdateRequired = false
     }
 
     /// This environment with `route` preferred, which is how a client talks
@@ -87,12 +104,14 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
     /// over without reconnecting.
     public func sameExceptRoutes(as other: Environment) -> Bool {
         id == other.id && label == other.label && descriptor == other.descriptor
-            && isEnabled == other.isEnabled
+            && isEnabled == other.isEnabled && unsupportedReason == other.unsupportedReason
+            && serverUpdateRequired == other.serverUpdateRequired
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, label, httpBaseURL, webSocketBaseURL, kind, descriptor, routes
         case isEnabled = "enabled"
+        case unsupportedReason, serverUpdateRequired
     }
 
     public init(from decoder: any Decoder) throws {
@@ -101,6 +120,11 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
         label = try container.decode(String.self, forKey: .label)
         descriptor = try container.decodeIfPresent(EnvironmentDescriptor.self, forKey: .descriptor)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        unsupportedReason = try container.decodeIfPresent(String.self, forKey: .unsupportedReason)
+        serverUpdateRequired = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .serverUpdateRequired
+        ) ?? false
         let decodedRoutes = try? container.decodeIfPresent(
             [LossyEnvironmentRoute].self,
             forKey: .routes
@@ -138,6 +162,8 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
         try container.encode(routes, forKey: .routes)
         try container.encodeIfPresent(descriptor, forKey: .descriptor)
         try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encodeIfPresent(unsupportedReason, forKey: .unsupportedReason)
+        if serverUpdateRequired { try container.encode(true, forKey: .serverUpdateRequired) }
     }
 }
 
@@ -293,6 +319,9 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
     public let platform: Platform
     public let serverVersion: String
     public let capabilities: Capabilities
+    /// The orchestration protocol the server speaks. Absent on servers that
+    /// predate negotiation, which this fork treats as compatible.
+    public var orchestrationProtocolVersion: Int? = nil
 }
 
 public enum EnvironmentCredentialAuthorizationMethod: String, Codable, Sendable {

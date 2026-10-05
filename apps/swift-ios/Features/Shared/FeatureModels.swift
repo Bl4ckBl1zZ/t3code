@@ -37,6 +37,12 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var isEnabled: Bool = true
     /// The ways this device reaches the environment, preferred first.
     public var routes: [FeatureEnvironmentRoute] = []
+    /// Why this app cannot talk to the server (another orchestration
+    /// protocol). Such a server stays switched off until a check finds it
+    /// compatible again.
+    public var unsupportedReason: String? = nil
+    /// The server is outdated and this app can update it.
+    public var serverUpdateRequired: Bool = false
     /// Reachability from the latest aggregate refresh. `nil` means the client
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?

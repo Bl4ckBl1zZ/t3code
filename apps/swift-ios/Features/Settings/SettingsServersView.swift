@@ -161,7 +161,8 @@ struct SettingsServersView: View {
         .accessibilityHint(
             environment.isActive
                 ? "Current server"
-                : environment.isEnabled ? "Switch to this server" : "Switched off"
+                : environment.unsupportedReason
+                    ?? (environment.isEnabled ? "Switch to this server" : "Switched off")
         )
         .swipeActions(edge: .trailing) {
             if !environment.isActive {

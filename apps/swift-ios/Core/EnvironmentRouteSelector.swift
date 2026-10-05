@@ -142,6 +142,9 @@ public final class EnvironmentRouteSelector: @unchecked Sendable {
                 return result
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let incompatible as EnvironmentIncompatibleError {
+                // The same server answers on every route.
+                throw incompatible
             } catch {
                 firstError = firstError ?? error
             }
@@ -157,6 +160,9 @@ public final class EnvironmentRouteSelector: @unchecked Sendable {
                 return result
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let incompatible as EnvironmentIncompatibleError {
+                // The same server answers on every route.
+                throw incompatible
             } catch {
                 firstError = firstError ?? error
             }
