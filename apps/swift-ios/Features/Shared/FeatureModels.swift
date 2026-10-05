@@ -327,6 +327,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// again on its own. Optional so cached rows written before the field
     /// decode unchanged.
     public var backgroundWorkCount: Int?
+    /// What the settled thread still runs, named and kinded. Nil when the
+    /// server predates the list (or on rows cached before it), where
+    /// ``backgroundWorkCount`` is all there is.
+    public var pendingBackgroundTasks: [OrchestrationV2PendingBackgroundTask]? = nil
     public var runtimeMode: FeatureRuntimeMode
     public var interactionMode: FeatureInteractionMode
     /// A provider is executing a turn on this thread right now, so archiving
@@ -391,6 +395,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         workingStartedAt: Date? = nil,
         latestTurnCompletedAt: Date? = nil,
         backgroundWorkCount: Int? = nil,
+        pendingBackgroundTasks: [OrchestrationV2PendingBackgroundTask]? = nil,
         runtimeMode: FeatureRuntimeMode = .fullAccess,
         interactionMode: FeatureInteractionMode = .standard,
         archiveBlockedByLiveRun: Bool? = nil
@@ -451,6 +456,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.workingStartedAt = workingStartedAt
         self.latestTurnCompletedAt = latestTurnCompletedAt
         self.backgroundWorkCount = backgroundWorkCount
+        self.pendingBackgroundTasks = pendingBackgroundTasks
         self.runtimeMode = runtimeMode
         self.interactionMode = interactionMode
         self.archiveBlockedByLiveRun = archiveBlockedByLiveRun

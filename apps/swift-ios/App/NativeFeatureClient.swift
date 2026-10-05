@@ -5468,6 +5468,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             // work still going with no turn of the thread's own behind it.
             backgroundWorkCount: (thread.backgroundProcessCount ?? 0)
                 + (thread.activeAgentCount ?? 0),
+            // The named list says which of that work holds the thread: a dev
+            // server left running does not. Nil on servers that predate it.
+            pendingBackgroundTasks: thread.pendingBackgroundTasks,
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode),
             archiveBlockedByLiveRun: !ThreadArchive.canArchive(shell: thread)

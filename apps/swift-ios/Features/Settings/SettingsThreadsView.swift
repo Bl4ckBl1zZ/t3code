@@ -32,7 +32,7 @@ struct SettingsThreadsView: View {
                 Text("Beta")
             } footer: {
                 Text(
-                    "Moves threads that are working, or waiting on background agents or commands, "
+                    "Moves threads that are working, or waiting on subagents or monitors, "
                         + "into a Working section on Home until they finish or need you. Threads that "
                         + "come back are listed newest first, so arranging the list is paused. "
                         + "Applies to this device only."

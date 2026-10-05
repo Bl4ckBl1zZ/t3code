@@ -582,8 +582,9 @@ enum HomeThreadStatus: String, Sendable, Equatable {
     case approval
     case input
     case working
-    /// Nothing is generating, but a delegated agent or a detached command is
-    /// still running and will wake the thread.
+    /// Nothing is generating, but a delegated agent or a monitor is still
+    /// running and will wake the thread. Commands left running, such as a dev
+    /// server, do not count (``FeatureThread/backgroundWorkHoldsThread``).
     case background
     case failed
     case done
@@ -625,6 +626,19 @@ enum HomeWorkingDuration {
 }
 
 extension FeatureThread {
+    /// Whether work the thread left running holds it in Background: it will
+    /// speak again without the user. Subagents and monitors do; a dev server
+    /// or other command does not, the agent is done with it. Servers that
+    /// predate the named list only send counts, which cannot tell a command
+    /// from a monitor, so any live work holds there as before. Mirrors web's
+    /// `sidebarBackgroundWorkHoldsThread`.
+    var backgroundWorkHoldsThread: Bool {
+        if let pendingBackgroundTasks {
+            return OrchestrationV2PendingBackgroundTask.holdCompletion(pendingBackgroundTasks)
+        }
+        return (backgroundWorkCount ?? 0) > 0
+    }
+
     var homeStatus: HomeThreadStatus {
         switch state {
         case .queued, .working:
@@ -639,8 +653,9 @@ extension FeatureThread {
             .done
         case .idle:
             // Ranked under Done, matching the web sidebar: a result the reader
-            // has not seen yet outranks work that is still going.
-            (backgroundWorkCount ?? 0) > 0 ? .background : .ready
+            // has not seen yet outranks work that is still going. A dev server
+            // left running does not hold the thread; it reads as ready.
+            backgroundWorkHoldsThread ? .background : .ready
         }
     }
 

@@ -186,7 +186,7 @@ already have synced positions, update those servers before reordering the sectio
 ## Fold working threads (beta)
 
 Turn on **Settings → General → Working section (beta)** to move active threads that are working,
-or waiting on background agents or commands, into a collapsed **Working** section below the active
+or waiting on subagents or monitors, into a collapsed **Working** section below the active
 list. A thread returns to the top of the active list when it finishes, fails, or needs an approval,
 an answer, or a decision on a plan. Pinned threads and Work's main thread stay where they are, and
 snoozed and settled threads keep their own sections. The Working section lists the thread you last
