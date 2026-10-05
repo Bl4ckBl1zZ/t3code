@@ -8,6 +8,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { CircleArrowUpIcon } from "lucide-react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -82,6 +83,7 @@ export function ServerUpdateAction({
   desktopAppUpdate = false,
   targetVersion,
   label = "Update",
+  appearance = "button",
 }: {
   readonly environmentId: EnvironmentId;
   readonly serverLabel: string;
@@ -94,6 +96,8 @@ export function ServerUpdateAction({
   readonly desktopAppUpdate?: boolean;
   readonly targetVersion: string;
   readonly label?: string;
+  /** "icon" renders a compact icon button with the label in a tooltip. */
+  readonly appearance?: "button" | "icon";
 }) {
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
   const updateServer = useAtomCommand(serverEnvironment.updateServer, {
@@ -177,18 +181,43 @@ export function ServerUpdateAction({
     );
   }
 
-  if (selfUpdate === null) {
-    const command = manualServerUpdateCommand(targetVersion, installation);
+  const manualCommand =
+    selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
+  const actionLabel =
+    manualCommand === null
+      ? label
+      : installation?.kind === "npm-global"
+        ? "Copy update command"
+        : "Copy relaunch command";
+  const onClick =
+    manualCommand !== null
+      ? () => copyToClipboard(manualCommand, { command: manualCommand })
+      : () => void handleUpdate();
+
+  if (appearance === "icon") {
     return (
-      <Button size="xs" variant="outline" onClick={() => copyToClipboard(command, { command })}>
-        {installation?.kind === "npm-global" ? "Copy update command" : "Copy relaunch command"}
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={`${actionLabel} for ${serverLabel}`}
+              onClick={onClick}
+            />
+          }
+        >
+          <CircleArrowUpIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">{actionLabel}</TooltipPopup>
+      </Tooltip>
     );
   }
 
   return (
-    <Button size="xs" onClick={() => void handleUpdate()}>
-      {label}
+    <Button size="xs" variant={manualCommand === null ? "default" : "outline"} onClick={onClick}>
+      {actionLabel}
     </Button>
   );
 }

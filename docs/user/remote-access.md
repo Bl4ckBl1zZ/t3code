@@ -244,6 +244,17 @@ Do not use hosted pairing for plain HTTP LAN URLs such as `http://192.168.x.y:37
 
 Hosted pairing does not proxy traffic through T3 Code. The browser still connects directly to the backend URL in the pairing link.
 
+## Switching a Saved Environment Off
+
+On web and desktop, each saved environment in **Settings → Connections** has a switch. Switching
+it off disconnects it and stops reconnect attempts, and its projects and threads leave the sidebar,
+but this device keeps its pairing, credentials, and cached threads. Switch it back on to reconnect
+with everything restored. An environment stays off across restarts and when you edit it.
+
+To forget an environment on this device instead, open its **⋯** menu and choose **Remove from this
+device…**. Removing asks first, because it deletes the pairing, credentials, and cached threads
+here.
+
 ## Managing Access Later
 
 Use `t3 auth` to manage access after the initial pairing flow.

@@ -60,6 +60,15 @@ The supervisor is the transport retry owner.
 6. An involuntary session close keeps the registration and cache, then retries.
 7. Explicit removal closes the session and deletes the registration,
    credentials, shell cache, and thread cache.
+8. `EnvironmentRegistry.setEnabled(id, false)` switches a saved environment
+   off: the supervisor disconnects in place (it keeps its generation and
+   durable streams), a managed SSH backend is torn down, and the id is written
+   to the catalog document's `disabledEnvironmentIds`. Registration,
+   credentials, and cache stay. Disabled entries remain in
+   `EnvironmentRegistry.entries` so Settings can list them, but the workspace
+   projections (projects, threads, shell summary) iterate
+   `enabledEnvironmentIds` only. Re-registering an entry keeps its flag;
+   platform environments never persist it.
 
 ### Wakeups
 
