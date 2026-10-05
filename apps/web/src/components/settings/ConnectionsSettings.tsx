@@ -1394,20 +1394,26 @@ function SavedBackendListRow({
   onRemove,
 }: SavedBackendListRowProps) {
   const environmentId = environment.environmentId;
-  const enabled = environment.entry.enabled;
+  // Discovery or a socket preflight found this server incompatible: it stays
+  // switched off with its reason until compatibility changes.
+  const unsupported = environment.connection.phase === "unsupported";
+  const enabled = environment.entry.enabled && !unsupported;
   const connectionState = environment.connection.phase;
   const isConnected = connectionState === "connected";
   const isRemoving = removingEnvironmentId === environmentId;
-  const stateDotClassName = !enabled
-    ? "bg-muted-foreground/40"
-    : connectionState === "connected"
-      ? "bg-success"
-      : connectionState === "connecting" || connectionState === "reconnecting"
-        ? "bg-warning"
-        : connectionState === "error"
-          ? "bg-destructive"
-          : "bg-muted-foreground/40";
-  const statusTooltip = enabled ? connectionStatusText(environment.connection) : "Off";
+  const stateDotClassName = unsupported
+    ? "bg-destructive"
+    : !enabled
+      ? "bg-muted-foreground/40"
+      : connectionState === "connected"
+        ? "bg-success"
+        : connectionState === "connecting" || connectionState === "reconnecting"
+          ? "bg-warning"
+          : connectionState === "error"
+            ? "bg-destructive"
+            : "bg-muted-foreground/40";
+  const statusTooltip =
+    enabled || unsupported ? connectionStatusText(environment.connection) : "Off";
   const errorTraceId = environment.connection.traceId;
   const { copyToClipboard: copyTraceIdToClipboard } = useCopyToClipboard<{ traceId: string }>({
     target: "trace ID",
@@ -1447,7 +1453,7 @@ function SavedBackendListRow({
   const metadataBits = [
     sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
     environment.relayManaged ? "T3 Connect" : null,
-    enabled ? null : "Off",
+    enabled || unsupported ? null : "Off",
   ].filter((value): value is string => value !== null);
 
   // The WSL backend is a desktop-managed local backend (it surfaces as a bearer
@@ -1519,10 +1525,12 @@ function SavedBackendListRow({
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          {enabled && environment.connection.error && !resumingServerUpdate ? (
+          {(enabled || unsupported) && environment.connection.error && !resumingServerUpdate ? (
             <p className="flex min-w-0 items-center gap-2 text-destructive text-xs">
               <span className="min-w-0 break-words">
-                {connectionStatusText(environment.connection)}
+                {unsupported
+                  ? environment.connection.error
+                  : connectionStatusText(environment.connection)}
               </span>
               {errorTraceId ? (
                 <button
@@ -1570,13 +1578,15 @@ function SavedBackendListRow({
                     <Switch
                       size="sm"
                       checked={enabled}
-                      disabled={isRemoving}
+                      disabled={isRemoving || unsupported}
                       aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
                       onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
                     />
                   }
                 />
-                <TooltipPopup side="top">{enabled ? "Switch off" : "Switch on"}</TooltipPopup>
+                <TooltipPopup side="top">
+                  {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+                </TooltipPopup>
               </Tooltip>
               <Menu>
                 <MenuTrigger

@@ -41,6 +41,8 @@ export interface ConnectionCatalogEntry {
   readonly profile: Option.Option<ConnectionProfile>;
   /** False when the user switched the environment off: saved, but never connects. */
   readonly enabled: boolean;
+  /** Discovery rejection stays visible while the saved connection is switched off. */
+  readonly unsupportedReason?: string;
 }
 
 export class BearerConnectionCredential extends Schema.TaggedClass<BearerConnectionCredential>()(
@@ -130,5 +132,50 @@ export function connectionRegistrationCatalogEntry(
         profile: Option.some(registration.profile),
         enabled: true,
       };
+  }
+}
+
+/**
+ * Identifies the saved endpoint behind an entry: the relay environment, the
+ * SSH host, or the normalized HTTP/WS base URLs. Two entries with the same key
+ * reach the same server the same way, so state learned about one (such as a
+ * discovery rejection) carries over when the entry is re-registered. Null when
+ * the entry has no saved endpoint to compare (a bearer target whose profile is
+ * missing, or a URL that is not a plain http/ws origin).
+ */
+export function connectionEndpointKey(entry: ConnectionCatalogEntry): string | null {
+  const target = entry.target;
+  if (target._tag === "RelayConnectionTarget") {
+    return JSON.stringify([target._tag, target.environmentId]);
+  }
+  const profile = Option.getOrNull(entry.profile);
+  if (target._tag === "SshConnectionTarget") {
+    if (profile?._tag !== "SshConnectionProfile") return null;
+    const { alias, hostname, username, port } = profile.target;
+    return JSON.stringify([target._tag, target.environmentId, alias, hostname, username, port]);
+  }
+  const baseUrls =
+    target._tag === "PrimaryConnectionTarget"
+      ? [target.httpBaseUrl, target.wsBaseUrl]
+      : profile?._tag === "BearerConnectionProfile"
+        ? [profile.httpBaseUrl, profile.wsBaseUrl]
+        : null;
+  if (baseUrls === null) return null;
+  try {
+    const urls = baseUrls.map((baseUrl) => new URL(baseUrl));
+    if (
+      !["http:", "https:"].includes(urls[0]!.protocol) ||
+      !["ws:", "wss:"].includes(urls[1]!.protocol) ||
+      urls.some((url) => url.username || url.password)
+    ) {
+      return null;
+    }
+    return JSON.stringify([
+      target._tag,
+      target.environmentId,
+      ...urls.map((url) => url.href.replace(/\/+$/, "")),
+    ]);
+  } catch {
+    return null;
   }
 }

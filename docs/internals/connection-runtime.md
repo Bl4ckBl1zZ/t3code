@@ -69,6 +69,18 @@ The supervisor is the transport retry owner.
    projections (projects, threads, shell summary) iterate
    `enabledEnvironmentIds` only. Re-registering an entry keeps its flag;
    platform environments never persist it.
+9. `EnvironmentRegistry.setCompatibility(id, error)` records an incompatible
+   server as `unsupportedReason` on the entry and switches it off (persisted for
+   saved entries). Two sources feed it: `watchDiscoveredCompatibility` in
+   [layer.ts][layer] checks each T3 Connect discovery descriptor with
+   `orchestrationProtocolCompatibilityError`, and the registry watches each
+   supervisor for a `blocked`/`unsupported` failure. Only a fresh discovery
+   check (new `checkedAt`, protocol, or server version) clears the reason, so a
+   replayed health result cannot undo a newer socket rejection; clearing it
+   leaves the entry off until the user switches it on. The reason survives
+   re-registration of the same endpoint (`connectionEndpointKey`). A
+   descriptor without `orchestrationProtocolVersion` is compatible: every fork
+   server before negotiation speaks the current wire.
 
 ### Wakeups
 

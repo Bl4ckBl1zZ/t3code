@@ -251,6 +251,12 @@ it off disconnects it and stops reconnect attempts, and its projects and threads
 but this device keeps its pairing, credentials, and cached threads. Switch it back on to reconnect
 with everything restored. An environment stays off across restarts and when you edit it.
 
+When T3 Connect reports that a machine runs a T3 Code version this client cannot talk to, the
+machine is switched off and shows **Client not supported** with the reason, and T3 Connect lists
+it without a Connect button. Its switch stays locked until a later check finds the versions
+compatible; update the older side, then switch the machine back on. A server that does not report
+a protocol version is treated as compatible.
+
 To forget an environment on this device instead, open its **⋯** menu and choose **Remove from this
 device…**. Removing asks first, because it deletes the pairing, credentials, and cached threads
 here.

@@ -3,13 +3,17 @@ import {
   type EnvironmentConnectionPresentation,
   RelayConnectionRegistration,
   RelayConnectionTarget,
+  orchestrationProtocolCompatibilityError,
 } from "@t3tools/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
+import type {
+  RelayClientEnvironmentRecord,
+  RelayEnvironmentStatusResponse,
+} from "@t3tools/contracts/relay";
 import * as Option from "effect/Option";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 
@@ -24,6 +28,13 @@ import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { presentSavedCloudEnvironmentConnection } from "./cloudEnvironmentConnectionPresentation";
+
+function discoveredCompatibilityError(
+  status: Option.Option<RelayEnvironmentStatusResponse> | undefined,
+) {
+  const descriptor = status === undefined ? undefined : Option.getOrNull(status)?.descriptor;
+  return descriptor === undefined ? null : orchestrationProtocolCompatibilityError(descriptor);
+}
 
 export interface SavedCloudEnvironmentConnection {
   readonly environmentId: EnvironmentId;
@@ -93,6 +104,14 @@ export function CloudEnvironmentConnectRows({
   }, [refreshRelayEnvironments]);
 
   const connectEnvironment = async (environment: RelayClientEnvironmentRecord) => {
+    // Discovery already knows this server cannot talk to this client.
+    if (
+      discoveredCompatibilityError(
+        environmentsState.environments.get(environment.environmentId)?.status,
+      ) !== null
+    ) {
+      return;
+    }
     setConnectingEnvironmentId(environment.environmentId);
     const result = await connectRelayEnvironment(environment);
     setConnectingEnvironmentId(null);
@@ -171,11 +190,20 @@ export function CloudEnvironmentConnectRows({
     return empty;
   }
 
-  return visibleEnvironments.map(({ environment, availability, error }) => {
+  return visibleEnvironments.map(({ environment, availability, error, status }) => {
     const savedEnvironment = savedById.get(environment.environmentId);
-    const savedConnection = savedEnvironment
-      ? presentSavedCloudEnvironmentConnection(savedEnvironment.connection)
-      : null;
+    const compatibilityError = discoveredCompatibilityError(status);
+    const unsupported =
+      compatibilityError !== null || savedEnvironment?.connection.phase === "unsupported";
+    const savedConnection = unsupported
+      ? presentSavedCloudEnvironmentConnection({
+          phase: "unsupported",
+          error: compatibilityError?.message ?? savedEnvironment?.connection.error ?? null,
+          traceId: null,
+        })
+      : savedEnvironment
+        ? presentSavedCloudEnvironmentConnection(savedEnvironment.connection)
+        : null;
     const dotClassName = savedConnection
       ? savedConnection.tone === "connected"
         ? "bg-success"
