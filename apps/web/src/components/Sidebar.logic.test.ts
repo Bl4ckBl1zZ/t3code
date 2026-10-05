@@ -1361,6 +1361,68 @@ describe("resolveSidebarThreadStatus", () => {
   });
 });
 
+describe("unseen completion with background work", () => {
+  const completedThread = (
+    pendingBackgroundTasks: NonNullable<Thread["pendingBackgroundTasks"]>,
+  ) => ({
+    hasActionableProposedPlan: false,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    interactionMode: "default" as const,
+    latestRun: {
+      runId: RunId.make("run-background-completion"),
+      status: "completed" as const,
+      requestedAt: "2026-06-20T00:58:00.000Z",
+      startedAt: "2026-06-20T00:58:00.000Z",
+      completedAt: "2026-06-20T01:00:00.000Z",
+      assistantMessageId: null,
+    },
+    lastVisitedAt: "2026-06-20T00:59:00.000Z",
+    runtime: {
+      status: "completed" as const,
+      activeRunId: null,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerName: null,
+      lastError: null,
+      updatedAt: "2026-06-20T01:00:00.000Z",
+    },
+    backgroundProcessCount: 1,
+    activeAgentCount: 0,
+    pendingBackgroundTasks,
+  });
+
+  it.each([
+    { kind: "command", status: "ready", working: false, badge: "done", pill: "Completed" },
+    { kind: "monitor", status: "background", working: true, badge: "working", pill: "Completed" },
+  ] as const)("presents a completed thread left running a $kind", (expected) => {
+    const thread = completedThread([{ taskId: "background-work", kind: expected.kind }]);
+    const status = resolveSidebarThreadStatus(thread);
+    const isUnread = hasUnseenCompletion(thread);
+
+    expect(isUnread).toBe(true);
+    expect(status).toBe(expected.status);
+    expect(isSidebarThreadWorking(thread)).toBe(expected.working);
+    expect(resolveWorkInboxBadge({ status, hasUnseenCompletion: isUnread })).toBe(expected.badge);
+    expect(resolveThreadStatusPill({ thread })).toMatchObject({ label: expected.pill });
+  });
+
+  it("drops the Background pill once only a dev server is left and the result was seen", () => {
+    const seen = {
+      ...completedThread([{ taskId: "dev", kind: "command", description: "vp run dev" }]),
+      lastVisitedAt: "2026-06-20T01:05:00.000Z",
+    };
+    expect(resolveThreadStatusPill({ thread: seen })).toBeNull();
+    const watching = {
+      ...seen,
+      pendingBackgroundTasks: [{ taskId: "review", kind: "subagent" as const }],
+    };
+    expect(resolveThreadStatusPill({ thread: watching })).toMatchObject({
+      label: "Background",
+      tooltip: "Waiting on a subagent",
+    });
+  });
+});
+
 describe("formatBackgroundWorkTooltip", () => {
   it("names both kinds of work and pluralizes each", () => {
     expect(formatBackgroundWorkTooltip({ activeAgentCount: 1 })).toBe("1 background agent running");

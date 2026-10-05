@@ -44,9 +44,14 @@ with the elapsed time of the oldest. Click it for the latest output of each. Whe
 working, a pill beside it counts them; click it to see what each agent is doing and open its thread.
 The two pills share one panel, so clicking the other pill swaps what it shows. In the React Native
 mobile client, tapping either pill opens the conversation's details, which list both. In the
-sidebar, a conversation with background work shows a hollow, breathing dot — distinct from the
-filled dot of a conversation that is generating right now, and from no dot at all. It means: idle at
-the moment, but this one will speak again by itself.
+sidebar, a conversation waiting on a subagent or a monitor shows a hollow, breathing dot — distinct
+from the filled dot of a conversation that is generating right now, and from no dot at all. It
+means: idle at the moment, but this one will speak again by itself. Hover it to see what it is
+waiting on.
+
+A command the agent leaves running when it is done, such as a dev server, does not hold the
+conversation: it reads as finished, shows as done until you open it, and sends the usual completion
+alert. The command keeps running, and its pill above the composer still shows it.
 
 ## How commands end
 
