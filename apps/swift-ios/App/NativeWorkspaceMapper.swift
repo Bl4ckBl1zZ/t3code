@@ -40,12 +40,16 @@ enum NativeWorkspaceMapper {
     }
 
     static func review(_ preview: ReviewDiffPreview) -> FeatureReview {
-        FeatureReview(
+        var review = FeatureReview(
             title: "Working tree",
             baseReference: preview.sources.compactMap(\.baseRef).first,
             files: preview.sources.flatMap(NativeUnifiedDiffMapper.parseDiff),
             isTruncated: preview.sources.contains(where: \.truncated)
         )
+        review.sources = preview.sources.map {
+            FeatureReviewSource(kind: $0.kind, baseReference: $0.baseRef, isTruncated: $0.truncated)
+        }
+        return review
     }
 
     /// Lossless read of `VcsStatusResult` into the feature-layer status.
@@ -70,7 +74,7 @@ enum NativeWorkspaceMapper {
     /// one entry per path, so an added file and an addition-only edit are the
     /// same `n/0`, and a 0/0 entry is an untracked file or a binary one.
     static func sourceControl(_ status: VCSStatus) -> FeatureSourceControlStatus {
-        FeatureSourceControlStatus(
+        var mapped = FeatureSourceControlStatus(
             isRepository: status.isRepo,
             branch: status.refName,
             hasUpstream: status.hasUpstream,
@@ -84,6 +88,10 @@ enum NativeWorkspaceMapper {
             files: status.workingTree.files.map(sourceControlFile),
             pullRequest: status.pr.map(pullRequest)
         )
+        mapped.branchChanges = status.branchChanges.map {
+            FeatureBranchChanges(baseReference: $0.baseRef, insertions: $0.insertions, deletions: $0.deletions)
+        }
+        return mapped
     }
 
     static func pullRequest(_ changeRequest: VCSChangeRequest) -> FeaturePullRequest {

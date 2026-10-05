@@ -13,16 +13,22 @@ import Foundation
 /// diff", which carries a checkpoint id and nothing else, so the id is what is
 /// stored and the turn count is resolved from the projection at load time.
 public enum ReviewSectionID: Hashable, Sendable {
-    /// The workspace as it stands right now, from `review.getDiffPreview`.
+    /// Everything on the branch since it left its base, merge-base to the
+    /// working tree. The default section when the server reads it.
+    case changes
+    /// What is not committed yet ("Uncommitted"), or on a server that does not
+    /// split the branch out, the whole working tree as one list.
     case workingTree
     /// The diff one checkpoint captured.
     case checkpoint(id: String)
 
+    private static let changesRawValue = "git:branch-range"
     private static let workingTreeRawValue = "git:working-tree"
     private static let checkpointPrefix = "checkpoint:"
 
     public var rawValue: String {
         switch self {
+        case .changes: Self.changesRawValue
         case .workingTree: Self.workingTreeRawValue
         case let .checkpoint(id): Self.checkpointPrefix + id
         }
@@ -31,6 +37,10 @@ public enum ReviewSectionID: Hashable, Sendable {
     /// `nil` for a section id this build does not understand, which callers
     /// treat as "no checkpoint selected" rather than guessing at a scope.
     public init?(rawValue: String) {
+        if rawValue == Self.changesRawValue {
+            self = .changes
+            return
+        }
         if rawValue == Self.workingTreeRawValue {
             self = .workingTree
             return
@@ -44,6 +54,17 @@ public enum ReviewSectionID: Hashable, Sendable {
     public var checkpointID: String? {
         guard case let .checkpoint(id) = self else { return nil }
         return id
+    }
+
+    /// Both git sections come from one `review.getDiffPreview` read.
+    public var isGit: Bool { checkpointID == nil }
+
+    /// The git section a review shows: what was asked for when the server
+    /// splits the branch out, else today's single working-tree list. Nothing
+    /// asked for opens on Changes.
+    public static func resolveGit(_ requested: ReviewSectionID?, splitsBranchChanges: Bool) -> ReviewSectionID {
+        guard splitsBranchChanges else { return .workingTree }
+        return requested == .workingTree ? .workingTree : .changes
     }
 }
 

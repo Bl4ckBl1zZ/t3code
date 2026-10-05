@@ -2127,6 +2127,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             )
         )
         review.title = "Turn \(diff.toTurnCount)"
+        review.sources = nil
         review.baseReference = diff.fromTurnCount == 0
             ? "Thread start … turn \(diff.toTurnCount)"
             : "Turn \(diff.fromTurnCount) … turn \(diff.toTurnCount)"

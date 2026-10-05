@@ -90,6 +90,8 @@ import {
   OrchestrationV2ThreadProjection,
   OrchestrationV2Command,
   CommandId,
+  VcsStatusResult,
+  ReviewDiffPreviewResult,
   OrchestrationV2Run,
   OrchestrationV2ConversationMessage,
   OrchestrationV2Command,
@@ -2072,6 +2074,71 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(pullRequestWatchPath, pullRequestWatchFixture);
+
+// The branch's Changes: the status totals the details row shows, and a review
+// preview with both sources, which is what splits Review into Changes and
+// Uncommitted.
+const reviewChangesPath = NodePath.join(NodePath.dirname(outputPath), "reviewChanges.json");
+const reviewChangesFixture = `${JSON.stringify(
+  {
+    status: Schema.encodeSync(VcsStatusResult)({
+      isRepo: true,
+      hasPrimaryRemote: true,
+      isDefaultRef: false,
+      refName: "feature/changes",
+      hasWorkingTreeChanges: true,
+      workingTree: {
+        files: [{ path: "src/new.ts", insertions: 3, deletions: 0 }],
+        insertions: 3,
+        deletions: 0,
+      },
+      branchChanges: { baseRef: "origin/main", insertions: 12, deletions: 4 },
+      hasUpstream: true,
+      aheadCount: 2,
+      behindCount: 0,
+      pr: null,
+    }),
+    preview: Schema.encodeSync(ReviewDiffPreviewResult)({
+      cwd: "/repo",
+      generatedAt: now,
+      sources: [
+        {
+          id: "working-tree",
+          kind: "working-tree",
+          title: "Uncommitted",
+          baseRef: "HEAD",
+          headRef: null,
+          diff: "diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+          diffHash: "hash-working-tree",
+          truncated: false,
+        },
+        {
+          id: "branch-range",
+          kind: "branch-range",
+          title: "Changes vs origin/main",
+          baseRef: "origin/main",
+          headRef: "feature/changes",
+          diff:
+            "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n" +
+            "diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+          diffHash: "hash-branch-range",
+          truncated: true,
+        },
+      ],
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(reviewChangesPath) ||
+    NodeFS.readFileSync(reviewChangesPath, "utf8") !== reviewChangesFixture
+  ) {
+    console.error("[swift-fixtures] reviewChanges.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(reviewChangesPath, reviewChangesFixture);
 
 // The Swift client mirrors the protocol version by hand. Pin it here so a bump
 // in `packages/contracts` fails the Swift test instead of shipping a build the

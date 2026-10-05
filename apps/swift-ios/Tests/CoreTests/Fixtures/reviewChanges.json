@@ -1,0 +1,55 @@
+{
+  "status": {
+    "isRepo": true,
+    "hasPrimaryRemote": true,
+    "isDefaultRef": false,
+    "refName": "feature/changes",
+    "hasWorkingTreeChanges": true,
+    "workingTree": {
+      "files": [
+        {
+          "path": "src/new.ts",
+          "insertions": 3,
+          "deletions": 0
+        }
+      ],
+      "insertions": 3,
+      "deletions": 0
+    },
+    "branchChanges": {
+      "baseRef": "origin/main",
+      "insertions": 12,
+      "deletions": 4
+    },
+    "hasUpstream": true,
+    "aheadCount": 2,
+    "behindCount": 0,
+    "pr": null
+  },
+  "preview": {
+    "cwd": "/repo",
+    "generatedAt": "2026-06-20T00:00:00.000Z",
+    "sources": [
+      {
+        "id": "working-tree",
+        "kind": "working-tree",
+        "title": "Uncommitted",
+        "baseRef": "HEAD",
+        "headRef": null,
+        "diff": "diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+        "diffHash": "hash-working-tree",
+        "truncated": false
+      },
+      {
+        "id": "branch-range",
+        "kind": "branch-range",
+        "title": "Changes vs origin/main",
+        "baseRef": "origin/main",
+        "headRef": "feature/changes",
+        "diff": "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+        "diffHash": "hash-branch-range",
+        "truncated": true
+      }
+    ]
+  }
+}

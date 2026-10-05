@@ -398,6 +398,14 @@ public struct VCSChangeRequest: Codable, Equatable, Sendable {
     public let updatedAt: String?
 }
 
+/// Totals for everything on the branch since it left its base: merge-base to
+/// the working tree, untracked files included. Absent on older servers.
+public struct VCSBranchChanges: Codable, Equatable, Sendable {
+    public let baseRef: String?
+    public let insertions: Int
+    public let deletions: Int
+}
+
 public struct VCSLocalStatus: Codable, Equatable, Sendable {
     public let isRepo: Bool
     public let sourceControlProvider: SourceControlProviderInfo?
@@ -406,6 +414,7 @@ public struct VCSLocalStatus: Codable, Equatable, Sendable {
     public let refName: String?
     public let hasWorkingTreeChanges: Bool
     public let workingTree: VCSWorkingTree
+    public var branchChanges: VCSBranchChanges? = nil
 }
 
 public struct VCSRemoteStatus: Codable, Equatable, Sendable {
@@ -429,6 +438,7 @@ public struct VCSStatus: Codable, Equatable, Sendable {
     public let behindCount: Int
     public let aheadOfDefaultCount: Int?
     public let pr: VCSChangeRequest?
+    public var branchChanges: VCSBranchChanges? = nil
 }
 
 public enum VCSStatusEvent: Decodable, Sendable {

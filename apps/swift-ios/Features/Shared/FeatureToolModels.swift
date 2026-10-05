@@ -860,11 +860,50 @@ enum FeatureFullDiffHydrator {
     }
 }
 
+/// One source of a working-tree review, without its files (they carry their
+/// `sourceKind`).
+public struct FeatureReviewSource: Sendable, Equatable, Codable {
+    /// "working-tree" or "branch-range".
+    public var kind: String
+    public var baseReference: String?
+    public var isTruncated: Bool
+
+    public init(kind: String, baseReference: String? = nil, isTruncated: Bool = false) {
+        self.kind = kind
+        self.baseReference = baseReference
+        self.isTruncated = isTruncated
+    }
+}
+
 public struct FeatureReview: Sendable, Equatable, Codable {
     public var title: String
     public var baseReference: String?
     public var files: [FeatureReviewFile]
     public var isTruncated: Bool
+    /// The sources a working-tree review was read from; nil for a checkpoint.
+    public var sources: [FeatureReviewSource]? = nil
+
+    /// The server reads the branch since its base as its own source, so the
+    /// review offers Changes and Uncommitted instead of one combined list.
+    public var splitsBranchChanges: Bool {
+        sources?.contains { $0.kind == "branch-range" } == true
+    }
+
+    /// The files and labels of one git section. A review that does not split
+    /// is returned whole, which is the combined list older builds showed.
+    public func section(_ scope: ReviewSectionID) -> FeatureReview {
+        guard splitsBranchChanges, scope.isGit else { return self }
+        let kind = scope == .changes ? "branch-range" : "working-tree"
+        let source = sources?.first { $0.kind == kind }
+        var section = FeatureReview(
+            title: scope == .changes ? "Changes" : "Uncommitted",
+            baseReference: scope == .changes ? source?.baseReference : nil,
+            files: files.filter { $0.sourceKind == kind },
+            isTruncated: source?.isTruncated ?? false
+        )
+        section.sources = sources
+        return section
+    }
 
     public init(
         title: String = "Working tree",
@@ -986,6 +1025,18 @@ public enum FeatureSourceControlAction: String, CaseIterable, Sendable, Codable 
 /// the confirmation that stops a commit landing on the default branch could
 /// never fire because nothing downstream knew it was the default branch. They
 /// are carried now, so no consumer has to guess.
+public struct FeatureBranchChanges: Sendable, Equatable, Codable {
+    public var baseReference: String?
+    public var insertions: Int
+    public var deletions: Int
+
+    public init(baseReference: String? = nil, insertions: Int, deletions: Int) {
+        self.baseReference = baseReference
+        self.insertions = insertions
+        self.deletions = deletions
+    }
+}
+
 public struct FeatureSourceControlStatus: Sendable, Equatable, Codable {
     public var isRepository: Bool
     public var branch: String?
@@ -1017,6 +1068,9 @@ public struct FeatureSourceControlStatus: Sendable, Equatable, Codable {
     public var files: [FeatureSourceControlFile]
     public var pullRequest: FeaturePullRequest?
     public var isBusy: Bool
+    /// Line totals for everything on the branch since its base, which is what
+    /// the review opens on. Nil on servers that do not report it.
+    public var branchChanges: FeatureBranchChanges? = nil
 
     /// `hasWorkingTreeChanges` and `hasUpstream` default to `nil` rather than to
     /// a literal so a hand-built status stays self-consistent: omitting them
