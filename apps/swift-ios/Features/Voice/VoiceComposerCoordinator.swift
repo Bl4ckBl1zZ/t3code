@@ -106,6 +106,10 @@ public final class VoiceComposerCoordinator {
     /// an incoming composer's `onAppear` before the outgoing one's
     /// `onDisappear`, even when both name the same conversation.
     @ObservationIgnored private var visibleComposers: Set<UUID> = []
+    /// False while the attached composer's host is still restoring its saved
+    /// draft. A transcript written in before that would be overwritten by the
+    /// restore, so it waits in the stash until `draftDidLoad`.
+    @ObservationIgnored private var draftLoaded = true
     @ObservationIgnored private var readDraft: () -> String = { "" }
     @ObservationIgnored private var writeDraft: (String) -> Void = { _ in }
     @ObservationIgnored private var readRange: (String) -> VoiceTextRange = {
@@ -156,11 +160,14 @@ public final class VoiceComposerCoordinator {
     /// `composer` identifies the attaching view for visibility bookkeeping and
     /// must be passed again to `detach`. `threadID` names the thread a
     /// recording started here belongs to, so the edge pill can lead back to it.
+    /// `draftLoaded` is false while the host is still restoring the saved
+    /// draft; stashed transcripts then wait for `draftDidLoad`.
     public func attach(
         identity: String,
         composer: UUID,
         destinationName: String = "its conversation",
         threadID: String? = nil,
+        draftLoaded: Bool = true,
         capability: (any FeatureVoiceTranscribing)?,
         readDraft: @escaping () -> String,
         writeDraft: @escaping (String) -> Void,
@@ -177,6 +184,7 @@ public final class VoiceComposerCoordinator {
         self.identity = identity
         self.destinationName = destinationName
         self.threadID = threadID
+        self.draftLoaded = draftLoaded
         visibleComposers.insert(composer)
         updateVisibility()
         if controller == nil, capability != nil { makeController() }
@@ -185,7 +193,15 @@ public final class VoiceComposerCoordinator {
         // fights an in-flight gesture on the previous one. Coming back on screen
         // counts too: a transcript that finished behind the edge pill was
         // stashed under this same identity.
-        if identityChanged || wasOffScreen { deliverStashedTranscript() }
+        if identityChanged || wasOffScreen, draftLoaded { deliverStashedTranscript() }
+    }
+
+    /// The attached composer's saved draft finished restoring: hand it any
+    /// transcript that was held back meanwhile.
+    public func draftDidLoad(identity: String) {
+        guard self.identity == identity, hasVisibleComposer, !draftLoaded else { return }
+        draftLoaded = true
+        deliverStashedTranscript()
     }
 
     /// Releases the touch bookkeeping for a composer that is going away.
@@ -234,8 +250,9 @@ public final class VoiceComposerCoordinator {
 
     private func deliver(_ transcript: String) {
         // With no composer on screen the draft closures belong to a view that
-        // is gone; writing through them would drop the words.
-        let target: VoiceComposerTarget? = hasVisibleComposer
+        // is gone, and a draft still being restored is about to be replaced;
+        // writing through them would drop the words.
+        let target: VoiceComposerTarget? = hasVisibleComposer && draftLoaded
             ? {
                 let draft = readDraft()
                 return VoiceComposerTarget(identity: identity, draft: draft, range: readRange(draft))

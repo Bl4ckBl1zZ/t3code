@@ -1026,6 +1026,7 @@ public struct ThreadDetailView: View {
             onExternalFileDropConsumed: { id in
                 if model.pendingThreadFileDrops[thread.id]?.id == id { model.pendingThreadFileDrops[thread.id] = nil }
             },
+            draftLoaded: didRestoreDraft,
             onApprovalDecision: { id, decision in
                 Task { await model.resolveApproval(id, decision: decision) }
             },

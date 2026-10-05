@@ -83,6 +83,24 @@ final class VoiceEdgePillTests: XCTestCase {
         XCTAssertNil(stash.peek(identity: "thread-1"))
     }
 
+    /// A thread view restores its saved draft after the composer attaches; a
+    /// transcript written in before that would be replaced by the restore.
+    func testAStashedTranscriptWaitsForTheRestoredDraft() {
+        let stash = VoiceTranscriptStash()
+        let voice = VoiceComposerCoordinator(stash: stash, preflight: VoicePreflightCache())
+        var draft = ""
+        stash.put(identity: "thread-1", text: "spoken words")
+
+        attach(voice, identity: "thread-1", composer: UUID(), draftLoaded: false, draft: { draft }, write: { draft = $0 })
+        XCTAssertEqual(draft, "", "held back while the saved draft is still loading")
+        XCTAssertNotNil(stash.peek(identity: "thread-1"))
+
+        draft = "Restored draft"
+        voice.draftDidLoad(identity: "thread-1")
+        XCTAssertEqual(draft, "Restored draft spoken words")
+        XCTAssertNil(stash.peek(identity: "thread-1"))
+    }
+
     func testARecordingFinishedOffScreenIsStashedForItsThreadNotWrittenIntoAGoneDraft() async throws {
         let stash = VoiceTranscriptStash()
         let preflight = VoicePreflightCache()
@@ -152,6 +170,7 @@ final class VoiceEdgePillTests: XCTestCase {
         identity: String,
         composer: UUID,
         threadID: String? = nil,
+        draftLoaded: Bool = true,
         capability: (any FeatureVoiceTranscribing)? = nil,
         draft: @escaping () -> String = { "" },
         write: @escaping (String) -> Void = { _ in }
@@ -160,6 +179,7 @@ final class VoiceEdgePillTests: XCTestCase {
             identity: identity,
             composer: composer,
             threadID: threadID,
+            draftLoaded: draftLoaded,
             capability: capability,
             readDraft: draft,
             writeDraft: write,
