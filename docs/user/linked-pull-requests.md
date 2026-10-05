@@ -46,6 +46,14 @@ available on web, desktop and iOS.
 Project choices combine checkouts of the same repository on one machine and distinguish
 matching names across machines.
 
+On web and desktop, hold **Shift** over the pull-request list to show quick actions on GitHub rows:
+**Close** and **Merge** on open requests, **Close** and **Ready for review** on drafts, and
+**Reopen** on closed ones. They act at once, without opening the request. Quick actions are hidden
+while you type in a field. **Merge** uses the project's merge method, then the machine's, then the
+one you last picked, falling back to a method the repository allows. A request that belongs to a
+stack, or that you may not merge, says so instead; open it to merge from the stack controls. The
+row updates the same way it does when you act from the request itself.
+
 On iOS, choose **⋯ → Pull Requests** on Home to browse across your connected environments. Tap
 the filter button to choose an environment, project, host,
 state, involvement, draft/review/check status, author, or labels. Filters and sort order are

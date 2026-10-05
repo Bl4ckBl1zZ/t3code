@@ -30,6 +30,7 @@ import {
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   pullRequestReviewOutcome,
+  pullRequestSpeedActions,
   readableFailure,
   resolvePullRequestMergeMethod,
   resolvePullRequestPrimaryControl,
@@ -1332,5 +1333,21 @@ describe("pull request merge method", () => {
     );
     expect(resolvePullRequestMergeMethod(["squash"], null, "merge", "rebase")).toBe("squash");
     expect(resolvePullRequestMergeMethod(["merge", "squash"], null, null, "squash")).toBe("squash");
+  });
+});
+
+describe("pull request quick actions", () => {
+  it("offers the next step and a close for open GitHub pull requests only", () => {
+    const github = { provider: "github" as const, isDraft: false };
+    expect(pullRequestSpeedActions({ ...github, state: "open" })).toEqual(["close", "merge"]);
+    expect(pullRequestSpeedActions({ ...github, state: "open", isDraft: true })).toEqual([
+      "close",
+      "ready",
+    ]);
+    expect(pullRequestSpeedActions({ ...github, state: "closed" })).toEqual(["reopen"]);
+    expect(pullRequestSpeedActions({ ...github, state: "merged" })).toEqual([]);
+    expect(pullRequestSpeedActions({ provider: "gitlab", state: "open", isDraft: false })).toEqual(
+      [],
+    );
   });
 });

@@ -45,6 +45,26 @@ export function resolvePullRequestMergeMethod(
   return allowed[0] ?? "merge";
 }
 
+export type PullRequestSpeedAction = Extract<
+  PullRequestAction,
+  "close" | "merge" | "ready" | "reopen"
+>;
+
+/**
+ * The one-press actions a list row offers while Shift is held: the next step for its state and a
+ * way to close it. GitHub only, where the row's state is enough to know what the host offers;
+ * nothing on a merged pull request, which has no step left.
+ */
+export function pullRequestSpeedActions(entry: {
+  readonly provider: SourceControlProviderKind;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
+}): ReadonlyArray<PullRequestSpeedAction> {
+  if (entry.provider !== "github" || entry.state === "merged") return [];
+  if (entry.state === "closed") return ["reopen"];
+  return entry.isDraft ? ["close", "ready"] : ["close", "merge"];
+}
+
 const safeShellArgument = /^[A-Za-z0-9._/@+=,-]+$/;
 const bitbucketRepositoryName = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 

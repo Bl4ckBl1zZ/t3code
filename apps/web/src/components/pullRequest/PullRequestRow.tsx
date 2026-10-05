@@ -7,6 +7,11 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
+import {
+  PullRequestSpeedActions,
+  type PullRequestSpeedActionResult,
+} from "./PullRequestSpeedActions";
+import { pullRequestSpeedActions } from "./pullRequestDetail.logic";
 import { pullRequestLabelColor, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
 import {
@@ -70,6 +75,7 @@ function PullRequestRowImpl({
   statsKey,
   statsRef,
   onSelect,
+  onActed,
 }: {
   entry: EnvironmentPullRequestEntry;
   selected: boolean;
@@ -85,19 +91,19 @@ function PullRequestRowImpl({
   matchedElsewhere?: boolean;
   /** Used by the list's shared visibility observer to defer optional line-count reads. */
   statsKey?: string;
-  statsRef?: RefCallback<HTMLButtonElement>;
+  statsRef?: RefCallback<HTMLDivElement>;
   onSelect: (entry: EnvironmentPullRequestEntry) => void;
+  /** A quick action's phases, held with Shift; the list shows the buttons, not the row. */
+  onActed: (result: PullRequestSpeedActionResult) => void;
 }) {
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
-    <button
+    <div
       ref={statsRef}
       data-pull-request-stats-key={statsKey}
-      type="button"
-      aria-current={selected ? "true" : undefined}
-      onClick={() => onSelect(entry)}
       className={cn(
-        "grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        // The quick actions sit inside the same skipped row, but outside its selection button.
+        "flex items-center rounded-lg transition-colors",
         // Offscreen rows are skipped for style, layout and paint: a long list costs what the
         // viewport shows, not what the pages have loaded. The intrinsic size keeps the
         // scrollbar honest while a row is skipped.
@@ -105,115 +111,125 @@ function PullRequestRowImpl({
         selected ? "bg-accent" : "hover:bg-accent/60",
       )}
     >
-      {/* The row is two lines tall, so a centered glyph reads as belonging to neither. The
+      <button
+        type="button"
+        aria-current={selected ? "true" : undefined}
+        onClick={() => onSelect(entry)}
+        className="grid min-w-0 flex-1 cursor-pointer grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-lg px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        {/* The row is two lines tall, so a centered glyph reads as belonging to neither. The
           wrapper takes the offset instead of the icon, keeping the tooltip anchored to the glyph. */}
-      <span className="mt-0.75 inline-flex shrink-0 self-start">
-        <PullRequestStateGlyph
-          state={entry.state}
-          isDraft={entry.isDraft}
-          mergeability={entry.mergeability}
-          baseBranch={entry.baseBranch}
-        />
-      </span>
-      <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5">
-        <span className="col-start-1 row-start-1 block truncate text-sm font-medium text-foreground">
-          {entry.title}
+        <span className="mt-0.75 inline-flex shrink-0 self-start">
+          <PullRequestStateGlyph
+            state={entry.state}
+            isDraft={entry.isDraft}
+            mergeability={entry.mergeability}
+            baseBranch={entry.baseBranch}
+          />
         </span>
-        <span className="col-start-2 row-start-2 justify-self-end whitespace-nowrap text-xs text-muted-foreground/70 tabular-nums">
-          {formatRelativeTimeLabel(entry.updatedAt)}
-        </span>
-        <PullRequestMetaLine className="@container/pr-row-meta col-start-1 row-start-2 overflow-hidden text-xs text-muted-foreground/70">
-          {matchedElsewhere ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className="flex min-w-6 items-center gap-1 overflow-hidden rounded-full border border-border/60 px-1 text-3xs" />
-                }
-              >
-                <span className="sr-only">matched in the description</span>
-                <SearchIcon aria-hidden className="size-3 shrink-0" />
-                <span aria-hidden className="hidden truncate @xs/pr-row-meta:block">
-                  matched in the description
-                </span>
-              </TooltipTrigger>
-              <TooltipPopup side="top">Matched in the description</TooltipPopup>
-            </Tooltip>
-          ) : null}
-          <span className="flex shrink-0 items-center gap-1">
-            {showProvider ? (
+        <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5">
+          <span className="col-start-1 row-start-1 block truncate text-sm font-medium text-foreground">
+            {entry.title}
+          </span>
+          <span className="col-start-2 row-start-2 justify-self-end whitespace-nowrap text-xs text-muted-foreground/70 tabular-nums">
+            {formatRelativeTimeLabel(entry.updatedAt)}
+          </span>
+          <PullRequestMetaLine className="@container/pr-row-meta col-start-1 row-start-2 overflow-hidden text-xs text-muted-foreground/70">
+            {matchedElsewhere ? (
               <Tooltip>
-                <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-                  <Icon aria-label={providerName} className="size-3" />
+                <TooltipTrigger
+                  render={
+                    <span className="flex min-w-6 items-center gap-1 overflow-hidden rounded-full border border-border/60 px-1 text-3xs" />
+                  }
+                >
+                  <span className="sr-only">matched in the description</span>
+                  <SearchIcon aria-hidden className="size-3 shrink-0" />
+                  <span aria-hidden className="hidden truncate @xs/pr-row-meta:block">
+                    matched in the description
+                  </span>
                 </TooltipTrigger>
-                <TooltipPopup>{providerName}</TooltipPopup>
+                <TooltipPopup side="top">Matched in the description</TooltipPopup>
               </Tooltip>
             ) : null}
-            {/* The number carries the link, here as much as on the detail: a right-click on it
+            <span className="flex shrink-0 items-center gap-1">
+              {showProvider ? (
+                <Tooltip>
+                  <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+                    <Icon aria-label={providerName} className="size-3" />
+                  </TooltipTrigger>
+                  <TooltipPopup>{providerName}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+              {/* The number carries the link, here as much as on the detail: a right-click on it
                 copies the pull request's own address rather than opening the editing menu. */}
-            <span
-              onContextMenu={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                void showPullRequestLinkContextMenu({
-                  url: entry.url,
-                  openLabel: openOnHostLabel(entry.provider),
-                  position: { x: event.clientX, y: event.clientY },
-                });
-              }}
-            >
-              #{entry.number}
+              <span
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void showPullRequestLinkContextMenu({
+                    url: entry.url,
+                    openLabel: openOnHostLabel(entry.provider),
+                    position: { x: event.clientX, y: event.clientY },
+                  });
+                }}
+              >
+                #{entry.number}
+              </span>
             </span>
-          </span>
-          {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
-          {environmentLabel ? (
-            <span className="min-w-0 max-w-32 truncate">{environmentLabel}</span>
-          ) : null}
-          <PullRequestActorLabel
-            actor={entry.author}
-            className="min-w-4 max-w-40"
-            labelClassName="sr-only @xs/pr-row-meta:not-sr-only @xs/pr-row-meta:truncate"
-          />
-          {entry.labels.length > 0 ? <PullRequestRowLabels labels={entry.labels} /> : null}
-          {/* Only a verdict somebody has actually given: "review required" is the absence of
-              one, and saying so on every unreviewed row would say nothing. */}
-          {entry.reviewDecision === "approved" || entry.reviewDecision === "changes-requested" ? (
-            <span
-              className={cn(
-                "min-w-0 truncate",
-                entry.reviewDecision === "approved"
-                  ? "text-emerald-600/90 dark:text-emerald-400/80"
-                  : "text-amber-600/90 dark:text-amber-400/80",
-              )}
-            >
-              {entry.reviewDecision === "approved" ? "Approved" : "Changes requested"}
-            </span>
-          ) : null}
-          {entry.checksState === undefined ? null : (
-            <PullRequestChecksPopover
-              checksState={entry.checksState}
-              environmentId={entry.environmentId}
-              reference={{
-                projectId: entry.projectId,
-                host: entry.host,
-                repository: entry.repository,
-                number: entry.number,
-              }}
+            {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
+            {environmentLabel ? (
+              <span className="min-w-0 max-w-32 truncate">{environmentLabel}</span>
+            ) : null}
+            <PullRequestActorLabel
+              actor={entry.author}
+              className="min-w-4 max-w-40"
+              labelClassName="sr-only @xs/pr-row-meta:not-sr-only @xs/pr-row-meta:truncate"
             />
-          )}
-        </PullRequestMetaLine>
-        <PullRequestDiffStat
-          additions={entry.additions}
-          deletions={entry.deletions}
-          className="col-start-2 row-start-1 shrink-0 justify-self-end whitespace-nowrap text-xs"
-        />
-      </span>
-    </button>
+            {entry.labels.length > 0 ? <PullRequestRowLabels labels={entry.labels} /> : null}
+            {/* Only a verdict somebody has actually given: "review required" is the absence of
+              one, and saying so on every unreviewed row would say nothing. */}
+            {entry.reviewDecision === "approved" || entry.reviewDecision === "changes-requested" ? (
+              <span
+                className={cn(
+                  "min-w-0 truncate",
+                  entry.reviewDecision === "approved"
+                    ? "text-emerald-600/90 dark:text-emerald-400/80"
+                    : "text-amber-600/90 dark:text-amber-400/80",
+                )}
+              >
+                {entry.reviewDecision === "approved" ? "Approved" : "Changes requested"}
+              </span>
+            ) : null}
+            {entry.checksState === undefined ? null : (
+              <PullRequestChecksPopover
+                checksState={entry.checksState}
+                environmentId={entry.environmentId}
+                reference={{
+                  projectId: entry.projectId,
+                  host: entry.host,
+                  repository: entry.repository,
+                  number: entry.number,
+                }}
+              />
+            )}
+          </PullRequestMetaLine>
+          <PullRequestDiffStat
+            additions={entry.additions}
+            deletions={entry.deletions}
+            className="col-start-2 row-start-1 shrink-0 justify-self-end whitespace-nowrap text-xs"
+          />
+        </span>
+      </button>
+      {pullRequestSpeedActions(entry).length > 0 ? (
+        <PullRequestSpeedActions entry={entry} onActed={onActed} />
+      ) : null}
+    </div>
   );
 }
 
 /**
  * Memoized: the list re-renders on every keystroke of a search and every status poll, and a
  * row whose entry, selection and match state are unchanged has nothing new to say. Effective
- * because the route hands it a stable `onSelect`.
+ * because the route hands it a stable `onSelect` and `onActed`.
  */
 export const PullRequestRow = memo(PullRequestRowImpl);
