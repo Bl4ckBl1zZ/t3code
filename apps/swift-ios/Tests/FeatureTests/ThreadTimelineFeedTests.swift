@@ -57,6 +57,58 @@ final class ThreadTimelineFeedTests: XCTestCase {
         return projected(V2Fixture.turnItem(id: id, type: "subagent", extra: extra))
     }
 
+    private func setupFailure(_ id: String, status: String, runID: String = "run-1") -> OrchestrationV2ProjectedTurnItem {
+        projected(
+            V2Fixture.turnItem(
+                id: id,
+                type: "error",
+                status: status,
+                extra: [
+                    "runId": .string(runID),
+                    "failure": .object([
+                        "class": .string("provider_error"),
+                        "message": .string("git worktree add failed"),
+                        "code": .string(orchestrationV2WorkspacePreparationFailureCode),
+                        "retryable": .bool(true),
+                    ]),
+                ]
+            )
+        )
+    }
+
+    /// Ports client-runtime's `workspacePreparationRetryRunIds`: only a failed
+    /// run that recorded its preparation offers Retry setup, and a failure the
+    /// retry already cancelled leaves the transcript.
+    func testFailedWorkspacePreparationOffersRetrySetupOnlyWhereTheRunCanRepeatIt() throws {
+        let runs = [
+            LifecycleTimelineRun(id: "run-1", ordinal: 1, providerInstanceID: "codex", model: "m", status: "failed", preparesWorkspace: true),
+            LifecycleTimelineRun(id: "run-2", ordinal: 2, providerInstanceID: "codex", model: "m", status: "failed"),
+        ]
+        let entries = ThreadTimelineFeed.entries(
+            timelineItems: [
+                setupFailure("retried", status: "cancelled"),
+                setupFailure("failed", status: "failed"),
+                setupFailure("legacy", status: "failed", runID: "run-2"),
+            ],
+            messages: [],
+            runs: runs
+        )
+        let rows = entries.compactMap { entry -> ThreadTimelineEntry.WorkLog? in
+            if case let .workLog(work) = entry { return work }
+            return nil
+        }
+        XCTAssertFalse(rows.flatMap(\.rows).contains { $0.item.id == "retried" })
+        XCTAssertEqual(rows.flatMap(\.rows).map(\.item.id), ["failed", "legacy"])
+        XCTAssertEqual(rows.reduce(into: Set<String>()) { $0.formUnion($1.retryableSetupRunIDs) }, ["run-1"])
+
+        // Once the retry puts the run back into preparation it stops offering one.
+        let preparing = [LifecycleTimelineRun(id: "run-1", ordinal: 1, providerInstanceID: "codex", model: "m", status: "preparing", preparesWorkspace: true)]
+        XCTAssertEqual(
+            ThreadWorkspacePreparationRetry.retryableRunIDs(runs: preparing, items: [setupFailure("failed", status: "failed").item]),
+            []
+        )
+    }
+
     private func compaction(_ id: String) -> OrchestrationV2ProjectedTurnItem {
         projected(V2Fixture.turnItem(id: id, type: "compaction", extra: ["driver": .null]))
     }

@@ -11,12 +11,55 @@ public struct LifecycleTimelineRun: Equatable, Sendable {
     public let ordinal: Int
     public let providerInstanceID: String
     public let model: String
+    public let status: String
+    /// The run records how its workspace is prepared, so a failed preparation
+    /// can be retried with `prepared-run.retry`.
+    public let preparesWorkspace: Bool
 
-    public init(id: String, ordinal: Int, providerInstanceID: String, model: String) {
+    public init(
+        id: String,
+        ordinal: Int,
+        providerInstanceID: String,
+        model: String,
+        status: String = "",
+        preparesWorkspace: Bool = false
+    ) {
         self.id = id
         self.ordinal = ordinal
         self.providerInstanceID = providerInstanceID
         self.model = model
+        self.status = status
+        self.preparesWorkspace = preparesWorkspace
+    }
+}
+
+/// Ports client-runtime's turn-item presentation for workspace preparation.
+public enum ThreadWorkspacePreparationRetry {
+    /// The failure item a preparation left before a retry replaced it. The
+    /// retry cancels it, after which it has nothing left to say.
+    public static func isRetriedFailure(_ item: OrchestrationV2TurnItem) -> Bool {
+        guard case let .error(failure, _) = item.payload else { return false }
+        return item.status == .cancelled && failure.code == orchestrationV2WorkspacePreparationFailureCode
+    }
+
+    /// Runs Retry Setup can prepare again: their workspace preparation failed
+    /// and the run still ended there. Older servers record no preparation on
+    /// the run, so they never offer it.
+    public static func retryableRunIDs(
+        runs: [LifecycleTimelineRun],
+        items: [OrchestrationV2TurnItem]
+    ) -> Set<String> {
+        let failedRuns = Set(runs.filter { $0.status == "failed" && $0.preparesWorkspace }.map(\.id))
+        guard !failedRuns.isEmpty else { return [] }
+        var retryable = Set<String>()
+        for item in items {
+            guard case let .error(failure, _) = item.payload,
+                  item.status == .failed,
+                  failure.code == orchestrationV2WorkspacePreparationFailureCode,
+                  let runID = item.base.runId, failedRuns.contains(runID) else { continue }
+            retryable.insert(runID)
+        }
+        return retryable
     }
 }
 

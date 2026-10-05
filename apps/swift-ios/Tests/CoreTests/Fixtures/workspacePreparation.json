@@ -1,0 +1,80 @@
+{
+  "run": {
+    "id": "run-1",
+    "threadId": "thread-v2",
+    "ordinal": 1,
+    "providerInstanceId": "codex",
+    "modelSelection": {
+      "instanceId": "codex",
+      "model": "gpt-5.4"
+    },
+    "providerThreadId": null,
+    "userMessageId": "setup-message",
+    "rootNodeId": null,
+    "activeAttemptId": null,
+    "status": "failed",
+    "requestedAt": "2026-06-20T00:00:00.000Z",
+    "startedAt": null,
+    "completedAt": "2026-06-20T00:00:00.000Z",
+    "checkpointId": null,
+    "contextHandoffId": null,
+    "workspacePreparation": {
+      "type": "worktree",
+      "baseRef": "main",
+      "branch": "t3/setup",
+      "startFromOrigin": true
+    }
+  },
+  "failedItem": {
+    "id": "item-setup-failed",
+    "threadId": "thread-v2",
+    "runId": "run-1",
+    "nodeId": "node-1",
+    "providerThreadId": "provider-thread-1",
+    "providerTurnId": "provider-turn-1",
+    "nativeItemRef": null,
+    "parentItemId": null,
+    "ordinal": 27,
+    "status": "failed",
+    "title": null,
+    "startedAt": "2026-06-20T00:00:00.000Z",
+    "completedAt": "2026-06-20T00:00:00.000Z",
+    "updatedAt": "2026-06-20T00:00:00.000Z",
+    "type": "error",
+    "failure": {
+      "class": "provider_error",
+      "message": "git worktree add failed",
+      "code": "workspace_preparation_failed",
+      "retryable": true
+    }
+  },
+  "retriedItem": {
+    "id": "item-setup-cancelled",
+    "threadId": "thread-v2",
+    "runId": "run-1",
+    "nodeId": "node-1",
+    "providerThreadId": "provider-thread-1",
+    "providerTurnId": "provider-turn-1",
+    "nativeItemRef": null,
+    "parentItemId": null,
+    "ordinal": 28,
+    "status": "cancelled",
+    "title": null,
+    "startedAt": "2026-06-20T00:00:00.000Z",
+    "completedAt": "2026-06-20T00:00:00.000Z",
+    "updatedAt": "2026-06-20T00:00:00.000Z",
+    "type": "error",
+    "failure": {
+      "class": "provider_error",
+      "message": "git worktree add failed",
+      "code": "workspace_preparation_failed",
+      "retryable": true
+    }
+  },
+  "retryCommand": {
+    "type": "prepared-run.retry",
+    "commandId": "command-retry",
+    "threadId": "thread-v2",
+    "runId": "run-1"
+  }
+}

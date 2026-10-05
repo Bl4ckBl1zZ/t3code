@@ -152,6 +152,9 @@ public protocol FeatureClient: AnyObject {
     func editQueuedRun(threadID: String, runID: String, text: String) async throws
     /// Releases a queue that restart recovery held back.
     func resumeThreadQueue(threadID: String) async throws
+    /// Prepares the workspace again for a run whose preparation failed
+    /// (`prepared-run.retry`), instead of resending its message.
+    func retryWorkspacePreparation(threadID: String, runID: String) async throws
 
     func saveSettings(_ settings: FeatureSettings) async throws
 
@@ -365,6 +368,10 @@ public extension FeatureClient {
 
     func resumeThreadQueue(threadID: String) async throws {
         throw FeatureCapabilityUnavailable("Queue resume")
+    }
+
+    func retryWorkspacePreparation(threadID _: String, runID _: String) async throws {
+        throw FeatureCapabilityUnavailable("Retrying setup")
     }
 
     func loadReviewFileContents(

@@ -47,6 +47,32 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertTrue(roundTripped.outputOmitted)
     }
 
+    func testWorkspacePreparationRetryContracts() throws {
+        struct Fixture: Decodable {
+            let run: OrchestrationV2Run
+            let failedItem: OrchestrationV2TurnItem
+            let retriedItem: OrchestrationV2TurnItem
+            let retryCommand: JSONValue
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/workspacePreparation.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.run.workspacePreparation?.type, "worktree")
+        XCTAssertEqual(fixture.run.workspacePreparation?.baseRef, "main")
+        XCTAssertEqual(fixture.run.workspacePreparation?.startFromOrigin, true)
+        guard case let .error(failure, _) = fixture.failedItem.payload else {
+            return XCTFail("expected an error item")
+        }
+        XCTAssertEqual(failure.code, orchestrationV2WorkspacePreparationFailureCode)
+        XCTAssertTrue(ThreadWorkspacePreparationRetry.isRetriedFailure(fixture.retriedItem))
+        XCTAssertFalse(ThreadWorkspacePreparationRetry.isRetriedFailure(fixture.failedItem))
+        XCTAssertEqual(
+            OrchestrationCommands.retryWorkspacePreparation(
+                threadID: "thread-v2", runID: fixture.run.id, commandID: "command-retry"
+            ),
+            fixture.retryCommand
+        )
+    }
+
     /// Every turn item type the contract defines, as of the generated fixture.
     /// Kept explicit so adding a contract variant without a Swift case fails
     /// loudly rather than silently decoding to `.unknown`.

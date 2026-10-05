@@ -88,6 +88,7 @@ public final class FeatureRootModel {
     public var outboxCount: Int { pendingSubmissionsByID.count }
     public var outboxSubmissions: [FeatureQueuedSubmission] { pendingSubmissionsByID.values.sorted { $0.identity.createdAt < $1.identity.createdAt } }
     private var failedOutboxIDs: Set<String> = []
+    private var retryingSetupRunIDs: Set<String> = []
     private var sendingOutboxIDs: Set<String> = []
 
     public func outboxStatus(_ submission: FeatureQueuedSubmission) -> String {
@@ -734,6 +735,16 @@ public final class FeatureRootModel {
                 )
             }
             return false
+        }
+    }
+
+    /// Prepares the workspace again for a run whose preparation failed. One
+    /// retry per run at a time: a second tap lands while it is preparing.
+    public func retryWorkspacePreparation(threadID: String, runID: String) async {
+        guard retryingSetupRunIDs.insert(runID).inserted else { return }
+        defer { retryingSetupRunIDs.remove(runID) }
+        await perform(failureTitle: "Couldn't Retry Setup") {
+            try await client.retryWorkspacePreparation(threadID: threadID, runID: runID)
         }
     }
 

@@ -732,6 +732,9 @@ public struct ThreadDetailView: View {
                 onOpenDiff: openDiff,
                 onRetrySend: { model.retryOutbox() },
                 onRetryTurn: retryLastMessage,
+                onRetrySetup: { runID in
+                    Task { await model.retryWorkspacePreparation(threadID: thread.id, runID: runID) }
+                },
                 loadTurnItem: { [client = model.client, threadID = thread.id] sourceThreadID, itemID, revision in
                     try await client.loadTurnItem(
                         threadID: threadID,
@@ -1797,6 +1800,9 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         /// a row opens.
         let support: [String: ThreadActivityItemSupport]
         let date: Date?
+        /// Runs in this group whose failed workspace preparation can be
+        /// retried. Part of the entry so a retry that lands reconfigures it.
+        var retryableSetupRunIDs: Set<String> = []
     }
 
     var id: String {
@@ -1866,6 +1872,10 @@ enum ThreadTimelineFeed {
         var entries: [ThreadTimelineEntry] = []
         var openWork: [ThreadWorkLogRow] = []
         var openLifecycle: [OrchestrationV2ProjectedTurnItem] = []
+        let retryableSetupRunIDs = ThreadWorkspacePreparationRetry.retryableRunIDs(
+            runs: runs,
+            items: timelineItems.map(\.item)
+        )
 
         func closeWork() {
             guard !openWork.isEmpty else { return }
@@ -1880,7 +1890,10 @@ enum ThreadTimelineFeed {
                             id: "work:\(group[0].id)",
                             rows: group,
                             support: groupSupport,
-                            date: ThreadTimelineDay.date(fromISO8601: group[0].createdAt)
+                            date: ThreadTimelineDay.date(fromISO8601: group[0].createdAt),
+                            retryableSetupRunIDs: retryableSetupRunIDs.intersection(
+                                group.compactMap(\.runID)
+                            )
                         )
                     )
                 )
@@ -1929,6 +1942,8 @@ enum ThreadTimelineFeed {
                let runID = item.base.runId, interruptedRunIDs.contains(runID) {
                 continue
             }
+            // A setup failure a retry already replaced has nothing left to say.
+            if ThreadWorkspacePreparationRetry.isRetriedFailure(item) { continue }
             if item.type == "user_message" || item.type == "assistant_message" {
                 // An empty bubble is not a row — an assistant message before its
                 // first token, say — and skipping it must not split the work
@@ -2035,6 +2050,7 @@ private struct ThreadTimelineEntryView: View {
     let onOpenDiff: (String, String?) -> Void
     var onRetrySend: () -> Void = {}
     var onRetryTurn: (() -> Void)? = nil
+    var onRetrySetup: ((String) -> Void)? = nil
 
     var onToggleFold: (String) -> Void = { _ in }
 
@@ -2096,6 +2112,8 @@ private struct ThreadTimelineEntryView: View {
                 onOpenDiff: onOpenDiff,
                 onRollback: onRollback,
                 onRetryTurn: onRetryTurn,
+                retryableSetupRunIDs: workLog.retryableSetupRunIDs,
+                onRetrySetup: onRetrySetup,
                 alwaysExpandActivity: alwaysExpandActivity
             )
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2154,6 +2172,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let onOpenDiff: (String, String?) -> Void
     var onRetrySend: () -> Void = {}
     var onRetryTurn: (() -> Void)? = nil
+    /// Retries a failed workspace preparation for the given run.
+    var onRetrySetup: ((String) -> Void)? = nil
     /// Fetches output the wire withheld from a work-log row, while it is open.
     var loadTurnItem: ThreadTurnItemDetailStore.Loader? = nil
     var citationNavigation: AssistantCitationNavigationRequest? = nil
@@ -2232,6 +2252,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onOpenDiff: onOpenDiff,
                 onRetrySend: onRetrySend,
                 onRetryTurn: onRetryTurn,
+                onRetrySetup: onRetrySetup,
                 onOpenCitation: onOpenCitation,
                 citationContext: citationContext,
                 onUseTemplate: onUseTemplate
@@ -2302,6 +2323,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenDiff: (String, String?) -> Void = { _, _ in }
             var onRetrySend: () -> Void = {}
             var onRetryTurn: (() -> Void)?
+            var onRetrySetup: ((String) -> Void)?
             var onOpenCitation: (AssistantCitation) -> Void = { _ in }
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
@@ -2476,6 +2498,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                         onOpenDiff: context.onOpenDiff,
                         onRetrySend: context.onRetrySend,
                         onRetryTurn: context.onRetryTurn,
+                        onRetrySetup: context.onRetrySetup,
                         onToggleFold: { [weak self] in self?.toggleFold($0) }
                     )
                     // A recycled cell keeps the SwiftUI state of whatever it

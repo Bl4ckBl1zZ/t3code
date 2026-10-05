@@ -748,6 +748,10 @@ public actor T3Client {
 
     /// Releases a queue that restart recovery held, starting the run at its head.
     @discardableResult
+    public func retryWorkspacePreparation(threadID: String, runID: String) async throws -> DispatchResult {
+        try await dispatch(OrchestrationCommands.retryWorkspacePreparation(threadID: threadID, runID: runID))
+    }
+
     public func resumeThreadQueue(threadID: String) async throws -> DispatchResult {
         try await dispatch(OrchestrationCommands.resumeQueue(threadID: threadID))
     }
@@ -2990,6 +2994,21 @@ public enum OrchestrationCommands {
     ) -> JSONValue {
         .object([
             "type": .string("queued-run.cancel"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "runId": .string(runID),
+        ])
+    }
+
+    /// `prepared-run.retry`: puts a run whose workspace preparation failed back
+    /// into preparation, repeating the run's recorded `workspacePreparation`.
+    public static func retryWorkspacePreparation(
+        threadID: String,
+        runID: String,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("prepared-run.retry"),
             "commandId": .string(commandID),
             "threadId": .string(threadID),
             "runId": .string(runID),

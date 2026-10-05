@@ -1355,6 +1355,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refreshThread(id: route.uiID, client: route.client)
     }
 
+    func retryWorkspacePreparation(threadID: String, runID: String) async throws {
+        let route = try threadRoute(for: threadID)
+        _ = try await route.client.retryWorkspacePreparation(threadID: route.wireID, runID: runID)
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
     func editQueuedRun(threadID: String, runID: String, text: String) async throws {
         let route = try threadRoute(for: threadID)
         _ = try await route.client.editQueuedRun(
@@ -4926,7 +4932,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             id: run.id,
             ordinal: run.ordinal,
             providerInstanceID: run.providerInstanceId ?? "",
-            model: run.modelSelection?.model ?? ""
+            model: run.modelSelection?.model ?? "",
+            status: run.status,
+            preparesWorkspace: run.workspacePreparation != nil
         )
     }
 

@@ -1015,6 +1015,10 @@ struct ThreadWorkLog: View {
     var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
     /// Resends the last user message after a failed turn.
     var onRetryTurn: (() -> Void)? = nil
+    /// Runs whose failed workspace preparation can be retried in place.
+    var retryableSetupRunIDs: Set<String> = []
+    /// Dispatches `prepared-run.retry` for a run, instead of resending.
+    var onRetrySetup: ((String) -> Void)? = nil
     /// `FeatureSettings.alwaysExpandActivity`: the log opens unfolded and every
     /// row opens with it, the way a provider CLI leaves its scrollback alone.
     var alwaysExpandActivity: Bool = false
@@ -1148,7 +1152,11 @@ struct ThreadWorkLog: View {
                 onOpenDiff: { onOpenDiff(checkpointID, $0) }
             )
         } else if row.item.type == "error" {
-            ProviderErrorCallout(row: row, onRetry: onRetryTurn)
+            if let runID = row.runID, retryableSetupRunIDs.contains(runID), let onRetrySetup {
+                ProviderErrorCallout(row: row, retryLabel: "Retry setup", onRetry: { onRetrySetup(runID) })
+            } else {
+                ProviderErrorCallout(row: row, onRetry: onRetryTurn)
+            }
         } else {
             // Rows with nothing to show offer no disclosure, so they never
             // open to an empty panel.
@@ -1428,6 +1436,9 @@ private struct WorkLogRowButton: View {
 /// adapter noise into the next step; a one-line row truncated exactly that.
 private struct ProviderErrorCallout: View {
     let row: ThreadWorkLogRow
+    /// "Retry setup" when the retry prepares the workspace again rather than
+    /// resending the message.
+    var retryLabel: String = "Try Again"
     let onRetry: (() -> Void)?
 
     private var message: String {
@@ -1448,7 +1459,7 @@ private struct ProviderErrorCallout: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let onRetry {
-                Button("Try Again", systemImage: "arrow.clockwise", action: onRetry)
+                Button(retryLabel, systemImage: "arrow.clockwise", action: onRetry)
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
                     .controlSize(.small)

@@ -44,6 +44,9 @@ sheets use the system glass material.
   Tap it to retry. Above the composer, a notice says why the message was not sent, with **Retry**
   and a close button. It stays with the thread until you dismiss it, send again, or the message
   goes out.
+- **Failed setup.** When preparing a new task's workspace fails, for example creating its
+  worktree, the error offers **Retry setup**. It prepares the workspace again and then starts the
+  task, without sending your message twice.
 - **Unavailable threads.** An offline, archived or unavailable thread says so, with **Reconnect**,
   **Unarchive** or **Try Again**.
 - **Hardware keyboard shortcuts:**

@@ -1127,7 +1127,23 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
     public let requestedAt: OrchestrationV2Timestamp
     public let startedAt: OrchestrationV2Timestamp?
     public let completedAt: OrchestrationV2Timestamp?
+    /// How a launch prepares this run's workspace; `prepared-run.retry`
+    /// repeats it. Older servers never record it, so they never offer the retry.
+    public var workspacePreparation: OrchestrationV2WorkspacePreparation? = nil
 }
+
+/// `OrchestrationV2ThreadLaunchWorkspaceStrategy`: where a launched run works.
+/// `type` stays a string so a strategy this build predates still decodes.
+public struct OrchestrationV2WorkspacePreparation: Codable, Equatable, Sendable {
+    public let type: String
+    public var baseRef: String? = nil
+    public var branch: String? = nil
+    public var worktreePath: String? = nil
+    public var startFromOrigin: Bool? = nil
+}
+
+/// Failure code on the error item a failed workspace preparation leaves.
+public let orchestrationV2WorkspacePreparationFailureCode = "workspace_preparation_failed"
 
 /// A conversation message row.
 ///

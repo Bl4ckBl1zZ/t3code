@@ -87,6 +87,9 @@ import {
   OrchestrationV2ThreadProjection,
   OrchestrationV2Run,
   OrchestrationV2ConversationMessage,
+  OrchestrationV2Command,
+  CommandId,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2TurnItem as OrchestrationV2TurnItemSchema,
   PlanId,
@@ -2056,3 +2059,68 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(turnItemDetailPath, turnItemDetailFixture);
+
+// Retry a failed workspace preparation: the run records how its workspace is
+// prepared, the failure item carries the code, and `prepared-run.retry` is the
+// command the Swift client builds by hand.
+const workspacePreparationPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "workspacePreparation.json",
+);
+const preparationFailure = (status: "failed" | "cancelled"): OrchestrationV2TurnItem => ({
+  ...base(`item-setup-${status}`),
+  status,
+  type: "error",
+  failure: {
+    class: "provider_error",
+    message: "git worktree add failed",
+    code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+    retryable: true,
+  },
+});
+const workspacePreparationFixture = `${JSON.stringify(
+  {
+    run: Schema.encodeSync(OrchestrationV2Run)({
+      id: runId,
+      threadId,
+      ordinal: 1,
+      providerInstanceId,
+      modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+      providerThreadId: null,
+      userMessageId: MessageId.make("setup-message"),
+      rootNodeId: null,
+      activeAttemptId: null,
+      status: "failed",
+      requestedAt: now,
+      startedAt: null,
+      completedAt: now,
+      checkpointId: null,
+      contextHandoffId: null,
+      workspacePreparation: {
+        type: "worktree",
+        baseRef: "main",
+        branch: "t3/setup",
+        startFromOrigin: true,
+      },
+    }),
+    failedItem: encodeTurnItem(preparationFailure("failed")),
+    retriedItem: encodeTurnItem(preparationFailure("cancelled")),
+    retryCommand: Schema.encodeSync(OrchestrationV2Command)({
+      type: "prepared-run.retry",
+      commandId: CommandId.make("command-retry"),
+      threadId,
+      runId,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(workspacePreparationPath) ||
+    NodeFS.readFileSync(workspacePreparationPath, "utf8") !== workspacePreparationFixture
+  ) {
+    console.error("[swift-fixtures] workspacePreparation.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(workspacePreparationPath, workspacePreparationFixture);
