@@ -88,6 +88,9 @@ final class OrchestrationV2JoinColumnTests: XCTestCase {
         // The navigation target and the orb seed both hang off this.
         XCTAssertEqual(subagent.childThreadId, "thread-child")
         XCTAssertEqual(subagent.title, "Audit the mapper")
+        XCTAssertEqual(subagent.model, "opus")
+        XCTAssertEqual(subagent.driver, "claude")
+        XCTAssertEqual(subagent.providerInstanceId, "claude")
         XCTAssertEqual(subagent.workflow?.name, "review")
         XCTAssertEqual(subagent.workflow?.currentPhase, "Report")
         XCTAssertEqual(subagent.workflow?.spawnedCount, 3)
@@ -118,6 +121,8 @@ final class OrchestrationV2JoinColumnTests: XCTestCase {
 
         XCTAssertNil(subagent.childThreadId)
         XCTAssertNil(subagent.title)
+        XCTAssertNil(subagent.model)
+        XCTAssertNil(subagent.providerInstanceId)
         XCTAssertNil(subagent.workflow)
         XCTAssertNil(subagent.usage)
         XCTAssertEqual(subagent.result, "done")

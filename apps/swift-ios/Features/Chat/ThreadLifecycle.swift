@@ -106,7 +106,223 @@ public enum LifecyclePresentation: Equatable, Sendable {
     }
 }
 
+/// What a subagent runs on and where, for the line under its name. Resolved
+/// once per projection from data the client already holds, never by loading
+/// the child's transcript.
+public struct SubagentRowMetadata: Equatable, Sendable {
+    public struct WorkspaceEntry: Equatable, Sendable {
+        /// "Project", "Branch", "Worktree" or "Workspace".
+        public let label: String
+        public let value: String
+
+        public init(label: String, value: String) {
+            self.label = label
+            self.value = value
+        }
+    }
+
+    public let modelLabel: String
+    /// The provider account, named only when the reader needs it to tell two
+    /// accounts on the same provider apart.
+    public let account: String?
+    /// `#RRGGBB`, present only alongside `account`.
+    public let accentColor: String?
+    /// Only what differs from the parent's workspace.
+    public let workspace: [WorkspaceEntry]
+
+    public init(
+        modelLabel: String,
+        account: String? = nil,
+        accentColor: String? = nil,
+        workspace: [WorkspaceEntry] = []
+    ) {
+        self.modelLabel = modelLabel
+        self.account = account
+        self.accentColor = accentColor
+        self.workspace = workspace
+    }
+}
+
+/// When a provider instance names itself next to a model. Ports
+/// `shouldShowInstanceBadge` / `normalizeProviderAccentColor` from
+/// apps/web/src/providerInstances.ts so every surface badges the same accounts.
+public enum ProviderAccountBadge {
+    /// A configured accent always shows; otherwise only a driver with several
+    /// instances needs telling apart.
+    public static func shows(
+        driver: String,
+        accentColor: String?,
+        amongDrivers drivers: [String]
+    ) -> Bool {
+        if normalizedAccent(accentColor) != nil { return true }
+        return drivers.lazy.filter { $0 == driver }.prefix(2).count > 1
+    }
+
+    /// `#RRGGBB` or nil; anything else is ignored rather than guessed at.
+    public static func normalizedAccent(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.count == 7, trimmed.hasPrefix("#"),
+              trimmed.dropFirst().allSatisfy(\.isHexDigit) else { return nil }
+        return trimmed
+    }
+}
+
 public enum ThreadLifecycle {
+    /// The two ends of a subagent edge as `resolveSubagentMetadata` reads them.
+    public struct SubagentWorkspaceThread: Equatable, Sendable {
+        public var projectID: String
+        public var branch: String?
+        public var worktreePath: String?
+
+        public init(projectID: String, branch: String? = nil, worktreePath: String? = nil) {
+            self.projectID = projectID
+            self.branch = branch
+            self.worktreePath = worktreePath
+        }
+    }
+
+    public struct SubagentWorkspaceProject: Equatable, Sendable {
+        public var id: String
+        public var title: String
+        public var workspaceRoot: String
+
+        public init(id: String, title: String, workspaceRoot: String) {
+            self.id = id
+            self.title = title
+            self.workspaceRoot = workspaceRoot
+        }
+    }
+
+    /// Ports `resolveSubagentMetadata` from
+    /// packages/client-runtime/src/state/subagentDisplay.ts: the catalog's short
+    /// name for the reported model, and only the workspace facts that differ
+    /// from the parent's.
+    public static func resolveSubagentMetadata(
+        model: String?,
+        provider: (driver: String, models: [ServerProviderModelSnapshot])? = nil,
+        parentThread: SubagentWorkspaceThread? = nil,
+        childThread: SubagentWorkspaceThread? = nil,
+        parentProject: SubagentWorkspaceProject? = nil,
+        childProject: SubagentWorkspaceProject? = nil
+    ) -> (modelLabel: String, workspace: [SubagentRowMetadata.WorkspaceEntry]) {
+        let reported = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = reported?.isEmpty == false ? reported : nil
+        let catalogModel = model.flatMap { model in
+            provider.flatMap { selectableModel(model, in: $0.models) }
+        }
+        let reportedLabel =
+            catalogModel.map { ($0.shortName?.isEmpty == false ? $0.shortName : nil) ?? $0.name }
+            ?? model.map(formatModelSlugName)
+            ?? "Not reported"
+        let modelLabel: String
+        if let qualifier = catalogModel?.subProvider?.trimmingCharacters(in: .whitespaces),
+           !qualifier.isEmpty {
+            modelLabel = stripQualifier(qualifier, from: reportedLabel)
+        } else {
+            modelLabel = reportedLabel
+        }
+
+        let parentWorkspace = parentThread?.worktreePath ?? parentProject?.workspaceRoot
+        let childWorkspace = childThread?.worktreePath ?? childProject?.workspaceRoot
+        var workspace: [SubagentRowMetadata.WorkspaceEntry] = []
+        if let parentThread, let childProject, childProject.id != parentThread.projectID {
+            workspace.append(.init(label: "Project", value: childProject.title))
+        }
+        if let parentWorkspace, let childWorkspace, parentWorkspace != childWorkspace {
+            let label =
+                childThread?.branch != nil ? "Branch"
+                : childThread?.worktreePath != nil ? "Worktree"
+                : "Workspace"
+            let value = childThread?.branch ?? URL(fileURLWithPath: childWorkspace).lastPathComponent
+            workspace.append(.init(label: label, value: value))
+        }
+        return (modelLabel, workspace)
+    }
+
+    /// `resolveSelectableModel`, against the catalog alone: slug, then name,
+    /// then the catalog's own aliases.
+    private static func selectableModel(
+        _ value: String,
+        in models: [ServerProviderModelSnapshot]
+    ) -> ServerProviderModelSnapshot? {
+        models.first { $0.slug == value }
+            ?? models.first { $0.name.caseInsensitiveCompare(value) == .orderedSame }
+            ?? models.first { $0.aliases?.contains(value) == true }
+    }
+
+    /// "Cloud+ / My model" reads "My model" once the provider is already named.
+    private static func stripQualifier(_ qualifier: String, from label: String) -> String {
+        guard label.lowercased().hasPrefix(qualifier.lowercased()) else { return label }
+        var rest = label.dropFirst(qualifier.count)
+        let separators: Set<Character> = [".", ":", "/", "-"]
+        let leading = rest.prefix { $0.isWhitespace }
+        rest = rest.dropFirst(leading.count)
+        if let first = rest.first, separators.contains(first) {
+            rest = rest.dropFirst().drop { $0.isWhitespace }
+        } else if leading.isEmpty {
+            // "Cloud+Model" is not a qualifier followed by a name.
+            return label
+        }
+        let stripped = rest.trimmingCharacters(in: .whitespaces)
+        return stripped.isEmpty ? label : stripped
+    }
+
+    /// Ports `formatModelSlugName` from packages/shared/src/model.ts:
+    /// "claude-opus-4-6" reads "Claude Opus 4.6", "gpt-5.4-mini" reads
+    /// "GPT-5.4-Mini"; anything unrecognized is kept verbatim.
+    static func formatModelSlugName(_ slug: String) -> String {
+        let separator = slug.lastIndex(of: "/").map { slug.index(after: $0) } ?? slug.startIndex
+        let prefix = String(slug[..<separator])
+        let name = String(slug[separator...])
+        if name.range(of: #"^gpt-\d"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            let upper = name.replacingOccurrences(
+                of: "^gpt", with: "GPT", options: [.regularExpression, .caseInsensitive]
+            )
+            var result = ""
+            var capitalizeNext = false
+            for character in upper {
+                if capitalizeNext, character.isLetter, character.isLowercase {
+                    result.append(contentsOf: character.uppercased())
+                } else {
+                    result.append(character)
+                }
+                capitalizeNext = character == "-"
+            }
+            return prefix + result
+        }
+        guard name.range(
+            of: #"^(claude-(opus|sonnet|haiku|fable)|gemini|grok|composer)-\d"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil else { return slug }
+        let dotted = name.replacingOccurrences(
+            of: #"^(claude-[a-z]+-\d+)-(\d{1,2})(?=-|\[|$)"#,
+            with: "$1.$2",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        return prefix + dotted.split(separator: "-", omittingEmptySubsequences: false)
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    /// Ports `subagentDetailPreview`: live work leads with progress, settled
+    /// work with its result, collapsed to one paragraph of at most 280
+    /// characters for a three-line row.
+    static func subagentDetailPreview(
+        status: OrchestrationV2TurnItemStatus,
+        progress: String?,
+        result: String?
+    ) -> String? {
+        let progress = oneLine(progress)
+        let result = oneLine(result)
+        guard let detail = status.isTerminal ? (result ?? progress) : (progress ?? result) else {
+            return nil
+        }
+        guard detail.count > 280 else { return detail }
+        var clipped = String(detail.prefix(280))
+        while clipped.last?.isWhitespace == true { clipped.removeLast() }
+        return clipped + "…"
+    }
+
     /// Turn items that become dividers or related-thread rows.
     static let lifecycleTypes: Set<String> = [
         "run_interrupt_request",
@@ -334,8 +550,6 @@ public enum ThreadLifecycle {
             )
 
         case let .subagent(subagentID, _, _, _, childThreadID, prompt, progress, result):
-            let latestProgress = oneLine(progress)
-            let latestResult = oneLine(result)
             let title = (item.base.title ?? "Subagent").trimmingCharacters(in: .whitespacesAndNewlines)
             return .relatedThread(
                 .init(
@@ -344,9 +558,7 @@ public enum ThreadLifecycle {
                     preview: oneLine(prompt),
                     // Once it stops, the last streamed result says more than a
                     // stale progress line; while it runs, live progress comes first.
-                    detail: item.status.isTerminal
-                        ? (latestResult ?? latestProgress)
-                        : (latestProgress ?? latestResult),
+                    detail: subagentDetailPreview(status: item.status, progress: progress, result: result),
                     meta: nil,
                     status: WorkRowStatus(agentStatus: item.status.rawValue),
                     threadID: childThreadID,

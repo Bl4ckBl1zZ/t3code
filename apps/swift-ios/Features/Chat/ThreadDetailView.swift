@@ -1050,8 +1050,16 @@ public struct ThreadDetailView: View {
             provider?.models.first { $0.id == selection.modelID }
         }
         let parentThreadID = detail.workflow.thread?.parentThreadID
+        let showsAccount = provider.map {
+            ProviderAccountBadge.shows(
+                driver: $0.driver,
+                accentColor: $0.accentColor,
+                amongDrivers: environmentProviders.map(\.driver)
+            )
+        } ?? false
         return ProviderSubagentBar(
             provider: provider,
+            showsAccount: showsAccount,
             modelLabel: model?.name ?? selection?.modelID ?? currentThread.providerName ?? "Subagent",
             effortLabel: model.flatMap {
                 DailyUXModelOptions.reasoningSummary(for: $0, selections: selection?.options ?? [])
@@ -1790,6 +1798,8 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         /// Projected-item id to the feature-scoped id of the thread a subagent
         /// spawned, which is what makes its card tappable.
         let childThreadIDs: [String: String]
+        /// Projected-item id to what that subagent runs on and where.
+        var subagentMetadata: [String: SubagentRowMetadata] = [:]
         let date: Date?
     }
 
@@ -1847,6 +1857,7 @@ enum ThreadTimelineFeed {
             runs: detail.timelineRuns,
             support: detail.itemSupport,
             subagentChildThreadIDs: detail.subagentChildThreadIDs,
+            subagentMetadata: detail.subagentMetadata,
             liveRun: ThreadWorkLogLiveRun(threadState: detail.thread.state, activeRunID: activeRunID),
             calendar: calendar
         )
@@ -1863,6 +1874,7 @@ enum ThreadTimelineFeed {
         runs: [LifecycleTimelineRun] = [],
         support: [String: ThreadActivityItemSupport] = [:],
         subagentChildThreadIDs: [String: String] = [:],
+        subagentMetadata: [String: SubagentRowMetadata] = [:],
         liveRun: ThreadWorkLogLiveRun = .unscoped,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
@@ -1906,12 +1918,13 @@ enum ThreadTimelineFeed {
             guard !openLifecycle.isEmpty else { return }
             for group in ThreadTimelineGrouping.mergeRelatedThreadCardRuns(openLifecycle) {
                 var childThreadIDs: [String: String] = [:]
+                var metadata: [String: SubagentRowMetadata] = [:]
                 for row in group.elements {
-                    guard case let .subagent(subagentID, _, _, _, _, _, _, _) = row.item.payload,
-                          let childThreadID = subagentChildThreadIDs[subagentID] else {
+                    guard case let .subagent(subagentID, _, _, _, _, _, _, _) = row.item.payload else {
                         continue
                     }
-                    childThreadIDs[row.id] = childThreadID
+                    childThreadIDs[row.id] = subagentChildThreadIDs[subagentID]
+                    metadata[row.id] = subagentMetadata[subagentID]
                 }
                 entries.append(
                     .lifecycle(
@@ -1922,6 +1935,7 @@ enum ThreadTimelineFeed {
                             rows: group.elements,
                             runs: runs,
                             childThreadIDs: childThreadIDs,
+                            subagentMetadata: metadata,
                             date: itemDate(group.first.item)
                         )
                     )
@@ -2088,6 +2102,7 @@ private struct ThreadTimelineEntryView: View {
                     rows: lifecycle.rows,
                     runs: lifecycle.runs,
                     liveChildThreadIDs: lifecycle.childThreadIDs,
+                    subagentMetadata: lifecycle.subagentMetadata,
                     onOpenThread: onOpenThread
                 )
             } else if let row = lifecycle.rows.first {
@@ -2095,6 +2110,7 @@ private struct ThreadTimelineEntryView: View {
                     row: row,
                     runs: lifecycle.runs,
                     liveChildThreadID: lifecycle.childThreadIDs[row.id],
+                    subagentMetadata: lifecycle.subagentMetadata[row.id],
                     onOpenThread: onOpenThread
                 )
             }

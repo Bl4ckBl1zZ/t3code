@@ -58,6 +58,9 @@ public struct ProviderSubagentStatus: Equatable, Sendable {
 /// which model is working, for how long, and leads back to the parent.
 struct ProviderSubagentBar: View {
     let provider: FeatureProvider?
+    /// Several accounts on this provider: badge the glyph and name the account,
+    /// as the subagent rows in the parent do.
+    var showsAccount = false
     let modelLabel: String
     /// Reasoning effort as the model chip names it, when the subagent has one.
     let effortLabel: String?
@@ -77,11 +80,25 @@ struct ProviderSubagentBar: View {
                             fallbackName: provider.name,
                             size: 14
                         )
+                        .overlay(alignment: .bottomTrailing) {
+                            if let accent = accountAccent {
+                                Circle()
+                                    .fill(accent)
+                                    .frame(width: 6, height: 6)
+                                    .offset(x: 2, y: 2)
+                            }
+                        }
                     }
                     Text(modelLabel)
                         .font(T3Typography.supportingStrong)
                         .foregroundStyle(T3Colors.textPrimary)
                         .lineLimit(1)
+                    if let account {
+                        Text(verbatim: "· \(account)")
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .lineLimit(1)
+                    }
                     if let effortLabel {
                         Text(effortLabel)
                             .font(T3Typography.supporting)
@@ -129,8 +146,18 @@ struct ProviderSubagentBar: View {
         .lineLimit(1)
     }
 
+    private var account: String? {
+        showsAccount ? provider?.name : nil
+    }
+
+    private var accountAccent: Color? {
+        guard showsAccount else { return nil }
+        return provider?.accentColor.flatMap(ProviderAccountBadge.color)
+    }
+
     private var accessibilityText: String {
-        let model = effortLabel.map { "\(modelLabel), \($0)" } ?? modelLabel
+        let named = account.map { "\(modelLabel), \($0)" } ?? modelLabel
+        let model = effortLabel.map { "\(named), \($0)" } ?? named
         return "\(model) subagent, \(status?.summary ?? "Starting"). It runs on its own and cannot take messages."
     }
 }

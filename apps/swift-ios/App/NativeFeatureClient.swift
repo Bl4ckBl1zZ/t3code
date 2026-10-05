@@ -4494,6 +4494,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             timelineRuns: incoming.timelineRuns,
             itemSupport: incoming.itemSupport,
             subagentChildThreadIDs: incoming.subagentChildThreadIDs,
+            subagentMetadata: incoming.subagentMetadata,
             workflow: incoming.workflow
         )
     }
@@ -4808,8 +4809,62 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             timelineRuns: projection.runs.map(Self.timelineRun),
             itemSupport: itemSupport,
             subagentChildThreadIDs: subagentChildThreadIDs,
+            subagentMetadata: subagentMetadata(projection, environmentID: environment.id),
             workflow: mapWorkflow(projection, environment: environment)
         )
+    }
+
+    /// What each subagent runs on and where, from the server config and shell
+    /// this client already holds; the child's transcript is never loaded.
+    private func subagentMetadata(
+        _ projection: OrchestrationV2ThreadProjection,
+        environmentID: String
+    ) -> [String: SubagentRowMetadata] {
+        guard !projection.subagents.isEmpty else { return [:] }
+        let providers = serverConfigsByEnvironmentID[environmentID]?.providers ?? []
+        let drivers = providers.map(\.driver)
+        let shell = shellsByEnvironmentID[environmentID]
+        func project(_ id: String?) -> ThreadLifecycle.SubagentWorkspaceProject? {
+            guard let id, let project = shell?.projects.first(where: { $0.id == id }) else { return nil }
+            return .init(id: project.id, title: project.title, workspaceRoot: project.workspaceRoot)
+        }
+        let parent = ThreadLifecycle.SubagentWorkspaceThread(
+            projectID: projection.thread.projectId,
+            branch: projection.thread.branch,
+            worktreePath: projection.thread.worktreePath
+        )
+        var result: [String: SubagentRowMetadata] = [:]
+        for subagent in projection.subagents {
+            let provider = providers.first { $0.instanceId == subagent.providerInstanceId }
+            let child = subagent.childThreadId.flatMap { id in shell?.threads.first { $0.id == id } }
+            let childThread = child.map {
+                ThreadLifecycle.SubagentWorkspaceThread(
+                    projectID: $0.projectId, branch: $0.branch, worktreePath: $0.worktreePath
+                )
+            }
+            let resolved = ThreadLifecycle.resolveSubagentMetadata(
+                model: subagent.model,
+                provider: provider.map { ($0.driver, $0.models) },
+                parentThread: parent,
+                childThread: childThread,
+                parentProject: project(parent.projectID),
+                childProject: project(child?.projectId)
+            )
+            let showsAccount = provider.map {
+                ProviderAccountBadge.shows(
+                    driver: $0.driver,
+                    accentColor: $0.accentColor,
+                    amongDrivers: drivers
+                )
+            } ?? false
+            result[subagent.id] = SubagentRowMetadata(
+                modelLabel: resolved.modelLabel,
+                account: showsAccount ? provider.map { $0.displayName ?? providerDisplayName($0.driver) } : nil,
+                accentColor: showsAccount ? ProviderAccountBadge.normalizedAccent(provider?.accentColor) : nil,
+                workspace: resolved.workspace
+            )
+        }
+        return result
     }
 
     /// The projection's relational tables, narrowed for the queue control and
@@ -5578,6 +5633,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     }
                 )
                 mapped.incompatibleVersionWarning = provider.incompatibleVersionWarning
+                mapped.accentColor = ProviderAccountBadge.normalizedAccent(provider.accentColor)
                 mapped.workspaceSnapshots = provider.workspaceSnapshots?.map { workspace in
                     FeatureProviderWorkspace(cwd: workspace.cwd,
                         slashCommands: workspace.slashCommands.map { .init(name: $0.name, description: $0.description, inputHint: $0.input?.hint) },

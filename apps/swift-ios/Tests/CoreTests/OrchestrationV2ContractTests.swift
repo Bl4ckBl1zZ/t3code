@@ -123,6 +123,14 @@ final class OrchestrationV2ContractTests: XCTestCase {
         try JSONDecoder().decode(OrchestrationV2ThreadProjection.self, from: fixtureData())
     }
 
+    func testSubagentRowsCarryTheModelAndProviderTheyRunOn() throws {
+        let subagent = try XCTUnwrap(projection().subagents.first)
+        XCTAssertEqual(subagent.model, "claude-haiku-4-5")
+        XCTAssertEqual(subagent.driver, "claudeAgent")
+        XCTAssertEqual(subagent.providerInstanceId, "claude-work")
+        XCTAssertEqual(subagent.childThreadId, "thread-child")
+    }
+
     func testNativeParityFieldsDecodeFromServerContract() throws {
         let projection = try projection()
         XCTAssertEqual(projection.thread.activeOrderKey, "n")

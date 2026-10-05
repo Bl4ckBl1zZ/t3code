@@ -15,6 +15,9 @@ struct ThreadLifecycleRow: View {
     /// thread id: provider-native subagents backfill it after the item is first
     /// persisted.
     var liveChildThreadID: String?
+    /// What a subagent runs on and where; nil for created threads and for a
+    /// subagent whose projection row has not arrived.
+    var subagentMetadata: SubagentRowMetadata?
     /// Drops a related-thread row's own bottom spacing so a merged run can
     /// supply it once.
     var grouped = false
@@ -43,6 +46,7 @@ struct ThreadLifecycleRow: View {
                     threadID: row.item.type == "subagent"
                         ? (liveChildThreadID ?? presentation.threadID)
                         : presentation.threadID,
+                    metadata: row.item.type == "subagent" ? subagentMetadata : nil,
                     onOpenThread: onOpenThread
                 )
                 .padding(.bottom, grouped ? 0 : ChatTimelineStyle.entrySpacing)
@@ -57,6 +61,7 @@ struct ThreadLifecycleRow: View {
 private struct RelatedThreadRow: View {
     let presentation: LifecyclePresentation.RelatedThread
     let threadID: String?
+    let metadata: SubagentRowMetadata?
     let onOpenThread: (String) -> Void
 
     private var canOpen: Bool { threadID != nil }
@@ -98,13 +103,20 @@ private struct RelatedThreadRow: View {
                 }
                 .frame(minHeight: T3Metrics.minimumTapTarget)
 
-                // Strictly one line: a fan-out of agents is scanned, not read.
-                // Plain text even while the agent runs, since that can be minutes.
+                if let metadata {
+                    SubagentMetadataLine(metadata: metadata)
+                        .padding(.leading, 28)
+                        .padding(.bottom, 2)
+                }
+
+                // At most three lines: enough to read where the agent got to,
+                // short enough that a fan-out still scans. Plain text even while
+                // the agent runs, since that can be minutes.
                 if let detail = presentation.detail {
                     Text(verbatim: detail)
                         .font(ChatTimelineStyle.small)
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .lineLimit(1)
+                        .foregroundStyle(presentation.status == .failed ? T3Colors.danger : T3Colors.textTertiary)
+                        .lineLimit(3)
                         .truncationMode(.tail)
                         .padding(.leading, 28)
                         .padding(.bottom, 6)
@@ -149,6 +161,7 @@ private struct RelatedThreadRow: View {
             presentation.preview,
             presentation.meta,
             presentation.status?.accessibilityLabel,
+            metadata?.accessibilityText,
             presentation.detail,
         ]
         .compactMap { $0 }
@@ -165,6 +178,63 @@ private struct RelatedThreadRow: View {
     }
 }
 
+/// "Model · ● Account · ⎇ branch": what a subagent runs on, then only where it
+/// differs from the parent.
+private struct SubagentMetadataLine: View {
+    let metadata: SubagentRowMetadata
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(verbatim: metadata.modelLabel)
+                .layoutPriority(1)
+            if let account = metadata.account {
+                separator
+                if let accent = metadata.accentColor.flatMap(ProviderAccountBadge.color) {
+                    Circle()
+                        .fill(accent)
+                        .frame(width: 6, height: 6)
+                }
+                Text(verbatim: account)
+            }
+            ForEach(metadata.workspace, id: \.label) { entry in
+                separator
+                Image(systemName: entry.label == "Branch" ? "arrow.triangle.branch" : "folder")
+                    .imageScale(.small)
+                Text(verbatim: entry.value)
+            }
+        }
+        .font(ChatTimelineStyle.small)
+        .foregroundStyle(T3Colors.textTertiary)
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var separator: some View {
+        Text(verbatim: "·")
+    }
+}
+
+extension SubagentRowMetadata {
+    /// Read in place of the line's glyphs: "Opus 4.6, Work account, Branch: fix/agents".
+    var accessibilityText: String {
+        ([modelLabel] + [account].compactMap { $0 } + workspace.map { "\($0.label): \($0.value)" })
+            .joined(separator: ", ")
+    }
+}
+
+extension ProviderAccountBadge {
+    /// The accent a provider instance was given in settings, as a fill.
+    static func color(_ hex: String) -> Color? {
+        guard let value = UInt32(hex.dropFirst(), radix: 16) else { return nil }
+        return Color(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
+}
+
 /// Agents fanned out side by side read as one list: a run of adjacent
 /// lifecycle rows stacks as tightly as a work log, with the entry spacing
 /// supplied once for the run.
@@ -172,6 +242,7 @@ struct ThreadLifecycleRowGroup: View {
     let rows: [OrchestrationV2ProjectedTurnItem]
     var runs: [LifecycleTimelineRun] = []
     var liveChildThreadIDs: [String: String] = [:]
+    var subagentMetadata: [String: SubagentRowMetadata] = [:]
     var onOpenThread: (String) -> Void = { _ in }
 
     var body: some View {
@@ -181,6 +252,7 @@ struct ThreadLifecycleRowGroup: View {
                     row: row,
                     runs: runs,
                     liveChildThreadID: liveChildThreadIDs[row.id],
+                    subagentMetadata: subagentMetadata[row.id],
                     grouped: true,
                     onOpenThread: onOpenThread
                 )

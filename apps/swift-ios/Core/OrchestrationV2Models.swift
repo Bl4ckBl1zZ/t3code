@@ -1064,6 +1064,12 @@ public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiabl
     /// which clients render as nothing rather than as a zero.
     public let workflow: OrchestrationV2WorkflowProgress?
     public let usage: OrchestrationV2TaskUsage?
+    /// What the agent runs on, for its detail line. Optional here although the
+    /// contract always sends driver and instance: `model` is null when the
+    /// provider does not report one, and an absent field must not drop the row.
+    public var model: String? = nil
+    public var driver: String? = nil
+    public var providerInstanceId: String? = nil
 }
 
 public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {

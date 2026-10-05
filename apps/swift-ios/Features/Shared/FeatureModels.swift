@@ -813,6 +813,9 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
     /// row in `timelineItems`, which is exactly the set a timeline row can be
     /// tapped from.
     public var subagentChildThreadIDs: [String: String] = [:]
+    /// Subagent id to what it runs on and where, for its timeline row. Absent
+    /// for a subagent whose projection row has not arrived.
+    public var subagentMetadata: [String: SubagentRowMetadata] = [:]
     /// The projection's relational tables, narrowed to what the queue control
     /// and the relationship graph take as input. One field rather than ten so a
     /// caller that rebuilds a detail from parts carries it across in one line.
@@ -828,6 +831,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         timelineRuns: [LifecycleTimelineRun] = [],
         itemSupport: [String: ThreadActivityItemSupport] = [:],
         subagentChildThreadIDs: [String: String] = [:],
+        subagentMetadata: [String: SubagentRowMetadata] = [:],
         workflow: FeatureThreadWorkflow = .empty
     ) {
         self.thread = thread
@@ -839,6 +843,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         self.timelineRuns = timelineRuns
         self.itemSupport = itemSupport
         self.subagentChildThreadIDs = subagentChildThreadIDs
+        self.subagentMetadata = subagentMetadata
         self.workflow = workflow
     }
 
@@ -1172,6 +1177,9 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     /// Set when the installed version is known to be unsupported or broken on
     /// this server. The provider can still run, so it stays available.
     public var incompatibleVersionWarning: String? = nil
+    /// The `#RRGGBB` accent the instance was given in settings, which is how
+    /// two accounts on one provider are told apart.
+    public var accentColor: String? = nil
     public var workspaceSnapshots: [FeatureProviderWorkspace]? = nil
     public var slashCommands: [FeatureProviderSlashCommand]?
     public var skills: [FeatureProviderSkill]?
