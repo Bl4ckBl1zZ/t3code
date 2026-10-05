@@ -2548,7 +2548,11 @@ public actor EnvironmentRuntime {
             }
             // Route edits and learned routes reach the live client in place, so
             // a newly learned LAN address does not drop a working connection.
-            if existing.environment.sameExceptRoutes(as: environment) {
+            // A list without the route in use has no connection to keep, so
+            // that client is replaced like any other endpoint change.
+            let routeInUse = existing.routeSelector.currentRouteID()
+            if existing.environment.sameExceptRoutes(as: environment),
+               environment.routes.contains(where: { $0.id == routeInUse }) {
                 await existing.adoptRoutes(environment.routes, preferFirst: false)
                 return existing
             }
