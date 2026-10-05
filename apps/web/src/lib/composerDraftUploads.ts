@@ -18,10 +18,17 @@ const uploadableImages = (
     (attachment): attachment is ComposerImageAttachment => attachment.type === "image",
   );
 
+/** Releases the uploads a draft's attachments hold, such as one discarded for good. */
+export function releaseDraftAttachmentUploads(
+  attachments: ReadonlyArray<ComposerAttachment>,
+): void {
+  releaseAttachmentUploads(uploadableImages(attachments));
+}
+
 export function releaseComposerDraftUploads(target: ScopedThreadRef | DraftId): void {
   const draft = useComposerDraftStore.getState().getComposerDraft(target);
   if (draft) {
-    releaseAttachmentUploads(uploadableImages(draft.images));
+    releaseDraftAttachmentUploads(draft.images);
   }
 }
 

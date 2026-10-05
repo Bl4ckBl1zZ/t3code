@@ -15,8 +15,12 @@ import {
 } from "@t3tools/shared/hostProcess";
 
 import { OpenCodeRuntime, OpenCodeRuntimeLive } from "./opencodeRuntime.ts";
+import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 
-const testLayer = OpenCodeRuntimeLive.pipe(Layer.provideMerge(NodeServices.layer));
+const testLayer = OpenCodeRuntimeLive.pipe(
+  Layer.provide(OpenCodeServerLedger.layerTest),
+  Layer.provideMerge(NodeServices.layer),
+);
 
 it.layer(testLayer)("OpenCodeRuntime inventory", (it) => {
   it.effect("keeps provider inventory when agent discovery fails", () =>
@@ -187,6 +191,7 @@ it.layer(testLayer)("OpenCodeRuntime inventory", (it) => {
       }).pipe(
         Effect.provide(
           Layer.fresh(OpenCodeRuntimeLive).pipe(
+            Layer.provide(OpenCodeServerLedger.layerTest),
             Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, serialSpawner)),
             Layer.provide(NodeServices.layer),
           ),

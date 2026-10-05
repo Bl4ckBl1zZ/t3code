@@ -155,6 +155,7 @@ it.effect("skips the branch recheck when a terminal link would settle nothing", 
     const thread = fixture({
       branch: "feature",
       latestUserMessageAt: DateTime.makeUnsafe(10 * 86_400_000),
+      latestUserAuthoredMessageAt: DateTime.makeUnsafe(10 * 86_400_000),
       linkedPullRequest: {
         projectId: ProjectId.make("project"),
         repository: "org/repo",
@@ -197,6 +198,49 @@ it.effect("skips the branch recheck when a terminal link would settle nothing", 
     expect(summary).toHaveBeenCalledTimes(1);
     expect(h.branch).not.toHaveBeenCalled();
     expect(h.dispatch).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("settles a merged thread the agent woke on its own after the merge", () =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust("12 days");
+    const wokeAt = DateTime.makeUnsafe(10 * 86_400_000);
+    // A delegated result woke the agent after the merge; the user last wrote before it.
+    const thread = fixture({
+      latestUserMessageAt: wokeAt,
+      latestUserAuthoredMessageAt: epoch,
+      latestRunRequestedAt: wokeAt,
+      latestRunStartedAt: wokeAt,
+      latestRunCompletedAt: wokeAt,
+      pullRequests: [
+        {
+          host: "github.com",
+          repository: "org/repo",
+          number: 1,
+          url: "https://github.com/org/repo/pull/1",
+          source: "agent",
+          linkedAt: "1970-01-01T00:00:00Z",
+          stack: null,
+          snapshot: {
+            state: "merged",
+            title: "Feature",
+            headBranch: "feature",
+            baseBranch: "main",
+            isDraft: false,
+            updatedAt: "1970-01-02T00:00:00.000Z",
+            syncedAt: "1970-01-02T00:00:00.000Z",
+            mergedAt: "1970-01-02T00:00:00.000Z",
+            closedAt: null,
+          },
+        },
+      ],
+    });
+    const h = harness(thread);
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+    yield* reactor.requestSweep;
+    yield* reactor.drain;
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+    expect(h.summary).not.toHaveBeenCalled();
   }).pipe(Effect.scoped),
 );
 

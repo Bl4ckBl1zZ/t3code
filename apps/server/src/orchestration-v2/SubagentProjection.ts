@@ -16,8 +16,27 @@ import type {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
+import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
 import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
+
+/**
+ * A delegated child's apparent result is not final while its result run, or a
+ * later run that a second restart cut before it started, still has a restart
+ * continuation pending: the continuation's run produces the real result.
+ */
+export function delegatedTaskAwaitsRestartContinuation(
+  runs: ReadonlyArray<
+    Pick<OrchestrationV2Run, "id" | "ordinal" | "completedAt" | "restartContinuation">
+  >,
+  resultRun: Pick<OrchestrationV2Run, "id" | "ordinal" | "completedAt">,
+): boolean {
+  return runs.some(
+    (run) =>
+      run.restartContinuation?.status === "pending" &&
+      (run.id === resultRun.id || runRanAfter(run, resultRun)),
+  );
+}
 
 function trimmed(value: string | null | undefined): string | undefined {
   const result = value?.trim();
@@ -236,7 +255,7 @@ export function delegatedTaskProgress(projection: {
   );
   const resultRun = workRuns
     .filter((run) => terminal(run.status) && (run.startedAt !== null || run.ordinal === 1))
-    .toSorted((a, b) => b.ordinal - a.ordinal)[0];
+    .toSorted((a, b) => (runRanAfter(a, b) ? -1 : runRanAfter(b, a) ? 1 : 0))[0];
   return {
     state:
       active || resultRun === undefined

@@ -36,6 +36,9 @@ export function SubagentTooltipContent(props: {
   readonly modelLabel: string | null;
   readonly driver?: ProviderDriverKind | undefined;
   readonly providerDisplayName?: string | undefined;
+  readonly providerAccentColor?: string | undefined;
+  /** Several accounts on this provider: the card names the account, as the sidebar does. */
+  readonly showInstanceBadge?: boolean | undefined;
   readonly elapsed?: ReactNode;
   readonly parentThread?:
     | Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath">
@@ -95,13 +98,20 @@ export function SubagentTooltipContent(props: {
           <ProviderInstanceIcon
             driverKind={props.driver}
             displayName={props.providerDisplayName ?? props.driver}
+            accentColor={props.providerAccentColor}
+            // Same treatment as the sidebar card: accent dot, account in the label.
+            showBadge={props.showInstanceBadge === true && props.providerAccentColor !== undefined}
+            badgeContent="none"
+            badgeClassName="h-2 min-w-2 px-0"
             iconClassName="size-3 shrink-0 grayscale opacity-60"
           />
         ) : (
           <BotIcon className="size-3 shrink-0" />
         )}
         <span className="min-w-0 truncate text-foreground/75">
-          {props.modelLabel ?? "Not reported"}
+          {props.showInstanceBadge && props.providerDisplayName
+            ? `${props.modelLabel ?? "Not reported"} · ${props.providerDisplayName}`
+            : (props.modelLabel ?? "Not reported")}
         </span>
       </div>
       <div className="flex min-w-0 items-center justify-between gap-4">

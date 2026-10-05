@@ -55,6 +55,7 @@ import {
 } from "../RuntimePolicy.ts";
 import { layer as turnItemPositionStoreLayer } from "../TurnItemPositionStore.ts";
 import { layer as runtimeRequestServiceLayer } from "../RuntimeRequestService.ts";
+import { layer as threadCommandExecutorLayer } from "../ThreadCommandExecutor.ts";
 import { layer as threadForkServiceLayer } from "../ThreadForkService.ts";
 import {
   runOrchestratorV2Scenario,
@@ -263,7 +264,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   );
   const commandReceiptStoreProvided = commandReceiptStoreLayer.pipe(Layer.provide(databaseLayer));
   const providerEventIngestorProvided = providerEventIngestorLayer.pipe(
-    Layer.provide(Layer.mergeAll(storesLayer, eventSinkProvided, idAllocatorLayer)),
+    Layer.provide(
+      Layer.mergeAll(storesLayer, eventSinkProvided, idAllocatorLayer, threadCommandExecutorLayer),
+    ),
   );
   const vcsDriverRegistryLayer = VcsDriverRegistry.layer.pipe(
     Layer.provide(VcsProcess.layer),

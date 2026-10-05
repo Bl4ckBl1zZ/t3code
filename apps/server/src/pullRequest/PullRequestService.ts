@@ -410,7 +410,12 @@ function toPullRequestError(
   return (error) =>
     isProviderUnusable(error)
       ? toUnavailableError(error)
-      : new PullRequestOperationError({ operation, detail: error.detail, cause: error });
+      : new PullRequestOperationError({
+          operation,
+          detail: error.detail,
+          ...(error.reason === "not-found" ? { reason: "not-found" as const } : {}),
+          cause: error,
+        });
 }
 
 function withRateLimitBackoff(
@@ -1291,6 +1296,7 @@ export const make = Effect.gen(function* () {
               ...(changeRequest.headRepositoryNameWithOwner === undefined
                 ? {}
                 : { headRepositoryNameWithOwner: changeRequest.headRepositoryNameWithOwner }),
+              ...(changeRequest.headSha ? { headSha: changeRequest.headSha } : {}),
               baseBranch: changeRequest.baseBranch,
               createdAt: changeRequest.createdAt,
               updatedAt: changeRequest.updatedAt,
@@ -1340,6 +1346,9 @@ export const make = Effect.gen(function* () {
                 comments: activity.comments,
                 commentCount: activity.commentCount,
                 commentsTruncated: activity.commentsTruncated,
+                ...(activity.reviewThreadsTruncated === undefined
+                  ? {}
+                  : { reviewThreadsTruncated: activity.reviewThreadsTruncated }),
                 reviewThreads: activity.reviewThreads,
                 commits: activity.commits,
                 ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),

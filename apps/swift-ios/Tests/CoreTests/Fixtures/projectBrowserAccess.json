@@ -137,7 +137,8 @@
     "hermesProactiveDefaultApplied": false,
     "projectFileBackfillApplied": false,
     "usageLimitSources": {},
-    "usagePriceOverrides": {}
+    "usagePriceOverrides": {},
+    "usageModelAliases": {}
   },
   "capabilities": {
     "projectBrowserAccess": true,

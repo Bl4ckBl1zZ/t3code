@@ -232,7 +232,6 @@ const seedParentWithTerminalTask = (input: {
             delegatedCompletion: {
               disposition: "open",
               nextGeneration: 2,
-              settledDeliveryCount: 1,
               delivery:
                 input.deliveryTaskIds === undefined
                   ? null
@@ -285,6 +284,188 @@ const seedParentWithTerminalTask = (input: {
   });
 
 it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
+  it.effect("keeps arming successors until every finished child is delivered", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const orchestrator = yield* OrchestratorV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:delegated-delivery-successors");
+      const projectId = ProjectId.make("project:delegated-delivery-successors");
+      const runId = RunId.make("run:delegated-delivery-successors");
+      const rootNodeId = NodeId.make("node:delegated-delivery-successors-root");
+      const firstTaskId = NodeId.make("node:delegated-delivery-successors-first");
+      const providerThreadId = ProviderThreadId.make(
+        "provider-thread:delegated-delivery-successors",
+      );
+
+      yield* seedParentWithTerminalTask({
+        threadId,
+        projectId,
+        runId,
+        rootNodeId,
+        taskId: firstTaskId,
+        deliveryState: "claimed",
+        completionWake: "always",
+        deliveryTaskIds: [firstTaskId],
+        now,
+      });
+
+      // A child that finished while the delivery for `generation` was running.
+      const finishChild = (taskId: NodeId) =>
+        eventSink.write({
+          commandId: CommandId.make(`command:finish:${taskId}`),
+          events: [
+            {
+              id: EventId.make(`event:finish:${taskId}`),
+              type: "subagent.updated",
+              threadId,
+              runId,
+              nodeId: taskId,
+              driver,
+              providerInstanceId: modelSelection.instanceId,
+              occurredAt: now,
+              payload: {
+                id: taskId,
+                threadId,
+                runId,
+                parentNodeId: rootNodeId,
+                origin: "app_owned",
+                createdBy: "agent",
+                driver,
+                providerInstanceId: modelSelection.instanceId,
+                providerThreadId: null,
+                childThreadId: null,
+                nativeTaskRef: null,
+                prompt: `Finish ${taskId}.`,
+                title: null,
+                model: null,
+                completionWake: "always",
+                completionDelivery: { state: "pending", observedByRunId: null },
+                status: "completed",
+                result: "child finished",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+              },
+            },
+          ],
+        });
+      // The delivery run for the cohort's current reservation completes, and
+      // the parent's cohort is reconciled by the terminal-run listener.
+      const completeDelivery = (ordinal: number) =>
+        Effect.gen(function* () {
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          const delivery = projection.runs.find((run) => run.id === runId)?.delegatedCompletion
+            ?.delivery;
+          if (delivery === undefined || delivery === null) {
+            return yield* Effect.die(new Error("Delegated completion delivery missing."));
+          }
+          const deliveryRunId = RunId.make(`run:delegated-delivery-successors:${ordinal}`);
+          const afterSequence = yield* eventSink.latestSequence({ threadId });
+          yield* eventSink.write({
+            commandId: CommandId.make(`command:delegated-delivery-successors:${ordinal}`),
+            events: [
+              {
+                id: EventId.make(`event:delegated-delivery-successors:message:${ordinal}`),
+                type: "message.updated",
+                threadId,
+                runId: deliveryRunId,
+                occurredAt: now,
+                payload: {
+                  id: delivery.messageId,
+                  threadId,
+                  runId: deliveryRunId,
+                  nodeId: null,
+                  role: "user",
+                  text: "Delegated tasks reached terminal states.",
+                  attachments: [],
+                  streaming: false,
+                  createdBy: "agent",
+                  creationSource: "server",
+                  createdAt: now,
+                  updatedAt: now,
+                  delegatedCompletion: {
+                    parentRunId: runId,
+                    generation: delivery.generation,
+                    taskIds: delivery.taskIds,
+                  },
+                },
+              },
+              {
+                id: EventId.make(`event:delegated-delivery-successors:run:${ordinal}`),
+                type: "run.updated",
+                threadId,
+                runId: deliveryRunId,
+                providerInstanceId: modelSelection.instanceId,
+                occurredAt: now,
+                payload: {
+                  id: deliveryRunId,
+                  threadId,
+                  ordinal,
+                  providerInstanceId: modelSelection.instanceId,
+                  modelSelection,
+                  providerThreadId,
+                  userMessageId: delivery.messageId,
+                  rootNodeId: NodeId.make(`node:delegated-delivery-successors:${ordinal}`),
+                  activeAttemptId: null,
+                  status: "completed",
+                  requestedAt: now,
+                  startedAt: now,
+                  completedAt: now,
+                  checkpointId: null,
+                  contextHandoffId: null,
+                },
+              },
+            ],
+          });
+          // The listener's cohort write is the receipt for this delivery.
+          yield* eventSink.stream({ threadId, afterSequence }).pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "run.updated" &&
+                stored.event.payload.id === runId &&
+                stored.event.payload.delegatedCompletion?.delivery?.messageId !==
+                  delivery.messageId,
+            ),
+            Stream.runHead,
+          );
+          return delivery;
+        });
+
+      // Three deliveries in a row each leave a finished child behind. Every
+      // one still wakes the parent; nothing is left pending.
+      const laterTaskIds = [2, 3, 4].map((index) =>
+        NodeId.make(`node:delegated-delivery-successors-${index}`),
+      );
+      for (const [index, taskId] of laterTaskIds.entries()) {
+        yield* finishChild(taskId);
+        const delivered = yield* completeDelivery(index + 2);
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        const successor = projection.runs.find((run) => run.id === runId)?.delegatedCompletion
+          ?.delivery;
+        assert.deepEqual(successor?.taskIds, [taskId]);
+        assert.equal(successor?.generation, delivered.generation + 1);
+        assert.deepEqual(
+          projection.subagents.find((task) => task.id === taskId)?.completionDelivery?.state,
+          "claimed",
+        );
+      }
+
+      yield* completeDelivery(5);
+      const drained = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(
+        drained.runs.find((run) => run.id === runId)?.delegatedCompletion?.delivery ?? null,
+      );
+      assert.deepEqual(
+        [firstTaskId, ...laterTaskIds].map(
+          (taskId) =>
+            drained.subagents.find((task) => task.id === taskId)?.completionDelivery?.state,
+        ),
+        ["delivered", "delivered", "delivered", "delivered"],
+      );
+    }),
+  );
+
   it.effect("builds completion text and metadata from the same live cohort", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
@@ -376,7 +557,6 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
       assert.deepEqual(parentRun?.delegatedCompletion, {
         disposition: "open",
         nextGeneration: 2,
-        settledDeliveryCount: 1,
         delivery: null,
       });
       assert.isFalse(

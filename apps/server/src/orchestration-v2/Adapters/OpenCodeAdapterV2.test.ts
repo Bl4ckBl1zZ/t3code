@@ -1,19 +1,27 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  MessageId,
   NodeId,
   OpenCodeSettings,
+  ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
+  RunAttemptId,
+  RunId,
   ThreadId,
   type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
 import type { OpenCodeRuntimeShape } from "../../provider/opencodeRuntime.ts";
@@ -34,6 +42,48 @@ import {
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+const OPENCODE_TEST_SETTINGS = Schema.decodeUnknownSync(OpenCodeSettings)({});
+
+const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "t3-opencode-v2-adapter-",
+}).pipe(Layer.provide(NodeServices.layer));
+
+/**
+ * A native event stream the test feeds by hand. `push` resolves once the
+ * adapter has finished handling the event and asked for the next one.
+ */
+function asyncEventStream() {
+  const values: Array<{ value: unknown; handled: () => void }> = [];
+  const waiters: Array<(value: IteratorResult<unknown>) => void> = [];
+  let previousHandled: (() => void) | undefined;
+  return {
+    push(value: unknown) {
+      return new Promise<void>((handled) => {
+        const waiter = waiters.shift();
+        if (waiter) {
+          previousHandled = handled;
+          waiter({ done: false, value });
+        } else values.push({ value, handled });
+      });
+    },
+    stream: {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => {
+            previousHandled?.();
+            const entry = values.shift();
+            if (entry !== undefined) {
+              previousHandled = entry.handled;
+              return Promise.resolve({ done: false as const, value: entry.value });
+            }
+            return new Promise<IteratorResult<unknown>>((resolve) => waiters.push(resolve));
+          },
+        };
+      },
+    },
+  };
+}
 
 function runtimePolicy(
   runtimeMode: ProviderAdapterV2RuntimePolicy["runtimeMode"],
@@ -187,6 +237,525 @@ describe("OpenCodeAdapterV2", () => {
         ),
       ),
     ),
+  );
+
+  // Event order from a live OpenCode 1.18.32 run of a `task` call with
+  // background=true: the task part completes at launch, the root session
+  // settles, and the child session stays busy until its own work ends.
+  it.effect("reports a background task child as pending work after the root turn settles", () =>
+    Effect.gen(function* () {
+      const idAllocator = yield* IdAllocatorV2;
+      const serverConfig = yield* ServerConfig;
+      const nativeEvents = asyncEventStream();
+      const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
+      const root = "ses_root";
+      const child = "ses_child";
+      const client = {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
+          get: async () => ({
+            data: { id: child, parentID: root, permission: [], time: { created: 2, updated: 2 } },
+          }),
+          update: async () => ({ data: { id: child, parentID: root } }),
+          promptAsync: async () => ({ data: true }),
+          abort: async () => ({ data: true }),
+        },
+      } as unknown as OpencodeClient;
+      const unused = (operation: string) => () => Effect.die(`${operation} is not used`);
+      const instanceId = ProviderInstanceId.make("opencode");
+      const threadId = ThreadId.make("thread-opencode-background-child");
+      const modelSelection = { instanceId, model: "anthropic/claude-sonnet" };
+      const policy = runtimePolicy("full-access", { cwd: "/workspace" });
+      const adapter = makeOpenCodeAdapterV2({
+        instanceId,
+        settings: OPENCODE_TEST_SETTINGS,
+        environment: {},
+        runtime: {
+          startOpenCodeServerProcess: unused("startOpenCodeServerProcess"),
+          connectToOpenCodeServer: () =>
+            Effect.succeed({
+              url: "test://opencode",
+              version: "test",
+              exitCode: null,
+              external: true,
+            }),
+          runOpenCodeCommand: unused("runOpenCodeCommand"),
+          createOpenCodeSdkClient: () => client,
+          loadOpenCodeInventory: unused("loadOpenCodeInventory"),
+          loadInventoryFromCli: unused("loadInventoryFromCli"),
+        },
+        idAllocator,
+        serverConfig,
+      });
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-opencode-background-child"),
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const hasPendingBackgroundWork = session.hasPendingBackgroundWork;
+      if (hasPendingBackgroundWork === undefined) {
+        return yield* Effect.die("OpenCode runtime must expose hasPendingBackgroundWork.");
+      }
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const now = yield* DateTime.now;
+      yield* session.startTurn({
+        appThread: {
+          id: threadId,
+          projectId: ProjectId.make("project-opencode-background-child"),
+          title: "background child",
+          providerInstanceId: instanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: providerThread.id,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdBy: "user",
+          creationSource: "web",
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+        threadId,
+        runId: RunId.make("run-opencode-background-child"),
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: RunAttemptId.make("attempt-opencode-background-child"),
+        rootNodeId: NodeId.make("node-opencode-background-child"),
+        providerThread,
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: MessageId.make("message-opencode-background-child"),
+          text: "sleep in the background",
+          attachments: [],
+        },
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const terminal = yield* session.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      const taskPart = (status: "running" | "completed") => ({
+        type: "message.part.updated",
+        properties: {
+          sessionID: root,
+          part: {
+            id: "prt_task",
+            sessionID: root,
+            messageID: "msg_root_assistant",
+            type: "tool",
+            tool: "task",
+            callID: "call_task",
+            state: {
+              status,
+              input: {
+                description: "Background sleep task",
+                prompt: "sleep",
+                subagent_type: "general",
+              },
+              title: "Background sleep task",
+              metadata: { parentSessionId: root, sessionId: child, background: true },
+              time: { start: 3, ...(status === "completed" ? { end: 3 } : {}) },
+              ...(status === "completed" ? { output: "Background task started" } : {}),
+            },
+          },
+        },
+      });
+      const status = (sessionID: string, type: "busy" | "idle") => ({
+        type: "session.status",
+        properties: { sessionID, status: { type } },
+      });
+
+      yield* push(status(root, "busy"));
+      yield* push(taskPart("running"));
+      yield* push({
+        type: "session.created",
+        properties: {
+          sessionID: child,
+          info: { id: child, parentID: root, time: { created: 2, updated: 2 } },
+        },
+      });
+      yield* push(status(child, "busy"));
+      yield* push(taskPart("completed"));
+      yield* push(status(root, "idle"));
+      assert.equal(Option.getOrUndefined(yield* Fiber.join(terminal))?.status, "completed");
+      assert.isTrue(yield* hasPendingBackgroundWork, "the running child must pin idle release");
+
+      yield* push(status(child, "idle"));
+      yield* push({ type: "session.idle", properties: { sessionID: child } });
+      assert.isFalse(yield* hasPendingBackgroundWork, "an idle child must not pin idle release");
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(idAllocatorLayer, serverConfigLayer))),
+  );
+
+  it.effect("keeps search output on the search row and leaves empty searches without results", () =>
+    Effect.gen(function* () {
+      const idAllocator = yield* IdAllocatorV2;
+      const serverConfig = yield* ServerConfig;
+      const nativeEvents = asyncEventStream();
+      const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
+      const root = "ses_search_root";
+      const client = {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
+          promptAsync: async () => ({ data: true }),
+          abort: async () => ({ data: true }),
+        },
+      } as unknown as OpencodeClient;
+      const unused = (operation: string) => () => Effect.die(`${operation} is not used`);
+      const instanceId = ProviderInstanceId.make("opencode");
+      const threadId = ThreadId.make("thread-opencode-search-output");
+      const modelSelection = { instanceId, model: "anthropic/claude-sonnet" };
+      const policy = runtimePolicy("full-access", { cwd: "/workspace" });
+      const adapter = makeOpenCodeAdapterV2({
+        instanceId,
+        settings: OPENCODE_TEST_SETTINGS,
+        environment: {},
+        runtime: {
+          startOpenCodeServerProcess: unused("startOpenCodeServerProcess"),
+          connectToOpenCodeServer: () =>
+            Effect.succeed({
+              url: "test://opencode",
+              version: "test",
+              exitCode: null,
+              external: true,
+            }),
+          runOpenCodeCommand: unused("runOpenCodeCommand"),
+          createOpenCodeSdkClient: () => client,
+          loadOpenCodeInventory: unused("loadOpenCodeInventory"),
+          loadInventoryFromCli: unused("loadInventoryFromCli"),
+        },
+        idAllocator,
+        serverConfig,
+      });
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-opencode-search-output"),
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const now = yield* DateTime.now;
+      const collected = yield* session.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* session.startTurn({
+        appThread: {
+          id: threadId,
+          projectId: ProjectId.make("project-opencode-search-output"),
+          title: "search output",
+          providerInstanceId: instanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: providerThread.id,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdBy: "user",
+          creationSource: "web",
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+        threadId,
+        runId: RunId.make("run-opencode-search-output"),
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: RunAttemptId.make("attempt-opencode-search-output"),
+        rootNodeId: NodeId.make("node-opencode-search-output"),
+        providerThread,
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: MessageId.make("message-opencode-search-output"),
+          text: "search",
+          attachments: [],
+        },
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const status = (type: "busy" | "idle") => ({
+        type: "session.status",
+        properties: { sessionID: root, status: { type } },
+      });
+
+      yield* push(status("busy"));
+      for (const [tool, input, output] of [
+        ["grep", { pattern: "TODO", path: "apps/web" }, "---\nfile body"],
+        ["websearch", { query: "OpenCode documentation" }, "---\nfile body"],
+        ["glob", { pattern: "missing", path: "apps/web" }, ""],
+        ["codesearch", {}, " \n\t"],
+      ] as const) {
+        yield* push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: root,
+            part: {
+              id: `prt_${tool}`,
+              sessionID: root,
+              messageID: "msg_search_assistant",
+              type: "tool",
+              tool,
+              callID: `call_${tool}`,
+              state: {
+                status: "completed",
+                input,
+                output,
+                title: tool,
+                metadata: {},
+                time: { start: 1, end: 2 },
+              },
+            },
+          },
+        });
+      }
+      yield* push(status("idle"));
+      const items = Array.from(yield* Fiber.join(collected)).flatMap((event) =>
+        event.type === "turn_item.updated" ? [event.turnItem] : [],
+      );
+
+      const grep = items.find((item) => item.type === "file_search" && item.pattern === "TODO");
+      assert.deepEqual(grep?.type === "file_search" ? grep.results : null, [
+        { fileName: "apps/web", preview: "---\nfile body" },
+      ]);
+      const webSearch = items.find(
+        (item) => item.type === "web_search" && item.patterns !== undefined,
+      );
+      assert.deepEqual(webSearch?.type === "web_search" ? webSearch.results : null, [
+        { snippet: "---\nfile body" },
+      ]);
+      const emptyFileSearch = items.find(
+        (item) => item.type === "file_search" && item.pattern === "missing",
+      );
+      assert.ok(emptyFileSearch?.type === "file_search");
+      assert.equal(emptyFileSearch.results, undefined);
+      const emptyWebSearch = items.find(
+        (item) => item.type === "web_search" && item.patterns === undefined,
+      );
+      assert.ok(emptyWebSearch?.type === "web_search");
+      assert.equal(emptyWebSearch.results, undefined);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(idAllocatorLayer, serverConfigLayer))),
+  );
+
+  it.effect("presents OpenCode MCP calls without treating remote tools as local edits", () =>
+    Effect.gen(function* () {
+      const idAllocator = yield* IdAllocatorV2;
+      const serverConfig = yield* ServerConfig;
+      const nativeEvents = asyncEventStream();
+      const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
+      const root = "ses_mcp_root";
+      let statusReads = 0;
+      const client = {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        mcp: {
+          status: async () => {
+            statusReads++;
+            return {
+              data: {
+                "my.server_with_underscores": { status: "connected" },
+                ambiguous: { status: "connected" },
+                ambiguous_server: { status: "connected" },
+                code: { status: "connected" },
+                apply: { status: "connected" },
+              },
+            };
+          },
+        },
+        session: {
+          create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
+          promptAsync: async () => ({ data: true }),
+          abort: async () => ({ data: true }),
+        },
+      } as unknown as OpencodeClient;
+      const unused = (operation: string) => () => Effect.die(`${operation} is not used`);
+      const instanceId = ProviderInstanceId.make("opencode");
+      const threadId = ThreadId.make("thread-opencode-mcp-presentation");
+      const modelSelection = { instanceId, model: "anthropic/claude-sonnet" };
+      const policy = runtimePolicy("full-access", { cwd: "/workspace" });
+      const adapter = makeOpenCodeAdapterV2({
+        instanceId,
+        settings: OPENCODE_TEST_SETTINGS,
+        environment: {},
+        runtime: {
+          startOpenCodeServerProcess: unused("startOpenCodeServerProcess"),
+          connectToOpenCodeServer: () =>
+            Effect.succeed({
+              url: "test://opencode",
+              version: "test",
+              exitCode: null,
+              external: true,
+            }),
+          runOpenCodeCommand: unused("runOpenCodeCommand"),
+          createOpenCodeSdkClient: () => client,
+          loadOpenCodeInventory: unused("loadOpenCodeInventory"),
+          loadInventoryFromCli: unused("loadInventoryFromCli"),
+        },
+        idAllocator,
+        serverConfig,
+      });
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-opencode-mcp-presentation"),
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const now = yield* DateTime.now;
+      const collected = yield* session.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* session.startTurn({
+        appThread: {
+          id: threadId,
+          projectId: ProjectId.make("project-opencode-mcp-presentation"),
+          title: "mcp presentation",
+          providerInstanceId: instanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: providerThread.id,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdBy: "user",
+          creationSource: "web",
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+        threadId,
+        runId: RunId.make("run-opencode-mcp-presentation"),
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: RunAttemptId.make("attempt-opencode-mcp-presentation"),
+        rootNodeId: NodeId.make("node-opencode-mcp-presentation"),
+        providerThread,
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: MessageId.make("message-opencode-mcp-presentation"),
+          text: "edit the remote document",
+          attachments: [],
+        },
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const status = (type: "busy" | "idle") => ({
+        type: "session.status",
+        properties: { sessionID: root, status: { type } },
+      });
+
+      const toolPart = (
+        id: string,
+        tool: string,
+        state: Record<string, unknown>,
+      ): Effect.Effect<void> =>
+        push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: root,
+            part: {
+              id,
+              sessionID: root,
+              messageID: "msg_mcp_assistant",
+              type: "tool",
+              tool,
+              callID: `call_${id}`,
+              state: { metadata: {}, time: { start: 1, end: 2 }, ...state },
+            },
+          },
+        });
+
+      yield* push(status("busy"));
+      for (const state of ["running", "completed", "error"] as const) {
+        yield* toolPart("prt_mcp", "my_server_with_underscores_edit_document", {
+          status: state,
+          input: { document: "remote-doc" },
+          title: "Edit remote document",
+          output: "saved",
+          error: "failed",
+        });
+      }
+      yield* toolPart("prt_ambiguous", "ambiguous_server_edit_document", {
+        status: "completed",
+        input: {},
+        title: "Ambiguous tool",
+        output: "",
+      });
+      for (const tool of ["code_search", "apply_patch"]) {
+        yield* toolPart(`prt_${tool}`, tool, {
+          status: "completed",
+          input: { query: "needle", filePath: "local.ts" },
+          title: `Native ${tool}`,
+          output: "done",
+        });
+      }
+      yield* push(status("idle"));
+      const items = Array.from(yield* Fiber.join(collected)).flatMap((event) =>
+        event.type === "turn_item.updated" ? [event.turnItem] : [],
+      );
+
+      assert.equal(items.find((item) => item.title === "Native code_search")?.type, "web_search");
+      assert.equal(items.find((item) => item.title === "Native apply_patch")?.type, "file_change");
+      const tools = items.filter((item) => item.type === "dynamic_tool");
+      assert.deepEqual(
+        tools.slice(0, 3).map((item) => [item.status, item.title]),
+        [
+          ["running", "Edit remote document"],
+          ["completed", "Edit remote document"],
+          ["failed", "edit document"],
+        ],
+      );
+      for (const item of tools.slice(0, 3)) {
+        assert.deepEqual(item.toolSource, {
+          key: "mcp:my.server_with_underscores",
+          name: "my.server with underscores",
+          kind: "integration",
+        });
+        assert.deepEqual(item.input, { document: "remote-doc" });
+      }
+      assert.equal(tools[3]?.toolName, "ambiguous_server_edit_document");
+      assert.isUndefined(tools[3]?.toolSource);
+      assert.equal(statusReads, 1);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(idAllocatorLayer, serverConfigLayer))),
   );
 
   it("maps native permission families to orchestration request kinds", () => {

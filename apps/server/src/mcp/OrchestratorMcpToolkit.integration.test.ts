@@ -881,6 +881,14 @@ describe("orchestrator MCP toolkit", () => {
               status: "completed",
             });
             expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+                (task) => task.id === delegated.taskId,
+              ),
+            ).toMatchObject({
+              result: delegatedResult,
+              completionDelivery: { state: "disposed" },
+            });
+            expect(
               (yield* orchestrator.getThreadProjection(delegated.childThreadId)).runs.find(
                 (run) => run.id === activeChildFollowup.runId,
               )?.status,
@@ -1417,6 +1425,50 @@ describe("orchestrator MCP toolkit", () => {
             expect(
               listed.threads.some((thread) => thread.relationshipToParent === "subagent"),
             ).toBe(false);
+            expect(
+              listed.threads.find((thread) => thread.threadId === emptyThread.threadId),
+            ).toMatchObject({ settled: false, settledAt: null });
+
+            yield* orchestrator.dispatch({
+              type: "thread.settle",
+              commandId: CommandId.make("command:mcp-empty:settle"),
+              threadId: emptyThread.threadId,
+              settledAt: "2026-01-01T00:00:00.000Z",
+            });
+            const settledReadCall = yield* invoke("t3_thread_read", {
+              threadId: emptyThread.threadId,
+            });
+            const settledRead = yield* decodeThreadReadResult(
+              settledReadCall.structuredContent,
+            ).pipe(Effect.orDie);
+            expect(settledRead.thread).toMatchObject({
+              settled: true,
+              settledAt: "2026-01-01T00:00:00.000Z",
+            });
+            const settledListCall = yield* invoke("t3_thread_list", { settled: true, limit: 100 });
+            const settledList = yield* decodeThreadListResult(
+              settledListCall.structuredContent,
+            ).pipe(Effect.orDie);
+            expect(settledList.threads.map((thread) => thread.threadId)).toEqual([
+              emptyThread.threadId,
+            ]);
+            expect(settledList.threads[0]).toMatchObject({
+              settled: true,
+              settledAt: "2026-01-01T00:00:00.000Z",
+            });
+            const activeListCall = yield* invoke("t3_thread_list", { settled: false, limit: 100 });
+            const activeList = yield* decodeThreadListResult(activeListCall.structuredContent).pipe(
+              Effect.orDie,
+            );
+            expect(
+              activeList.threads.some((thread) => thread.threadId === emptyThread.threadId),
+            ).toBe(false);
+            yield* orchestrator.dispatch({
+              type: "thread.unsettle",
+              commandId: CommandId.make("command:mcp-empty:unsettle"),
+              threadId: emptyThread.threadId,
+              reason: "user",
+            });
 
             // A wait-mode delegation whose blocking wait times out no longer
             // owns delivery, so delegate_task upgrades the task to "always".

@@ -10,7 +10,10 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as EffectAcpErrors from "effect-acp/errors";
-import { xAiRateLimitedErrorCode } from "../../provider/acp/XAiAcpExtension.ts";
+import {
+  XAiPromptFailureText,
+  xAiRateLimitedErrorCode,
+} from "../../provider/acp/XAiAcpExtension.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -269,6 +272,25 @@ describe("GrokAdapterV2 capabilities", () => {
       flavor.promptFailure?.(new Error("Rate limit mentioned in an ordinary error")).class,
       "provider_error",
     );
+  });
+
+  it("shows Grok's own text for a prompt that ended with an error", () => {
+    const flavor = makeGrokAcpAdapterFlavor({
+      makeRuntime: () => Effect.never,
+    } as unknown as GrokAdapterV2Options);
+    const failure = flavor.promptFailure?.(
+      EffectAcpErrors.AcpRequestError.internalError(
+        "Grok ended the turn with an error.",
+        undefined,
+        {
+          cause: new XAiPromptFailureText(
+            "API error (status 400 Bad Request): invalid_request_error",
+          ),
+        },
+      ),
+    );
+    assert.equal(failure?.message, "API error (status 400 Bad Request): invalid_request_error");
+    assert.equal(failure?.class, "provider_error");
   });
 
   it("wires hard Stop teardown but soft non-Stop interrupts in the constructor flavor", () => {

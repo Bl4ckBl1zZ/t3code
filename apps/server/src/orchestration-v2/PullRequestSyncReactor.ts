@@ -3,6 +3,7 @@ import {
   CommandId,
   type OrchestrationV2ThreadShell,
   type PullRequestSummary,
+  type ThreadId,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
   type ThreadPullRequestSnapshot,
@@ -25,11 +26,13 @@ import type * as Scope from "effect/Scope";
 
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { forkParked } from "../serverActivation.ts";
-import { ThreadManagementService } from "./ThreadManagementService.ts";
+import { isTerminalRunStatus, ThreadManagementService } from "./ThreadManagementService.ts";
 import { allThreadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
 import * as Stream from "effect/Stream";
 
 const SLOW_SYNC_INTERVAL_MS = 15 * 60 * 1_000;
+/** Shell commands that can merge or close a pull request without a merge notification. */
+const PULL_REQUEST_CLOSE_COMMAND = /\b(?:gh\s+pr|glab\s+mr)\s+(?:merge|close)\b/u;
 
 type SnapshotFields = Omit<ThreadPullRequestSnapshot, "syncedAt">;
 
@@ -331,6 +334,24 @@ export const make = Effect.gen(function* () {
     return worker.enqueue(undefined).pipe(Effect.asVoid);
   });
 
+  // Threads whose current run ran a merge or close command, until that run ends.
+  const closeCommandThreads = new Set<ThreadId>();
+  const refreshOpenLinks = (threadId: ThreadId) =>
+    threads.getThreadShell(threadId).pipe(
+      Effect.flatMap((thread) =>
+        thread === null || thread.archivedAt !== null || thread.deletedAt !== null
+          ? Effect.void
+          : Effect.forEach(
+              visibleThreadPullRequests(allThreadPullRequestsOf(thread)).filter(
+                (link) => link.snapshot?.state === "open",
+              ),
+              requestSync,
+              { discard: true },
+            ),
+      ),
+      Effect.catchCause(logSkipped("pull request refresh after run skipped", { threadId })),
+    );
+
   const start: PullRequestSyncReactor["Service"]["start"] = Effect.fn(
     "PullRequestSyncReactor.start",
   )(function* () {
@@ -340,17 +361,35 @@ export const make = Effect.gen(function* () {
     );
     yield* forkParked(
       Stream.runForEach(threads.streamDomainEvents, (event) => {
-        if (
-          event.type !== "thread.metadata-updated" &&
-          event.type !== "thread.created" &&
-          event.type !== "thread.unarchived"
-        )
-          return Effect.void;
-        return visibleThreadPullRequests(allThreadPullRequestsOf(event.payload)).some(
-          (link) => link.snapshot === null,
-        )
-          ? enqueueSweep
-          : Effect.void;
+        switch (event.type) {
+          case "thread.metadata-updated":
+          case "thread.created":
+          case "thread.unarchived":
+            return visibleThreadPullRequests(allThreadPullRequestsOf(event.payload)).some(
+              (link) => link.snapshot === null,
+            )
+              ? enqueueSweep
+              : Effect.void;
+          // An agent can merge or close its pull request from a shell (`gh pr merge`), which
+          // sends no merge notification. When a run that ran such a command ends, read the
+          // thread's open links fresh, so settlement does not wait for the cached summary.
+          // Other runs add no host reads.
+          case "turn-item.updated":
+            if (
+              event.payload.type === "command_execution" &&
+              PULL_REQUEST_CLOSE_COMMAND.test(event.payload.input)
+            ) {
+              closeCommandThreads.add(event.threadId);
+            }
+            return Effect.void;
+          case "run.updated":
+            return isTerminalRunStatus(event.payload.status) &&
+              closeCommandThreads.delete(event.threadId)
+              ? refreshOpenLinks(event.threadId)
+              : Effect.void;
+          default:
+            return Effect.void;
+        }
       }),
     );
     yield* forkParked(

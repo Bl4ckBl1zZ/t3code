@@ -252,7 +252,6 @@
     "driver": "acpRegistry",
     "label": "ACP Registry",
     "hasDefaultInstance": false,
-    "badgeLabel": "V2 Preview",
     "environmentFields": [],
     "fields": [
       {
@@ -350,7 +349,6 @@
     "driver": "pi",
     "label": "Pi",
     "hasDefaultInstance": true,
-    "badgeLabel": "Early Access",
     "environmentFields": [],
     "fields": [
       {

@@ -158,7 +158,8 @@
     "hermesProactiveDefaultApplied": false,
     "projectFileBackfillApplied": false,
     "usageLimitSources": {},
-    "usagePriceOverrides": {}
+    "usagePriceOverrides": {},
+    "usageModelAliases": {}
   },
   "capabilities": {
     "projectActionDefaults": true,

@@ -18,6 +18,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -184,6 +185,38 @@ const baseLayer: Layer.Layer<
     const turnItemPositions = yield* TurnItemPositionStoreV2;
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
 
+    // Transactions commit one at a time, but each writer publishes after its
+    // commit. If a writer is descheduled in between, a later commit reaches
+    // subscribers first, and clients drop any event at or below the newest
+    // sequence they have applied. So a writer takes this lane as the last step
+    // of its transaction and holds it until it has published. Publishing never
+    // waits, so a writer that holds the transaction while it waits for the
+    // lane is not blocked for long.
+    const publishLane = yield* Semaphore.make(1);
+    const commitThenPublish = <A, E, R, E2, R2>(
+      transaction: Effect.Effect<A, E, R>,
+      publish: (committed: A) => Effect.Effect<void, E2, R2>,
+    ) =>
+      Effect.suspend(() => {
+        let holdsLane = false;
+        const takeLane = publishLane.take(1).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              holdsLane = true;
+            }),
+          ),
+          Effect.uninterruptible,
+        );
+        return sql
+          .withTransaction(Effect.tap(transaction, () => takeLane))
+          .pipe(
+            Effect.tap(publish),
+            Effect.ensuring(
+              Effect.suspend(() => (holdsLane ? publishLane.release(1) : Effect.void)),
+            ),
+          );
+      });
+
     const normalizeEvents = (events: ReadonlyArray<OrchestrationV2DomainEvent>) => {
       const runOrdinals = new Map(
         events.flatMap((event) =>
@@ -272,29 +305,27 @@ const baseLayer: Layer.Layer<
      * written once per batch because only the highest sequence is meaningful
      * and every write would otherwise rewrite the same row.
      */
-    const runBatchTransaction = (batch: ReadonlyArray<PendingWrite>) =>
-      sql.withTransaction(
-        Effect.gen(function* () {
-          const committed: Array<ReadonlyArray<OrchestrationV2StoredEvent>> = [];
-          for (const pending of batch) {
-            const normalized = yield* normalizeEvents(pending.input.events);
-            const stored = yield* eventStore.append({
-              ...(pending.input.commandId === undefined
-                ? {}
-                : { commandId: pending.input.commandId }),
-              events: normalized,
-            });
-            yield* applyProjectionEvents(stored);
-            yield* effectOutbox.enqueue(pending.input.effects);
-            committed.push(stored);
-          }
-          const sequence = committed.at(-1)?.at(-1)?.sequence;
-          if (sequence !== undefined) {
-            yield* recordProjectionSequence(sequence);
-          }
-          return committed;
-        }),
-      );
+    const batchTransaction = (batch: ReadonlyArray<PendingWrite>) =>
+      Effect.gen(function* () {
+        const committed: Array<ReadonlyArray<OrchestrationV2StoredEvent>> = [];
+        for (const pending of batch) {
+          const normalized = yield* normalizeEvents(pending.input.events);
+          const stored = yield* eventStore.append({
+            ...(pending.input.commandId === undefined
+              ? {}
+              : { commandId: pending.input.commandId }),
+            events: normalized,
+          });
+          yield* applyProjectionEvents(stored);
+          yield* effectOutbox.enqueue(pending.input.effects);
+          committed.push(stored);
+        }
+        const sequence = committed.at(-1)?.at(-1)?.sequence;
+        if (sequence !== undefined) {
+          yield* recordProjectionSequence(sequence);
+        }
+        return committed;
+      });
 
     const settleCommittedBatch = (
       batch: ReadonlyArray<PendingWrite>,
@@ -338,11 +369,12 @@ const baseLayer: Layer.Layer<
         ),
       });
 
-      const outcome = yield* Effect.exit(runBatchTransaction(batch));
-      if (Exit.isSuccess(outcome)) {
-        yield* settleCommittedBatch(batch, outcome.value);
-        return;
-      }
+      const outcome = yield* Effect.exit(
+        commitThenPublish(batchTransaction(batch), (committed) =>
+          settleCommittedBatch(batch, committed),
+        ),
+      );
+      if (Exit.isSuccess(outcome)) return;
       if (batch.length === 1) {
         yield* failPendingWrites(batch, Cause.squash(outcome.cause));
         return;
@@ -407,7 +439,7 @@ const baseLayer: Layer.Layer<
           "orchestration_v2.thread_id": input.threadId,
         });
 
-        const result = yield* sql.withTransaction(
+        return yield* commitThenPublish(
           Effect.gen(function* () {
             const rows = yield* sql<{
               readonly status: string;
@@ -441,12 +473,13 @@ const baseLayer: Layer.Layer<
             yield* applyStoredEvents(storedEvents);
             return { committed: true as const, storedEvents };
           }),
+          (result) =>
+            result.committed
+              ? eventStore
+                  .publishCommitted(result.storedEvents)
+                  .pipe(Effect.andThen(PubSub.publishAll(liveEvents, result.storedEvents)))
+              : Effect.void,
         );
-        if (result.committed) {
-          yield* eventStore.publishCommitted(result.storedEvents);
-          yield* PubSub.publishAll(liveEvents, result.storedEvents);
-        }
-        return result;
       },
     );
 
@@ -468,7 +501,7 @@ const baseLayer: Layer.Layer<
     const commitCommandEffect = Effect.fn("orchestrationV2.EventSink.commitCommand")(function* (
       input: Parameters<EventSinkV2Shape["commitCommand"]>[0],
     ) {
-      const result = yield* sql.withTransaction(
+      const result = yield* commitThenPublish(
         Effect.gen(function* () {
           const reserved = yield* commandReceipts.insertIfAbsent({
             commandId: input.commandId,
@@ -517,15 +550,18 @@ const baseLayer: Layer.Layer<
                 });
           return { receipt, storedEvents, committed: true as const, cancelledEffectIds };
         }),
+        (result) =>
+          Effect.gen(function* () {
+            yield* effectOutbox.signalCancellations(result.cancelledEffectIds);
+            if (result.committed && input.effects.length > 0) {
+              yield* effectOutbox.notifyAvailable(input.effects.length);
+            }
+            if (result.committed) {
+              yield* eventStore.publishCommitted(result.storedEvents);
+              yield* PubSub.publishAll(liveEvents, result.storedEvents);
+            }
+          }),
       );
-      yield* effectOutbox.signalCancellations(result.cancelledEffectIds);
-      if (result.committed && input.effects.length > 0) {
-        yield* effectOutbox.notifyAvailable(input.effects.length);
-      }
-      if (result.committed) {
-        yield* eventStore.publishCommitted(result.storedEvents);
-        yield* PubSub.publishAll(liveEvents, result.storedEvents);
-      }
       return {
         receipt: result.receipt,
         storedEvents: result.storedEvents,

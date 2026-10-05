@@ -94,6 +94,19 @@ describe("thread execution presentation", () => {
     ).toMatchObject({ status: "running", lastError: null, lastErrorClass: null });
   });
 
+  it("counts a wake run's activity from the start of the work it continues", () => {
+    const workStartedAt = DateTime.makeUnsafe("2026-07-28T09:20:00.000Z");
+    const wake = { ...run("wake", 2, "running"), workStartedAt };
+    expect(
+      deriveThreadRuntime({ ...v2Projection, runs: [run("prompt", 1, "completed"), wake] })
+        ?.activityStartedAt,
+    ).toBe("2026-07-28T09:20:00.000Z");
+    expect(
+      deriveThreadRuntime({ ...v2Projection, runs: [run("prompt", 1, "running")] })
+        ?.activityStartedAt,
+    ).toBe("2026-07-28T10:00:00.000Z");
+  });
+
   it("keeps a subscription limit visible while later messages stay queued", () => {
     const failed = {
       ...run("limited", 1, "failed"),
@@ -169,6 +182,32 @@ describe("thread execution presentation", () => {
       activeRunId: runningRun.id,
     });
     expect(threadRuntimeHasInterruptibleRun(runtime)).toBe(true);
+  });
+
+  it("presents a held queue as the stopped run instead of queued work", () => {
+    const interrupted = { ...run("run-interrupted", 1, "interrupted"), completedAt: now };
+    const held = { ...run("run-held", 2, "queued"), queueHeld: true };
+    const projection = { ...v2Projection, runs: [interrupted, held], updatedAt: now };
+
+    expect(deriveLatestThreadRun(projection)?.runId).toBe(interrupted.id);
+    expect(deriveThreadActivityRun(projection)?.runId).toBe(interrupted.id);
+    expect(deriveThreadRuntime(projection)).toMatchObject({
+      status: "interrupted",
+      activeRunId: null,
+    });
+
+    // Resuming clears the hold, and the run reads as queued until it starts.
+    const resumed = { ...projection, runs: [interrupted, { ...held, queueHeld: false }] };
+    expect(deriveThreadRuntime(resumed)).toMatchObject({ status: "queued" });
+
+    // Recovery can hold a first message before any run executed; it is not work.
+    const onlyHeld = {
+      ...projection,
+      runs: [held],
+      thread: { ...projection.thread, activeProviderThreadId: null },
+    };
+    expect(deriveLatestThreadRun(onlyHeld)).toBeNull();
+    expect(deriveThreadRuntime(onlyHeld)).toBeNull();
   });
 
   it("does not expose a queued-only run as interruptible", () => {

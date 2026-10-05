@@ -32,6 +32,10 @@ import { makeProviderFailure } from "./ProviderFailure.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { canRouteRelatedSubagent, RunExecutionServiceV2 } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import {
+  pendingRestartCancelledBackgroundWork,
+  restartCancelledBackgroundWorkNote,
+} from "./RestartBackgroundNote.ts";
 
 export class ProviderTurnStartError extends Schema.TaggedErrorClass<ProviderTurnStartError>()(
   "ProviderTurnStartError",
@@ -255,9 +259,9 @@ export const layer: Layer.Layer<
         return;
       }
       const providerSessionId = providerThread.providerSessionId;
-      const isCurrentAttemptInStatus = (
-        expectedStatus: OrchestrationV2Run["status"],
-      ): Effect.Effect<boolean, never> =>
+      // `false` means the run moved on or is gone. A failed read is an error,
+      // so the caller fails the start or the run instead of skipping it.
+      const isCurrentAttemptInStatus = (expectedStatus: OrchestrationV2Run["status"]) =>
         projectionStore.getThreadProjection(projection.thread.id).pipe(
           Effect.map((current) => {
             const currentRun = current.runs.find((candidate) => candidate.id === run.id);
@@ -265,7 +269,6 @@ export const layer: Layer.Layer<
               currentRun?.activeAttemptId === attempt.id && currentRun.status === expectedStatus
             );
           }),
-          Effect.catchCause(() => Effect.succeed(false)),
         );
 
       const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
@@ -314,6 +317,9 @@ export const layer: Layer.Layer<
         });
       }
       let effectiveHandoffs = handoffs;
+      // A resume fallback keeps this provider thread's history but binds a
+      // fresh native session, which has to be created before it can resume.
+      let boundFreshNativeThread = false;
       const loadedProviderThread = yield* Effect.gen(function* () {
         if (nativeForkTransfer !== undefined) {
           const sourceProjection = yield* projectionStore.getThreadRecords(
@@ -396,6 +402,7 @@ export const layer: Layer.Layer<
           // still adopting this row's identity.
           existingProviderThread: { ...providerThread, nativeThreadRef: null },
         });
+        boundFreshNativeThread = true;
         if (existingResumeFallback !== undefined) {
           return replacement;
         }
@@ -589,6 +596,48 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         canRouteRelatedSubagent(subagent.status),
       );
+      // Delivered once: this run's provider turn marks the work as told.
+      const restartCancelledWork = pendingRestartCancelledBackgroundWork({
+        runs: projection.runs,
+        providerTurns: projection.providerTurns,
+        compactionMessageIds: new Set(
+          projection.messages
+            .filter(
+              (candidate) =>
+                candidate.attachments.length === 0 &&
+                candidate.text.trim().toLowerCase() === "/compact",
+            )
+            .map((candidate) => candidate.id),
+        ),
+        continuationMessageIds: new Set([
+          ...projection.runs.flatMap((candidate) =>
+            candidate.restartContinuation === undefined
+              ? []
+              : [candidate.restartContinuation.messageId],
+          ),
+          ...(message.restartContinuation === true ? [message.id] : []),
+        ]),
+        run,
+        runAttemptIds: projection.attempts
+          .filter((candidate) => candidate.runId === run.id)
+          .map((candidate) => candidate.id),
+      });
+      const restartNote =
+        restartCancelledWork.length === 0
+          ? null
+          : restartCancelledBackgroundWorkNote(restartCancelledWork);
+      const providerText =
+        effectiveHandoffs.length === 0
+          ? restartNote === null
+            ? message.text
+            : `${restartNote}\n\nUser message:\n${message.text}`
+          : [
+              ...(restartNote === null ? [] : [restartNote, ""]),
+              providerMessageWithContextHandoffs({
+                handoffs: effectiveHandoffs,
+                userText: message.text,
+              }),
+            ].join("\n");
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
@@ -613,6 +662,7 @@ export const layer: Layer.Layer<
               .filter((turn) => turn.providerThreadId === providerThread.id)
               .map((turn) => turn.ordinal),
           ) + 1,
+        ...(boundFreshNativeThread ? { nativeThreadHasTurns: false } : {}),
         shouldStartProviderTurn: () => isCurrentAttemptInStatus("running"),
         shouldFinalizeRun: () =>
           projectionStore.getThreadProjection(projection.thread.id).pipe(
@@ -623,7 +673,6 @@ export const layer: Layer.Layer<
                 (currentRun.status === "starting" || currentRun.status === "running")
               );
             }),
-            Effect.catchCause(() => Effect.succeed(false)),
           ),
         hasUnpairedRunInterruptRequest: () =>
           projectionStore
@@ -649,15 +698,7 @@ export const layer: Layer.Layer<
           // Attachment paths and captured-window data follow handoff context,
           // outside the historical summary.
           text: appendSnapShotContext(
-            appendUploadedFilesBlock(
-              effectiveHandoffs.length === 0
-                ? message.text
-                : providerMessageWithContextHandoffs({
-                    handoffs: effectiveHandoffs,
-                    userText: message.text,
-                  }),
-              uploads.promptBlock,
-            ),
+            appendUploadedFilesBlock(providerText, uploads.promptBlock),
             message.attachments,
           ),
           attachments: uploads.inlineAttachments,

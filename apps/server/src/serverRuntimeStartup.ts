@@ -2,6 +2,7 @@ import * as RestartContinuationService from "./orchestration-v2/RestartContinuat
 import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
+import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import { resolveProjectAutoPull } from "@t3tools/shared/serverSettings";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import {
@@ -35,6 +36,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/LegacyV1ThreadImporter.ts";
+import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
@@ -348,12 +350,14 @@ export function runOrderedV2StartupPhases<
   VerifyError,
   RebuildError,
   RecoveryError,
+  DelegationError,
   WorkerError,
   BootstrapError,
   ImportContext,
   VerifyContext,
   RebuildContext,
   RecoveryContext,
+  DelegationContext,
   WorkerContext,
   BootstrapContext,
 >(input: {
@@ -361,6 +365,8 @@ export function runOrderedV2StartupPhases<
   readonly verify: Effect.Effect<Verification, VerifyError, VerifyContext>;
   readonly rebuild: Effect.Effect<RebuildVerification, RebuildError, RebuildContext>;
   readonly recover: Effect.Effect<Recovery, RecoveryError, RecoveryContext>;
+  /** Settles delegated tasks whose runs recovery just terminalized. */
+  readonly recoverDelegatedTasks: Effect.Effect<void, DelegationError, DelegationContext>;
   readonly startEffectWorker: Effect.Effect<void, WorkerError, WorkerContext>;
   readonly autoBootstrap: Effect.Effect<Bootstrap, BootstrapError, BootstrapContext>;
 }) {
@@ -376,6 +382,7 @@ export function runOrderedV2StartupPhases<
       }
     }
     const recovery = yield* input.recover;
+    yield* input.recoverDelegatedTasks;
     yield* input.startEffectWorker;
     const bootstrap = yield* input.autoBootstrap;
     return { recovery, bootstrap } as const;
@@ -438,10 +445,12 @@ export const make = (options?: StartupOptions) =>
     const projectionMaintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
     const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
     const threadPullRequests = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
     const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+    const pullRequestWatch = yield* PullRequestWatchReactor.PullRequestWatchReactor;
     const threadSettlement = yield* ThreadSettlementReactor.ThreadSettlementReactor;
     const restartContinuation = yield* RestartContinuationService.RestartContinuationService;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -590,6 +599,10 @@ export const make = (options?: StartupOptions) =>
             .prepare("restart")
             .pipe(Effect.ignore({ log: true }), Effect.andThen(providerRuntimeRecovery.recover)),
         ),
+        recoverDelegatedTasks: runStartupPhase(
+          "orchestration-v2.delegated-tasks.recover",
+          orchestrator.recoverDelegatedTasks,
+        ),
         startEffectWorker: runStartupPhase(
           "orchestration-v2.effect-worker.start",
           startEffectWorkerWithRelay({
@@ -701,6 +714,7 @@ export const make = (options?: StartupOptions) =>
 
       yield* threadPullRequests.start();
       yield* pullRequestSync.start();
+      yield* pullRequestWatch.start();
       yield* threadSettlement.start({ beforeSweep: restartContinuation.awaitInitialResume });
       yield* forkParked(restartContinuation.resume);
 

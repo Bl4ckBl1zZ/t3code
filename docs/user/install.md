@@ -15,7 +15,12 @@ npx t3@latest
 ```
 
 This starts the T3 Code server on your machine and opens the local web app. Use
-`npx t3@latest --help` for the full CLI reference.
+`npx t3@latest help` or `npx t3@latest --help` for the full CLI reference. To start in a new
+working directory, use an explicit path such as `npx t3@latest ./my-project`. A bare directory
+name is accepted only if it already exists.
+
+If `t3` or `t3 start` reports an already running server, connect to that server instead. Stop it
+before starting a replacement, or use a different `--base-dir` for an independent server.
 
 ## Open a project in the desktop app
 
@@ -131,7 +136,7 @@ For Pi, see [Pi](./providers-pi.md).
 - [Keeping T3 Code in sync](./updating.md): client and server version skew
 - [Running in the background](./background-service.md): Linux background service
 
-Provider updates use the installer that owns the executable on the selected machine. npm updates target the original global prefix; Homebrew compares against the version available from Homebrew. Unknown installations and mise-managed provider packages require updating with their original installer.
+Provider updates use the installer that owns the executable on the selected machine: Homebrew, or a global npm, pnpm, Yarn, Bun, Volta, or Vite+ install. When T3 Code cannot tell which installer owns the CLI, it runs the CLI's own update command instead. npm updates target the original global prefix; Homebrew compares against the version available from Homebrew. Update a CLI installed with mise through mise.
 
 T3 Code warns when a provider version has known compatibility problems with your release. Check
 **Settings → Providers** on web and desktop for the recommended version or range. When its package manager supports installing a

@@ -413,6 +413,8 @@ export interface ProviderAdapterV2TurnInput {
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly runOrdinal: number;
+  /** Whether the current native session has an accepted turn; omitted when unknown. */
+  readonly nativeThreadHasTurns?: boolean;
   readonly providerTurnOrdinal: number;
   readonly attemptId: RunAttemptId;
   readonly rootNodeId: NodeId;
@@ -550,6 +552,14 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly interruptTurn: (
     input: ProviderAdapterV2InterruptInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;
+  /**
+   * Lets a runtime shared by several app threads unload one provider thread's
+   * native state (and its MCP servers) when that app thread detaches, while
+   * the runtime keeps serving the others. A later resume reloads it.
+   */
+  readonly unloadThread?: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+  }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly respondToRuntimeRequest: (
     input: ProviderAdapterV2RuntimeRequestResponseInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;

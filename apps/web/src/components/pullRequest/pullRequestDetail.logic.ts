@@ -1,3 +1,6 @@
+import * as Schema from "effect/Schema";
+
+import { PullRequestOperationError } from "@t3tools/contracts";
 import type {
   PullRequestAction,
   PullRequestActor,
@@ -911,6 +914,12 @@ export function buildAddSelectionToAgentHandoff(input: {
     prompt: bounded(input.request),
     reviewComments: [pullRequestContextComment(input, []), { ...input.comment, text: "" }],
   };
+}
+
+const isPullRequestOperationError = Schema.is(PullRequestOperationError);
+
+export function isPullRequestNotFound(failure: unknown): boolean {
+  return isPullRequestOperationError(failure) && failure.reason === "not-found";
 }
 
 /**

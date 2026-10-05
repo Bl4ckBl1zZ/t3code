@@ -335,6 +335,31 @@ describe("ChatMarkdown Windows file links", () => {
     },
   );
 
+  it.each([true, false])(
+    "keeps backslashes CommonMark would read as escapes with parseRawHtml=%s",
+    (parseRawHtml) => {
+      const html = renderToStaticMarkup(
+        <ChatMarkdown
+          cwd="C:/Users/shawn/project"
+          environmentId={environmentId}
+          text={[
+            String.raw`[settings](C:\Users\shawn\.claude\settings.json)`,
+            "[Open][source]",
+            String.raw`[source]: C:\Users\shawn\.t3\main.ts`,
+            "[amp](C:/Users/shawn/a&amp;b.ts)",
+          ].join("\n\n")}
+          lineBreaks={!parseRawHtml}
+          parseRawHtml={parseRawHtml}
+        />,
+      );
+
+      expect(html).toContain('href="C:/Users/shawn/.claude/settings.json"');
+      expect(html).toContain('href="C:/Users/shawn/.t3/main.ts"');
+      // Character references in a Windows path are still decoded.
+      expect(html).toContain('href="C:/Users/shawn/a&amp;b.ts"');
+    },
+  );
+
   it.each([true, false])("preserves reference links with parseRawHtml=%s", (parseRawHtml) => {
     const html = renderToStaticMarkup(
       <ChatMarkdown

@@ -5,6 +5,8 @@ import {
   isParentThreadRelationship,
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
+  liveThreadRunStatus,
+  threadRelationshipRowStatus,
   type ThreadRelationshipEdge,
 } from "@t3tools/client-runtime/state/thread-relationships";
 import {
@@ -38,6 +40,7 @@ import { useState, type ReactNode } from "react";
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
 import { AgentElapsed, type AgentElapsedTiming } from "./AgentElapsed";
 import { SubagentTooltipContent } from "./SubagentTooltipContent";
+import { shouldShowInstanceBadge } from "../../providerInstances";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { resolveThreadModelBadge } from "./threadModelBadge";
 import { WorkflowScriptDialog } from "../WorkflowScriptDialog";
@@ -80,6 +83,45 @@ function statusDotClass(status: string | null): string {
   return "bg-muted-foreground/45";
 }
 
+function relationshipStatusLabel(status: string | null): string {
+  switch (status) {
+    case "preparing":
+    case "starting":
+      return "Starting";
+    case "running":
+    case "in_progress":
+      return "Running";
+    case "pending":
+    case "queued":
+      return "Queued";
+    case "waiting":
+    case "blocked":
+      return "Waiting";
+    case "completed":
+      return "Done";
+    case "failed":
+    case "error":
+      return "Failed";
+    case "cancelled":
+    case "interrupted":
+      return "Stopped";
+    case "rolled_back":
+      return "Reverted";
+    case "resolved_native":
+      return "Resolved (native)";
+    case "resolved_portable":
+      return "Resolved (portable)";
+    case "consumed":
+      return "Consumed";
+    case "superseded":
+      return "Superseded";
+    case "idle":
+      return "Idle";
+    default:
+      return "Unknown";
+  }
+}
+
 function relationshipOrbState(status: string | null): AgentOrbState {
   if (status === "running" || status === "in_progress") return "active";
   if (status === "failed" || status === "error") return "failed";
@@ -92,6 +134,28 @@ function subagentTiming(subagent: OrchestrationV2Subagent): AgentElapsedTiming {
     status: subagent.status,
     startedAt: subagent.startedAt === null ? null : DateTime.formatIso(subagent.startedAt),
     completedAt: subagent.completedAt === null ? null : DateTime.formatIso(subagent.completedAt),
+  };
+}
+
+/**
+ * A delegated task settles with its first run, but the parent can keep sending
+ * the child follow-ups. While the child thread has a live run, the row's timer
+ * and hover card follow that run instead of the settled task.
+ */
+function liveSubagent(
+  subagent: OrchestrationV2Subagent | undefined,
+  childThread: OrchestrationV2ThreadShell | null | undefined,
+): OrchestrationV2Subagent | undefined {
+  const liveStatus = liveThreadRunStatus(childThread);
+  if (!subagent || !liveStatus) return subagent;
+  return {
+    ...subagent,
+    status: liveStatus === "running" || liveStatus === "waiting" ? liveStatus : "pending",
+    startedAt: childThread?.activityRunStartedAt ?? null,
+    completedAt: null,
+    // The settled task's output belongs to its first run, not this one.
+    progress: undefined,
+    result: null,
   };
 }
 
@@ -257,6 +321,7 @@ export function ThreadRelationshipsPanel(props: {
           const isSubagent = edge.kind === "subagent";
           const isMergeTarget = threadId === mergeTargetThreadId;
           const isParent = isParentThreadRelationship(edge, props.threadId);
+          const status = threadRelationshipRowStatus(graph, { threadId, edge });
           const showOrb = isSubagent && !isParent;
           const RelationshipIcon = isParent ? CornerLeftUpIcon : GitForkIcon;
           const relationship = relationshipLabel(edge, props.threadId);
@@ -264,7 +329,10 @@ export function ThreadRelationshipsPanel(props: {
             title: node?.thread?.title ?? threadId,
             isSubagent,
           });
-          const subagent = showOrb ? subagentByChildThreadId.get(threadId) : undefined;
+          const subagent = liveSubagent(
+            showOrb ? subagentByChildThreadId.get(threadId) : undefined,
+            node?.thread,
+          );
           const phase = workflowPhaseProgress(subagent?.workflow);
           const runScriptPath = subagent?.runHandles?.scriptPath;
           const runSessionUrl = subagent?.runHandles?.sessionUrl;
@@ -286,6 +354,11 @@ export function ThreadRelationshipsPanel(props: {
               modelLabel={modelBadge?.model ?? subagent.model}
               driver={providerEntry?.driverKind ?? subagent.driver}
               providerDisplayName={providerEntry?.displayName}
+              providerAccentColor={providerEntry?.accentColor}
+              showInstanceBadge={
+                providerEntry !== null &&
+                shouldShowInstanceBadge(providerEntry, providerEntryByInstanceId.values())
+              }
               elapsed={<AgentElapsed agent={subagentTiming(subagent)} />}
               status={subagent.status}
               result={subagent.result}
@@ -306,14 +379,14 @@ export function ThreadRelationshipsPanel(props: {
             <>
               <span className="relative grid size-4 shrink-0 place-items-center">
                 {showOrb ? (
-                  <AgentOrb seed={threadId} size={16} state={relationshipOrbState(edge.status)} />
+                  <AgentOrb seed={threadId} size={16} state={relationshipOrbState(status)} />
                 ) : (
                   <>
                     <RelationshipIcon className={THREAD_RELATIONSHIP_ICON_CLASS} />
                     <span
                       className={cn(
                         "absolute -bottom-1 -right-1 size-2 rounded-full border-2 border-card",
-                        statusDotClass(edge.status),
+                        statusDotClass(status),
                       )}
                       aria-hidden="true"
                     />
@@ -349,6 +422,12 @@ export function ThreadRelationshipsPanel(props: {
                   ) : null}
                 </span>
               ) : null}
+              <span
+                className="shrink-0 text-[11px] leading-4 text-muted-foreground"
+                data-thread-relationship-status
+              >
+                {relationshipStatusLabel(status)}
+              </span>
               <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
             </>
           );

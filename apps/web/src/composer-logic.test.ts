@@ -115,6 +115,25 @@ describe("composerSubmissionIntentForEnter", () => {
     ).toBe("foreground");
   });
 
+  it.each([true, false])(
+    "sends in the background and opens a new thread with Mod+Alt+Enter (draft=%s)",
+    (isDraftThread) => {
+      for (const isRunning of [false, true]) {
+        expect(
+          composerSubmissionIntentForEnter({
+            isMobileViewport: false,
+            shiftKey: false,
+            modifierKey: true,
+            altKey: true,
+            isDraftThread,
+            isRunning,
+            sendShortcut: "mod-enter",
+          }),
+        ).toBe("background");
+      }
+    },
+  );
+
   it("keeps Enter inert on mobile even with Shift held", () => {
     expect(
       composerSubmissionIntentForEnter({

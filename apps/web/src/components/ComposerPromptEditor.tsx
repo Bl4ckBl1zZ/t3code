@@ -892,6 +892,8 @@ function collectTerminalContextIds(node: LexicalNode): string[] {
 export interface ComposerPromptEditorHandle {
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
   isCaretOnVisualEdge: (edge: "start" | "end") => boolean;
+  /** True when a collapsed caret sits before everything in the draft, including when it is empty. */
+  isCaretAtStart: () => boolean;
   focus: () => void;
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
@@ -1890,6 +1892,15 @@ function ComposerPromptEditorInner({
         if (target) setOpenCitationComment(target);
       },
       readSnapshot,
+      isCaretAtStart: () =>
+        editor.getEditorState().read(() => {
+          const selection = $getSelection();
+          return (
+            $isRangeSelection(selection) &&
+            selection.isCollapsed() &&
+            $readExpandedSelectionOffsetFromEditorState(-1) === 0
+          );
+        }),
       isCaretOnVisualEdge: (edge) => {
         const snapshot = readSnapshot();
         if (snapshot.value.length === 0) return true;

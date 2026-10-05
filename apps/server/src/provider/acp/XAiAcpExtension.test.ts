@@ -39,6 +39,7 @@ import {
   XAI_EMPTY_PLAN_MARKDOWN,
   XAiAskUserQuestionRequest,
   XAiExitPlanModeRequest,
+  XAiPromptFailureText,
 } from "./XAiAcpExtension.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import {
@@ -1678,6 +1679,59 @@ describe("XAiAcpExtension", () => {
       const response = yield* Fiber.join(promptFiber);
       expect(response.stopReason).toBe("end_turn");
       expect(handlers.has("_x.ai/session/update")).toBe(true);
+    }),
+  );
+
+  it.effect("fails the prompt with Grok's API error from an error turn_completed", () =>
+    Effect.gen(function* () {
+      const handlers = new Map<string, (notification: unknown) => Effect.Effect<void>>();
+      const hungPrompt = yield* Deferred.make<never>();
+      const baseRuntime = {
+        start: () =>
+          Effect.succeed({
+            sessionId: "root-session",
+            initializeResult: {},
+            sessionSetupResult: {},
+            modelConfigId: undefined,
+          }),
+        prompt: () => Deferred.await(hungPrompt),
+        cancel: Effect.void,
+        handleExtNotification: (
+          method: string,
+          _schema: unknown,
+          handler: (notification: unknown) => Effect.Effect<void>,
+        ) => {
+          handlers.set(method, handler);
+          return Effect.void;
+        },
+        handleExtRequest: () => Effect.void,
+      } as unknown as AcpSessionRuntime.AcpSessionRuntime["Service"];
+
+      const runtime = yield* makeXAiPromptCompletionRuntime(baseRuntime);
+      const promptFiber = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "hi" }] })
+        .pipe(Effect.flip, Effect.forkChild);
+      yield* Effect.yieldNow;
+      // Grok settles the prompt here, before its session/prompt RPC error.
+      yield* handlers.get("_x.ai/session_notification")!({
+        sessionId: "root-session",
+        update: {
+          sessionUpdate: "turn_completed",
+          prompt_id: "t3-xai-prompt-1",
+          stop_reason: "error",
+          agent_result: "API error (status 400 Bad Request): invalid_request_error",
+        },
+      });
+      const error = yield* Fiber.join(promptFiber);
+      if (error._tag !== "AcpRequestError") return yield* Effect.die(error);
+      expect(error.code).toBe(-32603);
+      // The unbounded provider text stays off the error's structured fields.
+      expect(error.errorMessage).toBe("Grok ended the turn with an error.");
+      expect(error.cause).toBeInstanceOf(XAiPromptFailureText);
+      expect(error.cause).toHaveProperty(
+        "message",
+        "API error (status 400 Bad Request): invalid_request_error",
+      );
     }),
   );
 

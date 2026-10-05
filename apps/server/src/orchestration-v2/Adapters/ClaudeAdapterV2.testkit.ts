@@ -185,6 +185,11 @@ interface ClaudeQuerySetModelFrame {
   readonly model: string;
 }
 
+interface ClaudeQuerySetPermissionModeFrame {
+  readonly type: "query.set_permission_mode";
+  readonly mode: string;
+}
+
 interface ClaudeQueryInterruptFrame {
   readonly type: "query.interrupt";
 }
@@ -240,6 +245,7 @@ type ClaudeOutboundFrame =
   | ClaudeQueryOpenFrame
   | ClaudePromptOfferFrame
   | ClaudeQuerySetModelFrame
+  | ClaudeQuerySetPermissionModeFrame
   | ClaudeQueryInterruptFrame
   | ClaudePermissionResponseFrame
   | ClaudeSessionForkFrame
@@ -530,7 +536,8 @@ function makeReplayQueryRunner(transcript: ClaudeAgentSdkReplayTranscript): Clau
 
   // Prompt uuids are derived from ids that differ between the recording and
   // a replay run, so a matched prompt offer maps the recorded uuid to the
-  // replayed one, and inbound frames echoing it are rewritten to match.
+  // replayed one, and inbound frames echoing or acknowledging it are
+  // rewritten to match.
   const promptUuidReplacements = new Map<string, string>();
   const replayedPromptUuid = (value: string): string => promptUuidReplacements.get(value) ?? value;
   const withReplayedPromptUuids = (frame: unknown): unknown => {
@@ -539,11 +546,13 @@ function makeReplayQueryRunner(transcript: ClaudeAgentSdkReplayTranscript): Clau
     }
     const uuid: unknown = Reflect.get(frame, "user_message_uuid");
     const uuids: unknown = Reflect.get(frame, "user_message_uuids");
-    if (typeof uuid !== "string" && !Array.isArray(uuids)) {
+    const commandUuid: unknown = Reflect.get(frame, "command_uuid");
+    if (typeof uuid !== "string" && !Array.isArray(uuids) && typeof commandUuid !== "string") {
       return frame;
     }
     return {
       ...frame,
+      ...(typeof commandUuid === "string" ? { command_uuid: replayedPromptUuid(commandUuid) } : {}),
       ...(typeof uuid === "string" ? { user_message_uuid: replayedPromptUuid(uuid) } : {}),
       ...(Array.isArray(uuids)
         ? {
@@ -694,6 +703,13 @@ function makeReplayQueryRunner(transcript: ClaudeAgentSdkReplayTranscript): Clau
             assertNextOutboundFrame({
               type: "query.set_model",
               model,
+            });
+          }),
+        setPermissionMode: (mode) =>
+          replayEffect(() => {
+            assertNextOutboundFrame({
+              type: "query.set_permission_mode",
+              mode,
             });
           }),
         interrupt: replayEffect(() => {
@@ -987,6 +1003,11 @@ function sanitizeSdkMessageForReplay(input: {
       uuid: message.uuid,
       session_id: message.session_id,
     };
+  }
+  // Like init's slash_commands, the recording account's commands and skills
+  // are local configuration, not protocol.
+  if (message.type === "system" && message.subtype === "commands_changed") {
+    return { ...message, commands: [] };
   }
   if (message.type === "rate_limit_event") {
     return {

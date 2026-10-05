@@ -1,5 +1,6 @@
+import type { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card";
 import type { EnvironmentId, PullRequestRef } from "@t3tools/contracts";
-import { useState, type ComponentPropsWithoutRef, type ReactElement } from "react";
+import { useRef, useState, type ComponentPropsWithoutRef, type ReactElement } from "react";
 
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -26,6 +27,7 @@ export function PullRequestLinkPreview({
   target: PullRequestLinkPreviewTarget;
 }) {
   const [open, setOpen] = useState(false);
+  const previewActionsRef = useRef<PreviewCardPrimitive.Root.Actions | null>(null);
   const detailQuery = useEnvironmentQuery(
     open
       ? pullRequestEnvironment.detail({
@@ -49,8 +51,17 @@ export function PullRequestLinkPreview({
         : (detail?.author.login ?? null);
 
   return (
-    <PreviewCard open={open} onOpenChange={setOpen}>
-      <Tooltip open={showUrlTooltip}>
+    <PreviewCard open={open} onOpenChange={setOpen} actionsRef={previewActionsRef}>
+      <Tooltip
+        open={showUrlTooltip}
+        onOpenChange={(nextOpen) => {
+          // A scroll that dismisses the URL tooltip also cancels the card's delayed hover open,
+          // but leaves a card that is already showing (or loading) its preview alone.
+          if (!nextOpen && detail === null && (!open || detailQuery.error !== null)) {
+            previewActionsRef.current?.close();
+          }
+        }}
+      >
         <PreviewCardTrigger
           render={<TooltipTrigger render={link} />}
           delay={350}

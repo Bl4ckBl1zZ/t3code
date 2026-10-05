@@ -48,9 +48,13 @@ The supervisor is the transport retry owner.
    waits for a signal without consuming retry attempts or running a timer.
 3. When online, it asks the driver for one prepared connection and one RPC
    session.
-4. Transient failures retry forever with exponential backoff capped at 16
-   seconds (`RETRY_DELAYS_MS`). A connection stable for 30 seconds resets
-   accumulated backoff.
+4. Transient failures retry forever with jittered exponential backoff
+   (`retryDelayMs`): the ceiling doubles from 2 seconds up to five minutes and
+   each delay is a random point in its upper half. A connection stable for 30
+   seconds resets accumulated backoff. Without jitter, every client of a
+   restarted server reconnects in the same second; with a short cap, a client
+   that can never connect retries all day. Returning to the app, the network
+   coming back, and an explicit retry all skip the wait.
 5. Authentication or configuration failures remain blocked until an external
    wakeup changes the relevant input.
 6. An involuntary session close keeps the registration and cache, then retries.
@@ -75,11 +79,15 @@ Wakeup handling differs by phase, in [supervisor.ts][supervisor]:
 - While waiting out backoff, application activation resets the retry ladder so a
   foregrounded app reconnects immediately instead of serving the remaining
   delay.
-- Once connected, `monitorConnectedLease` handles plain activation by probing
-  the existing session (`lease.session.probe`, with a shorter timeout for
-  mobile's `application-active-probe`) rather than reconnecting; a healthy
-  session survives foregrounding. `application-active-reconnect` skips the probe
-  and replaces the lease outright.
+- Once connected, `monitorConnectedLease` answers foregrounding, an explicit
+  retry, and an offline report by probing the existing session
+  (`lease.session.probe`, with a 3-second timeout for retries, offline reports
+  and mobile's `application-active-probe`); only a failed probe reconnects, and
+  that reconnect skips the first backoff rung. Offline reports are often wrong,
+  for example for a loopback server, so a healthy session survives them.
+  `application-active-reconnect` skips the probe and replaces the lease
+  outright, because a probe would hold a dead socket in "Resuming" until it
+  times out; that fresh attempt runs even while the network reports offline.
 
 The UI derives `available`, `offline`, `connecting`, `reconnecting`,
 `connected`, and `error` from supervisor state plus explicit data-sync state.

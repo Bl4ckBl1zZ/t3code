@@ -451,3 +451,30 @@ function buildFileLinkMetaFromTarget(targetPath: string, cwd?: string): Markdown
     ...(columnNumber !== undefined ? { column: columnNumber } : {}),
   };
 }
+
+/**
+ * Whether a file link's label only names its destination (a filename or path,
+ * optionally with the same position). Such labels collapse into the file chip;
+ * descriptive prose is kept next to it.
+ */
+export function isMarkdownFileLinkLabel(label: string, meta: MarkdownFileLinkMeta): boolean {
+  const normalize = (path: string) =>
+    path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  const labelPosition = splitPathAndPosition(label.trim());
+  const labelLine = labelPosition.line ? Number.parseInt(labelPosition.line, 10) : undefined;
+  const labelColumn = labelPosition.column ? Number.parseInt(labelPosition.column, 10) : undefined;
+  if (
+    (labelLine !== undefined && labelLine !== meta.line) ||
+    (labelColumn !== undefined && labelColumn !== meta.column)
+  ) {
+    return false;
+  }
+  let labelPath = normalize(labelPosition.path);
+  let destinationPath = normalize(meta.filePath);
+  if (labelPath.length === 0) return true;
+  if (isWindowsAbsolutePath(meta.filePath)) {
+    labelPath = labelPath.toLowerCase();
+    destinationPath = destinationPath.toLowerCase();
+  }
+  return destinationPath === labelPath || destinationPath.endsWith(`/${labelPath}`);
+}

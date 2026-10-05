@@ -5,6 +5,7 @@ import {
   type OrchestrationV2PlanArtifact,
   OrchestrationV2StoredEvent,
   type OrchestrationV2Run,
+  type OrchestrationV2Subagent,
   ProviderInstanceId,
   ProviderSessionId,
   RawEventId,
@@ -23,6 +24,7 @@ import { IdAllocatorV2 } from "./IdAllocator.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderAdapterV2Event } from "./ProviderAdapter.ts";
 import { makeProviderFailureTurnItem } from "./ProviderFailure.ts";
+import { ThreadCommandExecutor } from "./ThreadCommandExecutor.ts";
 
 type TodoListPlan = Extract<OrchestrationV2PlanArtifact, { readonly kind: "todo_list" }>;
 
@@ -173,13 +175,14 @@ const decodeDomainEvent = Schema.decodeUnknownEffect(OrchestrationV2DomainEvent)
 export const layer: Layer.Layer<
   ProviderEventIngestorV2,
   never,
-  EventSinkV2 | IdAllocatorV2 | ProjectionStoreV2
+  EventSinkV2 | IdAllocatorV2 | ProjectionStoreV2 | ThreadCommandExecutor
 > = Layer.effect(
   ProviderEventIngestorV2,
   Effect.gen(function* () {
     const eventSink = yield* EventSinkV2;
     const idAllocator = yield* IdAllocatorV2;
     const projections = yield* ProjectionStoreV2;
+    const threadCommands = yield* ThreadCommandExecutor;
 
     const makeDomainEvent = (
       input: ProviderEventIngestInput,
@@ -215,6 +218,48 @@ export const layer: Layer.Layer<
           }),
         );
       });
+
+    /**
+     * A native subagent's thread starts on the parent's model when the
+     * provider names the real one later (a Claude agent file's model arrives
+     * with the subagent's first reply). Clients read the thread's model, so
+     * move the thread to the reported one. Thread commands rewrite the whole
+     * thread row under the thread's lock, so this read and write take it too.
+     */
+    const syncSubagentThreadModel = Effect.fn("ProviderEventIngestor.syncSubagentThreadModel")(
+      function* (input: ProviderEventIngestInput, subagent: OrchestrationV2Subagent) {
+        const { childThreadId, model } = subagent;
+        if (subagent.origin !== "provider_native" || childThreadId === null || model === null) {
+          return [];
+        }
+        const staleThread = projections.getThreadRecords(childThreadId, []).pipe(
+          Effect.map(({ thread }) => (thread.modelSelection.model === model ? null : thread)),
+          Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(null)),
+        );
+        // Nearly every update already matches; only a mismatch takes the lock.
+        if ((yield* staleThread) === null) return [];
+        return yield* threadCommands.withLock(
+          childThreadId,
+          Effect.gen(function* () {
+            const thread = yield* staleThread;
+            if (thread === null) return [];
+            const now = yield* DateTime.now;
+            const event = yield* makeDomainEvent(input, {
+              type: "thread.model-selection-updated",
+              threadId: thread.id,
+              // The parent's options belong to the parent's model.
+              payload: {
+                ...thread,
+                modelSelection: { instanceId: thread.modelSelection.instanceId, model },
+                updatedAt: now,
+              },
+              occurredAt: now,
+            });
+            return yield* eventSink.write({ events: [event] });
+          }),
+        );
+      },
+    );
 
     const normalize: ProviderEventIngestorV2Shape["normalize"] = (input) =>
       Effect.gen(function* () {
@@ -405,7 +450,23 @@ export const layer: Layer.Layer<
             })
             .pipe(Effect.mapError(mapWriteError));
           return result.storedEvents;
-        }),
+        }).pipe(
+          Effect.flatMap((storedEvents) =>
+            storedEvents.length === 0 || input.event.type !== "subagent.updated"
+              ? Effect.succeed(storedEvents)
+              : syncSubagentThreadModel(input, input.event.subagent).pipe(
+                  Effect.map((synced) => [...storedEvents, ...synced]),
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderEventPublishError({
+                        providerSessionId: input.providerSessionId,
+                        eventCount: 1,
+                        cause,
+                      }),
+                  ),
+                ),
+          ),
+        ),
     });
   }),
 );

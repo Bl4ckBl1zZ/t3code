@@ -180,6 +180,10 @@ export function resolveHistoricalWorkSummary(entries: ReadonlyArray<WorkLogEntry
         return `Linked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
       case "unlink-pr":
         return `Unlinked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
+      case "watch-pr":
+        return `Watching ${count} ${count === 1 ? "pull request" : "pull requests"}`;
+      case "unwatch-pr":
+        return `Stopped watching ${count} ${count === 1 ? "pull request" : "pull requests"}`;
       case "list-prs":
         return count === 1
           ? "Checked linked pull requests"
@@ -667,9 +671,9 @@ function timelineEntryFoldRunId(entry: TimelineEntry, runlessKey: RunId | null):
 /**
  * Settled V2 runs keep their terminal assistant message visible. Interim
  * responses and completed work fold behind the duration row; live resources
- * and interruption evidence keep their existing visibility rules. A thread
- * without runs (a provider-native subagent) folds each prompt's response the
- * same way; `isWorking` keeps its latest response open.
+ * and interruption evidence keep their existing visibility rules. A prompt
+ * without a run (a provider-native subagent, or a turn imported from V1) folds
+ * its response the same way.
  */
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
@@ -677,7 +681,8 @@ function deriveTurnFolds(input: {
   latestRun: TimelineLatestRun | null;
   unsettledRunId: RunId | null;
   failedRunIds: ReadonlySet<RunId>;
-  isWorking: boolean;
+  /** Keeps the latest runless response open; V2 work must not reopen imported turns. */
+  runlessWorkActive: boolean;
 }): ReadonlyMap<string, TurnFold> {
   const interruptedRunIds = new Set<RunId>();
   for (const entry of input.timelineEntries) {
@@ -706,14 +711,15 @@ function deriveTurnFolds(input: {
   const groupsByRunId = new Map<RunId, TurnGroup>();
   const runlessFailedKeys = new Set<RunId>();
 
-  // Fold state is keyed by run, so each prompt of a runless thread lends its
-  // response a stable key of its own.
+  // Fold state is keyed by run, so each runless prompt lends its response a
+  // stable key of its own. Decide per prompt, not per thread: a V1 thread's
+  // first V2 run must not unfold every imported turn above it.
   let runlessKey: RunId | null = null;
   let pendingUserBoundary: string | null = null;
   for (const entry of input.timelineEntries) {
     if (entry.kind === "message" && entry.message.role === "user") {
       pendingUserBoundary = entry.message.createdAt;
-      runlessKey = input.latestRun === null ? RunId.make(`runless:${entry.id}`) : null;
+      runlessKey = entry.message.runId == null ? RunId.make(`runless:${entry.id}`) : null;
       continue;
     }
     const runId = timelineEntryFoldRunId(entry, runlessKey);
@@ -755,7 +761,7 @@ function deriveTurnFolds(input: {
       interruptedRunIds.has(runId) ||
       input.failedRunIds.has(runId) ||
       runlessFailedKeys.has(runId) ||
-      (input.isWorking && runId === runlessKey)
+      (input.runlessWorkActive && runId === runlessKey)
     ) {
       continue;
     }
@@ -897,6 +903,7 @@ export function deriveMessagesTimelineRows(input: {
     timelineEntries,
     failedRunIds,
   );
+  const runlessWorkActive = input.isWorking && input.runlessWorkActive === true;
   const foldsByAnchorEntryId = input.alwaysExpandActivity
     ? new Map<string, TurnFold>()
     : deriveTurnFolds({
@@ -905,7 +912,7 @@ export function deriveMessagesTimelineRows(input: {
         latestRun: input.latestRun ?? null,
         unsettledRunId,
         failedRunIds,
-        isWorking: input.isWorking,
+        runlessWorkActive,
       });
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
@@ -923,8 +930,6 @@ export function deriveMessagesTimelineRows(input: {
       }
     }
   }
-  const runlessWorkActive = input.isWorking && input.runlessWorkActive === true;
-
   for (let index = 0; index < timelineEntries.length; index += 1) {
     const timelineEntry = timelineEntries[index];
     if (!timelineEntry) {

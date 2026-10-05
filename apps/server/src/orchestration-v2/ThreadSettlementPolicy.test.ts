@@ -86,6 +86,16 @@ describe("V2 automatic settlement policy", () => {
     expect(decide({}, { state: "merged", mergedAt: "invalid" }, null)).toBeNull();
     expect(decide({}, { state: "merged", mergedAt: "2026-09-10T12:00:00Z" }, null)).toEqual(before);
   });
+  it("settles a merged thread that only woke on its own after the merge", () => {
+    const merged = { state: "merged", mergedAt: "2026-09-10T12:00:00Z" } as const;
+    // A delegated result or restart woke the agent after the merge.
+    const woke = { latestUserMessageAt: now, latestRunRequestedAt: now };
+    expect(decide({ ...woke, latestUserAuthoredMessageAt: before }, merged, null)).toEqual(now);
+    // The user writing after the merge still holds the thread open.
+    expect(decide({ ...woke, latestUserAuthoredMessageAt: now }, merged, null)).toBeNull();
+    // Readers without authorship keep the older anchor.
+    expect(decide(woke, merged, null)).toBeNull();
+  });
   it("honors merge opt-out while closed requests remain terminal", () => {
     expect(
       decide({}, { state: "merged", mergedAt: "2026-09-10T12:00:00Z" }, null, false),

@@ -1,5 +1,9 @@
 import { makeProviderFailure } from "../ProviderFailure.ts";
-import { xAiRateLimitedErrorCode } from "../../provider/acp/XAiAcpExtension.ts";
+import {
+  XAiPromptFailureText,
+  isXAiTaskCompletedWakeNotification,
+  xAiRateLimitedErrorCode,
+} from "../../provider/acp/XAiAcpExtension.ts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import {
   defaultInstanceIdForDriver,
@@ -221,7 +225,12 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
         cause,
         ...(Schema.is(EffectAcpErrors.AcpRequestError)(cause)
           ? {
-              message: cause.errorMessage,
+              // Grok's own failure text rides on the cause; makeProviderFailure
+              // redacts and bounds it before it reaches the user.
+              message:
+                cause.cause instanceof XAiPromptFailureText
+                  ? cause.cause.message
+                  : cause.errorMessage,
               code: String(cause.code),
               class: cause.code === xAiRateLimitedErrorCode ? "usage_limit" : "provider_error",
             }
@@ -238,6 +247,7 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
       ...extractXAiKilledBackgroundTasks(toolCall),
     ],
     isPersistentBackgroundTool: isXAiPersistentMonitor,
+    isProviderWakeNotification: isXAiTaskCompletedWakeNotification,
     deferFinalizeForBackgroundWork: true,
     enablePostSettleContinuation: true,
     ...(options.assertComplete === undefined ? {} : { assertComplete: options.assertComplete }),

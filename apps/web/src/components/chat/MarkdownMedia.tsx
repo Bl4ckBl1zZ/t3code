@@ -10,7 +10,7 @@ import { assetEnvironment } from "../../state/assets";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { AssetResource, ScopedThreadRef } from "@t3tools/contracts";
-import { isWorkspaceVideoPreviewPath } from "@t3tools/shared/filePreview";
+import { mediaKindFromPath } from "@t3tools/shared/filePreview";
 import { memo, useState, type CSSProperties } from "react";
 import { markdownImageGallery, markdownImageItems } from "./markdownImageGallery";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -303,7 +303,7 @@ export const MarkdownMedia = memo(function MarkdownMedia({
   }
   const authoredStyle = imageSizeStyle(width, height);
   const name = alt && alt.trim().length > 0 ? alt.trim() : mediaFileName(src);
-  const isVideo = kind === "video" || (kind === undefined && isWorkspaceVideoPreviewPath(src));
+  const isVideo = kind === "video" || (kind === undefined && mediaKindFromPath(src) === "video");
   if (!threadRef) {
     return DIRECT_MEDIA_SRC_PATTERN.test(src) ? (
       <ResolvedMedia

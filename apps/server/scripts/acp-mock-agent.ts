@@ -65,6 +65,7 @@ const emitRunningCommandThenHang = process.env.T3_ACP_EMIT_RUNNING_COMMAND_THEN_
 const emitRunningCommandThenHangOnFirstPrompt =
   process.env.T3_ACP_EMIT_RUNNING_COMMAND_THEN_HANG_FIRST_PROMPT === "1";
 const emitEmptySuccessfulBash = process.env.T3_ACP_EMIT_EMPTY_SUCCESSFUL_BASH === "1";
+const emitProviderResultTools = process.env.T3_ACP_EMIT_PROVIDER_RESULT_TOOLS === "1";
 const emitEmptySuccessfulBashThenHang =
   process.env.T3_ACP_EMIT_EMPTY_SUCCESSFUL_BASH_THEN_HANG === "1";
 const exitOnCancel = process.env.T3_ACP_EXIT_ON_CANCEL === "1";
@@ -915,6 +916,78 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate(update);
         yield* Effect.sleep("25 millis");
         yield* agent.client.sessionUpdate(update);
+        return { stopReason: "end_turn" };
+      }
+
+      if (emitProviderResultTools) {
+        for (const update of [
+          // Grok backend searches: the query only arrives in the completed rawOutput.
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "grok-x-search",
+            title: "X search:",
+            kind: "search",
+            status: "in_progress",
+            rawInput: { variant: "XSearch", backend: true },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "grok-x-search",
+            title: "X search:",
+            status: "completed",
+            rawOutput: {
+              call_id: "xs_call-1",
+              input: '{"query":"conversation_id:42","limit":"10","mode":"Latest"}',
+              name: "x_keyword_search",
+              id: "grok-x-search",
+            },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "grok-web-search",
+            title: "Web search:",
+            kind: "search",
+            status: "completed",
+            rawInput: { variant: "WebSearch", backend: true },
+            rawOutput: {
+              action: {
+                type: "search",
+                query: "t3 code",
+                sources: [
+                  { type: "url", url: "https://t3.codes" },
+                  { type: "url", url: "https://t3.codes" },
+                  { type: "url", url: "https://github.com/pingdotgg/t3code" },
+                ],
+              },
+              id: "grok-web-search",
+              status: "completed",
+            },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "grok-web-fetch",
+            title: "Fetch: https://t3.codes",
+            kind: "fetch",
+            status: "completed",
+            rawInput: { variant: "WebFetch", url: "https://t3.codes" },
+            rawOutput: {
+              type: "WebFetch",
+              Content: { url: "https://t3.codes", content: "T3 Code page" },
+            },
+            content: [{ type: "content", content: { type: "text", text: "T3 Code page" } }],
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "antigravity-shell",
+            title: "run_command",
+            kind: "execute",
+            status: "completed",
+            rawInput: { command: "cat probe.txt" },
+            rawOutput: { commandLine: "cat probe.txt", exitCode: 0, combinedOutput: "after\n" },
+          },
+        ] as const) {
+          yield* agent.client.sessionUpdate({ sessionId: requestedSessionId, update });
+        }
         return { stopReason: "end_turn" };
       }
 

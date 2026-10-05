@@ -500,6 +500,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  canInterrupt: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -534,6 +535,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        canInterrupt={props.canInterrupt}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -569,6 +571,8 @@ export interface ChatComposerHandle {
   openModelPicker: () => void;
   toggleModelPicker: () => void;
   isModelPickerOpen: () => boolean;
+  /** True when a collapsed caret sits before everything in the draft, including when it is empty. */
+  isCaretAtStart: () => boolean;
   readSnapshot: () => {
     value: string;
     cursor: number;
@@ -639,14 +643,11 @@ export interface ChatComposerProps {
   hermesProviderScope: "only" | "hidden";
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
-  /**
-   * The thread's model, effort, and access belong to its provider (a native
-   * subagent answering a question): hide those pickers and attachments.
-   */
-  hideThreadSettings?: boolean;
 
   // Session phase
   phase: SessionPhase;
+  /** Stop is offered: a run is preparing, starting, or running. */
+  canInterrupt: boolean;
   isConnecting: boolean;
   isSendBusy: boolean;
   isPreparingWorktree: boolean;
@@ -789,8 +790,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     hermesProviderScope,
     forceExpandedOnMobile,
     projectSelectionRequired,
-    hideThreadSettings = false,
     phase,
+    canInterrupt,
     isConnecting,
     isSendBusy,
     sendDisabledReason: externalSendDisabledReason,
@@ -1246,11 +1247,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
-  // The picker lives in the hidden thread settings, so it cannot stay open (or
-  // a shortcut that opened it would pop it up later on another thread).
-  if (hideThreadSettings && isComposerModelPickerOpen) {
-    setIsComposerModelPickerOpen(false);
-  }
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
   const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
@@ -2556,13 +2552,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // draft it starts the thread in the background, and on a live thread it
     // takes the non-default follow-up action (steer when follow-ups queue,
     // queue when they steer). A draft has no run to steer, so the two never
-    // apply at once.
+    // apply at once. Mod+Alt+Enter sends in the background everywhere: on a
+    // live thread it keeps that thread running and opens a fresh composer.
     const submissionIntent =
       key === "Enter"
         ? composerSubmissionIntentForEnter({
             isMobileViewport,
             shiftKey: event.shiftKey,
             modifierKey: event.metaKey || event.ctrlKey,
+            altKey: event.altKey,
             isDraftThread: routeKind === "draft",
             isRunning: phase === "running",
             sendShortcut: settings.sendShortcut,
@@ -3339,6 +3337,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         setIsComposerModelPickerOpen((open) => !open);
       },
       isModelPickerOpen: () => isComposerModelPickerOpen,
+      isCaretAtStart: () => composerEditorRef.current?.isCaretAtStart() ?? false,
       readSnapshot: () => {
         return readComposerSnapshot();
       },
@@ -3457,7 +3456,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   // Render
   // ------------------------------------------------------------------
-  const composerModelControls = hideThreadSettings ? null : (
+  const composerModelControls = (
     <div
       data-chat-resting-composer-controls="true"
       className={cn(
@@ -3677,6 +3676,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             compact
                             pendingAction={pendingPrimaryAction}
                             isRunning={false}
+                            canInterrupt={false}
                             showPlanFollowUpPrompt={false}
                             promptHasText={false}
                             isSendBusy={isSendBusy}
@@ -4114,6 +4114,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     compact
                     pendingAction={pendingPrimaryAction}
                     isRunning={false}
+                    canInterrupt={false}
                     showPlanFollowUpPrompt={false}
                     promptHasText={false}
                     isSendBusy={isSendBusy}
@@ -4219,36 +4220,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </MenuPopup>
                   </Menu>
                 ) : null}
-                {hideThreadSettings ? null : (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          onPointerDown={(event) => event.preventDefault()}
-                          onClick={() => attachmentInputRef.current?.click()}
-                          aria-label="Attach files"
-                          disabled={
-                            isConnecting ||
-                            isComposerApprovalState ||
-                            pendingUserInputs.length > 0 ||
-                            projectSelectionRequired ||
-                            isAttachmentLimitReached(composerImages.length)
-                          }
-                        />
-                      }
-                    >
-                      <PaperclipIcon />
-                    </TooltipTrigger>
-                    <TooltipPopup>
-                      {isAttachmentLimitReached(composerImages.length)
-                        ? `Attachment limit reached (${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} of ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS})`
-                        : "Attach files"}
-                    </TooltipPopup>
-                  </Tooltip>
-                )}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        onPointerDown={(event) => event.preventDefault()}
+                        onClick={() => attachmentInputRef.current?.click()}
+                        aria-label="Attach files"
+                        disabled={
+                          isConnecting ||
+                          isComposerApprovalState ||
+                          pendingUserInputs.length > 0 ||
+                          projectSelectionRequired ||
+                          isAttachmentLimitReached(composerImages.length)
+                        }
+                      />
+                    }
+                  >
+                    <PaperclipIcon />
+                  </TooltipTrigger>
+                  <TooltipPopup>
+                    {isAttachmentLimitReached(composerImages.length)
+                      ? `Attachment limit reached (${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} of ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS})`
+                      : "Attach files"}
+                  </TooltipPopup>
+                </Tooltip>
                 <ComposerVoiceAction
                   state={voice.state}
                   // Dictation stays available while the agent runs: the transcript only lands
@@ -4285,6 +4284,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeThreadModelDisplayName={activeThreadModelDisplayName}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
+                  canInterrupt={canInterrupt}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
                   promptHasText={prompt.trim().length > 0}
                   isSendBusy={isSendBusy || voiceBusy}

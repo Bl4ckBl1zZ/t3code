@@ -550,3 +550,54 @@ it.effect("records a rollback that failed for good with the reason the client sh
     ]);
   }).pipe(Effect.provide(testLayer));
 });
+
+it.effect("drops a late failure from a rollback that a newer one superseded", () => {
+  const threadId = ThreadId.make("thread:rollback-superseded");
+  const olderRequestId = CommandId.make("command:rollback-superseded-older");
+  const newerRequestId = CommandId.make("command:rollback-superseded-newer");
+  const thread = {
+    id: threadId,
+    providerInstanceId: ProviderInstanceId.make("provider_rollback_superseded"),
+    rollbackRequestId: newerRequestId,
+    rollbackFailure: null,
+    deletedAt: null,
+  };
+  const written: Array<{ readonly events: ReadonlyArray<unknown> }> = [];
+  const testLayer = checkpointRollbackServiceLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(CheckpointServiceV2)({}),
+        Layer.mock(EventSinkV2)({
+          write: ((input: { readonly events: ReadonlyArray<unknown> }) => {
+            written.push(input);
+            return Effect.succeed([]);
+          }) as never,
+        }),
+        idAllocatorLayer,
+        Layer.mock(ProjectionStoreV2)({
+          getThreadRecords: (() => Effect.succeed({ thread })) as never,
+        }),
+        Layer.mock(ProviderSessionManagerV2)({}),
+        Layer.mock(RuntimePolicyV2)({}),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* CheckpointRollbackServiceV2;
+    yield* service.recordPermanentFailure({ threadId, requestId: olderRequestId });
+    assert.deepEqual(written, []);
+
+    yield* service.recordPermanentFailure({ threadId, requestId: newerRequestId });
+    assert.deepEqual(
+      written
+        .flatMap((batch) => batch.events)
+        .map(
+          (event) =>
+            (event as { readonly payload: { readonly rollbackFailure: unknown } }).payload
+              .rollbackFailure,
+        ),
+      [{ requestId: newerRequestId, message: ROLLBACK_FAILED_MESSAGE }],
+    );
+  }).pipe(Effect.provide(testLayer));
+});

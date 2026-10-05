@@ -67,6 +67,11 @@ export function linkedPullRequestKey(link: ThreadLinkedPullRequest): string {
   return threadPullRequestKeyOf(legacyThreadPullRequestKey(link));
 }
 
+function withoutWatch(link: ThreadPullRequestLink): ThreadPullRequestLink {
+  const { watch: _watch, ...rest } = link;
+  return rest;
+}
+
 /** Atomic edits apply to the latest projection; a background sync cannot recreate a removed link. */
 export function updateLinkedPullRequests(
   thread: ThreadLinks,
@@ -86,6 +91,10 @@ export function updateLinkedPullRequests(
   now = LEGACY_LINKED_AT,
 ) {
   let links = [...allThreadPullRequestsOf(thread)];
+  // A legacy client re-linking the same pull request (remove, then add) keeps its watch.
+  const watches = new Map(
+    links.flatMap((link) => (link.watch ? [[threadPullRequestKeyOf(link), link.watch]] : [])),
+  );
   const remove = (reference: ThreadLinkedPullRequest) => {
     const key = linkedPullRequestKey(reference);
     const existing = links.find((link) => threadPullRequestKeyOf(link) === key);
@@ -104,7 +113,7 @@ export function updateLinkedPullRequests(
       threadPullRequestKeyOf(link) !== key
         ? [link]
         : belongsToStack
-          ? [{ ...link, source: "stack-dismissed" as const }]
+          ? [{ ...withoutWatch(link), source: "stack-dismissed" as const }]
           : [],
     );
   };
@@ -130,6 +139,7 @@ export function updateLinkedPullRequests(
       linkedAt: existing?.source === source ? existing.linkedAt : now,
       snapshot: existing?.snapshot ?? null,
       stack: existing?.stack ?? null,
+      ...(source !== "stack-dismissed" && watches.has(key) ? { watch: watches.get(key)! } : {}),
     };
     if (first) links = [next, ...links.filter((link) => threadPullRequestKeyOf(link) !== key)];
     else if (index < 0) links.push(next);

@@ -28,7 +28,7 @@ import {
 
 import { formatOrchestrationV2RollbackDetail } from "@t3tools/shared/orchestrationV2Timeline";
 
-import { getProviderInstanceEntry } from "../../providerInstances";
+import { getProviderInstanceEntry, shouldShowInstanceBadge } from "../../providerInstances";
 import { useProjects, useThreadProjection, useThreadShell } from "../../state/entities";
 import { useProviderEntryByInstanceId } from "../../state/providerEntries";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
@@ -317,7 +317,8 @@ function SubagentTimelineTooltip(props: {
     item.childThreadId === null ? null : scopeThreadRef(props.environmentId, item.childThreadId),
   );
   const projects = useProjects();
-  const providerEntry = useProviderEntryByInstanceId().get(item.providerInstanceId) ?? null;
+  const providerEntries = useProviderEntryByInstanceId();
+  const providerEntry = providerEntries.get(item.providerInstanceId) ?? null;
   const modelLabel =
     resolveThreadModelBadge({ modelSelection: child?.modelSelection, providerEntry })?.model ??
     agent?.model ??
@@ -333,6 +334,10 @@ function SubagentTimelineTooltip(props: {
       modelLabel={modelLabel}
       driver={providerEntry?.driverKind ?? item.driver}
       providerDisplayName={providerEntry?.displayName}
+      providerAccentColor={providerEntry?.accentColor}
+      showInstanceBadge={
+        providerEntry !== null && shouldShowInstanceBadge(providerEntry, providerEntries.values())
+      }
       elapsed={
         <AgentElapsed
           agent={{

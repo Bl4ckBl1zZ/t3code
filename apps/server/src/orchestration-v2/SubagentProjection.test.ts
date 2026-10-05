@@ -16,6 +16,7 @@ import {
 import * as DateTime from "effect/DateTime";
 
 import {
+  delegatedTaskAwaitsRestartContinuation,
   delegatedTaskProgress,
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
@@ -233,4 +234,44 @@ it("ignores monitor wakes when deciding whether a delegated task has a result", 
     }).resultRun?.id,
     delegatedRun.id,
   );
+});
+
+it("reports the run that ended last, not the highest ordinal", () => {
+  // A restart continuation (ordinal 4) ran ahead of held queued runs 2 and 3.
+  const ended = (ordinal: number, completedAt: string): OrchestrationV2Run => ({
+    ...delegatedRun,
+    id: RunId.make(`run:${ordinal}`),
+    ordinal,
+    completedAt: DateTime.makeUnsafe(completedAt),
+  });
+  const progress = delegatedTaskProgress({
+    runs: [
+      { ...delegatedRun, status: "cancelled" },
+      ended(4, "2026-07-24T10:00:00.000Z"),
+      ended(2, "2026-07-24T10:05:00.000Z"),
+      ended(3, "2026-07-24T10:10:00.000Z"),
+    ],
+    messages: [],
+    subagents: [],
+  });
+  assert.equal(progress.state, "result_available");
+  assert.equal(progress.resultRun?.ordinal, 3);
+});
+
+it("holds a delegated result while a restart continuation of it is pending", () => {
+  const cut = {
+    ...delegatedRun,
+    status: "cancelled" as const,
+    restartContinuation: {
+      messageId: MessageId.make("message:continuation"),
+      reason: "restart" as const,
+      status: "pending" as const,
+    },
+  } as OrchestrationV2Run;
+  assert.isTrue(delegatedTaskAwaitsRestartContinuation([cut], cut));
+  const cleared = {
+    ...cut,
+    restartContinuation: { ...cut.restartContinuation!, status: "cancelled" as const },
+  } as OrchestrationV2Run;
+  assert.isFalse(delegatedTaskAwaitsRestartContinuation([cleared], cleared));
 });

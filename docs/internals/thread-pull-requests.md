@@ -59,7 +59,10 @@ and persisted linked-PR decisions finish before branch/host lookups, which share
 `ThreadSettlementPolicy` checks V2 run/request state, queued messages, background processes,
 delegated agents and snooze wake conditions. Explicit keep-active and Work main threads remain
 active. All visible explicit links must have terminal snapshots; dismissed stack members do not
-participate. A PR only settles resumed work if its actual merge/close time follows the user anchor.
+participate. A PR only settles resumed work if its actual merge/close time follows the user anchor:
+the last message the user wrote (`createdBy: "user"`). Agent, server and delegated-completion wakes
+share the user role but do not move the anchor. The thread shell carries this stamp as
+`latestUserAuthoredMessageAt`.
 
 The worker captures the thread event sequence before reading its shell. `thread.settle.automatic`
 carries that sequence into the existing serialized V2 dispatch; changed threads are rejected.
@@ -97,6 +100,8 @@ the host terminal timestamp and captured repository identity; a failed confirmat
 report the already successful host action as failed. PR sync consumes the event, while settlement
 invalidates matching checkout status caches and requests a sweep. Subsequent snapshot events
 re-evaluate settlement when host refresh finishes after that sweep.
+A merge outside T3, such as an agent running `gh pr merge`, sends no merge event, so PR sync
+re-reads a thread's open links uncached when a run that ran a merge or close command ends.
 
 Git stacked actions accept an optional `threadId` from web, Expo and Swift. Successful PR creation
 or opening of an existing PR links its URL-derived host/repository identity through V2 metadata

@@ -29,6 +29,15 @@ to the web and desktop composer.
 opposite for one message. When sending requires `mod+Enter`, use `mod+Shift+Enter` for the
 opposite action.
 
+In a new thread, `mod+Enter` starts the thread in the background and opens a fresh composer.
+`mod+Alt+Enter` does the same from any thread: it sends, keeps that thread running in the
+background, and opens a fresh new-thread composer.
+
+## Machine
+
+To step a new thread to the next machine instead of opening the machine menu, bind **Composer:
+Cycle Host** (`composer.cycleHost`) in Keybindings. It has no default shortcut.
+
 ## Rule Shape
 
 - `key` (required): shortcut string, like `mod+j`, `ctrl+k`, `cmd+shift+d`
@@ -93,8 +102,8 @@ but the new thread does not reuse the worktree created for the thread that just 
 
 A `when` expression is evaluated against context keys describing the current UI state. The keys
 the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`,
-`modelPickerOpen`, `usagePageOpen`, `editableFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
-field, the composer, or another editor has the keyboard. The default `mod+1`…`mod+9` thread and model jumps
+`modelPickerOpen`, `usagePageOpen`, `editableFocus`, `composerFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
+field, the composer, or another editor has the keyboard; `composerFocus` only while the composer does. The default `mod+1`…`mod+9` thread and model jumps
 are limited to `isDesktop`, so a browser keeps those keys for switching tabs. The set is open and grows over time, so treat that as the current list rather
 than a fixed one. Any key the running app does not supply evaluates to `false`.
 
@@ -118,8 +127,13 @@ finished, it stops the background commands and agents the turn left running in C
 and Claude conversations. It has no default shortcut; assign one in
 **Settings → Keybindings**.
 
+`thread.editQueuedMessage` (`alt+arrowup` by default, `Option+Up` on macOS) opens the most
+recently queued message for editing. It only runs from the composer with the cursor at the start of
+the draft, so elsewhere the key keeps moving the cursor.
+
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
-bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive
+bottom of the sidebar, such as unpin, settle, snooze, archive, or discarding a
+draft. Consecutive
 actions of the same kind undo together. The notice remains available for five
 seconds after the latest action. The default shortcut skips text fields and
 terminals so native undo keeps working there.

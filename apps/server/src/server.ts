@@ -8,6 +8,7 @@ import * as RestartContinuationService from "./orchestration-v2/RestartContinuat
 import * as ThreadSettlementReactor from "./orchestration-v2/ThreadSettlementReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration-v2/ThreadPullRequestReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
+import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import { ServerSelfUpdateError, EnvironmentHttpApi } from "@t3tools/contracts";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -67,6 +68,7 @@ import { hermesWorkConversationServiceLayer } from "./hermes/HermesWorkConversat
 import { hermesWorkGroupsServiceLayer } from "./hermes/HermesWorkGroupsService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
+import * as OpenCodeServerLedger from "./provider/OpenCodeServerLedger.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
@@ -537,7 +539,9 @@ const RuntimeCoreDependenciesLive = HermesWorkServicesLive.pipe(
   // the rewritten registry reads snapshots off the instance registry and
   // no longer transitively provides it. Exposing it at the runtime level
   // keeps a single Live for all opencode consumers.
-  Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+  Layer.provideMerge(
+    OpenCodeRuntime.OpenCodeRuntimeLive.pipe(Layer.provide(OpenCodeServerLedger.layer)),
+  ),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
@@ -954,6 +958,7 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provide(
         Layer.mergeAll(
           PullRequestSyncReactor.layer,
+          PullRequestWatchReactor.layer,
           ThreadPullRequestReactor.layer,
           ThreadSettlementReactor.layer,
           RestartContinuationService.layer,

@@ -32,6 +32,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
+import type { OrchestratorV2DispatchResult, OrchestratorV2Error } from "./Orchestrator.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
 import { randomUuidV4 } from "./RandomUuid.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -82,6 +83,25 @@ export interface ThreadLaunchInput {
   readonly onPreparationFailure?: ((detail: string) => Effect.Effect<void>) | undefined;
 }
 
+/** What workspace preparation reads from a launch; a retry rebuilds it from the run. */
+type PreparationInput = Pick<
+  ThreadLaunchInput,
+  "commandId" | "projectId" | "workspaceStrategy" | "initialMessage" | "onPreparationFailure"
+> & {
+  /**
+   * Set when a retry reuses the worktree its failed attempt created and
+   * recorded. The thread already records the workspace, and a branch rename
+   * may still be running.
+   */
+  readonly reusedWorktree?: true;
+};
+
+export interface ThreadLaunchRetryInput {
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+  readonly runId: RunId;
+}
+
 export interface ThreadLaunchResult {
   readonly threadId: ThreadId;
   readonly projection: OrchestrationV2ThreadProjection;
@@ -120,6 +140,10 @@ export class ThreadLaunchService extends Context.Service<
     readonly launch: (
       input: ThreadLaunchInput,
     ) => Effect.Effect<ThreadLaunchResult, ThreadLaunchError>;
+    /** Dispatches prepared-run.retry and prepares the run's workspace again. */
+    readonly retryPreparation: (
+      input: ThreadLaunchRetryInput,
+    ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
   }
 >()("t3/orchestration-v2/ThreadLaunchService") {}
 
@@ -132,6 +156,30 @@ function failureDetail(error: unknown): string {
     return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
   }
   return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+/** Rebuilds a launch's preparation from the run it left; a recorded worktree is reused. */
+function retriedPreparationInput(
+  input: ThreadLaunchRetryInput,
+  projection: OrchestrationV2ThreadProjection,
+  run: OrchestrationV2ThreadProjection["runs"][number],
+  workspacePreparation: ThreadLaunchWorkspaceStrategy,
+): PreparationInput {
+  const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
+  const { worktreePath, branch } = projection.thread;
+  const reused: ThreadLaunchWorkspaceStrategy | null =
+    workspacePreparation.type === "worktree" && worktreePath !== null && branch !== null
+      ? { type: "existing_worktree", worktreePath, branch }
+      : null;
+  return {
+    commandId: input.commandId,
+    projectId: projection.thread.projectId,
+    workspaceStrategy: reused ?? workspacePreparation,
+    ...(reused === null ? {} : { reusedWorktree: true as const }),
+    ...(message === undefined
+      ? {}
+      : { initialMessage: { text: message.text, attachments: message.attachments } }),
+  };
 }
 
 export const make = Effect.gen(function* () {
@@ -149,7 +197,7 @@ export const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
 
   const mapError =
-    (input: ThreadLaunchInput, operation: ThreadLaunchError["operation"], threadId?: ThreadId) =>
+    (input: PreparationInput, operation: ThreadLaunchError["operation"], threadId?: ThreadId) =>
     (cause: unknown) =>
       new ThreadLaunchError({
         operation,
@@ -220,7 +268,7 @@ export const make = Effect.gen(function* () {
   );
 
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
-    input: ThreadLaunchInput,
+    input: PreparationInput,
     threadId: ThreadId,
     runId: RunId | null,
   ) {
@@ -234,8 +282,6 @@ export const make = Effect.gen(function* () {
         }),
       ),
     );
-
-    yield* scheduleTitleGeneration(input, threadId, project.workspaceRoot);
 
     const initialMessage = input.initialMessage;
     const generateBranchNameFor = (cwd: string, message: ThreadLaunchInitialMessage) =>
@@ -337,21 +383,26 @@ export const make = Effect.gen(function* () {
       branch = worktree.worktree.refName;
     }
 
-    yield* threads
-      .dispatch({
-        type: "thread.metadata.update",
-        commandId: CommandId.make(`${input.commandId}:workspace`),
-        threadId,
-        branch,
-        worktreePath,
-      })
-      .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+    // A reused worktree is already recorded, and rewriting it could undo the
+    // first attempt's branch rename.
+    if (input.reusedWorktree === undefined) {
+      yield* threads
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`${input.commandId}:workspace`),
+          threadId,
+          branch,
+          worktreePath,
+        })
+        .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+    }
 
     // Rename temporary branches (server-invented above, or sent by clients
     // that name worktrees themselves) in the background so generation latency
     // never delays provisioning or the provider turn. The temporary name
     // simply sticks if generation or the rename fails.
     if (
+      input.reusedWorktree === undefined &&
       worktreePath !== null &&
       branch !== null &&
       initialMessage !== undefined &&
@@ -429,7 +480,10 @@ export const make = Effect.gen(function* () {
 
   // Best-effort: a launcher that cannot record the failure must not keep the
   // preparation fiber from marking the run itself.
-  const notifyPreparationFailure = (input: ThreadLaunchInput, cause: unknown) =>
+  const notifyPreparationFailure = (
+    input: Pick<PreparationInput, "commandId" | "onPreparationFailure">,
+    cause: unknown,
+  ) =>
     input.onPreparationFailure === undefined
       ? Effect.void
       : input.onPreparationFailure(failureDetail(cause)).pipe(
@@ -443,7 +497,7 @@ export const make = Effect.gen(function* () {
         );
 
   const failPreparedRun = (
-    input: ThreadLaunchInput,
+    input: Pick<PreparationInput, "commandId" | "onPreparationFailure">,
     threadId: ThreadId,
     runId: RunId | null,
     cause: unknown,
@@ -471,7 +525,6 @@ export const make = Effect.gen(function* () {
               }),
             })
             .pipe(
-              Effect.mapError(mapError(input, "fail-run", threadId)),
               Effect.catchCause((persistCause) =>
                 Effect.logWarning("Failed to persist thread workspace preparation failure", {
                   commandId: input.commandId,
@@ -500,7 +553,7 @@ export const make = Effect.gen(function* () {
     });
 
   const schedulePreparation = Effect.fn("ThreadLaunchService.schedulePreparation")(function* (
-    input: ThreadLaunchInput,
+    input: PreparationInput,
     threadId: ThreadId,
     runId: RunId | null,
   ) {
@@ -622,7 +675,7 @@ export const make = Effect.gen(function* () {
               dispatchMode:
                 input.prepareWorkspace === false
                   ? { type: "start_immediately" }
-                  : { type: "defer_start" },
+                  : { type: "defer_start", workspaceStrategy: input.workspaceStrategy },
               createdBy: input.createdBy,
               creationSource: input.creationSource,
             })
@@ -670,6 +723,7 @@ export const make = Effect.gen(function* () {
                       Effect.mapError(mapError(input, "update-thread", threadId)),
                     );
               if (preparationStillRequired) {
+                yield* scheduleTitleGeneration(input, threadId, project.workspaceRoot);
                 yield* schedulePreparation(input, threadId, runId);
               } else {
                 yield* releasePreparation(input.commandId);
@@ -687,7 +741,38 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  return ThreadLaunchService.of({ launch });
+  const retryPreparation: ThreadLaunchService["Service"]["retryPreparation"] = Effect.fn(
+    "ThreadLaunchService.retryPreparation",
+  )(function* (input) {
+    const dispatched = yield* threads.dispatch({
+      type: "prepared-run.retry",
+      commandId: input.commandId,
+      threadId: input.threadId,
+      runId: input.runId,
+    });
+    // A replayed retry finds the run already past preparation, or prepared by
+    // the attempt that first reserved this command. From here the run is
+    // preparing again; anything that stops preparation from being scheduled
+    // must fail it, or it would wait in preparing forever.
+    const scheduled = yield* Effect.gen(function* () {
+      const projection = yield* threads.getThreadProjection(input.threadId);
+      const run = projection.runs.find((candidate) => candidate.id === input.runId);
+      const workspacePreparation = run?.workspacePreparation;
+      if (run?.status !== "preparing" || workspacePreparation === undefined) return;
+      if (!(yield* reservePreparation(input.commandId))) return;
+      yield* schedulePreparation(
+        retriedPreparationInput(input, projection, run, workspacePreparation),
+        input.threadId,
+        run.id,
+      ).pipe(Effect.onError(() => releasePreparation(input.commandId)));
+    }).pipe(Effect.exit);
+    if (Exit.isFailure(scheduled)) {
+      yield* failPreparedRun(input, input.threadId, input.runId, Cause.squash(scheduled.cause));
+    }
+    return dispatched;
+  });
+
+  return ThreadLaunchService.of({ launch, retryPreparation });
 });
 
 export const layer = Layer.effect(ThreadLaunchService, make);

@@ -307,6 +307,17 @@ const VcsStatusLocalShape = {
    * absence as "nothing changed".
    */
   branchDiff: Schema.optional(Schema.NullOr(VcsBranchDiffStat)),
+  /**
+   * Totals for the diff panel's Changes view: merge-base with the base branch to the
+   * working tree, untracked files included. Absent on older servers.
+   */
+  branchChanges: Schema.optional(
+    Schema.Struct({
+      baseRef: Schema.NullOr(TrimmedNonEmptyStringSchema),
+      insertions: NonNegativeInt,
+      deletions: NonNegativeInt,
+    }),
+  ),
 };
 
 const VcsStatusRemoteShape = {

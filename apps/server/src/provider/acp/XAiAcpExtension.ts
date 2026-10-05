@@ -43,6 +43,7 @@ const XAiSessionUpdateNotification = Schema.Struct({
     promptId: Schema.optional(Schema.String),
     stop_reason: Schema.optional(Schema.String),
     stopReason: Schema.optional(Schema.String),
+    agent_result: Schema.optional(Schema.NullOr(Schema.Unknown)),
     // subagent_finished
     child_session_id: Schema.optional(Schema.String),
     status: Schema.optional(Schema.String),
@@ -87,7 +88,19 @@ export function xAiPromptCompleteFromSessionUpdate(
     sessionId: notification.sessionId,
     promptId,
     ...(stopReason === undefined ? {} : { stopReason }),
+    ...(update.agent_result === undefined ? {} : { agentResult: update.agent_result }),
   };
+}
+
+/**
+ * Grok answers a finished background command in its own turn, tagging every
+ * frame with a `task-completed-*` prompt id instead of the one T3 sent.
+ */
+export function isXAiTaskCompletedWakeNotification(
+  notification: EffectAcpSchema.SessionNotification,
+): boolean {
+  const promptId = notification._meta?.promptId;
+  return typeof promptId === "string" && promptId.startsWith(XAI_TASK_COMPLETED_PROMPT_ID_PREFIX);
 }
 
 interface PendingXAiPromptCompletion {
@@ -1462,15 +1475,29 @@ const settleXAiPromptCompletion = (
     ).pipe(Effect.asVoid);
   }
   if (notification.stopReason === "error") {
+    // Grok's raw result is unbounded provider text: keep it only as the cause.
+    const agentResult = xAiAgentResultMessage(notification.agentResult);
     return Deferred.fail(
       deferred,
       EffectAcpErrors.AcpRequestError.internalError(
-        xAiAgentResultMessage(notification.agentResult) ?? "Grok prompt failed.",
+        "Grok ended the turn with an error.",
+        undefined,
+        {
+          operation: "receive-response",
+          ...(agentResult === undefined ? {} : { cause: new XAiPromptFailureText(agentResult) }),
+        },
       ),
     ).pipe(Effect.asVoid);
   }
   return Deferred.succeed(deferred, promptResponseFromXAi(notification)).pipe(Effect.asVoid);
 };
+
+/**
+ * Grok's own text for a failed prompt. A plain Error rather than a schema
+ * error so the unbounded provider text never becomes a structured attribute;
+ * it is read back only at the presentation boundary.
+ */
+export class XAiPromptFailureText extends Error {}
 
 function xAiAgentResultMessage(value: unknown): string | undefined {
   if (typeof value === "string") {

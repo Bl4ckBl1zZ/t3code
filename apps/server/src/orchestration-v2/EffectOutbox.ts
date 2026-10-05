@@ -283,6 +283,9 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         available,
         Array.from({ length: Math.min(64, Math.max(0, Math.floor(count))) }, () => undefined),
       ).pipe(Effect.asVoid);
+    // Each thread runs its effects one at a time, in enqueue (rowid) order. An earlier
+    // effect waiting out a retry backoff still blocks later ones, so a turn
+    // cannot start while a failed rollback is about to restore files.
     const claimableCandidatePredicate = (availableBefore?: string) =>
       sql`
         ${
@@ -295,7 +298,10 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           SELECT 1
           FROM orchestration_v2_effect_outbox AS active
           WHERE active.thread_id = candidate.thread_id
-            AND active.status = 'running'
+            AND (
+              active.status = 'running'
+              OR (active.status = 'pending' AND active.rowid < candidate.rowid)
+            )
         )
       `;
 

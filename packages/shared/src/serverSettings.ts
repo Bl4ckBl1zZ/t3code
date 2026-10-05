@@ -154,6 +154,7 @@ export function applyServerSettingsPatch(
     backgroundActivityProfile,
     backgroundActivity,
     usagePriceOverrides: pricePatch,
+    usageModelAliases: aliasPatch,
     usageLimitSources: usageSourcesPatch,
     projectScriptOverrides: scriptOverridesPatch,
     defaultProjectScripts: defaultScriptsPatch,
@@ -207,6 +208,11 @@ export function applyServerSettingsPatch(
     if (price === null) delete usagePriceOverrides[model];
     else usagePriceOverrides[model] = price;
   }
+  const usageModelAliases = { ...current.usageModelAliases };
+  for (const [model, target] of Object.entries(aliasPatch ?? {})) {
+    if (target === null) delete usageModelAliases[model];
+    else usageModelAliases[model] = target;
+  }
   const projectAutoPullOverrides = { ...current.projectAutoPullOverrides };
   for (const [projectId, enabled] of Object.entries(autoPullPatch ?? {})) {
     if (enabled === null) delete projectAutoPullOverrides[projectId as ProjectId];
@@ -220,6 +226,7 @@ export function applyServerSettingsPatch(
   const nextWithReplacementsBase = {
     ...next,
     usagePriceOverrides,
+    usageModelAliases,
     usageLimitSources,
     defaultProjectScripts: defaultScriptsPatch ?? current.defaultProjectScripts,
     projectScriptOverrides: { ...current.projectScriptOverrides, ...scriptOverridesPatch },

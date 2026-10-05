@@ -110,6 +110,8 @@ export interface EnvironmentThreadShell {
   readonly latestRun: ThreadRunSummary | null;
   readonly runtime: ThreadRuntimeSummary | null;
   readonly latestUserMessageAt: string | null;
+  /** The last message the user wrote. `undefined` means the server predates it. */
+  readonly latestUserAuthoredMessageAt?: string | null;
   /**
    * The most recent visible message, for list rows that lead with what was
    * last said rather than with where the work lives. `role` rides along so a
@@ -286,6 +288,9 @@ export function presentThreadShell(
     latestRun,
     runtime: shellRuntime(thread),
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
+    ...(thread.latestUserAuthoredMessageAt === undefined
+      ? {}
+      : { latestUserAuthoredMessageAt: nullableIso(thread.latestUserAuthoredMessageAt) }),
     latestVisibleMessage:
       thread.latestVisibleMessage === null || thread.latestVisibleMessage === undefined
         ? null
@@ -354,7 +359,10 @@ export function resolveThreadProviderStack(
   return [...previous.slice(-(THREAD_PROVIDER_STACK_LIMIT - 1)), current];
 }
 
-/** Both shell and detail timers use the activity-owning run, never last activity. */
+/**
+ * Both shell and detail timers count from the activity-owning run's work
+ * start, never last activity. A wake keeps the start of the work it continues.
+ */
 export function resolveThreadWorkingStartedAt(input: {
   readonly latestRun: Pick<
     ThreadRunSummary,

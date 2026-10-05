@@ -187,6 +187,16 @@ When right-panel tabs overflow, use the left and right arrows or the mouse wheel
 tab strip to reach hidden tabs. Selecting a tab brings it into view. Arrow scrolling respects
 your system's reduced-motion preference.
 
+## Watching a pull request
+
+Ask the agent to watch, monitor, or babysit a pull request and it calls `watch_pull_request`. While
+the thread is active, the server checks the pull request every minute and wakes the agent when a check
+fails, the checks pass, someone else comments or reviews, or the branch starts to conflict. Comments
+from your own account do not wake it. Watching ends when the pull request merges or closes, after 10
+wakes in a row that bring only comments, or when the server cannot read the pull request for 15
+minutes. To start or stop it yourself, use the row menu in the **Linked pull requests** panel; a
+watched pull request shows an eye icon there.
+
 ## Completing and reversing a review
 
 When checks are still pending, the web review header offers auto-merge where your host supports it. Once armed, it shows the saved merge strategy. You can disable auto-merge or choose to merge immediately from the actions menu.

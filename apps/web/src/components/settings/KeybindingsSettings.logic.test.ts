@@ -219,10 +219,14 @@ describe("KeybindingsSettings.logic", () => {
         "threadPanel.toggle",
         "thread.stop",
         "rightPanel.toggleMaximized",
+        "composer.cycleHost",
         "usage.open",
         "script.setup-db.run",
       ]),
     );
+    expect(
+      DEFAULT_RESOLVED_KEYBINDINGS.some((binding) => binding.command === "composer.cycleHost"),
+    ).toBe(false);
   });
 
   it("reports unknown when variables without rejecting parseable expressions", () => {

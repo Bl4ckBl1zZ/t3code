@@ -57,6 +57,8 @@ Older connected servers may need an update before document previews are availabl
 The file browser can show images, videos, PDFs and HTML pages. For HTML, switch between the
 rendered page and its source. Markdown images resolve relative to the document's folder.
 Files outside the project can be opened by their absolute path and are read-only.
+The file browser recognizes these files by their filename extension, including filenames or
+folders containing `#` or `?`.
 
 On web and desktop, completed file-changing tools refresh the open preview and file tree.
 Unsaved edits finish saving first, and playing videos keep their playhead until paused.

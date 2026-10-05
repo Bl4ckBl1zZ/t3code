@@ -136,3 +136,106 @@ it.effect("resolves host-specific URLs and refuses incomplete or non-PR targets"
     ).toMatchObject({ _tag: "Failure", failure: { _tag: "PullRequestHostRequiredError" } });
   }),
 );
+
+const watchHarness = (pullRequests: ReadonlyArray<unknown>) =>
+  Effect.gen(function* () {
+    const thread = {
+      id: threadId,
+      projectId,
+      deletedAt: null,
+      pullRequests,
+    } as unknown as OrchestrationV2ThreadShell;
+    const commands: OrchestrationV2Command[] = [];
+    const service = yield* make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(ThreadManagementService)({
+            getThreadShell: () => Effect.succeed(thread),
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length, storedEvents: [] };
+              }),
+          }),
+          Layer.mock(ProjectService)({ getById: () => Effect.succeed(Option.none()) }),
+          NodeServices.layer,
+        ),
+      ),
+    );
+    return { service, commands };
+  });
+
+const watchedLink = (number: number, overrides: Record<string, unknown> = {}) => ({
+  host: "github.com",
+  repository: "t3tools/t3code",
+  number,
+  url: `https://github.com/t3tools/t3code/pull/${number}`,
+  source: "agent",
+  linkedAt: "2026-08-20T00:00:00.000Z",
+  snapshot: null,
+  stack: null,
+  ...overrides,
+});
+
+it.effect("watching an unlinked pull request links it first", () =>
+  Effect.gen(function* () {
+    const { service, commands } = yield* watchHarness([]);
+    const result = yield* service.setWatching(
+      scope,
+      { url: "https://github.com/t3tools/t3code/pull/9" },
+      true,
+    );
+    // The harness thread never changes, so the result reports what it still holds.
+    expect(result).toMatchObject({ number: 9, watching: false, wasWatching: false });
+    expect(commands).toMatchObject([
+      {
+        type: "thread.pull-request.watch",
+        number: 9,
+        watching: true,
+        link: { url: "https://github.com/t3tools/t3code/pull/9", source: "agent" },
+      },
+    ]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("refuses to watch a merged pull request and stops an existing watch", () =>
+  Effect.gen(function* () {
+    const watch = {
+      startedAt: "2026-08-20T00:00:00.000Z",
+      headSha: null,
+      failedChecks: [],
+      passed: false,
+      remarksThrough: "2026-08-20T00:00:00.000Z",
+      remarkIds: [],
+      conflicting: false,
+      wakes: 0,
+    };
+    const snapshot = (state: string) => ({
+      state,
+      title: "PR",
+      headBranch: "feature",
+      baseBranch: "main",
+      isDraft: false,
+      updatedAt: null,
+      syncedAt: "2026-08-20T00:00:00.000Z",
+    });
+    const { service, commands } = yield* watchHarness([
+      watchedLink(1, { snapshot: snapshot("merged") }),
+      watchedLink(3, { snapshot: snapshot("open"), watch }),
+    ]);
+    const error = yield* service
+      .setWatching(scope, { url: "https://github.com/t3tools/t3code/pull/1" }, true)
+      .pipe(Effect.flip);
+    expect(error).toMatchObject({ _tag: "PullRequestNotOpenError", state: "merged" });
+    expect(
+      yield* service.setWatching(scope, { url: "https://github.com/t3tools/t3code/pull/3" }, false),
+    ).toMatchObject({ wasWatching: true });
+    expect(commands).toMatchObject([
+      { type: "thread.pull-request.watch", number: 3, watching: false },
+    ]);
+    expect((yield* service.list(scope)).pullRequests).toMatchObject([
+      { number: 1, watching: false },
+      { number: 3, watching: true },
+    ]);
+  }).pipe(Effect.scoped),
+);

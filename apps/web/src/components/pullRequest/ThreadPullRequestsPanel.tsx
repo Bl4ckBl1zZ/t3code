@@ -4,6 +4,8 @@ import {
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequestChains";
 import {
+  EyeIcon,
+  EyeOffIcon,
   GitPullRequestArrow,
   LayersIcon,
   LinkIcon,
@@ -16,6 +18,8 @@ import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { cn } from "~/lib/utils";
 import { useServerConfigs, useThreadShell } from "~/state/entities";
+import { threadEnvironment } from "~/state/threads";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import { toastManager } from "../ui/toast";
@@ -66,15 +70,20 @@ function LinkRow({
   line,
   threadRef,
   onUnlink,
+  onSetWatching,
 }: {
   line: PullRequestListLine;
   threadRef: ScopedThreadRef;
   onUnlink: (link: ThreadPullRequestLink) => Promise<void>;
+  /** Null when the environment cannot watch pull requests. */
+  onSetWatching: ((link: ThreadPullRequestLink, watching: boolean) => void) | null;
 }) {
   const openPrLink = useOpenPrLink(threadRef);
   const { link, depth, stack } = line;
   const snapshot = link.snapshot;
   const [pending, setPending] = useState(false);
+  const open = snapshot === null || snapshot.state === "open";
+  const watching = link.watch !== undefined;
   return (
     <div
       className="group/pr-row flex items-center gap-2 rounded-md py-1 pr-1 hover:bg-accent/60"
@@ -117,6 +126,17 @@ function LinkRow({
               has someone ruled, how big is it. Each is absent rather than neutral when the
               host said nothing, so a row without them reads as unknown, not as fine. */}
           <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px]">
+            {watching && open ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+                  <EyeIcon role="img" aria-label="Watching" className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup>
+                  Watching: the agent wakes when checks finish, someone comments, or the branch
+                  conflicts
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
             {snapshot?.checksState ? <ChecksGlyph state={snapshot.checksState} /> : null}
             {snapshot?.state === "open" &&
             (snapshot.reviewDecision === "approved" ||
@@ -211,6 +231,12 @@ function LinkRow({
         <MenuPopup align="end" side="bottom">
           <MenuItem onClick={() => void writeTextToClipboard(link.url, "link")}>Copy link</MenuItem>
           <MenuItem onClick={(event) => openPrLink(event, link.url, threadRef)}>Open</MenuItem>
+          {onSetWatching !== null && open ? (
+            <MenuItem onClick={() => onSetWatching(link, !watching)}>
+              {watching ? <EyeOffIcon className="size-3.5" /> : <EyeIcon className="size-3.5" />}
+              {watching ? "Stop watching" : "Watch for changes"}
+            </MenuItem>
+          ) : null}
           <MenuItem
             disabled={pending}
             onClick={() => {
@@ -245,6 +271,25 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
   const thread = useThreadShell(threadRef);
   const openLinkDialog = useCallback(() => openLinkPullRequestDialog(threadRef), [threadRef]);
   const linking = usePullRequestLinking(threadRef.environmentId);
+  const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
+  const supportsWatch =
+    useServerConfigs().get(threadRef.environmentId)?.environment.capabilities
+      .threadPullRequestWatch === true;
+  const handleSetWatching = useCallback(
+    (link: ThreadPullRequestLink, watching: boolean) => {
+      void watch({
+        environmentId: threadRef.environmentId,
+        input: {
+          threadId: threadRef.threadId,
+          host: link.host,
+          repository: link.repository,
+          number: link.number,
+          watching,
+        },
+      });
+    },
+    [threadRef, watch],
+  );
   const links = useMemo(() => visibleThreadPullRequests(thread?.pullRequests ?? []), [thread]);
   const lines = useMemo(() => pullRequestListLines(resolveThreadPullRequestChains(links)), [links]);
   const handleUnlink = async (link: ThreadPullRequestLink) => {
@@ -304,6 +349,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               line={line}
               threadRef={threadRef}
               onUnlink={handleUnlink}
+              onSetWatching={supportsWatch ? handleSetWatching : null}
             />
           ))}
         </div>

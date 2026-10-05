@@ -15,7 +15,9 @@ away. Its timestamps do not change. Other threads keep their positions.
 
 A thread whose composer holds unsent text or attachments shows an amber tint and a pen icon in the
 sidebar, the same marks a new-thread draft uses. On web and desktop, hover the row and choose the
-**X** to discard that draft without opening the thread.
+**X** to discard that draft without opening the thread. Right-click a new-thread draft, or press
+the context menu key while it has focus, to copy its path or branch, open its project settings,
+or discard it.
 
 Right-click a pull request link in a thread and choose **Link to thread** to show that pull request
 in the sidebar. The thread settles when the linked pull request merges if **Auto-settle merged
@@ -34,8 +36,10 @@ position instead of following the thread to its new place in the list.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show a notice at
 the bottom of the sidebar with **Undo** for five seconds. Undo restores the thread's previous
-state, including its pinned position, and reopens an archived thread you were viewing. `mod+z`
-triggers the most recent Undo when no text field is focused; see [Keybindings](./keybindings.md).
+state, including its pinned position, and reopens an archived thread you were viewing.
+Discarding an unsent draft from the sidebar works the same way: Undo brings back its text and
+attachments. `mod+z` triggers the most recent Undo when no text field is focused; see
+[Keybindings](./keybindings.md).
 
 On web and desktop, hover a thread to see where it runs, which model it uses, and -- when it has
 changed agents -- which ones it ran on before. The elapsed time beside a working thread counts from
@@ -65,8 +69,9 @@ reset time offer manual retry and the normal snooze choices.
 A thread does not need a project. On web and desktop, click **or start without a project** under a
 new thread's heading, pick **No project** from the project menu in that heading or from **New
 thread in...** in the command palette, choose **New thread without a project** in the command
-palette, or press `mod+alt+n`. With no projects yet, choose **Start without a project**. To move a
-draft into a project, pick the project in the heading.
+palette, or press `mod+alt+n`. With no projects yet, choose **Start without a project**. It starts
+on your current machine; before sending, pick another machine from the machine menu to move it
+there. To move a draft into a project, pick the project in the heading.
 
 Each thread without a project works in its own folder under `~/.t3/scratch` (the `scratch` folder
 of your T3 data directory), named after its date, the first words of its first message, and a short
@@ -178,8 +183,9 @@ Turn on **Settings → General → Working section (beta)** to move active threa
 or waiting on background agents or commands, into a collapsed **Working** section below the active
 list. A thread returns to the top of the active list when it finishes, fails, or needs an approval,
 an answer, or a decision on a plan. Pinned threads and Work's main thread stay where they are, and
-snoozed and settled threads keep their own sections. The thread you have open stays visible even
-while the section is collapsed.
+snoozed and settled threads keep their own sections. The Working section lists the thread you last
+sent work to first; agents finishing or picking work back up do not reorder it. The thread you have
+open stays visible even while the section is collapsed.
 
 While this is on, unpinned active threads are ordered by when each last came back to you, so you
 cannot drag them and **Reset thread position** is hidden. Pinned threads can still be dragged. Your
@@ -203,8 +209,9 @@ active indefinitely. Older servers keep their existing device-local behavior.
 Running or queued work, blocking approvals and unanswered blocking questions stay visible.
 Asynchronous questions do not block the thread. Open linked pull requests keep their thread active;
 a stack is not finished until every visible linked request is terminal. A merge or close from before
-your latest engagement does not settle resumed work again. Manually reopen any settled thread to
-bring it back to the active list. Automatic settlement retains its pin and ordering metadata.
+your latest engagement does not settle resumed work again. Only your own messages count as
+resuming: a turn that a finished delegated task or a restart starts on its own does not. Manually
+reopen any settled thread to bring it back to the active list. Automatic settlement retains its pin and ordering metadata.
 
 Settling a thread, by hand or automatically, also closes its terminals that wait at an idle prompt,
 and keeps their output. A terminal that runs a command, such as a dev server, stays open.

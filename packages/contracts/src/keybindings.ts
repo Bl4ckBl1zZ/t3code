@@ -36,6 +36,7 @@ export type ModelPickerJumpKeybindingCommand =
 
 export const THREAD_KEYBINDING_COMMANDS = [
   "thread.stop",
+  "thread.editQueuedMessage",
   "thread.previous",
   "thread.next",
   "thread.settle",
@@ -86,6 +87,7 @@ export const BUILT_IN_KEYBINDING_COMMANDS = [
   "chat.new",
   "chat.newLocal",
   "chat.newWithoutProject",
+  "composer.cycleHost",
   "editor.openFavorite",
   ...MODEL_PICKER_KEYBINDING_COMMANDS,
   ...THREAD_KEYBINDING_COMMANDS,

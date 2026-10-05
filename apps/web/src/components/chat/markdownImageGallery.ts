@@ -1,4 +1,4 @@
-import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { mediaKindFromPath } from "@t3tools/shared/filePreview";
 import type { ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { resolveExternalWebLinkHost } from "./externalLinkContextMenu";
 import { resolveProtocolRelativeMediaUrl } from "../media/mediaContent";
@@ -13,7 +13,7 @@ export function markdownGalleryItem(element: Element): ExpandedImageItem | null 
   const link = element.closest("a");
   const href = link?.getAttribute("href") ?? "";
   if (!link) return registered;
-  if (!isWorkspaceImagePreviewPath(href)) return null;
+  if (mediaKindFromPath(href) !== "image") return null;
   return resolveExternalWebLinkHost(href) !== null
     ? { ...registered, src: resolveProtocolRelativeMediaUrl(href) }
     : registered;

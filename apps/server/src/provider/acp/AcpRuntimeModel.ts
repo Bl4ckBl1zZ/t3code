@@ -555,6 +555,12 @@ function makeToolCallState(
   if (kind) {
     data.kind = kind;
   }
+  if (title) {
+    // The agent's verbatim title. Presentation summarizes `title` on the
+    // state (e.g. a search becomes "Searched files"), so projections that
+    // need the provider's own label read it here.
+    data.title = title;
+  }
   if (command) {
     data.command = command;
   }

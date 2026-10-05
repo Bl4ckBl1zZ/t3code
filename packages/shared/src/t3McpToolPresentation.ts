@@ -5,7 +5,7 @@ export type T3McpToolLogo = "t3-code" | "pull-request" | "browser" | "device";
 export interface T3McpToolPresentation {
   readonly displayName: string;
   readonly logo: T3McpToolLogo;
-  readonly action?: "link-pr" | "unlink-pr" | "list-prs";
+  readonly action?: "link-pr" | "unlink-pr" | "list-prs" | "watch-pr" | "unwatch-pr";
 }
 
 export type T3McpToolSummaryAction =
@@ -58,6 +58,8 @@ export type T3McpToolSummaryAction =
   | "link-pr"
   | "unlink-pr"
   | "list-prs"
+  | "watch-pr"
+  | "unwatch-pr"
   | "browser"
   | "device";
 
@@ -94,6 +96,16 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   list_thread_pull_requests: tool(
     ["Check", "Checking", "Checked", "linked pull requests"],
     "list-prs",
+    "pull-request",
+  ),
+  watch_pull_request: tool(
+    ["Watch", "Watching", "Watching", "a pull request"],
+    "watch-pr",
+    "pull-request",
+  ),
+  unwatch_pull_request: tool(
+    ["Stop watching", "Stopping watching", "Stopped watching", "a pull request"],
+    "unwatch-pr",
     "pull-request",
   ),
   orchestrator_capabilities: tool(
@@ -351,7 +363,9 @@ export function resolveT3McpToolPresentation(
   const prAction =
     definition.summaryAction === "link-pr" ||
     definition.summaryAction === "unlink-pr" ||
-    definition.summaryAction === "list-prs"
+    definition.summaryAction === "list-prs" ||
+    definition.summaryAction === "watch-pr" ||
+    definition.summaryAction === "unwatch-pr"
       ? definition.summaryAction
       : undefined;
   const args =
