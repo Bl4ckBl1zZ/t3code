@@ -862,9 +862,12 @@ export const ProviderRegistryLive = Layer.effect(
       const workspaceSnapshotOf = (candidate: ServerProvider | undefined) =>
         candidate?.workspaceSnapshots?.find((snapshot) => snapshot.cwd === input.cwd);
       const scannedFrom = workspaceSnapshotOf(provider);
+      // A missing or not-yet-probed CLI has nothing to scan, and a scan taken
+      // from the pending startup snapshot would freeze its empty lists here.
       if (
         !provider ||
         !provider.enabled ||
+        !provider.installed ||
         (!input.fresh && scannedFrom && !scannedFrom.slashCommandsPending)
       ) {
         return providers;

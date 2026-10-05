@@ -47,10 +47,12 @@ cwd. Drivers that can read a workspace implement `snapshotForCwd`, and
 cwd (16 per instance, newest last). Clients request it with `server.refreshProviders`
 `{ instanceId, cwd }` and resolve skills and commands for a thread's cwd from that entry, falling
 back to the machine lists. A cwd is scanned once; `fresh` rescans it past the instance's discovery
-caches. A failed scan stores nothing. Claude scans skills from disk and commands with a no-prompt
-SDK probe in the cwd; when only the probe fails it stores the skills with `slashCommandsPending`,
-keeping the cwd's last known commands, and the next request scans again. Entries are never written
-to the status cache and are dropped when an instance is rebuilt.
+caches. A failed scan stores nothing. An instance that is not installed, or has not finished its
+first probe, is not scanned, so a scan never freezes the empty startup lists. Claude scans skills
+from disk and commands with a no-prompt SDK probe in the cwd; when only the probe fails it stores
+the skills with `slashCommandsPending`, keeping the cwd's last known commands, and the next request
+scans again. Entries are never written to the status cache and are dropped when an instance is
+rebuilt.
 
 Codex, Claude, OpenCode and Antigravity implement `snapshotForCwd`; Antigravity also records the
 workspaces its sessions report. Cursor, Grok, Pi, ACP Registry, Hermes and OpenClaw show their

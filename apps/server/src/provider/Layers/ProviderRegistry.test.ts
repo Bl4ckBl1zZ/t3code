@@ -1115,8 +1115,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             const returnFailedSnapshot = yield* Ref.make(true);
             const probeStarted = yield* Deferred.make<void>();
             const releaseProbe = yield* Deferred.make<void>();
+            // The CLI starts unprobed; nothing is scanned until it is installed.
+            const machineSnapshot = yield* Ref.make<ServerProvider>({
+              ...machineProvider,
+              installed: false,
+              status: "warning",
+              slashCommands: [],
+              skills: [],
+            });
             const makeInstance = (
-              provider: ServerProvider,
+              provider: Effect.Effect<ServerProvider>,
               snapshotForCwd: NonNullable<ProviderInstance["snapshotForCwd"]>,
             ): ProviderInstance => ({
               instanceId,
@@ -1132,8 +1140,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   provider: driver,
                   packageName: null,
                 }),
-                getSnapshot: Effect.succeed(provider),
-                refresh: Effect.succeed(provider),
+                getSnapshot: provider,
+                refresh: provider,
                 streamChanges: Stream.empty,
               },
               snapshotForCwd,
@@ -1141,7 +1149,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
             });
-            const firstInstance = makeInstance(machineProvider, () =>
+            const firstInstance = makeInstance(Ref.get(machineSnapshot), () =>
               Effect.gen(function* () {
                 yield* Ref.update(snapshotCalls, (count) => count + 1);
                 if (yield* Ref.get(returnFailedSnapshot)) return failedScopedProvider;
@@ -1163,7 +1171,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               installed: false,
               auth: { status: "unknown" },
             } satisfies ServerProvider;
-            const rebuiltInstance = makeInstance(rebuiltProvider, () =>
+            const rebuiltInstance = makeInstance(Effect.succeed(rebuiltProvider), () =>
               Ref.update(snapshotCalls, (count) => count + 1).pipe(Effect.as(scopedProvider)),
             );
             const registryChanges = yield* PubSub.unbounded<void>();
@@ -1200,6 +1208,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
             yield* Effect.gen(function* () {
               const registry = yield* ProviderRegistry.ProviderRegistry;
+              yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+              assert.strictEqual(yield* Ref.get(snapshotCalls), 0);
+              yield* Ref.set(machineSnapshot, machineProvider);
+              yield* registry.refreshInstance(instanceId);
               // A failed scan stores nothing, so the next request scans again.
               yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
               assert.strictEqual((yield* registry.getProviders)[0]?.workspaceSnapshots, undefined);
