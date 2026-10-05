@@ -18,6 +18,8 @@ public struct ThreadDetailView: View {
     /// Set when this thread was opened from another one: Back then returns to
     /// that thread, named on the button, instead of to the list.
     let backTitle: String?
+    /// Opens a new task in this thread's project, for Cmd+Option+Return.
+    let onStartNewThread: ((_ projectID: String) -> Void)?
     @State private var nativeToolIcons = NativeAppToolIconStore()
     @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
@@ -79,6 +81,7 @@ public struct ThreadDetailView: View {
         onNavigateBack: @escaping () -> Void = {},
         onOpenRelatedThread: @escaping (String, Bool) -> Void = { _, _ in },
         backTitle: String? = nil,
+        onStartNewThread: ((_ projectID: String) -> Void)? = nil,
         draftStore: FeatureComposerDraftStore = .shared
     ) {
         self.model = model
@@ -86,6 +89,7 @@ public struct ThreadDetailView: View {
         self.submitMessage = submitMessage
         self.onNavigateBack = onNavigateBack
         self.backTitle = backTitle
+        self.onStartNewThread = onStartNewThread
         self.onOpenRelatedThread = onOpenRelatedThread
         self.draftStore = draftStore
     }
@@ -522,6 +526,10 @@ public struct ThreadDetailView: View {
             if !currentThread.isProviderNativeSubagentThread {
                 Button("Send Message") { send() }
                     .keyboardShortcut(.return, modifiers: .command)
+                if onStartNewThread != nil {
+                    Button("Send and Start New Thread", action: sendAndStartNewThread)
+                        .keyboardShortcut(.return, modifiers: [.command, .option])
+                }
             }
             if currentThread.state == .working || currentThread.state == .queued {
                 Button("Stop") { Task { await model.cancelTurn(threadID: thread.id) } }
@@ -1540,6 +1548,16 @@ public struct ThreadDetailView: View {
                 NotificationCenter.default.post(name: .platformRouteReceived, object: nil, userInfo: ["route": PlatformRoute.thread(environmentID: environmentID, threadID: threadID)])
             } catch { workConversationFailure = error.localizedDescription }
         }
+    }
+
+    /// Sends what is in the composer, then opens a new task in the same
+    /// project while the message is delivered. Nothing to send does nothing.
+    private func sendAndStartNewThread() {
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
+              !isSending else { return }
+        let projectID = currentThread.projectID
+        send()
+        onStartNewThread?(projectID)
     }
 
     private func send() {

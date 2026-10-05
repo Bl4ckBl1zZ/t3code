@@ -78,6 +78,7 @@ public struct NewThreadView: View {
     public var body: some View {
         NavigationStack {
             content
+                .background { keyboardShortcuts }
                 .navigationTitle("New Task")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -163,6 +164,30 @@ public struct NewThreadView: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+    }
+
+    /// Hardware-keyboard commands, as hidden buttons so the shortcut overlay
+    /// lists them.
+    private var keyboardShortcuts: some View {
+        Group {
+            // Upstream's mobile default; Composer: Cycle Host on desktop and web.
+            Button("Next Machine", action: cycleMachine)
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(isSubmitting || creationEnvironments.count < 2)
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+
+    /// Steps the draft to the next machine, keeping the prompt, the way the
+    /// computer menu does.
+    private func cycleMachine() {
+        guard let next = NewTaskMachineCycle.next(
+            after: executionProject?.environmentID,
+            in: creationEnvironments.map(\.id)
+        ) else { return }
+        selectEnvironment(next)
     }
 
     @ViewBuilder
@@ -1300,5 +1325,16 @@ private struct NewTaskBranchSheetBackground: ViewModifier {
         } else {
             content.presentationBackground(T3Colors.background)
         }
+    }
+}
+
+/// Ports `nextEnvironmentId` from apps/mobile's hardwareKeyboardCommands.ts:
+/// the machine after the current one in display order, wrapping around, or
+/// the first when the current one is not listed. Nil with fewer than two.
+enum NewTaskMachineCycle {
+    static func next(after currentID: String?, in environmentIDs: [String]) -> String? {
+        guard environmentIDs.count > 1 else { return nil }
+        let index = currentID.flatMap { environmentIDs.firstIndex(of: $0) } ?? -1
+        return environmentIDs[(index + 1) % environmentIDs.count]
     }
 }

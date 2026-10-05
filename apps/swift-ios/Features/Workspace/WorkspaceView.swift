@@ -827,7 +827,10 @@ public struct WorkspaceView: View {
                     if isArchived { isArchiveExpanded = true }
                     openRelatedThread(threadID, in: tab)
                 },
-                backTitle: backTitle(in: tab)
+                backTitle: backTitle(in: tab),
+                onStartNewThread: { projectID in
+                    openNewTaskOrProjectCreation(initialProjectID: projectID)
+                }
             )
             .id(id)
         } else {

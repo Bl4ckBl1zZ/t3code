@@ -51,12 +51,14 @@ sheets use the system glass material.
   **Unarchive** or **Try Again**.
 - **Hardware keyboard shortcuts:**
 
-  | Shortcut                            | Action             |
-  | ----------------------------------- | ------------------ |
-  | `Cmd+I`                             | Open details       |
-  | `Option+Cmd+Up` / `Option+Cmd+Down` | Move between turns |
-  | `Cmd+Return`                        | Send               |
-  | `Cmd+.`                             | Stop the agent     |
+  | Shortcut                            | Action                                  |
+  | ----------------------------------- | --------------------------------------- |
+  | `Cmd+I`                             | Open details                            |
+  | `Option+Cmd+Up` / `Option+Cmd+Down` | Move between turns                      |
+  | `Cmd+Return`                        | Send                                    |
+  | `Option+Cmd+Return`                 | Send, then start a new task             |
+  | `Cmd+.`                             | Stop the agent                          |
+  | `Shift+Cmd+H`                       | In a new task, move to the next machine |
 
 ## Thread details
 
