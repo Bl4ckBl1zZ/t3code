@@ -11,6 +11,9 @@ public protocol FeatureClient: AnyObject {
     func pair(endpoint: String, token: String?) async throws
     func activateEnvironment(id: String) async throws
     func removeEnvironment(id: String) async throws
+    /// Switches a saved environment off (kept with its credential, never
+    /// connected, hidden from home) or back on.
+    func setEnvironmentEnabled(id: String, enabled: Bool) async throws
     func disconnect() async
 
     func addProject(path: String) async throws
@@ -274,6 +277,9 @@ public extension FeatureClient {
 
     func activateEnvironment(id: String) async throws {}
     func removeEnvironment(id: String) async throws {}
+    func setEnvironmentEnabled(id: String, enabled: Bool) async throws {
+        throw FeatureCapabilityUnavailable("Switching servers off")
+    }
     func disconnect() async {}
     func addProject(path: String) async throws {}
     func ensureScratchProject(environmentID: String) async throws -> String { throw FeatureCapabilityUnavailable("Threads without a project") }

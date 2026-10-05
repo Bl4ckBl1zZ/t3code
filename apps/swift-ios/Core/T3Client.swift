@@ -1944,8 +1944,10 @@ public actor EnvironmentRuntime {
         )
     }
 
+    /// The environment new projects and threads go to. A switched-off
+    /// environment is never active, so this falls back to the first one on.
     public func activeEnvironment() async throws -> Environment? {
-        let environments = try await environmentStore.load()
+        let environments = try await environmentStore.load().filter(\.isEnabled)
         guard !environments.isEmpty else { return nil }
         let activeID = try await environmentStore.activeEnvironmentID()
         return environments.first(where: { $0.id == activeID }) ?? environments[0]
@@ -1957,8 +1959,21 @@ public actor EnvironmentRuntime {
         guard let environment = environments.first(where: { $0.id == id }) else {
             throw RPCError.remote("Environment \(id) is not saved.")
         }
+        guard environment.isEnabled else {
+            throw RPCError.remote("\(environment.label) is switched off. Switch it on in Settings to use it.")
+        }
         try await environmentStore.setActiveEnvironment(id: id)
         return await client(for: environment)
+    }
+
+    /// Switches a saved environment on or off on this device. Off drops its
+    /// connection and keeps its record and credential, so switching it back
+    /// on needs no new pairing.
+    public func setEnabled(id: String, enabled: Bool) async throws {
+        try await environmentStore.setEnabled(id: id, enabled: enabled)
+        if !enabled, let client = clients.removeValue(forKey: id) {
+            await client.disconnect()
+        }
     }
 
     public func activeClient() async throws -> T3Client? {

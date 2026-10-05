@@ -36,6 +36,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private let continuation: AsyncStream<FeatureEvent>.Continuation
 
     private var activeEnvironment: Environment?
+    /// Saved environments the user switched off, newest catalog read. Listed
+    /// in Settings so they can be switched back on; never connected.
+    private var switchedOffEnvironments: [Environment] = []
     private var client: T3Client?
     private var latestShell: OrchestrationV2ShellSnapshot?
     private var environmentClients: [String: T3Client] = [:]
@@ -163,7 +166,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func initialSnapshot() async throws -> FeatureSnapshot {
-        let environments = try await runtime.environments()
+        let environments = try await liveEnvironments()
         guard let activeClient = try await runtime.activeClient() else {
             await clearActiveEnvironment()
             let snapshot = disconnectedSnapshot(environments: environments)
@@ -280,7 +283,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         do {
             try await refresh(client: managedClient)
         } catch {
-            let environments = (try? await runtime.environments()) ?? [environment]
+            let environments = (try? await liveEnvironments()) ?? [environment]
             let snapshot = makeSnapshot(
                 environments: environments,
                 activeEnvironment: environment,
@@ -297,6 +300,27 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         await adoptEnvironment(activated.environment, client: activated)
         try await refresh(client: activated)
         startPolling(activated, reason: "activate-environment")
+    }
+
+    /// Saved environments the user has not switched off. Every catalog read
+    /// that drives connections and home goes through here, so a switched-off
+    /// environment never connects and its threads stay out of home.
+    private func liveEnvironments() async throws -> [Environment] {
+        let saved = try await runtime.environments()
+        switchedOffEnvironments = saved.filter { !$0.isEnabled }
+        return saved.filter(\.isEnabled)
+    }
+
+    func setEnvironmentEnabled(id: String, enabled: Bool) async throws {
+        let wasActive = activeEnvironment?.id == id
+        try await runtime.setEnabled(id: id, enabled: enabled)
+        guard !enabled else { return }
+        environmentThemesByEnvironmentID[id] = nil
+        if wasActive {
+            // The runtime already moved the active selection to the next
+            // environment that is on; the caller reloads the snapshot.
+            await clearActiveEnvironment(disconnectClient: false)
+        }
     }
 
     func removeEnvironment(id: String) async throws {
@@ -438,7 +462,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func setProjectIcon(projectID: String, icon: ProjectIconOverride?) async throws {
         let route = try projectRoute(for: projectID)
-        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.projectIcons == true else {
+        guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.projectIcons == true else {
             throw FeatureCapabilityUnavailable("Project icons")
         }
         try await route.client.setProjectIcon(projectID: route.wireID, icon: icon)
@@ -776,7 +800,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         if activeEnvironment?.id == environment.id {
             latestShell = shell
         }
-        rebuildEntityIndexes((try? await runtime.environments()) ?? [environment])
+        rebuildEntityIndexes((try? await liveEnvironments()) ?? [environment])
         await emitSnapshot(shell, environment: environment)
         return true
     }
@@ -1437,7 +1461,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws {
         let route = try threadRoute(for: threadID)
-        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.threadPullRequestsV2 == true else {
+        guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.threadPullRequestsV2 == true else {
             throw FeatureCapabilityUnavailable("Multiple pull requests")
         }
         guard let shell = shellsByEnvironmentID[route.environmentID],
@@ -1477,7 +1501,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ) async throws -> FeatureLinkedPullRequest? {
         let route = try threadRoute(for: threadID)
         if adding {
-            guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.threadPullRequestsV2 == true else {
+            guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.threadPullRequestsV2 == true else {
                 throw FeatureCapabilityUnavailable("Multiple pull requests")
             }
         }
@@ -2245,7 +2269,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack? {
         let route = try threadRoute(for: threadID)
-        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { return nil }
+        guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { return nil }
         guard let shell = shellsByEnvironmentID[route.environmentID],
               let thread = shell.threads.first(where: { $0.id == route.wireID }),
               let project = shell.projects.first(where: { $0.id == thread.projectId }),
@@ -2255,7 +2279,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func runPullRequestStackAction(threadID: String, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
         let route = try threadRoute(for: threadID)
-        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else {
+        guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else {
             throw FeatureCapabilityUnavailable("Stack actions")
         }
         guard let shell = shellsByEnvironmentID[route.environmentID],
@@ -2267,7 +2291,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func listPullRequests(environmentID: String, input: PullRequestListInput) async throws -> PullRequestListResult {
-        guard (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.pullRequests == true else {
+        guard (try await liveEnvironments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.pullRequests == true else {
             throw FeatureCapabilityUnavailable("Pull requests")
         }
         return try await environmentClient(id: environmentID).listPullRequests(input)
@@ -2464,13 +2488,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func projectPullRequestStack(scope: FeaturePullRequestProjectScope, number: Int) async throws -> PullRequestStack? {
         let (route, repository) = try projectPullRequestRoute(scope)
-        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { return nil }
+        guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { return nil }
         return try await route.client.pullRequestStack(projectID: route.wireID, repository: repository, host: scope.host, number: number)
     }
 
     func runProjectPullRequestStackAction(scope: FeaturePullRequestProjectScope, number: Int, stack: PullRequestStack, action: String, mergeMethod: String?) async throws {
         let (route, repository) = try projectPullRequestRoute(scope)
-        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { throw FeatureCapabilityUnavailable("Stack actions") }
+        guard (try await liveEnvironments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.pullRequestStackActions == true else { throw FeatureCapabilityUnavailable("Stack actions") }
         try await route.client.runPullRequestStackAction(projectID: route.wireID, repository: repository, host: scope.host, number: number,
             stack: stack, action: action, mergeMethod: mergeMethod)
     }
@@ -3027,7 +3051,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         if let client = environmentClients[environmentID] {
             return client
         }
-        guard let environment = try await runtime.environments().first(where: {
+        guard let environment = try await liveEnvironments().first(where: {
             $0.id == environmentID
         }) else {
             throw NativeFeatureClientError.environmentNotFound
@@ -3571,7 +3595,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 }
                 let environments: [Environment]
                 do {
-                    environments = try await loadEnvironments(self.runtime)
+                    let saved = try await loadEnvironments(self.runtime)
+                    self.switchedOffEnvironments = saved.filter { !$0.isEnabled }
+                    environments = saved.filter(\.isEnabled)
                 } catch is CancellationError where Task.isCancelled {
                     return
                 } catch {
@@ -4260,7 +4286,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             latestShell = shell
         }
         rebuildEntityIndexes(
-            (try? await runtime.environments()) ?? [environment]
+            (try? await liveEnvironments()) ?? [environment]
         )
         if includeArchived,
            let archivedShell = try? await client.archivedShellSnapshot(),
@@ -4271,7 +4297,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             archivedShellThreadsByEnvironmentID[environment.id] = Dictionary(
                 uniqueKeysWithValues: archivedShell.threads.map { ($0.id, $0) }
             )
-            rebuildEntityIndexes((try? await runtime.environments()) ?? [environment])
+            rebuildEntityIndexes((try? await liveEnvironments()) ?? [environment])
         }
         await emitSnapshot(shell, environment: environment)
     }
@@ -4293,7 +4319,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 uniqueKeysWithValues: archivedShell.threads.map { ($0.id, $0) }
             )
             self.rebuildEntityIndexes(
-                (try? await self.runtime.environments()) ?? [environment]
+                (try? await self.liveEnvironments()) ?? [environment]
             )
             if let shell = self.latestShell {
                 await self.emitSnapshot(shell)
@@ -4362,7 +4388,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let sourceEnvironment = sourceEnvironment ?? environment
         let generation = environmentGeneration
         guard expectedGeneration == nil || expectedGeneration == generation else { return }
-        let environments = (try? await runtime.environments()) ?? [environment]
+        let environments = (try? await liveEnvironments()) ?? [environment]
         guard generation == environmentGeneration,
               expectedGeneration == nil || expectedGeneration == environmentGeneration,
               activeEnvironment?.id == environment.id else {
@@ -4576,6 +4602,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         FeatureSnapshot(
             connection: .init(state: .disconnected, detail: detail),
             environments: environments.map { mapEnvironment($0, activeID: nil) },
+            switchedOffEnvironments: switchedOffEnvironments.map { mapEnvironment($0, activeID: nil) },
             settings: loadSettings()
         )
     }
@@ -4692,6 +4719,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environments: environments.map {
                 mapEnvironment($0, activeID: activeEnvironment.id)
             },
+            switchedOffEnvironments: switchedOffEnvironments.map {
+                mapEnvironment($0, activeID: nil)
+            },
             projects: projects,
             threads: threads,
             providers: providersByEnvironment[activeEnvironment.id] ?? [],
@@ -4708,6 +4738,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             name: environment.label,
             endpoint: environment.httpBaseURL.absoluteString,
             isActive: environment.id == activeID,
+            isEnabled: environment.isEnabled,
             connectionState: environmentConnectionStates[environment.id],
             connectionDetail: environmentConnectionDetails[environment.id],
             supportsPullRequests: environment.descriptor?.capabilities.pullRequests,
@@ -7001,15 +7032,15 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         patch: ServerSettingsPatchInput
     ) async throws -> FeatureEnvironmentPreferences {
         if patch.providerInstances != nil || patch.customModelsByDriver != nil,
-           (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.customModelDefinitions != true {
+           (try await liveEnvironments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.customModelDefinitions != true {
             throw FeatureCapabilityUnavailable("Custom model definitions")
         }
         if patch.environmentIcon != nil,
-           (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.environmentIcon != true {
+           (try await liveEnvironments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.environmentIcon != true {
             throw FeatureCapabilityUnavailable("Environment icons")
         }
         if patch.usagePriceOverrides != nil,
-           (try await runtime.environments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.usagePriceOverrides != true {
+           (try await liveEnvironments()).first(where: { $0.id == environmentID })?.descriptor?.capabilities.usagePriceOverrides != true {
             throw FeatureCapabilityUnavailable("Custom model pricing")
         }
         let client = try await environmentClient(id: environmentID)
@@ -7036,7 +7067,7 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         let shared = SharedServerSettings.split(patch).shared
         var failedTargets: [String] = []
         if !SharedServerSettings.isEmpty(shared) {
-            for environment in try await runtime.environments() where environment.id != environmentID {
+            for environment in try await liveEnvironments() where environment.id != environmentID {
                 guard environmentConnectionStates[environment.id] == .connected else { continue }
                 do {
                     let targetClient = try await environmentClient(id: environment.id)
@@ -7072,7 +7103,7 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
         let source = try await providerModelConfiguration(environmentID: environmentID)
         guard source.environment?.capabilities.threadAutoSettlement == true, let sourceSettings = source.settings else { return [] }
         var mismatches: [FeatureSharedSettingsMismatch] = []
-        for environment in try await runtime.environments() where environment.id != environmentID {
+        for environment in try await liveEnvironments() where environment.id != environmentID {
             guard environmentConnectionStates[environment.id] == .connected,
                   let config = serverConfigsByEnvironmentID[environment.id],
                   config.environment?.capabilities.threadAutoSettlement == true,

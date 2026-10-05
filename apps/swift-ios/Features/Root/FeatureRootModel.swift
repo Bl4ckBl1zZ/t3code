@@ -246,6 +246,17 @@ public final class FeatureRootModel {
         scheduleOutboxDrain()
     }
 
+    /// Switches a saved server off or back on. Off keeps its record,
+    /// credential, and queued messages; they send once it is back on.
+    @discardableResult
+    public func setEnvironmentEnabled(_ id: String, enabled: Bool) async -> Bool {
+        await perform {
+            try await client.setEnvironmentEnabled(id: id, enabled: enabled)
+            install(try await client.initialSnapshot())
+            clearDetails()
+        }
+    }
+
     public func disconnect() async {
         await stopOutboxDrain()
         isManagingConnections = false
@@ -258,6 +269,7 @@ public final class FeatureRootModel {
         }
         install(FeatureSnapshot(
             environments: disconnectedEnvironments,
+            switchedOffEnvironments: snapshot.switchedOffEnvironments,
             settings: snapshot.settings
         ))
         clearDetails()

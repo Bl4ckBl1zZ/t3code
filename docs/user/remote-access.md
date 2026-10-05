@@ -281,6 +281,12 @@ it off disconnects it and stops reconnect attempts, and its projects and threads
 but this device keeps its pairing, credentials, and cached threads. Switch it back on to reconnect
 with everything restored. An environment stays off across restarts and when you edit it.
 
+In the iOS app, open **Settings → Servers**, swipe a server (or touch and hold it) and choose
+**Switch Off**, or tap its info button and turn off **Connect on This Device**. A switched-off
+server shows **Off**, stays saved with its credentials, and its threads leave Home; messages queued
+for it wait until it is switched back on. Switching off the server in use moves to the next one
+that is on.
+
 When T3 Connect reports that a machine runs a T3 Code version this client cannot talk to, the
 machine is switched off and shows **Client not supported** with the reason, and T3 Connect lists
 it without a Connect button. Its switch stays locked until a later check finds the versions

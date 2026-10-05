@@ -12,8 +12,12 @@ struct SettingsServersView: View {
     @State private var confirmingDisconnect = false
     @State private var switchingID: String?
     @State private var mergeMethodError: String?
+    @State private var detailID: String?
 
-    private var environments: [FeatureEnvironment] { model.snapshot.environments }
+    /// Servers that are on, then the ones switched off on this device.
+    private var environments: [FeatureEnvironment] {
+        model.snapshot.environments + model.snapshot.switchedOffEnvironments
+    }
     private var activeEnvironment: FeatureEnvironment? { environments.first(where: \.isActive) }
 
     private var isConnected: Bool {
@@ -28,7 +32,7 @@ struct SettingsServersView: View {
                 }
             } footer: {
                 if environments.count > 1 {
-                    Text("Tap a server to switch to it. Swipe to remove one you no longer use.")
+                    Text("Tap a server to switch to it. Swipe to switch one off or remove it; a switched-off server stays saved but doesn't connect or appear in Home.")
                 }
             }
 
@@ -98,6 +102,9 @@ struct SettingsServersView: View {
         }
         .navigationTitle("Servers")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $detailID) { id in
+            SettingsServerDetailView(model: model, environmentID: id)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Add Server", systemImage: "plus", action: onAddServer)
@@ -114,6 +121,7 @@ struct SettingsServersView: View {
         } label: {
             HStack(spacing: 12) {
                 T3SettingsTile(environment.machineSymbol, tint: environment.isActive ? .ink : .gray)
+                    .opacity(environment.isEnabled ? 1 : 0.5)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(environment.name)
                         .foregroundStyle(T3Colors.textPrimary)
@@ -137,18 +145,44 @@ struct SettingsServersView: View {
                         .foregroundStyle(T3Colors.accent)
                         .accessibilityHidden(true)
                 }
+                Button {
+                    detailID = environment.id
+                } label: {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(T3Colors.accent)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("\(environment.name) details")
             }
             .contentShape(Rectangle())
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityAddTraits(environment.isActive ? .isSelected : [])
-        .accessibilityHint(environment.isActive ? "Current server" : "Switch to this server")
+        .accessibilityHint(
+            environment.isActive
+                ? "Current server"
+                : environment.isEnabled ? "Switch to this server" : "Switched off"
+        )
         .swipeActions(edge: .trailing) {
             if !environment.isActive {
                 Button("Remove", role: .destructive) { removalTarget = environment }
             }
+            Button(environment.isEnabled ? "Switch Off" : "Switch On") {
+                setEnabled(environment, !environment.isEnabled)
+            }
+            .tint(environment.isEnabled ? T3Colors.textTertiary : T3Colors.success)
         }
         .contextMenu {
+            Button {
+                setEnabled(environment, !environment.isEnabled)
+            } label: {
+                Label(environment.isEnabled ? "Switch Off" : "Switch On", systemImage: "power")
+            }
+            Button {
+                detailID = environment.id
+            } label: {
+                Label("Details", systemImage: "info.circle")
+            }
             if !environment.isActive {
                 Button(role: .destructive) {
                     removalTarget = environment
@@ -174,7 +208,17 @@ struct SettingsServersView: View {
         }
     }
 
+    private func setEnabled(_ environment: FeatureEnvironment, _ enabled: Bool) {
+        PlatformHapticEngine.shared.playSelection()
+        Task { await model.setEnvironmentEnabled(environment.id, enabled: enabled) }
+    }
+
     private func switchTo(_ environment: FeatureEnvironment) {
+        // A switched-off server never connects; its details page switches it on.
+        guard environment.isEnabled else {
+            detailID = environment.id
+            return
+        }
         guard !environment.isActive, switchingID == nil else { return }
         PlatformHapticEngine.shared.playSelection()
         switchingID = environment.id

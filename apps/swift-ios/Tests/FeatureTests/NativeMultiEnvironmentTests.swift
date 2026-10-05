@@ -112,6 +112,43 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.client.disconnect()
     }
 
+    func testSwitchedOffEnvironmentLeavesHomeUntilSwitchedBackOn() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        _ = try await fixture.client.initialSnapshot()
+
+        try await fixture.client.setEnvironmentEnabled(id: "two", enabled: false)
+        let off = try await fixture.client.initialSnapshot()
+
+        XCTAssertEqual(off.environments.map(\.id), ["one"])
+        XCTAssertEqual(off.switchedOffEnvironments.map(\.id), ["two"])
+        XCTAssertEqual(off.switchedOffEnvironments.first?.isEnabled, false)
+        XCTAssertEqual(Set(off.projects.map(\.environmentID)), ["one"])
+        XCTAssertEqual(Set(off.threads.map(\.environmentID)), ["one"])
+
+        try await fixture.client.setEnvironmentEnabled(id: "two", enabled: true)
+        let on = try await fixture.client.initialSnapshot()
+
+        XCTAssertEqual(Set(on.environments.map(\.id)), ["one", "two"])
+        XCTAssertTrue(on.switchedOffEnvironments.isEmpty)
+        XCTAssertEqual(Set(on.threads.map(\.environmentID)), ["one", "two"])
+        await fixture.client.disconnect()
+    }
+
+    func testSwitchingTheActiveEnvironmentOffActivatesTheNextOne() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        _ = try await fixture.client.initialSnapshot()
+
+        try await fixture.client.setEnvironmentEnabled(id: "one", enabled: false)
+        let snapshot = try await fixture.client.initialSnapshot()
+
+        XCTAssertEqual(snapshot.environments.map(\.id), ["two"])
+        XCTAssertEqual(snapshot.environments.first?.isActive, true)
+        XCTAssertEqual(Set(snapshot.threads.map(\.environmentID)), ["two"])
+        await fixture.client.disconnect()
+    }
+
     func testFailedEnvironmentKeepsItsLastKnownRowsWithoutHidingHealthyDevices() async throws {
         let fixture = try await makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

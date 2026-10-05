@@ -31,6 +31,10 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var name: String
     public var endpoint: String
     public var isActive: Bool
+    /// False when the user switched this environment off on this device.
+    /// Switched-off environments only appear in
+    /// `FeatureSnapshot.switchedOffEnvironments`, never in home.
+    public var isEnabled: Bool = true
     /// Reachability from the latest aggregate refresh. `nil` means the client
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?
@@ -51,6 +55,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         name: String,
         endpoint: String,
         isActive: Bool = false,
+        isEnabled: Bool = true,
         connectionState: FeatureConnection.State? = nil,
         connectionDetail: String? = nil,
         supportsPullRequests: Bool? = nil,
@@ -64,6 +69,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.name = name
         self.endpoint = endpoint
         self.isActive = isActive
+        self.isEnabled = isEnabled
         self.connectionState = connectionState
         self.connectionDetail = connectionDetail
         self.supportsPullRequests = supportsPullRequests
@@ -1450,7 +1456,12 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
 
 public struct FeatureSnapshot: Sendable, Equatable, Codable {
     public var connection: FeatureConnection
+    /// Saved environments that are switched on. Everything that lists or
+    /// merges environments reads this, so switched-off ones stay out of home.
     public var environments: [FeatureEnvironment]
+    /// Saved environments the user switched off on this device. Only the
+    /// Servers settings list them, so they can be switched back on.
+    public var switchedOffEnvironments: [FeatureEnvironment]
     public var projects: [FeatureProject]
     public var threads: [FeatureThread]
     public var providers: [FeatureProvider]
@@ -1467,6 +1478,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
     public init(
         connection: FeatureConnection = .init(),
         environments: [FeatureEnvironment] = [],
+        switchedOffEnvironments: [FeatureEnvironment] = [],
         projects: [FeatureProject] = [],
         threads: [FeatureThread] = [],
         providers: [FeatureProvider] = [],
@@ -1477,6 +1489,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
     ) {
         self.connection = connection
         self.environments = environments
+        self.switchedOffEnvironments = switchedOffEnvironments
         self.projects = projects
         self.threads = threads
         self.providers = providers

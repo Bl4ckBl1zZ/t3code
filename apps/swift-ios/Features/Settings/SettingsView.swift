@@ -435,6 +435,9 @@ struct SettingsServerStatus: Equatable {
         for environment: FeatureEnvironment,
         connection: FeatureConnection.State
     ) -> SettingsServerStatus {
+        guard environment.isEnabled else {
+            return .init(title: "Off", symbol: "power", color: T3Colors.textTertiary)
+        }
         let state = environment.isActive ? connection : environment.connectionState
         switch state {
         case .connected where environment.isActive:

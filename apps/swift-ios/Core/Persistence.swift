@@ -179,12 +179,32 @@ public actor EnvironmentStore {
         return environments
     }
 
+    /// Switches one saved environment on or off. Off moves the active
+    /// selection to the next environment that is still on, so nothing keeps
+    /// pointing at a server this device no longer connects to.
+    @discardableResult
+    public func setEnabled(id: String, enabled: Bool) throws -> [Environment] {
+        var document = try loadDocument()
+        guard let index = document.environments.firstIndex(where: { $0.id == id }) else {
+            return document.environments
+        }
+        guard document.environments[index].isEnabled != enabled else {
+            return document.environments
+        }
+        document.environments[index].isEnabled = enabled
+        if !enabled, document.activeEnvironmentID == id {
+            document.activeEnvironmentID = document.environments.first(where: \.isEnabled)?.id
+        }
+        try save(document)
+        return document.environments
+    }
+
     @discardableResult
     public func remove(id: String) throws -> [Environment] {
         var document = try loadDocument()
         document.environments.removeAll { $0.id == id }
         if document.activeEnvironmentID == id {
-            document.activeEnvironmentID = document.environments.first?.id
+            document.activeEnvironmentID = document.environments.first(where: \.isEnabled)?.id
         }
         try save(document)
         return document.environments

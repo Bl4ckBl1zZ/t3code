@@ -13,6 +13,11 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
     public var webSocketBaseURL: URL
     public var kind: EnvironmentKind
     public var descriptor: EnvironmentDescriptor?
+    /// False when the user switched this environment off on this device. It
+    /// stays saved with its credential but never connects and stays out of
+    /// home until switched back on. Catalogs saved before the switch existed
+    /// decode as on.
+    public var isEnabled: Bool
 
     public init(
         id: String,
@@ -20,7 +25,8 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
         httpBaseURL: URL,
         webSocketBaseURL: URL,
         kind: EnvironmentKind = .bearer,
-        descriptor: EnvironmentDescriptor? = nil
+        descriptor: EnvironmentDescriptor? = nil,
+        isEnabled: Bool = true
     ) {
         self.id = id
         self.label = label
@@ -28,6 +34,34 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
         self.webSocketBaseURL = webSocketBaseURL
         self.kind = kind
         self.descriptor = descriptor
+        self.isEnabled = isEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, httpBaseURL, webSocketBaseURL, kind, descriptor
+        case isEnabled = "enabled"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        httpBaseURL = try container.decode(URL.self, forKey: .httpBaseURL)
+        webSocketBaseURL = try container.decode(URL.self, forKey: .webSocketBaseURL)
+        kind = try container.decode(EnvironmentKind.self, forKey: .kind)
+        descriptor = try container.decodeIfPresent(EnvironmentDescriptor.self, forKey: .descriptor)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(label, forKey: .label)
+        try container.encode(httpBaseURL, forKey: .httpBaseURL)
+        try container.encode(webSocketBaseURL, forKey: .webSocketBaseURL)
+        try container.encode(kind, forKey: .kind)
+        try container.encodeIfPresent(descriptor, forKey: .descriptor)
+        try container.encode(isEnabled, forKey: .isEnabled)
     }
 }
 
