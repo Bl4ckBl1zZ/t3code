@@ -1821,6 +1821,11 @@ export function orchestrationV2ActiveAgentCount(
  */
 const SETTLED_BACKGROUND_WORK_STOP_DRIVERS: ReadonlySet<string> = new Set(["codex", "claudeAgent"]);
 
+/** Whether a provider can end a thread's background work after its turn settled. */
+export function orchestrationV2CanStopSettledBackgroundWork(driver: ProviderDriverKind): boolean {
+  return SETTLED_BACKGROUND_WORK_STOP_DRIVERS.has(driver);
+}
+
 /**
  * The run a Stop targets once a thread's turn has settled but its background
  * work — live background commands or delegated agents — keeps running. Stop
@@ -1856,7 +1861,7 @@ export function orchestrationV2BackgroundWorkStopRunId(projection: {
   const driver = projection.providerThreads.find(
     (providerThread) => providerThread.id === latestRun.providerThreadId,
   )?.driver;
-  if (driver === undefined || !SETTLED_BACKGROUND_WORK_STOP_DRIVERS.has(driver)) {
+  if (driver === undefined || !orchestrationV2CanStopSettledBackgroundWork(driver)) {
     return null;
   }
   const backgroundWork =

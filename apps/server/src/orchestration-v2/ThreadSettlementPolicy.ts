@@ -1,4 +1,5 @@
 import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequestChains";
 import * as DateTime from "effect/DateTime";
 
@@ -34,6 +35,7 @@ export type SettlementThread = Pick<
   | "workInboxRole"
   | "backgroundProcessCount"
   | "activeAgentCount"
+  | "pendingBackgroundTasks"
   | "pullRequests"
   | "latestUserAuthoredMessageAt"
 >;
@@ -63,7 +65,15 @@ export function isAutoSettlementCandidate(thread: SettlementThread, now: DateTim
     return false;
   if (["preparing", "queued", "starting", "running", "waiting"].includes(thread.status))
     return false;
-  if ((thread.backgroundProcessCount ?? 0) > 0 || (thread.activeAgentCount ?? 0) > 0) return false;
+  // Background work that will wake the agent is not staleness. A dev server
+  // left running is: the agent is done with it. Shells without the named list
+  // fall back to the counts, which cannot tell the two apart.
+  if (
+    thread.pendingBackgroundTasks === undefined
+      ? (thread.backgroundProcessCount ?? 0) > 0 || (thread.activeAgentCount ?? 0) > 0
+      : backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks)
+  )
+    return false;
   const userAt = millis(thread.latestUserMessageAt);
   if (
     thread.status !== "failed" &&

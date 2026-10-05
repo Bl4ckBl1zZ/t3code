@@ -68,8 +68,9 @@ alert. The command keeps running, and its pill above the composer still shows it
 
 Once the turn has finished, Codex and Claude conversations with background work get a **Stop** pill
 beside the background pills, in the desktop and web app as well as both mobile apps. The `thread.stop`
-shortcut does the same. Stop ends the commands and agents the turn left running, and their rows end as
-stopped. Claude runs them inside its session, so stopping closes that session and everything in it
+shortcut does the same. Stop ends the commands and agents the conversation left running, and their rows end
+as stopped. That includes work started before you switched the conversation to another provider:
+a Codex dev server keeps running after a switch to Claude, and Stop still reaches it. Claude runs them inside its session, so stopping closes that session and everything in it
 ends; the next message starts a fresh one that picks up the conversation.
 
 Other providers cannot end work after its turn has finished. There, ask the agent to stop it.

@@ -129,6 +129,22 @@ describe("V2 automatic settlement policy", () => {
     ])
       expect(decide(overrides)).toBeNull();
   });
+  it("settles a thread that only left a dev server running", () => {
+    const devServer = { taskId: "dev", kind: "command" as const };
+    expect(decide({ backgroundProcessCount: 1, pendingBackgroundTasks: [devServer] })).toEqual(
+      before,
+    );
+    // Work that will wake the agent still holds it.
+    expect(
+      decide({
+        backgroundProcessCount: 2,
+        pendingBackgroundTasks: [devServer, { taskId: "watch", kind: "monitor" }],
+      }),
+    ).toBeNull();
+    expect(
+      decide({ activeAgentCount: 1, pendingBackgroundTasks: [{ taskId: "a", kind: "subagent" }] }),
+    ).toBeNull();
+  });
   it("distinguishes blocking requests from asynchronous questions", () => {
     const request = {
       id: RuntimeRequestId.make("question"),
