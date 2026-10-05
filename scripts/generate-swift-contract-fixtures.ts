@@ -95,8 +95,6 @@ import {
   ProjectEnsureScratchResult,
   OrchestrationV2Run,
   OrchestrationV2ConversationMessage,
-  OrchestrationV2Command,
-  CommandId,
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2TurnItem as OrchestrationV2TurnItemSchema,
