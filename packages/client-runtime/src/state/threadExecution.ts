@@ -20,6 +20,7 @@ import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "./models.ts";
+import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
 
 const ACTIVITY_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 const INTERRUPTIBLE_RUN_STATUSES = new Set(["preparing", "starting", "running"]);
@@ -285,13 +286,17 @@ export function presentPendingBackgroundWork(
   const items = tasks
     .map((task): PendingBackgroundWorkItem => {
       const description = task.description?.trim();
+      const label =
+        task.kind === "subagent" && description !== undefined
+          ? formatSubagentDisplayTitle(description).trim()
+          : description;
       return {
         taskId: task.taskId,
         kind: task.kind,
         label:
-          description === undefined || description.length === 0
+          label === undefined || label.length === 0
             ? BACKGROUND_WORK_KINDS[task.kind].singular
-            : description,
+            : label,
         childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
       };
     })
