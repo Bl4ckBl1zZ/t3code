@@ -129,4 +129,53 @@ final class ThreadLinkedPullRequestTests: XCTestCase {
         }
         """
     }
+
+    // MARK: - Watching
+
+    private func fixture(_ name: String) throws -> Data {
+        try Data(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/\(name)"))
+    }
+
+    func testWatchCommandMatchesTheContract() throws {
+        struct Fixture: Decodable {
+            let capabilities: EnvironmentDescriptor.Capabilities
+            let command: JSONValue
+        }
+        let fixture = try JSONDecoder().decode(Fixture.self, from: fixture("pullRequestWatch.json"))
+        XCTAssertEqual(fixture.capabilities.threadPullRequestWatch, true)
+        XCTAssertEqual(
+            OrchestrationCommands.watchPullRequest(
+                threadID: "thread-v2",
+                host: "github.com",
+                repository: "example/repo",
+                number: 41,
+                watching: true,
+                commandID: "command-watch"
+            ),
+            fixture.command
+        )
+    }
+
+    func testLinkedPullRequestsSayWhichOnesAreWatched() throws {
+        let projection = try JSONDecoder().decode(
+            OrchestrationV2ThreadProjection.self,
+            from: fixture("orchestrationV2Projection.json")
+        )
+        let links = try XCTUnwrap(projection.thread.pullRequests)
+        XCTAssertNotNil(links.first { $0.number == 41 }?.watch?.startedAt)
+        XCTAssertNil(links.first { $0.number == 42 }?.watch)
+    }
+
+    func testWatchingIsOfferedOnlyForOpenRequestsOnServersThatWatch() {
+        var link = FeatureLinkedPullRequest(projectID: "p", repository: "o/r", number: 41, url: "https://github.com/o/r/pull/41")
+        XCTAssertEqual(ThreadLinkedPullRequestPresentation.watchState(link, supportsWatch: false), .unavailable)
+        // Not synced yet reads as open, as on web.
+        XCTAssertEqual(ThreadLinkedPullRequestPresentation.watchState(link, supportsWatch: true), .notWatching)
+        link.isWatched = true
+        XCTAssertEqual(ThreadLinkedPullRequestPresentation.watchState(link, supportsWatch: true), .watching)
+        link.snapshot = FeaturePullRequestSnapshot(state: "merged", title: "Done", headBranch: "f", baseBranch: "main", isDraft: false)
+        XCTAssertEqual(ThreadLinkedPullRequestPresentation.watchState(link, supportsWatch: true), .unavailable)
+    }
 }

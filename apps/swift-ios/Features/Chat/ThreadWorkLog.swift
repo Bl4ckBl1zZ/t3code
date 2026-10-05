@@ -560,6 +560,8 @@ public enum T3McpToolPresentation {
         "link_pull_request": ("Link", "Linking", "Linked", "a pull request"),
         "unlink_pull_request": ("Unlink", "Unlinking", "Unlinked", "a pull request"),
         "list_thread_pull_requests": ("Check", "Checking", "Checked", "linked pull requests"),
+        "watch_pull_request": ("Watch", "Watching", "Watching", "a pull request"),
+        "unwatch_pull_request": ("Stop watching", "Stopping watching", "Stopped watching", "a pull request"),
         "orchestrator_capabilities": ("Get", "Getting", "Got", "orchestration capabilities"),
         "delegate_task": ("Delegate", "Delegating", "Delegated", "a child task"),
         "task_status": ("Get", "Getting", "Got", "delegated task status"),
@@ -611,7 +613,8 @@ public enum T3McpToolPresentation {
         default: verb = action
         }
         let target: String
-        if ["link_pull_request", "unlink_pull_request"].contains(resolved), let number = pullRequestNumber(input) {
+        if ["link_pull_request", "unlink_pull_request", "watch_pull_request", "unwatch_pull_request"].contains(resolved),
+           let number = pullRequestNumber(input) {
             target = "PR #\(number)"
         } else { target = detail }
         return "\(verb) \(target)"
@@ -625,13 +628,15 @@ public enum T3McpToolPresentation {
         case "link_pull_request": return .linkPR
         case "unlink_pull_request": return .unlinkPR
         case "list_thread_pull_requests": return .listPRs
+        case "watch_pull_request": return .watchPR
+        case "unwatch_pull_request": return .unwatchPR
         default: return name.hasPrefix("preview_") ? .browser : nil
         }
     }
 
     static func icon(for item: OrchestrationV2TurnItem) -> ThreadWorkLogRow.Icon? {
         switch historicalAction(for: item) {
-        case .linkPR, .unlinkPR, .listPRs: .pullRequest
+        case .linkPR, .unlinkPR, .listPRs, .watchPR, .unwatchPR: .pullRequest
         case .browser: .globe
         default: nil
         }

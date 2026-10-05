@@ -304,6 +304,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var linkedPullRequests: [FeatureLinkedPullRequest]? = nil
     public var branchPullRequest: FeatureLinkedPullRequest? = nil
     public var supportsMultiplePullRequests: Bool? = nil
+    /// Whether linked pull requests can be watched for the thread's agent.
+    public var supportsPullRequestWatch: Bool? = nil
     public var supportsPullRequestStackActions: Bool? = nil
 
     public var allLinkedPullRequests: [FeatureLinkedPullRequest] {
@@ -382,6 +384,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         linkedPullRequests: [FeatureLinkedPullRequest]? = nil,
         branchPullRequest: FeatureLinkedPullRequest? = nil,
         supportsMultiplePullRequests: Bool? = nil,
+        supportsPullRequestWatch: Bool? = nil,
         supportsPullRequestStackActions: Bool? = nil,
         supportsPullRequestLinking: Bool? = nil,
         attentionAt: Date? = nil,
@@ -441,6 +444,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.linkedPullRequests = linkedPullRequests
         self.branchPullRequest = branchPullRequest
         self.supportsMultiplePullRequests = supportsMultiplePullRequests
+        self.supportsPullRequestWatch = supportsPullRequestWatch
         self.supportsPullRequestStackActions = supportsPullRequestStackActions
         self.supportsPullRequestLinking = supportsPullRequestLinking
         self.attentionAt = attentionAt

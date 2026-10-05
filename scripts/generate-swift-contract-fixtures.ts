@@ -88,6 +88,8 @@ import {
   MessageId,
   NodeId,
   OrchestrationV2ThreadProjection,
+  OrchestrationV2Command,
+  CommandId,
   OrchestrationV2Run,
   OrchestrationV2ConversationMessage,
   OrchestrationV2Command,
@@ -412,6 +414,21 @@ const projection = {
         checksState: "passing" as const,
         mergeability: "mergeable" as const,
       },
+      // The bottom layer is watched, so the Swift row's "Watching" decodes.
+      ...(number === 41
+        ? {
+            watch: {
+              startedAt: DateTime.formatIso(now),
+              headSha: "abc123",
+              failedChecks: [],
+              passed: false,
+              remarksThrough: DateTime.formatIso(now),
+              remarkIds: [],
+              conflicting: false,
+              wakes: 0,
+            },
+          }
+        : {}),
       stack: {
         kind: "native" as const,
         id: "stack-9",
@@ -2023,6 +2040,38 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(hermesWorkPath, hermesWorkFixture);
+
+// Watching a linked pull request: the capability the client gates on and the
+// command it sends, encoded through the real schema so the Swift builder is
+// compared against it field for field.
+const pullRequestWatchPath = NodePath.join(NodePath.dirname(outputPath), "pullRequestWatch.json");
+const pullRequestWatchFixture = `${JSON.stringify(
+  {
+    capabilities: Schema.decodeSync(ExecutionEnvironmentCapabilities)({
+      threadPullRequestWatch: true,
+    }),
+    command: Schema.encodeSync(OrchestrationV2Command)({
+      type: "thread.pull-request.watch",
+      commandId: CommandId.make("command-watch"),
+      threadId,
+      host: "github.com",
+      repository: "example/repo",
+      number: 41,
+      watching: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestWatchPath) ||
+    NodeFS.readFileSync(pullRequestWatchPath, "utf8") !== pullRequestWatchFixture
+  ) {
+    console.error("[swift-fixtures] pullRequestWatch.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestWatchPath, pullRequestWatchFixture);
 
 // The Swift client mirrors the protocol version by hand. Pin it here so a bump
 // in `packages/contracts` fails the Swift test instead of shipping a build the

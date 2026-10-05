@@ -57,6 +57,10 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         /// sending a command the server will reject.
         public let threadPullRequestLinking: Bool?
         public let threadPullRequestsV2: Bool?
+        /// Whether `thread.pull-request.watch` is accepted: the server wakes the
+        /// thread's agent when a watched pull request's checks finish, someone
+        /// comments, or it starts to conflict.
+        public var threadPullRequestWatch: Bool? = nil
         public struct FileAttachments: Codable, Equatable, Sendable { public let maxUploadBytes: Int }
         public let attachmentUploads: Bool?
         public let fileAttachments: FileAttachments?
@@ -91,6 +95,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadTitleRegeneration
             case threadPullRequestLinking
             case threadPullRequestsV2
+            case threadPullRequestWatch
             case attachmentUploads, fileAttachments
             case assistantCitations
             case projectActionDefaults
@@ -128,6 +133,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
                 forKey: .threadTitleRegeneration
             )
             threadPullRequestsV2 = try container.decodeIfPresent(Bool.self, forKey: .threadPullRequestsV2)
+            threadPullRequestWatch = try container.decodeIfPresent(Bool.self, forKey: .threadPullRequestWatch)
             attachmentUploads = try container.decodeIfPresent(Bool.self, forKey: .attachmentUploads)
             fileAttachments = try container.decodeIfPresent(FileAttachments.self, forKey: .fileAttachments)
             assistantCitations = try container.decodeIfPresent(Bool.self, forKey: .assistantCitations)

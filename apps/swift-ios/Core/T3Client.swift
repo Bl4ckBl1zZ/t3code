@@ -2739,6 +2739,29 @@ public enum OrchestrationCommands {
         return .object(value)
     }
 
+    /// `thread.pull-request.watch`: the server wakes the thread's agent when a
+    /// linked pull request's checks finish, someone comments, or it starts to
+    /// conflict. The pull request is addressed by host identity, not by link.
+    public static func watchPullRequest(
+        threadID: String,
+        host: String,
+        repository: String,
+        number: Int,
+        watching: Bool,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        .object([
+            "type": .string("thread.pull-request.watch"),
+            "commandId": .string(commandID),
+            "threadId": .string(threadID),
+            "host": .string(host),
+            "repository": .string(repository),
+            // `.number`, as JSONValue decodes every integral value.
+            "number": .number(Double(number)),
+            "watching": .bool(watching),
+        ])
+    }
+
     /// Pins a pull request to the thread, or clears the pin with `nil`.
     ///
     /// Explicit null is what unlinks: `thread.metadata.update` leaves absent

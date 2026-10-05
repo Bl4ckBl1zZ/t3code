@@ -301,6 +301,29 @@ final class ThreadWorkLogTests: XCTestCase {
         XCTAssertEqual(row(browser).icon, .globe)
     }
 
+    func testPullRequestWatchToolsNameThePullRequestTheyWatch() {
+        for (status, label) in [("running", "Watching PR #41"), ("completed", "Watching PR #41"), ("failed", "Failed to watch PR #41")] {
+            let item = V2Fixture.turnItem(id: "watch", type: "dynamic_tool", status: status,
+                extra: ["toolName": .string("mcp__t3-code__watch_pull_request"), "input": .object(["number": .number(41)])])
+            XCTAssertEqual(row(item).summary, label)
+            XCTAssertEqual(row(item).icon, .pullRequest)
+            XCTAssertEqual(row(item).historicalSummaryItem.action, .watchPR)
+        }
+        XCTAssertEqual(
+            T3McpToolPresentation.displayName(for: "unwatch_pull_request", status: "completed",
+                input: .object(["url": .string("https://github.com/org/repo/pull/41")])),
+            "Stopped watching PR #41"
+        )
+        XCTAssertEqual(
+            ThreadHistoricalWorkSummary.label([
+                ThreadHistoricalWorkItem(action: .watchPR),
+                ThreadHistoricalWorkItem(action: .watchPR),
+                ThreadHistoricalWorkItem(action: .unwatchPR),
+            ]),
+            "Watching 2 pull requests and stopped watching 1 pull request"
+        )
+    }
+
     /// Provider failures arrive wrapped in adapter names and run ids; the row
     /// shows the operational next step instead.
     func testProviderErrorsPresentTheNextStep() {

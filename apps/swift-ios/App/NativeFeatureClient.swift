@@ -1429,6 +1429,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refresh(client: route.client)
     }
 
+    /// Starts or stops the server watching a linked pull request for the
+    /// thread's agent.
+    func setThreadPullRequestWatched(threadID: String, link: FeatureLinkedPullRequest, watched: Bool) async throws {
+        let route = try threadRoute(for: threadID)
+        guard (try await runtime.environments()).first(where: { $0.id == route.environmentID })?.descriptor?.capabilities.threadPullRequestWatch == true else {
+            throw FeatureCapabilityUnavailable("Watching pull requests")
+        }
+        guard let host = link.host ?? URL(string: link.url)?.host else {
+            throw NativeFeatureClientError.workspaceNotFound
+        }
+        _ = try await route.client.dispatch(OrchestrationCommands.watchPullRequest(
+            threadID: route.wireID, host: host, repository: link.repository, number: link.number, watching: watched))
+        try? await refresh(client: route.client)
+    }
+
     @discardableResult
     func setThreadLinkedPullRequest(threadID: String, number: Int?) async throws -> FeatureLinkedPullRequest? {
         try await changeThreadLinkedPullRequest(threadID: threadID, number: number, adding: false)
@@ -5214,6 +5229,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             linkedPullRequests: mapThreadPullRequests(thread.pullRequests, legacy: thread.linkedPullRequests, projectID: thread.projectId, environment: environment),
             branchPullRequest: mapLinkedPullRequest(thread.branchPullRequest, environment: environment),
             supportsMultiplePullRequests: environment.descriptor?.capabilities.threadPullRequestsV2,
+            supportsPullRequestWatch: environment.descriptor?.capabilities.threadPullRequestWatch,
             supportsPullRequestStackActions: environment.descriptor?.capabilities.pullRequestStackActions,
             supportsPullRequestLinking: environment.descriptor?.capabilities
                 .threadPullRequestLinking,
@@ -5238,7 +5254,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         metadata: OrchestrationV2ThreadPullRequestLink? = nil
     ) -> FeatureLinkedPullRequest? {
         guard let linked else { return nil }
-        return FeatureLinkedPullRequest(
+        var mapped = FeatureLinkedPullRequest(
             projectID: FeatureScopedID.project(
                 environmentID: environment.id,
                 wireID: linked.projectId
@@ -5264,6 +5280,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                                         base: stack.base, numbers: stack.layers.map(\.number))
             }
         )
+        mapped.isWatched = metadata.map { $0.watch != nil }
+        return mapped
     }
 
     private func mapThreadPullRequests(
@@ -5388,6 +5406,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             linkedPullRequests: mapThreadPullRequests(thread.pullRequests, legacy: thread.linkedPullRequests, projectID: thread.projectId, environment: environment),
             branchPullRequest: mapLinkedPullRequest(thread.branchPullRequest, environment: environment),
             supportsMultiplePullRequests: environment.descriptor?.capabilities.threadPullRequestsV2,
+            supportsPullRequestWatch: environment.descriptor?.capabilities.threadPullRequestWatch,
             supportsPullRequestStackActions: environment.descriptor?.capabilities.pullRequestStackActions,
             supportsPullRequestLinking: environment.descriptor?.capabilities
                 .threadPullRequestLinking,
