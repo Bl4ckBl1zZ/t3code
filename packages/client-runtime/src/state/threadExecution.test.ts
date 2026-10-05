@@ -14,6 +14,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 import {
+  presentPendingBackgroundWork,
   deriveLatestThreadRun,
   deriveProviderSubagentStatus,
   formatModelSelectionEffort,
@@ -428,5 +429,51 @@ describe("formatModelSelectionEffort", () => {
         catalog({ currentValue: "medium" }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("presentPendingBackgroundWork", () => {
+  it("names a single piece of work by kind", () => {
+    expect(
+      presentPendingBackgroundWork([
+        { taskId: "a", kind: "subagent", description: "Review src/math.ts" },
+      ])?.title,
+    ).toBe("Waiting on subagent Review src/math.ts");
+    expect(presentPendingBackgroundWork([{ taskId: "a", kind: "command" }])?.title).toBe(
+      "Waiting on a command",
+    );
+    expect(presentPendingBackgroundWork([])).toBeNull();
+  });
+
+  it("groups work by kind, subagents first, and keeps each name", () => {
+    const presentation = presentPendingBackgroundWork([
+      { taskId: "cmd", kind: "command", description: "npm test" },
+      {
+        taskId: "b",
+        kind: "subagent",
+        description: "Write tests",
+        childThreadId: ThreadId.make("thread:b"),
+      },
+      { taskId: "a", kind: "subagent", description: "Review src/math.ts" },
+    ]);
+    expect(presentation?.title).toBe("Waiting on 2 subagents and 1 command");
+    expect(presentation?.items.map((item) => [item.kind, item.label, item.childThreadId])).toEqual([
+      ["subagent", "Write tests", "thread:b"],
+      ["subagent", "Review src/math.ts", undefined],
+      ["command", "npm test", undefined],
+    ]);
+  });
+
+  it("names generic work", () => {
+    expect(
+      presentPendingBackgroundWork([
+        { taskId: "bash", kind: "command", description: "Background sleep" },
+        { taskId: "watch", kind: "monitor" },
+        { taskId: "other", kind: "background_task" },
+      ])?.title,
+    ).toBe("Waiting on 1 command, 1 monitor and 1 background task");
+    expect(presentPendingBackgroundWork([{ taskId: "old", kind: "background_task" }])?.title).toBe(
+      "Waiting on a background task",
+    );
   });
 });

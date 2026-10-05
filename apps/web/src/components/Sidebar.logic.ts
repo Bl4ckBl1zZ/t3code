@@ -1,4 +1,5 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import { presentPendingBackgroundWork } from "@t3tools/client-runtime/state/thread-execution";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
   isAtomCommandInterrupted,
@@ -426,6 +427,7 @@ type ThreadStatusInput = Pick<
   lastVisitedAt?: string | null | undefined;
   backgroundProcessCount?: number | undefined;
   activeAgentCount?: number | undefined;
+  pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"];
 };
 
 export interface ThreadJumpHintVisibilityController {
@@ -793,6 +795,8 @@ export type SidebarThreadStatus =
 interface SidebarBackgroundWorkInput {
   readonly backgroundProcessCount?: number | undefined;
   readonly activeAgentCount?: number | undefined;
+  /** The named list; absent on servers that predate it, where the counts speak. */
+  readonly pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"];
 }
 
 type SidebarThreadStatusInput = Pick<
@@ -816,9 +820,14 @@ const pluralize = (count: number, singular: string, plural: string) =>
 
 /**
  * Names what is actually still running, since "Background" alone does not say
- * whether the user is waiting on an agent or on a shell command.
+ * whether the user is waiting on an agent or on a shell command. The server's
+ * named list says which one; older servers only send counts.
  */
 export function formatBackgroundWorkTooltip(thread: SidebarBackgroundWorkInput): string {
+  const presentation = presentPendingBackgroundWork(thread.pendingBackgroundTasks ?? []);
+  if (presentation !== null) {
+    return presentation.title;
+  }
   const agents = thread.activeAgentCount ?? 0;
   const processes = thread.backgroundProcessCount ?? 0;
   const parts = [

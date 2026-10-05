@@ -1371,6 +1371,21 @@ describe("formatBackgroundWorkTooltip", () => {
       "2 background agents and 1 background process running",
     );
   });
+
+  it("names the work itself when the server lists it", () => {
+    expect(
+      formatBackgroundWorkTooltip({
+        activeAgentCount: 1,
+        pendingBackgroundTasks: [
+          { taskId: "review", kind: "subagent", description: "Review the diff" },
+        ],
+      }),
+    ).toBe("Waiting on subagent Review the diff");
+    // An empty list (nothing named yet) still falls back to the counts.
+    expect(formatBackgroundWorkTooltip({ activeAgentCount: 1, pendingBackgroundTasks: [] })).toBe(
+      "1 background agent running",
+    );
+  });
 });
 
 describe("searchSidebarThreads", () => {
