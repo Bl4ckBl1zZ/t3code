@@ -291,7 +291,9 @@ final class PlatformCloudDeliveryCoordinator {
     }
 
     private func refreshActivityTokenObservers() {
+        // An expired card's token addresses nothing the relay can repaint.
         let activities = Activity<LiveActivityAttributes>.activities
+            .filter { !$0.activityState.isFinished }
         let plan = PlatformActivityTokenSubscription.plan(
             activityIDs: activities.map(\.id),
             observing: observedActivityID

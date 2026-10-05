@@ -73,6 +73,50 @@ enum PlatformLiveActivityArming {
     }
 }
 
+/// Which lock-screen cards synchronization keeps, and which it dismisses.
+///
+/// iOS ends a Live Activity after eight hours but leaves it frozen on the Lock
+/// Screen for up to four more, and it stays in `Activity.activities` the
+/// whole time. Updating it repaints nothing, and requesting a replacement
+/// beside it shows two cards. So finished cards are dismissed first, and the
+/// one card the relay addresses is chosen from the rest. Ported from upstream
+/// 77823bd102 (the Expo widget factory's ended-activity sweep).
+enum PlatformLiveActivitySelection {
+    struct Card: Equatable, Sendable {
+        let id: String
+        /// Ended or dismissed: nothing can repaint it any more.
+        let isFinished: Bool
+    }
+
+    struct Plan: Equatable, Sendable {
+        /// The live card that keeps receiving updates, or nil when a new one
+        /// has to be requested.
+        var primary: String?
+        /// Live cards beyond the primary. The relay tracks exactly one card per
+        /// device, so concurrent arming's extras are ended.
+        var redundant: [String]
+        /// Expired cards to dismiss immediately.
+        var finished: [String]
+    }
+
+    static func plan(_ cards: [Card]) -> Plan {
+        let live = cards.filter { !$0.isFinished }.map(\.id)
+        return Plan(
+            primary: live.first,
+            redundant: Array(live.dropFirst()),
+            finished: cards.filter(\.isFinished).map(\.id)
+        )
+    }
+}
+
+extension ActivityState {
+    /// Ended or dismissed. Such a card can no longer be updated, so it must not
+    /// be mistaken for the card the relay keeps current.
+    var isFinished: Bool {
+        self == .ended || self == .dismissed
+    }
+}
+
 enum PlatformAgentAwarenessProjection {
     static let terminalVisibilityWindow: TimeInterval = 15 * 60
     static let maximumRows = 5
@@ -410,6 +454,14 @@ final class PlatformAgentAwarenessCoordinator {
             return
         }
 
+        let selection = PlatformLiveActivitySelection.plan(
+            activities.map { .init(id: $0.id, isFinished: $0.activityState.isFinished) }
+        )
+        for activity in activities where selection.finished.contains(activity.id) {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        let liveActivities = activities.filter { !selection.finished.contains($0.id) }
+
         let state = try LiveActivityAttributes.ContentState(aggregate: aggregate)
         let content = ActivityContent(
             state: state,
@@ -424,14 +476,14 @@ final class PlatformAgentAwarenessCoordinator {
                 // Freshly armed: the projection has nothing active yet only
                 // because the environment's first publish has not landed.
                 // Repaint rather than killing the card the user just created.
-                for activity in activities {
+                for activity in liveActivities {
                     await activity.update(content)
                 }
                 try Task.checkCancellation()
                 notifyActivityChanged()
                 return
             }
-            for activity in activities {
+            for activity in liveActivities {
                 await activity.end(
                     content,
                     dismissalPolicy: .after(now.addingTimeInterval(5 * 60))
@@ -443,15 +495,18 @@ final class PlatformAgentAwarenessCoordinator {
             return
         }
 
-        if let primary = activities.first {
+        if let primary = liveActivities.first {
             await primary.update(content)
             // The relay tracks exactly one card per device; if concurrent
             // arming ever produced extras, end them so only one keeps
             // receiving updates.
-            for duplicate in activities.dropFirst() {
+            for duplicate in liveActivities.dropFirst() {
                 await duplicate.end(nil, dismissalPolicy: .immediate)
             }
         } else {
+            // No live card, including one that expired after eight hours:
+            // the expired one was dismissed above, so this replaces it rather
+            // than standing beside it.
             _ = try Activity.request(
                 attributes: LiveActivityAttributes(),
                 content: content,
