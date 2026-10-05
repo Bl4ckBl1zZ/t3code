@@ -826,6 +826,80 @@ struct FeatureRootModelTests {
         #expect(model.snapshot.threads == [created])
     }
 
+    private func sendFailureFixture() -> (FeatureClientStub, FeatureThread) {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            environmentID: "environment-1",
+            title: "Thread"
+        )
+        client.snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "environment-1",
+                    name: "Studio",
+                    endpoint: "https://studio.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ],
+            threads: [thread]
+        )
+        client.threadDetail = FeatureThreadDetail(thread: thread)
+        client.sendMessageError = FeatureCapabilityUnavailable("Rejected message")
+        return (client, thread)
+    }
+
+    @Test
+    func aRefusedSendSaysWhyInItsThreadUntilTheNextSend() async {
+        let (client, thread) = sendFailureFixture()
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        #expect(await model.sendMessage(threadID: thread.id, text: "hello", selection: nil) == false)
+        let failure = model.sendFailures[thread.id]
+        #expect(failure?.message == FeatureCapabilityUnavailable("Rejected message").localizedDescription)
+        #expect(failure?.submissionID == nil)
+        // The thread says it; the app-wide alert stays for failures without one.
+        #expect(model.errorMessage == nil)
+
+        client.sendMessageError = nil
+        #expect(await model.sendMessage(threadID: thread.id, text: "again", selection: nil))
+        #expect(model.sendFailures[thread.id] == nil)
+    }
+
+    @Test
+    func aSendFailureIsDismissedOrDroppedWithItsEnvironment() async {
+        let (client, thread) = sendFailureFixture()
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        _ = await model.sendMessage(threadID: thread.id, text: "hello", selection: nil)
+        model.dismissSendFailure(threadID: thread.id)
+        #expect(model.sendFailures[thread.id] == nil)
+
+        _ = await model.sendMessage(threadID: thread.id, text: "hello", selection: nil)
+        #expect(model.sendFailures[thread.id] != nil)
+        await model.removeEnvironment("environment-1")
+        #expect(model.sendFailures.isEmpty)
+    }
+
+    @Test
+    func aQueuedFailureClearsWhenItsMessageGoesOutOrIsDiscarded() {
+        var failures = FeatureThreadSendFailures()
+        failures.record(threadID: "a", environmentID: "e", message: "boom", submissionID: "s1")
+        failures.record(threadID: "b", environmentID: "e", message: "draft back")
+        failures.clear(submissionID: "s1")
+        #expect(failures["a"] == nil)
+        #expect(failures["b"]?.message == "draft back")
+        failures.clear(environmentID: "other")
+        #expect(failures["b"] != nil)
+        failures.clear(environmentID: "e")
+        #expect(failures.isEmpty)
+    }
+
     @Test
     func failedDeleteReturnsFalseAndKeepsThreadForBatchRetry() async {
         let client = FeatureClientStub()

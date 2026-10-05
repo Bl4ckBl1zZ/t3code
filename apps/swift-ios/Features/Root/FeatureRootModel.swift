@@ -72,6 +72,9 @@ public final class FeatureRootModel {
     /// What failed, as the alert's title ("Couldn't Archive Thread"). Nil
     /// falls back to a generic title.
     public private(set) var errorTitle: String?
+    /// Why each thread's last message did not send, shown above its composer.
+    /// Send failures always have a thread, so they never raise the alert.
+    public private(set) var sendFailures = FeatureThreadSendFailures()
     /// What each thread's review is pointed at. Lives here rather than in the
     /// review screen because the thread feed arms it and the review — presented
     /// later, from a sheet that does not exist yet — spends it.
@@ -101,7 +104,16 @@ public final class FeatureRootModel {
         return .waiting
     }
 
-    public func retryOutbox() { failedOutboxIDs.removeAll(); scheduleOutboxDrain() }
+    public func retryOutbox() {
+        // A retry that fails again records its reason again.
+        for id in failedOutboxIDs { sendFailures.clear(submissionID: id) }
+        failedOutboxIDs.removeAll()
+        scheduleOutboxDrain()
+    }
+
+    public func dismissSendFailure(threadID: String) {
+        sendFailures.clear(threadID: threadID)
+    }
     public func cancelOutbox(_ id: String) async {
         guard !sendingOutboxIDs.contains(id), let submission = pendingSubmissionsByID[id] else { return }
         _ = await discardQueuedSubmission(submission)
@@ -216,6 +228,7 @@ public final class FeatureRootModel {
         await stopOutboxDrain()
         await perform {
             try await client.removeEnvironment(id: id)
+            sendFailures.clear(environmentID: id)
             do {
                 try await outboxStore.removeAll(environmentID: id)
                 removePendingSubmissions(environmentID: id)
@@ -630,6 +643,8 @@ public final class FeatureRootModel {
     public func sendMessage(_ submission: FeatureMessageSubmission) async -> Bool {
         let trimmed = submission.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !submission.attachments.isEmpty else { return false }
+        // A new send supersedes the reason the previous one bounced back.
+        sendFailures.clear(threadID: submission.threadID)
 
         guard let thread = snapshot.threads.first(where: { $0.id == submission.threadID }),
               let environmentID = thread.environmentID else {
@@ -711,7 +726,12 @@ public final class FeatureRootModel {
                 scheduleOutboxRetry()
             }
             if discarded, !Self.isBenignCancellation(error) {
-                reportFailure(error.localizedDescription, title: "Couldn't Send Message")
+                // The composer gets the draft back; the thread says why.
+                sendFailures.record(
+                    threadID: submission.threadID,
+                    environmentID: environmentID,
+                    message: error.localizedDescription
+                )
             }
             return false
         }
@@ -1268,6 +1288,7 @@ public final class FeatureRootModel {
         pendingCompletionSubmissionIDs.remove(submission.id)
         pendingSubmissionsByID.removeValue(forKey: submission.id)
         pendingThreadsByID.removeValue(forKey: submission.threadID)
+        sendFailures.clear(submissionID: submission.id)
         markQueuedMessageDelivered(submission)
         outboxRetryAttempt = 0
         return true
@@ -1321,6 +1342,7 @@ public final class FeatureRootModel {
         }
         pendingDiscardSubmissionIDs.remove(submission.id)
         pendingSubmissionsByID.removeValue(forKey: submission.id)
+        sendFailures.clear(submissionID: submission.id)
         let wasPendingCreation = pendingThreadsByID.removeValue(forKey: submission.threadID) != nil
         if wasPendingCreation {
             removeThread(id: submission.threadID)
@@ -1496,7 +1518,12 @@ public final class FeatureRootModel {
                         needsRetry = true
                     } else {
                         failedOutboxIDs.insert(submission.id)
-                        reportFailure(error.localizedDescription, title: "Couldn't Send Message")
+                        sendFailures.record(
+                            threadID: submission.threadID,
+                            environmentID: submission.environmentID,
+                            message: error.localizedDescription,
+                            submissionID: submission.id
+                        )
                     }
                 }
             }

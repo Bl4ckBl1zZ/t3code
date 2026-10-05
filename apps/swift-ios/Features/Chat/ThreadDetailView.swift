@@ -634,6 +634,7 @@ public struct ThreadDetailView: View {
                     VStack(spacing: 0) {
                         queueSurfaces
                         ComposerTasksView(detail: detail)
+                        sendFailureCallout
                         if currentThread.isArchived {
                             ThreadArchivedBar {
                                 await model.setArchived(thread.id, archived: false)
@@ -784,6 +785,24 @@ public struct ThreadDetailView: View {
     /// well; earlier systems keep the opaque bar and stop at it.
     private static var transcriptBleedEdges: Edge.Set {
         if #available(iOS 26, *) { [.top, .bottom] } else { .bottom }
+    }
+
+    /// Why this thread's last message did not send. Retry resends what failed:
+    /// the queued copy when it is still in the outbox, otherwise the draft the
+    /// failed send was put back into.
+    @ViewBuilder
+    private var sendFailureCallout: some View {
+        if let failure = model.sendFailures[thread.id] {
+            let canResendDraft = !isSending && !currentThread.isArchived
+                && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+            ThreadSendFailureCallout(
+                message: failure.message,
+                onRetry: failure.submissionID != nil
+                    ? { model.retryOutbox() }
+                    : canResendDraft ? { send() } : nil,
+                onDismiss: { model.dismissSendFailure(threadID: thread.id) }
+            )
+        }
     }
 
     /// Resends the last message the reader wrote, for a turn that failed. Text
@@ -1548,10 +1567,12 @@ public struct ThreadDetailView: View {
                 attachments = pendingAttachments + attachments.filter {
                     !pendingIDs.contains($0.id)
                 }
-                // The restored draft is the visible state; a real error has
-                // already been raised by the model. No second alert.
+                // The restored draft is the visible state, and the callout
+                // above the composer says why; it announces itself.
                 PlatformHapticEngine.shared.play(.error)
-                AccessibilityNotification.Announcement("Message not sent. Your draft is still here.").post()
+                if model.sendFailures[thread.id] == nil {
+                    AccessibilityNotification.Announcement("Message not sent. Your draft is still here.").post()
+                }
                 composerFocused = true
             }
             isSending = false

@@ -41,7 +41,9 @@ sheets use the system glass material.
 - **Scrolling.** When you scroll up, a round button above the composer jumps back to the latest
   message.
 - **Failed messages.** A message that could not be sent shows **Not sent · Try Again** underneath.
-  Tap it to retry.
+  Tap it to retry. Above the composer, a notice says why the message was not sent, with **Retry**
+  and a close button. It stays with the thread until you dismiss it, send again, or the message
+  goes out.
 - **Unavailable threads.** An offline, archived or unavailable thread says so, with **Reconnect**,
   **Unarchive** or **Try Again**.
 - **Hardware keyboard shortcuts:**
