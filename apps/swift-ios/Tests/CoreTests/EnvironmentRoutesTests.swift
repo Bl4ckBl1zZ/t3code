@@ -349,7 +349,10 @@ final class EnvironmentRoutesTests: XCTestCase {
         )
         let operation: (Environment) async throws -> String = { routed in
             let id = routed.routes[0].id
-            if id == lan.id, await !lanWorks.isOn { throw URLError(.timedOut) }
+            if id == lan.id {
+                let lanIsOn = await lanWorks.isOn
+                if !lanIsOn { throw URLError(.timedOut) }
+            }
             return id
         }
 
