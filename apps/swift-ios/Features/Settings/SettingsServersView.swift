@@ -11,8 +11,13 @@ struct SettingsServersView: View {
     @State private var removalTarget: FeatureEnvironment?
     @State private var confirmingDisconnect = false
     @State private var switchingID: String?
+    @State private var mergeMethodError: String?
+    @State private var detailID: String?
 
-    private var environments: [FeatureEnvironment] { model.snapshot.environments }
+    /// Servers that are on, then the ones switched off on this device.
+    private var environments: [FeatureEnvironment] {
+        model.snapshot.environments + model.snapshot.switchedOffEnvironments
+    }
     private var activeEnvironment: FeatureEnvironment? { environments.first(where: \.isActive) }
 
     private var isConnected: Bool {
@@ -27,13 +32,28 @@ struct SettingsServersView: View {
                 }
             } footer: {
                 if environments.count > 1 {
-                    Text("Tap a server to switch to it. Swipe to remove one you no longer use.")
+                    Text("Tap a server to switch to it. Swipe to switch one off or remove it; a switched-off server stays saved but doesn't connect or appear in Home.")
                 }
             }
 
-            if activeEnvironment != nil {
-                Section("This Server") {
+            if let activeEnvironment {
+                Section {
                     routeLink(.devices)
+                    if mergeMethodSupported(activeEnvironment) {
+                        SettingsMergeMethodPicker(
+                            environmentID: activeEnvironment.id,
+                            saved: model.snapshot.preferencesByEnvironment?[activeEnvironment.id]?.pullRequestMergeMethod,
+                            manager: (model.client as? any FeatureServerSettingsManaging) ?? EmptyFeatureServerSettingsManager.shared,
+                            error: $mergeMethodError
+                        )
+                    }
+                } header: {
+                    Text("This Server")
+                } footer: {
+                    if mergeMethodSupported(activeEnvironment) {
+                        SettingsFooter(text: "Merges start with this method unless the project sets its own. Last Used reuses this device's last choice.",
+                            error: mergeMethodError)
+                    }
                 }
             }
 
@@ -82,6 +102,9 @@ struct SettingsServersView: View {
         }
         .navigationTitle("Servers")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $detailID) { id in
+            SettingsServerDetailView(model: model, environmentID: id)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Add Server", systemImage: "plus", action: onAddServer)
@@ -98,6 +121,7 @@ struct SettingsServersView: View {
         } label: {
             HStack(spacing: 12) {
                 T3SettingsTile(environment.machineSymbol, tint: environment.isActive ? .ink : .gray)
+                    .opacity(environment.isEnabled ? 1 : 0.5)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(environment.name)
                         .foregroundStyle(T3Colors.textPrimary)
@@ -121,18 +145,45 @@ struct SettingsServersView: View {
                         .foregroundStyle(T3Colors.accent)
                         .accessibilityHidden(true)
                 }
+                Button {
+                    detailID = environment.id
+                } label: {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(T3Colors.accent)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("\(environment.name) details")
             }
             .contentShape(Rectangle())
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityAddTraits(environment.isActive ? .isSelected : [])
-        .accessibilityHint(environment.isActive ? "Current server" : "Switch to this server")
+        .accessibilityHint(
+            environment.isActive
+                ? "Current server"
+                : environment.unsupportedReason
+                    ?? (environment.isEnabled ? "Switch to this server" : "Switched off")
+        )
         .swipeActions(edge: .trailing) {
             if !environment.isActive {
                 Button("Remove", role: .destructive) { removalTarget = environment }
             }
+            Button(environment.isEnabled ? "Switch Off" : "Switch On") {
+                setEnabled(environment, !environment.isEnabled)
+            }
+            .tint(environment.isEnabled ? T3Colors.textTertiary : T3Colors.success)
         }
         .contextMenu {
+            Button {
+                setEnabled(environment, !environment.isEnabled)
+            } label: {
+                Label(environment.isEnabled ? "Switch Off" : "Switch On", systemImage: "power")
+            }
+            Button {
+                detailID = environment.id
+            } label: {
+                Label("Details", systemImage: "info.circle")
+            }
             if !environment.isActive {
                 Button(role: .destructive) {
                     removalTarget = environment
@@ -158,7 +209,17 @@ struct SettingsServersView: View {
         }
     }
 
+    private func setEnabled(_ environment: FeatureEnvironment, _ enabled: Bool) {
+        PlatformHapticEngine.shared.playSelection()
+        Task { await model.setEnvironmentEnabled(environment.id, enabled: enabled) }
+    }
+
     private func switchTo(_ environment: FeatureEnvironment) {
+        // A switched-off server never connects; its details page switches it on.
+        guard environment.isEnabled else {
+            detailID = environment.id
+            return
+        }
         guard !environment.isActive, switchingID == nil else { return }
         PlatformHapticEngine.shared.playSelection()
         switchingID = environment.id
@@ -168,11 +229,63 @@ struct SettingsServersView: View {
         }
     }
 
+    private func mergeMethodSupported(_ environment: FeatureEnvironment) -> Bool {
+        environment.supportsPullRequests == true
+            && model.snapshot.preferencesByEnvironment?[environment.id]?.supportsPullRequestMergeMethod == true
+    }
+
     private func routeLink(_ route: SettingsRoute) -> some View {
         NavigationLink(value: route) { routeLabel(route) }
     }
 
     private func routeLabel(_ route: SettingsRoute) -> some View {
         SettingsTileLabel(title: route.title, systemImage: route.systemImage, tint: route.tint)
+    }
+}
+
+/// The merge method this server's pull requests start with, unless a project
+/// sets its own. "Last Used" leaves it to the method last chosen on each device.
+private struct SettingsMergeMethodPicker: View {
+    let environmentID: String
+    let saved: String?
+    let manager: any FeatureServerSettingsManaging
+    @Binding var error: String?
+    /// The value just picked, shown until the server's answer replaces it.
+    @State private var pending: String?? = nil
+
+    init(environmentID: String, saved: String?, manager: any FeatureServerSettingsManaging, error: Binding<String?>) {
+        self.environmentID = environmentID
+        self.saved = saved
+        self.manager = manager
+        _error = error
+    }
+
+    var body: some View {
+        Picker(selection: Binding(get: { pending ?? saved }, set: write)) {
+            Text("Last Used").tag(String?.none)
+            ForEach(["merge", "squash", "rebase"], id: \.self) { method in
+                Text(PullRequestActionLogic.methodLabel(method)).tag(Optional(method))
+            }
+        } label: {
+            SettingsTileLabel(title: "Default Merge Method", systemImage: "arrow.triangle.merge", tint: .purple)
+        }
+        .pickerStyle(.menu)
+        .accessibilityHint("The merge method pull requests on this server start with")
+    }
+
+    private func write(_ method: String?) {
+        guard method != (pending ?? saved) else { return }
+        pending = .some(method)
+        error = nil
+        Task {
+            do {
+                try await manager.updateServerSettings(environmentID: environmentID,
+                    patch: ServerSettingsPatchInput(pullRequestMergeMethod: .some(method)))
+            } catch {
+                self.error = "Couldn't save the merge method. \(error.localizedDescription)"
+                PlatformHapticEngine.shared.play(.error)
+            }
+            pending = nil
+        }
     }
 }

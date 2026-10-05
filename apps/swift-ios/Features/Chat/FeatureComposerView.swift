@@ -69,6 +69,8 @@ struct FeatureComposerView: View {
     /// stash. The caret tracker stays per-composer because it follows this
     /// view's own text input.
     private let voice = VoiceComposerCoordinator.shared
+    /// This composer's token in the coordinator's visibility bookkeeping.
+    @State private var voiceComposerToken = UUID()
     @State private var caret = VoiceComposerCaret()
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
     @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -116,6 +118,9 @@ struct FeatureComposerView: View {
     private let onDidStash: () -> Void
     private let externalFileDrop: ThreadFileDropBatch?
     private let onExternalFileDropConsumed: (UUID) -> Void
+    /// False while the host is still restoring the saved draft. A dictation
+    /// transcript is held back until then so the restore cannot replace it.
+    private let draftLoaded: Bool
     @State private var historyGeneration = UUID()
     @State private var promptHistory = ComposerPromptHistory()
     @State private var stashedDrafts: [FeatureComposerStashEntry] = []
@@ -157,6 +162,7 @@ struct FeatureComposerView: View {
         onDidStash: @escaping () -> Void = {},
         externalFileDrop: ThreadFileDropBatch? = nil,
         onExternalFileDropConsumed: @escaping (UUID) -> Void = { _ in },
+        draftLoaded: Bool = true,
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
         onUserInputSubmit: ((String, [String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void)? = nil
     ) {
@@ -189,6 +195,7 @@ struct FeatureComposerView: View {
         self.onDidStash = onDidStash
         self.externalFileDrop = externalFileDrop
         self.onExternalFileDropConsumed = onExternalFileDropConsumed
+        self.draftLoaded = draftLoaded
         self.onApprovalDecision = onApprovalDecision
         self.onUserInputSubmit = onUserInputSubmit
     }
@@ -224,11 +231,14 @@ struct FeatureComposerView: View {
             .onDisappear {
                 historyGeneration = UUID()
                 caret.stopTracking()
-                voice.detach(identity: powerFeatures.voiceComposerIdentity)
+                voice.detach(identity: powerFeatures.voiceComposerIdentity, composer: voiceComposerToken)
             }
             .onChange(of: providers) { materializeModelSelection() }
             .onChange(of: selection) { materializeModelSelection() }
             .onChange(of: powerFeatures.voiceComposerIdentity) { attachVoice() }
+            .onChange(of: draftLoaded) { _, loaded in
+                if loaded { voice.draftDidLoad(identity: powerFeatures.voiceComposerIdentity) }
+            }
             .onChange(of: voice.state) { voice.surfaceFailureAlert() }
             .alert(
                 voice.alert?.title ?? "",
@@ -387,7 +397,10 @@ struct FeatureComposerView: View {
     private func attachVoice() {
         voice.attach(
             identity: powerFeatures.voiceComposerIdentity,
+            composer: voiceComposerToken,
             destinationName: powerFeatures.resolvedVoiceScope?.destinationName ?? "its conversation",
+            threadID: powerFeatures.resolvedVoiceScope?.threadID,
+            draftLoaded: draftLoaded,
             capability: powerFeatures.voice ?? FeatureVoiceCapability.current,
             readDraft: { text },
             writeDraft: { text = $0 },

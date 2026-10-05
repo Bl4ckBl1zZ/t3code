@@ -15,6 +15,8 @@ public struct ThreadDetailView: View {
     /// Leaves this thread once it no longer exists, such as after Delete. The
     /// system back button covers ordinary navigation.
     let onNavigateBack: () -> Void
+    /// Opens a new task in this thread's project, for Cmd+Option+Return.
+    let onStartNewThread: ((_ projectID: String) -> Void)?
     @State private var nativeToolIcons = NativeAppToolIconStore()
     @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
@@ -75,12 +77,14 @@ public struct ThreadDetailView: View {
         submitMessage: @escaping (FeatureMessageSubmission) async -> Bool,
         onNavigateBack: @escaping () -> Void = {},
         onOpenRelatedThread: @escaping (String, Bool) -> Void = { _, _ in },
+        onStartNewThread: ((_ projectID: String) -> Void)? = nil,
         draftStore: FeatureComposerDraftStore = .shared
     ) {
         self.model = model
         self.thread = thread
         self.submitMessage = submitMessage
         self.onNavigateBack = onNavigateBack
+        self.onStartNewThread = onStartNewThread
         self.onOpenRelatedThread = onOpenRelatedThread
         self.draftStore = draftStore
     }
@@ -143,9 +147,8 @@ public struct ThreadDetailView: View {
 
     private var threadContent: some View {
         threadChrome
-        .task(id: "\(currentThread.projectID):\(currentSelection?.providerID ?? ""):\(threadWorkspaceRoot ?? "")") {
-            guard let instanceID = currentSelection?.providerID,
-                  threadProviders.first(where: { $0.id == instanceID })?.driver == "antigravity" else { return }
+        .task(id: workspaceScanKey) {
+            guard let instanceID = currentSelection?.providerID else { return }
             try? await model.client.refreshProviderWorkspace(projectID: currentThread.projectID, instanceID: instanceID, cwd: threadWorkspaceRoot)
         }
         .task(id: draftKey) {
@@ -502,6 +505,10 @@ public struct ThreadDetailView: View {
             if !currentThread.isProviderNativeSubagentThread {
                 Button("Send Message") { send() }
                     .keyboardShortcut(.return, modifiers: .command)
+                if onStartNewThread != nil {
+                    Button("Send and Start New Thread", action: sendAndStartNewThread)
+                        .keyboardShortcut(.return, modifiers: [.command, .option])
+                }
             }
             if currentThread.state == .working || currentThread.state == .queued {
                 Button("Stop") { Task { await model.cancelTurn(threadID: thread.id) } }
@@ -634,6 +641,7 @@ public struct ThreadDetailView: View {
                     VStack(spacing: 0) {
                         queueSurfaces
                         ComposerTasksView(detail: detail)
+                        sendFailureCallout
                         if currentThread.isArchived {
                             ThreadArchivedBar {
                                 await model.setArchived(thread.id, archived: false)
@@ -731,6 +739,17 @@ public struct ThreadDetailView: View {
                 onOpenDiff: openDiff,
                 onRetrySend: { model.retryOutbox() },
                 onRetryTurn: retryLastMessage,
+                onRetrySetup: { runID in
+                    Task { await model.retryWorkspacePreparation(threadID: thread.id, runID: runID) }
+                },
+                loadTurnItem: { [client = model.client, threadID = thread.id] sourceThreadID, itemID, revision in
+                    try await client.loadTurnItem(
+                        threadID: threadID,
+                        sourceThreadID: sourceThreadID,
+                        itemID: itemID,
+                        revision: revision
+                    )
+                },
                 citationNavigation: model.pendingAssistantCitation.flatMap { request in
                     request.citation.threadId == (thread.wireID ?? thread.id) && request.citation.environmentId == threadEnvironment?.id ? request : nil
                 },
@@ -776,6 +795,24 @@ public struct ThreadDetailView: View {
     /// well; earlier systems keep the opaque bar and stop at it.
     private static var transcriptBleedEdges: Edge.Set {
         if #available(iOS 26, *) { [.top, .bottom] } else { .bottom }
+    }
+
+    /// Why this thread's last message did not send. Retry resends what failed:
+    /// the queued copy when it is still in the outbox, otherwise the draft the
+    /// failed send was put back into.
+    @ViewBuilder
+    private var sendFailureCallout: some View {
+        if let failure = model.sendFailures[thread.id] {
+            let canResendDraft = !isSending && !currentThread.isArchived
+                && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+            ThreadSendFailureCallout(
+                message: failure.message,
+                onRetry: failure.submissionID != nil
+                    ? { model.retryOutbox() }
+                    : canResendDraft ? { send() } : nil,
+                onDismiss: { model.dismissSendFailure(threadID: thread.id) }
+            )
+        }
     }
 
     /// Resends the last message the reader wrote, for a turn that failed. Text
@@ -996,6 +1033,7 @@ public struct ThreadDetailView: View {
             onExternalFileDropConsumed: { id in
                 if model.pendingThreadFileDrops[thread.id]?.id == id { model.pendingThreadFileDrops[thread.id] = nil }
             },
+            draftLoaded: didRestoreDraft,
             onApprovalDecision: { id, decision in
                 Task { await model.resolveApproval(id, decision: decision) }
             },
@@ -1019,8 +1057,16 @@ public struct ThreadDetailView: View {
             provider?.models.first { $0.id == selection.modelID }
         }
         let parentThreadID = detail.workflow.thread?.parentThreadID
+        let showsAccount = provider.map {
+            ProviderAccountBadge.shows(
+                driver: $0.driver,
+                accentColor: $0.accentColor,
+                amongDrivers: environmentProviders.map(\.driver)
+            )
+        } ?? false
         return ProviderSubagentBar(
             provider: provider,
+            showsAccount: showsAccount,
             modelLabel: model?.name ?? selection?.modelID ?? currentThread.providerName ?? "Subagent",
             effortLabel: model.flatMap {
                 DailyUXModelOptions.reasoningSummary(for: $0, selections: selection?.options ?? [])
@@ -1101,6 +1147,15 @@ public struct ThreadDetailView: View {
     /// The root a work-log row resolves its file paths against.
     private var threadWorkspaceRoot: String? {
         currentThread.worktreePath ?? threadProject?.path
+    }
+
+    /// Re-scans the thread's workspace when the provider, the cwd, the
+    /// provider's availability, or its stored scan of that cwd changes.
+    private var workspaceScanKey: String {
+        let instanceID = currentSelection?.providerID ?? ""
+        let provider = threadProviders.first { $0.id == instanceID }
+        let state = "\(provider?.isAvailable == true):\(provider?.hasCompleteWorkspace(threadWorkspaceRoot) == true)"
+        return "\(currentThread.projectID):\(instanceID):\(threadWorkspaceRoot ?? ""):\(state)"
     }
 
     // MARK: - Lineage
@@ -1483,6 +1538,16 @@ public struct ThreadDetailView: View {
         }
     }
 
+    /// Sends what is in the composer, then opens a new task in the same
+    /// project while the message is delivered. Nothing to send does nothing.
+    private func sendAndStartNewThread() {
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
+              !isSending else { return }
+        let projectID = currentThread.projectID
+        send()
+        onStartNewThread?(projectID)
+    }
+
     private func send() {
         let message = draft
         let pendingAttachments = attachments
@@ -1540,10 +1605,12 @@ public struct ThreadDetailView: View {
                 attachments = pendingAttachments + attachments.filter {
                     !pendingIDs.contains($0.id)
                 }
-                // The restored draft is the visible state; a real error has
-                // already been raised by the model. No second alert.
+                // The restored draft is the visible state, and the callout
+                // above the composer says why; it announces itself.
                 PlatformHapticEngine.shared.play(.error)
-                AccessibilityNotification.Announcement("Message not sent. Your draft is still here.").post()
+                if model.sendFailures[thread.id] == nil {
+                    AccessibilityNotification.Announcement("Message not sent. Your draft is still here.").post()
+                }
                 composerFocused = true
             }
             isSending = false
@@ -1757,6 +1824,8 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         /// Projected-item id to the feature-scoped id of the thread a subagent
         /// spawned, which is what makes its card tappable.
         let childThreadIDs: [String: String]
+        /// Projected-item id to what that subagent runs on and where.
+        var subagentMetadata: [String: SubagentRowMetadata] = [:]
         let date: Date?
     }
 
@@ -1768,6 +1837,9 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         /// a row opens.
         let support: [String: ThreadActivityItemSupport]
         let date: Date?
+        /// Runs in this group whose failed workspace preparation can be
+        /// retried. Part of the entry so a retry that lands reconfigures it.
+        var retryableSetupRunIDs: Set<String> = []
     }
 
     var id: String {
@@ -1811,6 +1883,7 @@ enum ThreadTimelineFeed {
             runs: detail.timelineRuns,
             support: detail.itemSupport,
             subagentChildThreadIDs: detail.subagentChildThreadIDs,
+            subagentMetadata: detail.subagentMetadata,
             liveRun: ThreadWorkLogLiveRun(threadState: detail.thread.state, activeRunID: activeRunID),
             calendar: calendar
         )
@@ -1827,6 +1900,7 @@ enum ThreadTimelineFeed {
         runs: [LifecycleTimelineRun] = [],
         support: [String: ThreadActivityItemSupport] = [:],
         subagentChildThreadIDs: [String: String] = [:],
+        subagentMetadata: [String: SubagentRowMetadata] = [:],
         liveRun: ThreadWorkLogLiveRun = .unscoped,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
@@ -1837,6 +1911,10 @@ enum ThreadTimelineFeed {
         var entries: [ThreadTimelineEntry] = []
         var openWork: [ThreadWorkLogRow] = []
         var openLifecycle: [OrchestrationV2ProjectedTurnItem] = []
+        let retryableSetupRunIDs = ThreadWorkspacePreparationRetry.retryableRunIDs(
+            runs: runs,
+            items: timelineItems.map(\.item)
+        )
 
         func closeWork() {
             guard !openWork.isEmpty else { return }
@@ -1851,7 +1929,10 @@ enum ThreadTimelineFeed {
                             id: "work:\(group[0].id)",
                             rows: group,
                             support: groupSupport,
-                            date: ThreadTimelineDay.date(fromISO8601: group[0].createdAt)
+                            date: ThreadTimelineDay.date(fromISO8601: group[0].createdAt),
+                            retryableSetupRunIDs: retryableSetupRunIDs.intersection(
+                                group.compactMap(\.runID)
+                            )
                         )
                     )
                 )
@@ -1863,12 +1944,13 @@ enum ThreadTimelineFeed {
             guard !openLifecycle.isEmpty else { return }
             for group in ThreadTimelineGrouping.mergeRelatedThreadCardRuns(openLifecycle) {
                 var childThreadIDs: [String: String] = [:]
+                var metadata: [String: SubagentRowMetadata] = [:]
                 for row in group.elements {
-                    guard case let .subagent(subagentID, _, _, _, _, _, _, _) = row.item.payload,
-                          let childThreadID = subagentChildThreadIDs[subagentID] else {
+                    guard case let .subagent(subagentID, _, _, _, _, _, _, _) = row.item.payload else {
                         continue
                     }
-                    childThreadIDs[row.id] = childThreadID
+                    childThreadIDs[row.id] = subagentChildThreadIDs[subagentID]
+                    metadata[row.id] = subagentMetadata[subagentID]
                 }
                 entries.append(
                     .lifecycle(
@@ -1879,6 +1961,7 @@ enum ThreadTimelineFeed {
                             rows: group.elements,
                             runs: runs,
                             childThreadIDs: childThreadIDs,
+                            subagentMetadata: metadata,
                             date: itemDate(group.first.item)
                         )
                     )
@@ -1900,6 +1983,8 @@ enum ThreadTimelineFeed {
                let runID = item.base.runId, interruptedRunIDs.contains(runID) {
                 continue
             }
+            // A setup failure a retry already replaced has nothing left to say.
+            if ThreadWorkspacePreparationRetry.isRetriedFailure(item) { continue }
             if item.type == "user_message" || item.type == "assistant_message" {
                 // An empty bubble is not a row — an assistant message before its
                 // first token, say — and skipping it must not split the work
@@ -2006,6 +2091,7 @@ private struct ThreadTimelineEntryView: View {
     let onOpenDiff: (String, String?) -> Void
     var onRetrySend: () -> Void = {}
     var onRetryTurn: (() -> Void)? = nil
+    var onRetrySetup: ((String) -> Void)? = nil
 
     var onToggleFold: (String) -> Void = { _ in }
 
@@ -2042,6 +2128,7 @@ private struct ThreadTimelineEntryView: View {
                     rows: lifecycle.rows,
                     runs: lifecycle.runs,
                     liveChildThreadIDs: lifecycle.childThreadIDs,
+                    subagentMetadata: lifecycle.subagentMetadata,
                     onOpenThread: onOpenThread
                 )
             } else if let row = lifecycle.rows.first {
@@ -2049,6 +2136,7 @@ private struct ThreadTimelineEntryView: View {
                     row: row,
                     runs: lifecycle.runs,
                     liveChildThreadID: lifecycle.childThreadIDs[row.id],
+                    subagentMetadata: lifecycle.subagentMetadata[row.id],
                     onOpenThread: onOpenThread
                 )
             }
@@ -2067,6 +2155,8 @@ private struct ThreadTimelineEntryView: View {
                 onOpenDiff: onOpenDiff,
                 onRollback: onRollback,
                 onRetryTurn: onRetryTurn,
+                retryableSetupRunIDs: workLog.retryableSetupRunIDs,
+                onRetrySetup: onRetrySetup,
                 alwaysExpandActivity: alwaysExpandActivity
             )
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2125,6 +2215,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let onOpenDiff: (String, String?) -> Void
     var onRetrySend: () -> Void = {}
     var onRetryTurn: (() -> Void)? = nil
+    /// Retries a failed workspace preparation for the given run.
+    var onRetrySetup: ((String) -> Void)? = nil
+    /// Fetches output the wire withheld from a work-log row, while it is open.
+    var loadTurnItem: ThreadTurnItemDetailStore.Loader? = nil
     var citationNavigation: AssistantCitationNavigationRequest? = nil
     var onCitationComplete: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
     var onOpenCitation: (AssistantCitation) -> Void = { _ in }
@@ -2176,6 +2270,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         transcript?.floatingBottomInset = bottomContentInset
         context.coordinator.onReadingHistoryChanged = onReadingHistoryChanged
         context.coordinator.onActivityBelowChanged = onActivityBelowChanged
+        context.coordinator.turnItemDetails.loader = loadTurnItem
         context.coordinator.update(
             threadID: threadID,
             detail: detail,
@@ -2200,6 +2295,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onOpenDiff: onOpenDiff,
                 onRetrySend: onRetrySend,
                 onRetryTurn: onRetryTurn,
+                onRetrySetup: onRetrySetup,
                 onOpenCitation: onOpenCitation,
                 citationContext: citationContext,
                 onUseTemplate: onUseTemplate
@@ -2270,6 +2366,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenDiff: (String, String?) -> Void = { _, _ in }
             var onRetrySend: () -> Void = {}
             var onRetryTurn: (() -> Void)?
+            var onRetrySetup: ((String) -> Void)?
             var onOpenCitation: (AssistantCitation) -> Void = { _ in }
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
@@ -2291,6 +2388,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         }
         private let citationHighlight = AssistantCitationHighlight()
         private let workLogHistory = ThreadWorkLogHistoryStore()
+        let turnItemDetails = ThreadTurnItemDetailStore()
         private var citationRequest: AssistantCitationNavigationRequest?
         private var citationCompletion: (AssistantCitationNavigationRequest, String?) -> Void = { _, _ in }
         private var citationPages = Set<String>()
@@ -2428,6 +2526,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 let context = rowContext
                 let highlight = citationHighlight
                 let toolHistory = workLogHistory
+                let toolDetails = turnItemDetails
                 cell.contentConfiguration = UIHostingConfiguration {
                     ThreadTimelineEntryView(
                         entry: entry,
@@ -2442,6 +2541,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                         onOpenDiff: context.onOpenDiff,
                         onRetrySend: context.onRetrySend,
                         onRetryTurn: context.onRetryTurn,
+                        onRetrySetup: context.onRetrySetup,
                         onToggleFold: { [weak self] in self?.toggleFold($0) }
                     )
                     // A recycled cell keeps the SwiftUI state of whatever it
@@ -2454,6 +2554,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.assistantCitationContext, context.citationContext)
                     .environment(\.assistantCitationHighlight, highlight)
                     .environment(\.threadWorkLogHistory, toolHistory)
+                    .environment(\.threadTurnItemDetails, toolDetails)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
                     .environment(\.openURL, OpenURLAction { url in

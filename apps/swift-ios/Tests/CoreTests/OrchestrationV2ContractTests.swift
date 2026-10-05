@@ -26,6 +26,105 @@ final class OrchestrationV2ContractTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(OrchestrationV2Run.self, from: JSONEncoder().encode(fixture.run)), fixture.run)
     }
 
+    func testOnDemandTurnItemDetailContracts() throws {
+        struct Fixture: Decodable {
+            let wireItems: [OrchestrationV2TurnItem]
+            let result: OrchestrationV2GetTurnItemResult
+            let missing: OrchestrationV2GetTurnItemResult
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/turnItemDetail.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.wireItems.map(\.outputOmitted), [true, true])
+        XCTAssertTrue(fixture.wireItems.allSatisfy(ThreadTurnItemDetail.needsFetch))
+        let fetched = try XCTUnwrap(fixture.result.item)
+        XCTAssertFalse(fetched.outputOmitted)
+        XCTAssertEqual(ThreadTurnItemDetail.outputText(fetched), "12 tests passed")
+        XCTAssertNil(fixture.missing.item)
+        // Re-encoding keeps the flag, so a cached projection still knows to fetch.
+        let roundTripped = try JSONDecoder().decode(
+            OrchestrationV2TurnItem.self, from: JSONEncoder().encode(fixture.wireItems[0])
+        )
+        XCTAssertTrue(roundTripped.outputOmitted)
+    }
+
+    func testWorkspacePreparationRetryContracts() throws {
+        struct Fixture: Decodable {
+            let run: OrchestrationV2Run
+            let failedItem: OrchestrationV2TurnItem
+            let retriedItem: OrchestrationV2TurnItem
+            let retryCommand: JSONValue
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/workspacePreparation.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.run.workspacePreparation?.type, "worktree")
+        XCTAssertEqual(fixture.run.workspacePreparation?.baseRef, "main")
+        XCTAssertEqual(fixture.run.workspacePreparation?.startFromOrigin, true)
+        guard case let .error(failure, _) = fixture.failedItem.payload else {
+            return XCTFail("expected an error item")
+        }
+        XCTAssertEqual(failure.code, orchestrationV2WorkspacePreparationFailureCode)
+        XCTAssertTrue(ThreadWorkspacePreparationRetry.isRetriedFailure(fixture.retriedItem))
+        XCTAssertFalse(ThreadWorkspacePreparationRetry.isRetriedFailure(fixture.failedItem))
+        XCTAssertEqual(
+            OrchestrationCommands.retryWorkspacePreparation(
+                threadID: "thread-v2", runID: fixture.run.id, commandID: "command-retry"
+            ),
+            fixture.retryCommand
+        )
+    }
+
+    /// The Working section orders on the last message the user wrote. A
+    /// server that predates the stamp omits it, which must decode to nil
+    /// rather than fail the shell.
+    func testThreadShellLatestUserAuthoredMessageStamp() throws {
+        struct Fixture: Decodable {
+            let stamped: OrchestrationV2ThreadShell
+            let neverAuthored: OrchestrationV2ThreadShell
+            let legacy: OrchestrationV2ThreadShell
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/threadShell.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.stamped.latestUserAuthoredMessageAt, "2026-06-20T00:02:00.000Z")
+        // Wakes move latestUserMessageAt; the authored stamp stays behind.
+        XCTAssertEqual(fixture.stamped.latestUserMessageAt, "2026-06-20T00:05:00.000Z")
+        XCTAssertNil(fixture.neverAuthored.latestUserAuthoredMessageAt)
+        XCTAssertNil(fixture.legacy.latestUserAuthoredMessageAt)
+    }
+
+    /// The shell's background roster: a kind from a newer server must decode as
+    /// `background_task` rather than fail the shell, and a server that predates
+    /// the list leaves it nil so callers fall back to the counts.
+    func testThreadShellPendingBackgroundTasks() throws {
+        struct Fixture: Decodable {
+            let legacy: OrchestrationV2ThreadShell
+            let backgroundSubagent: OrchestrationV2ThreadShell
+            let backgroundCommand: OrchestrationV2ThreadShell
+            let backgroundMonitor: OrchestrationV2ThreadShell
+            let backgroundUnknownKind: OrchestrationV2ThreadShell
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/threadShell.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+
+        XCTAssertNil(fixture.legacy.pendingBackgroundTasks)
+        XCTAssertEqual(fixture.backgroundSubagent.pendingBackgroundTasks, [
+            OrchestrationV2PendingBackgroundTask(taskId: "task-subagent", description: "/root/review_diff", kind: .subagent, childThreadId: "thread-child"),
+        ])
+        XCTAssertEqual(fixture.backgroundCommand.pendingBackgroundTasks, [
+            OrchestrationV2PendingBackgroundTask(taskId: "task-command", description: "Start the dev server", kind: .command),
+        ])
+        XCTAssertEqual(fixture.backgroundMonitor.pendingBackgroundTasks?.map(\.kind), [.monitor])
+        XCTAssertEqual(fixture.backgroundUnknownKind.pendingBackgroundTasks, [
+            OrchestrationV2PendingBackgroundTask(taskId: "task-future", description: "Scheduled wakeup", kind: .backgroundTask),
+        ])
+
+        XCTAssertTrue(OrchestrationV2PendingBackgroundTask.holdCompletion(fixture.backgroundSubagent.pendingBackgroundTasks ?? []))
+        XCTAssertFalse(OrchestrationV2PendingBackgroundTask.holdCompletion(fixture.backgroundCommand.pendingBackgroundTasks ?? []))
+        XCTAssertTrue(OrchestrationV2PendingBackgroundTask.holdCompletion(fixture.backgroundMonitor.pendingBackgroundTasks ?? []))
+        XCTAssertTrue(OrchestrationV2PendingBackgroundTask.holdCompletion(fixture.backgroundUnknownKind.pendingBackgroundTasks ?? []))
+    }
+
     /// Every turn item type the contract defines, as of the generated fixture.
     /// Kept explicit so adding a contract variant without a Swift case fails
     /// loudly rather than silently decoding to `.unknown`.
@@ -55,6 +154,14 @@ final class OrchestrationV2ContractTests: XCTestCase {
 
     private func projection() throws -> OrchestrationV2ThreadProjection {
         try JSONDecoder().decode(OrchestrationV2ThreadProjection.self, from: fixtureData())
+    }
+
+    func testSubagentRowsCarryTheModelAndProviderTheyRunOn() throws {
+        let subagent = try XCTUnwrap(projection().subagents.first)
+        XCTAssertEqual(subagent.model, "claude-haiku-4-5")
+        XCTAssertEqual(subagent.driver, "claudeAgent")
+        XCTAssertEqual(subagent.providerInstanceId, "claude-work")
+        XCTAssertEqual(subagent.childThreadId, "thread-child")
     }
 
     func testNativeParityFieldsDecodeFromServerContract() throws {

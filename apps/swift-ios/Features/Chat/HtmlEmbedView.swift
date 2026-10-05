@@ -72,6 +72,8 @@ enum HtmlEmbed {
     static let heightMessageHandlerName = "t3HtmlEmbedHeight"
     /// Discriminates our height payload from anything else an embed posts.
     static let heightMessageType = "t3-html-embed:height"
+    /// Where an app-authored user script reports back (a Mermaid render).
+    static let trustedMessageHandlerName = "t3EmbedTrusted"
 
     /// Posted on the main actor after an inline embed settles on a new height.
     ///
@@ -411,11 +413,19 @@ struct HtmlEmbedView: View {
 /// owner sets an explicit frame. That also keeps one authority for the height:
 /// the clamp in `HtmlEmbed`, applied once, rather than a size negotiation that
 /// can oscillate between the layout system and the document.
-private struct HtmlEmbedWebView: UIViewRepresentable {
+struct HtmlEmbedWebView: UIViewRepresentable {
     let document: String
     let isScrollEnabled: Bool
     /// `nil` for the expanded presentation, which scrolls instead of resizing.
     let onReportedHeight: ((Double) -> Void)?
+    /// App-authored script WebKit injects once the document has parsed. It
+    /// runs as a user script, so the document's CSP (inline only) does not
+    /// have to admit it, and it never comes from an agent. Changes with the
+    /// document; only the latest one runs.
+    var trustedScript: String? = nil
+    /// Messages the trusted script posts to `HtmlEmbed.trustedMessageHandlerName`.
+    /// Registered only for web views that pass it.
+    var onTrustedMessage: (([String: Any]) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -435,6 +445,13 @@ private struct HtmlEmbedWebView: UIViewRepresentable {
             context.coordinator,
             name: HtmlEmbed.heightMessageHandlerName
         )
+        if onTrustedMessage != nil {
+            configuration.userContentController.add(
+                context.coordinator,
+                name: HtmlEmbed.trustedMessageHandlerName
+            )
+            context.coordinator.handlesTrustedMessages = true
+        }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -450,17 +467,25 @@ private struct HtmlEmbedWebView: UIViewRepresentable {
         webView.accessibilityIdentifier = "html-embed"
         apply(scrollEnabled: isScrollEnabled, to: webView)
         context.coordinator.onReportedHeight = onReportedHeight
+        context.coordinator.onTrustedMessage = onTrustedMessage
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onReportedHeight = onReportedHeight
+        context.coordinator.onTrustedMessage = onTrustedMessage
         apply(scrollEnabled: isScrollEnabled, to: webView)
-        context.coordinator.load(document, into: webView)
+        context.coordinator.load(document, trustedScript: trustedScript, into: webView)
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         coordinator.onReportedHeight = nil
+        coordinator.onTrustedMessage = nil
+        if coordinator.handlesTrustedMessages {
+            webView.configuration.userContentController.removeScriptMessageHandler(
+                forName: HtmlEmbed.trustedMessageHandlerName
+            )
+        }
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
@@ -482,14 +507,23 @@ private struct HtmlEmbedWebView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var onReportedHeight: ((Double) -> Void)?
+        var onTrustedMessage: (([String: Any]) -> Void)?
+        var handlesTrustedMessages = false
         private var loadedDocument: String?
 
         /// Reloads only when the assembled document actually changed. SwiftUI
         /// re-runs `updateUIView` for unrelated reasons, and reloading would
         /// throw away whatever state the embed's own scripts hold.
-        func load(_ document: String, into webView: WKWebView) {
+        func load(_ document: String, trustedScript: String? = nil, into webView: WKWebView) {
             guard loadedDocument != document else { return }
             loadedDocument = document
+            let controller = webView.configuration.userContentController
+            controller.removeAllUserScripts()
+            if let trustedScript {
+                controller.addUserScript(
+                    WKUserScript(source: trustedScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+                )
+            }
             // `baseURL: nil` leaves the embed on `about:blank`: it has no origin
             // to inherit, so it cannot read app files or same-origin data.
             webView.loadHTMLString(document, baseURL: nil)
@@ -554,6 +588,10 @@ private struct HtmlEmbedWebView: UIViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            if message.name == HtmlEmbed.trustedMessageHandlerName {
+                if let payload = message.body as? [String: Any] { onTrustedMessage?(payload) }
+                return
+            }
             guard message.name == HtmlEmbed.heightMessageHandlerName,
                   let payload = message.body as? [String: Any],
                   payload["type"] as? String == HtmlEmbed.heightMessageType,

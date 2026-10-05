@@ -151,6 +151,21 @@ public enum ThreadLinkedPullRequestPresentation {
         return parts.joined(separator: " · ")
     }
 
+    /// What a pull request row offers for watching: nothing on a server that
+    /// cannot watch or on a closed request (the server ends the watch there),
+    /// otherwise the toggle and whether the row reads "Watching". A request the
+    /// host has not reported on yet counts as open, as on web.
+    public enum WatchState: Equatable, Sendable {
+        case unavailable
+        case notWatching
+        case watching
+    }
+
+    public static func watchState(_ link: FeatureLinkedPullRequest, supportsWatch: Bool) -> WatchState {
+        guard supportsWatch, link.snapshot.map({ $0.state == "open" }) ?? true else { return .unavailable }
+        return link.isWatched == true ? .watching : .notWatching
+    }
+
     /// Names the repository only when the thread's requests span more than
     /// one, such as a fork's pull request and its upstream one. With a single
     /// repository it is the project's and would only repeat on every row.

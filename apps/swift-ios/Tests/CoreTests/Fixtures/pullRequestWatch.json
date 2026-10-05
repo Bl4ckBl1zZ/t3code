@@ -1,0 +1,15 @@
+{
+  "capabilities": {
+    "repositoryIdentity": false,
+    "threadPullRequestWatch": true
+  },
+  "command": {
+    "type": "thread.pull-request.watch",
+    "commandId": "command-watch",
+    "threadId": "thread-v2",
+    "host": "github.com",
+    "repository": "example/repo",
+    "number": 41,
+    "watching": true
+  }
+}

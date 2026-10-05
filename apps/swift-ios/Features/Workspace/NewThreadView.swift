@@ -51,6 +51,9 @@ public struct NewThreadView: View {
     @State private var discardedDraft = false
     @State private var confirmsLeaving = false
     @State private var didFocusPrompt = false
+    /// The machine whose "No project" folder is being opened.
+    @State private var openingScratchEnvironmentID: String?
+    @State private var scratchFailure: String?
     @FocusState private var promptFocused: Bool
     private let voice = VoiceComposerCoordinator.shared
 
@@ -78,6 +81,7 @@ public struct NewThreadView: View {
     public var body: some View {
         NavigationStack {
             content
+                .background { keyboardShortcuts }
                 .navigationTitle("New Task")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -127,9 +131,8 @@ public struct NewThreadView: View {
         .onChange(of: selectedBranch) { scheduleDraftSave() }
         .onChange(of: startFromOrigin) { scheduleDraftSave() }
         .onChange(of: routing) { scheduleDraftSave() }
-        .task(id: "\(executionProject?.id ?? ""):\(selection?.providerID ?? "")") {
-            guard let project = executionProject, let instanceID = selection?.providerID,
-                  creationProviders.first(where: { $0.id == instanceID })?.driver == "antigravity" else { return }
+        .task(id: workspaceScanKey) {
+            guard let project = executionProject, let instanceID = selection?.providerID else { return }
             try? await model.client.refreshProviderWorkspace(projectID: project.id, instanceID: instanceID, cwd: project.path)
         }
         .task(id: balancingRequest) { await balanceEnvironment() }
@@ -156,6 +159,14 @@ public struct NewThreadView: View {
                 onRefresh: { Task { await loadBranches(refresh: true) } }
             )
         }
+        .alert("Couldn’t Start Without a Project", isPresented: Binding(
+            get: { scratchFailure != nil },
+            set: { if !$0 { scratchFailure = nil } }
+        )) {
+            Button("OK") {}
+        } message: {
+            Text(scratchFailure ?? "")
+        }
         .alert("Couldn’t Start Task", isPresented: $submissionFailed) {
             Button("OK") {}
         } message: {
@@ -163,6 +174,30 @@ public struct NewThreadView: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+    }
+
+    /// Hardware-keyboard commands, as hidden buttons so the shortcut overlay
+    /// lists them.
+    private var keyboardShortcuts: some View {
+        Group {
+            // Upstream's mobile default; Composer: Cycle Host on desktop and web.
+            Button("Next Machine", action: cycleMachine)
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(isSubmitting || creationEnvironments.count < 2)
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+
+    /// Steps the draft to the next machine, keeping the prompt, the way the
+    /// computer menu does.
+    private func cycleMachine() {
+        guard let next = NewTaskMachineCycle.next(
+            after: executionProject?.environmentID,
+            in: creationEnvironments.map(\.id)
+        ) else { return }
+        selectEnvironment(next)
     }
 
     @ViewBuilder
@@ -281,7 +316,7 @@ public struct NewThreadView: View {
 
     private var projectMenu: some View {
         Menu {
-            ForEach(creationProjects) { project in
+            ForEach(listedProjects) { project in
                 // A toggle rather than a picker: choosing the current project
                 // again still reaches `selectProject`, which reloads branches.
                 // Its on state draws the checkmark, leaving the row's image
@@ -303,11 +338,18 @@ public struct NewThreadView: View {
                     }
                 }
             }
+            scratchChoices
         } label: {
             // Primary text, not the accent role: most palettes define accent
             // as the message-bubble fill, which nearly vanishes on the sheet.
             HStack(spacing: 4) {
-                if let project = selectedProject {
+                if openingScratchEnvironmentID != nil {
+                    ProgressView()
+                        .padding(.trailing, 2)
+                } else if isScratchSelected {
+                    Image(systemName: "tray")
+                        .padding(.trailing, 2)
+                } else if let project = selectedProject {
                     ProjectFaviconBadge(
                         environmentID: project.environmentID,
                         workspaceRoot: project.path,
@@ -320,7 +362,7 @@ public struct NewThreadView: View {
                     }
                     .padding(.trailing, 2)
                 }
-                Text(selectedProject?.name ?? "a project")
+                Text(selectedProjectTitle)
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.semibold))
@@ -337,7 +379,82 @@ public struct NewThreadView: View {
             await menuIcons.decode(menuIcons.faviconURLs(creationProjects))
         }
         .accessibilityLabel("Project")
-        .accessibilityValue(selectedProject?.name ?? "None")
+        .accessibilityValue(isScratchSelected ? "No project" : selectedProject?.name ?? "None")
+    }
+
+    private var selectedProjectTitle: String {
+        isScratchSelected ? "No project" : selectedProject?.name ?? "a project"
+    }
+
+    /// The machines' Scratch projects are offered as "No project" below the
+    /// list rather than among it.
+    private var listedProjects: [FeatureProject] {
+        let configs = model.client.workspaceServerConfigs()
+        return creationProjects.filter { !DailyUXCreationContext.isScratchProject($0, serverConfigs: configs) }
+    }
+
+    private var scratchEnvironments: [FeatureEnvironment] {
+        DailyUXCreationContext.scratchEnvironments(
+            in: model.snapshot,
+            serverConfigs: model.client.workspaceServerConfigs()
+        )
+    }
+
+    private var isScratchSelected: Bool {
+        selectedProject.map {
+            DailyUXCreationContext.isScratchProject($0, serverConfigs: model.client.workspaceServerConfigs())
+        } ?? false
+    }
+
+    /// One "No project" per machine that has a Scratch folder; with a single
+    /// machine it needs no name.
+    @ViewBuilder
+    private var scratchChoices: some View {
+        let environments = scratchEnvironments
+        if !environments.isEmpty {
+            Section {
+                ForEach(environments) { environment in
+                    Toggle(isOn: Binding(
+                        get: { isScratchSelected && selectedProject?.environmentID == environment.id },
+                        set: { _ in openScratch(environmentID: environment.id) }
+                    )) {
+                        Label {
+                            Text(environments.count > 1 ? "No Project on \(environment.name)" : "No Project")
+                            Text("A folder for tasks outside any repository")
+                        } icon: {
+                            Image(systemName: "tray")
+                        }
+                    }
+                    .disabled(openingScratchEnvironmentID != nil)
+                }
+            }
+        }
+    }
+
+    /// Finds or creates the machine's Scratch project and starts the task
+    /// there. The draft follows, as it does for any project switch.
+    private func openScratch(environmentID: String) {
+        let configs = model.client.workspaceServerConfigs()
+        if let existing = creationProjects.first(where: {
+            $0.environmentID == environmentID && DailyUXCreationContext.isScratchProject($0, serverConfigs: configs)
+        }) {
+            selectProject(existing.id)
+            return
+        }
+        guard openingScratchEnvironmentID == nil else { return }
+        openingScratchEnvironmentID = environmentID
+        Task { @MainActor in
+            defer { openingScratchEnvironmentID = nil }
+            do {
+                let projectID = try await model.openScratchProject(environmentID: environmentID)
+                guard creationProjects.contains(where: { $0.id == projectID }) else { return }
+                selectProject(projectID)
+            } catch is CancellationError {
+                return
+            } catch {
+                scratchFailure = error.localizedDescription
+            }
+        }
     }
 
     @ViewBuilder
@@ -528,6 +645,12 @@ public struct NewThreadView: View {
                 }
             }
             .t3ProminentButtonStyle()
+            ForEach(scratchEnvironments) { environment in
+                Button(scratchEnvironments.count > 1 ? "Start Without a Project on \(environment.name)" : "Start Without a Project") {
+                    openScratch(environmentID: environment.id)
+                }
+                .disabled(openingScratchEnvironmentID != nil)
+            }
         }
     }
 
@@ -708,6 +831,16 @@ public struct NewThreadView: View {
                 in: model.snapshot
             )
         )
+    }
+
+    /// Re-scans the project's workspace when the provider, the project, the
+    /// provider's availability, or its stored scan of that path changes.
+    private var workspaceScanKey: String {
+        let instanceID = selection?.providerID ?? ""
+        let provider = creationProviders.first { $0.id == instanceID }
+        let path = executionProject?.path
+        let state = "\(provider?.isAvailable == true):\(provider?.hasCompleteWorkspace(path) == true)"
+        return "\(executionProject?.id ?? ""):\(instanceID):\(state)"
     }
 
     private var composerPowerFeatures: FeatureComposerPowerFeatures {
@@ -1300,5 +1433,16 @@ private struct NewTaskBranchSheetBackground: ViewModifier {
         } else {
             content.presentationBackground(T3Colors.background)
         }
+    }
+}
+
+/// Ports `nextEnvironmentId` from apps/mobile's hardwareKeyboardCommands.ts:
+/// the machine after the current one in display order, wrapping around, or
+/// the first when the current one is not listed. Nil with fewer than two.
+enum NewTaskMachineCycle {
+    static func next(after currentID: String?, in environmentIDs: [String]) -> String? {
+        guard environmentIDs.count > 1 else { return nil }
+        let index = currentID.flatMap { environmentIDs.firstIndex(of: $0) } ?? -1
+        return environmentIDs[(index + 1) % environmentIDs.count]
     }
 }

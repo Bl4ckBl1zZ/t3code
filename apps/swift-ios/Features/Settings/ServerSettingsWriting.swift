@@ -165,6 +165,8 @@ extension ServerSettingsPatchInput {
         if let value = later.defaultAutoPull { result.defaultAutoPull = value }
         result.projectAgentBrowserAccessOverrides = mergeMap(projectAgentBrowserAccessOverrides, later.projectAgentBrowserAccessOverrides)
         result.projectAutoPullOverrides = mergeMap(projectAutoPullOverrides, later.projectAutoPullOverrides)
+        if let value = later.pullRequestMergeMethod { result.pullRequestMergeMethod = value }
+        result.projectPullRequestMergeMethodOverrides = mergeMap(projectPullRequestMergeMethodOverrides, later.projectPullRequestMergeMethodOverrides)
         if let value = later.providerInstances { result.providerInstances = value }
         result.customModelsByDriver = mergeMap(customModelsByDriver, later.customModelsByDriver)
         if let value = later.environmentIcon { result.environmentIcon = value }

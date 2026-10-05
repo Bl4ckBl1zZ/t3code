@@ -1,3 +1,4 @@
+import ActivityKit
 import Foundation
 import XCTest
 @testable import T3Code
@@ -102,6 +103,41 @@ final class LiveActivityRegistrationHardeningTests: XCTestCase {
                 now: Date(timeIntervalSince1970: 1_000)
             )
         )
+    }
+
+    // MARK: - Expired cards (upstream 77823bd102)
+
+    /// iOS ends a card after eight hours yet keeps it on the Lock Screen. It
+    /// must not be updated as if it were live, and it must be dismissed so the
+    /// replacement does not stand beside it.
+    func testAnExpiredCardIsDismissedAndAReplacementIsRequested() {
+        let plan = PlatformLiveActivitySelection.plan([
+            .init(id: "expired", isFinished: true),
+        ])
+
+        XCTAssertNil(plan.primary, "no live card, so synchronization requests a new one")
+        XCTAssertEqual(plan.finished, ["expired"])
+        XCTAssertTrue(plan.redundant.isEmpty)
+    }
+
+    func testThePrimaryIsTheFirstLiveCardEvenBehindAnExpiredOne() {
+        let plan = PlatformLiveActivitySelection.plan([
+            .init(id: "expired", isFinished: true),
+            .init(id: "live-a", isFinished: false),
+            .init(id: "dismissed", isFinished: true),
+            .init(id: "live-b", isFinished: false),
+        ])
+
+        XCTAssertEqual(plan.primary, "live-a")
+        XCTAssertEqual(plan.redundant, ["live-b"])
+        XCTAssertEqual(plan.finished, ["expired", "dismissed"])
+    }
+
+    func testOnlyEndedAndDismissedCountAsFinished() {
+        XCTAssertTrue(ActivityState.ended.isFinished)
+        XCTAssertTrue(ActivityState.dismissed.isFinished)
+        XCTAssertFalse(ActivityState.active.isFinished)
+        XCTAssertFalse(ActivityState.stale.isFinished)
     }
 
     // MARK: - Token-registry expiry pruning

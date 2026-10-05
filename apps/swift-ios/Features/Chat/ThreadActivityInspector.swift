@@ -19,11 +19,15 @@ public struct ThreadActivityInspectorBlock: Equatable, Sendable {
     public let label: String?
     public let value: String
     public let monospaced: Bool
+    /// Lexer language for syntax colours (`FeatureSourceHighlighter`); nil
+    /// renders plain text.
+    public let language: String?
 
-    public init(label: String?, value: String, monospaced: Bool) {
+    public init(label: String?, value: String, monospaced: Bool, language: String? = nil) {
         self.label = label
         self.value = value
         self.monospaced = monospaced
+        self.language = language
     }
 }
 
@@ -422,8 +426,12 @@ public enum ThreadActivityInspector {
             }
 
         case let .dynamicTool(_, input, output):
-            addBlock(&blocks, "Input", input)
-            addBlock(&blocks, "Output", output)
+            addToolBlock(&blocks, "Input", ThreadTurnItemDetail.formatToolValue(input))
+            // A withheld output arrives as a one-line summary; the open row
+            // fetches the real one instead of showing that.
+            if !item.outputOmitted {
+                addToolBlock(&blocks, "Output", ThreadTurnItemDetail.formatToolValue(output))
+            }
 
         case let .approvalRequest(_, _, prompt, _):
             addBlock(&blocks, "Prompt", prompt, monospaced: false)
@@ -592,25 +600,22 @@ public enum ThreadActivityInspector {
         blocks.append(.init(label: label, value: value, monospaced: monospaced))
     }
 
-    /// Provider-defined payloads (dynamic tool input and output) arrive as raw
-    /// JSON. A JSON string renders as its text; anything else is pretty-printed.
-    private static func addBlock(
+    /// Tool payloads that read as JSON get JSON colours; text blocks stay plain.
+    private static func addToolBlock(
         _ blocks: inout [ThreadActivityInspectorBlock],
         _ label: String,
-        _ value: JSONValue?,
-        monospaced: Bool = true
+        _ value: String?
     ) {
-        guard let value else { return }
-        switch value {
-        case .null:
-            return
-        case let .string(text):
-            addBlock(&blocks, label, text, monospaced: monospaced)
-        default:
-            blocks.append(
-                .init(label: label, value: stringify(value, indent: 0), monospaced: monospaced)
-            )
-        }
+        guard let value, !value.isEmpty else { return }
+        blocks.append(
+            .init(label: label, value: value, monospaced: true, language: jsonLanguage(for: value))
+        )
+    }
+
+    /// "json" when the text opens like a JSON document.
+    static func jsonLanguage(for value: String) -> String? {
+        let first = value.first { !$0.isWhitespace }
+        return first == "{" || first == "[" ? "json" : nil
     }
 
     // MARK: - Duration
@@ -670,6 +675,11 @@ public enum ThreadActivityInspector {
             ],
             indent: 0
         )
+    }
+
+    /// Provider-defined JSON, indented the way the web client shows it.
+    static func prettyJSON(_ value: JSONValue) -> String {
+        stringify(value, indent: 0)
     }
 
     /// `JSON.stringify(value, null, 2)`, which `JSONSerialization.prettyPrinted`

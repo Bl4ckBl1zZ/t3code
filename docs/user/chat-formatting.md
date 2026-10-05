@@ -31,6 +31,14 @@ does not mean the assistant has tested the saved result.
 
 These instructions guide future answers; they do not rewrite earlier messages.
 
+## Diagrams
+
+When an answer finishes, its `mermaid` code blocks appear as diagrams on web, desktop and iOS;
+iOS draws each one as soon as its block is complete. Use the code button on the block to switch
+between the diagram and its source. A diagram that cannot be drawn shows its source with the
+reason. On iOS, the expand button opens the diagram full screen, where you can scroll and zoom.
+Diagrams are drawn on your device without loading anything from the network.
+
 ## Inspecting images on iOS
 
 Open an image to view it full screen. Pinch to zoom, drag to pan while zoomed,

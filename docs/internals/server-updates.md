@@ -99,6 +99,17 @@ compatible protocol, refreshes T3 Connect discovery so a stale relay descriptor 
 clears the compatibility error, and switches the environment back on. Normal connects keep skipping
 the descriptor round trip: the socket names the client's protocol and the server refuses a mismatch.
 
+The SwiftUI iOS client mirrors this by hand (`apps/swift-ios/Core/EnvironmentCompatibility.swift`).
+`OrchestrationProtocol.compatibilityIssue(with:)` applies the same rule (a missing version is
+compatible). Pairing saves an incompatible host it can update switched off with
+`unsupportedReason` and refuses any other before the token exchange, and a client whose socket redial fails reads the public descriptor before redialing, so a host that was
+updated past the app is switched off instead of retried forever. Switching such an environment on
+reads the descriptor again first. `EnvironmentRuntime.updateOutdatedServer` updates only
+desktop-managed hosts that advertise `desktopAppUpdate`, over a socket that names no protocol,
+because the app knows no exact npm target version for other self-update methods; those get manual
+guidance. T3 Connect discovery in the iOS app refuses an incompatible machine rather than saving
+it.
+
 ## Source Map
 
 - Launcher and state machine: `apps/server/src/serviceLauncher.ts`

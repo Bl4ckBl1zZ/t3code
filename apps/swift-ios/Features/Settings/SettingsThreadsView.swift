@@ -6,6 +6,7 @@ import SwiftUI
 struct SettingsThreadsView: View {
     @Binding var settings: FeatureSettings
     var saveError: String?
+    @AppStorage(HomeWorkingSection.enabledKey) private var isWorkingSectionEnabled = false
 
     var body: some View {
         SettingsForm {
@@ -23,6 +24,19 @@ struct SettingsThreadsView: View {
                 Toggle("Activity Detail", isOn: $settings.alwaysExpandActivity)
             } footer: {
                 Text("Keeps every tool call and reasoning step expanded on settled turns.")
+            }
+
+            Section {
+                Toggle("Working Section", isOn: $isWorkingSectionEnabled)
+            } header: {
+                Text("Beta")
+            } footer: {
+                Text(
+                    "Moves threads that are working, or waiting on subagents or monitors, "
+                        + "into a Working section on Home until they finish or need you. Threads that "
+                        + "come back are listed newest first, so arranging the list is paused. "
+                        + "Applies to this device only."
+                )
             }
         }
         .navigationTitle("Chat")

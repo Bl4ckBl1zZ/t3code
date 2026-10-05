@@ -19,6 +19,12 @@ struct PullRequestWorkspaceView: View {
     }
 
     @State private var refreshError: String?
+    /// Rows with a quick action on its way to the host; one at a time per row.
+    @State private var quickActionRowIDs: Set<String> = []
+    @State private var confirmingClose: NativePullRequestRow?
+    @State private var quickActionFailure: ThreadDetailsFailure?
+    /// Whether rows can act at all: the manager writes to the host.
+    private var canRunActions: Bool { manager is any FeaturePullRequestReviewWriting }
 
     var body: some View {
         NavigationStack {
@@ -145,6 +151,26 @@ struct PullRequestWorkspaceView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .refreshable { await reload(force: true) }
+        .confirmationDialog(
+            "Close #\(confirmingClose?.entry.number ?? 0)?",
+            isPresented: Binding(get: { confirmingClose != nil }, set: { if !$0 { confirmingClose = nil } }),
+            titleVisibility: .visible,
+            presenting: confirmingClose
+        ) { row in
+            Button("Close Pull Request", role: .destructive) { Task { await perform(.close, row: row) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(NativePullRequestAction.close.explanation)
+        }
+        .alert(
+            quickActionFailure?.title ?? "",
+            isPresented: Binding(get: { quickActionFailure != nil }, set: { if !$0 { quickActionFailure = nil } }),
+            presenting: quickActionFailure
+        ) { _ in
+            Button("OK") {}
+        } message: { failure in
+            Text(failure.message)
+        }
         .toolbar {
             if feed.loading && !rows.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -172,12 +198,102 @@ struct PullRequestWorkspaceView: View {
                 Button("Open on Host", systemImage: "safari") { openURL(url) }.tint(.blue)
             }
         }
+        // One tap on the revealed button, never a full swipe: these act on the host.
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            ForEach(quickActions(row)) { action in
+                Button(Self.quickLabel(action), systemImage: action.systemImage) { trigger(action, row: row) }
+                    .tint(action == .close ? T3Colors.danger : Self.quickTint(action))
+            }
+        }
         .contextMenu {
+            let actions = quickActions(row)
+            if !actions.isEmpty {
+                Section {
+                    ForEach(actions) { action in
+                        Button(Self.quickLabel(action), systemImage: action.systemImage, role: action == .close ? .destructive : nil) {
+                            trigger(action, row: row)
+                        }
+                    }
+                }
+            }
             if let url = Self.hostURL(row) {
                 Button("Open on Host", systemImage: "arrow.up.right.square") { openURL(url) }
                 Button("Copy Link", systemImage: "link") { copy(url) }
             }
         }
+    }
+
+    // MARK: - Quick actions
+
+    private func quickActions(_ row: NativePullRequestRow) -> [NativePullRequestAction] {
+        guard canRunActions, !quickActionRowIDs.contains(row.id) else { return [] }
+        return PullRequestActionLogic.quickActions(row.entry)
+    }
+
+    private static func quickLabel(_ action: NativePullRequestAction) -> String {
+        action == .close ? "Close" : action.primaryLabel
+    }
+
+    private static func quickTint(_ action: NativePullRequestAction) -> Color {
+        switch action {
+        case .merge: T3Colors.success
+        case .ready: T3Colors.statusRunning
+        default: T3Colors.textSecondary
+        }
+    }
+
+    private static func scope(_ row: NativePullRequestRow) -> FeaturePullRequestProjectScope {
+        .init(projectID: row.projectID, host: row.entry.host, repository: row.entry.repository)
+    }
+
+    /// Close asks first, the way the detail screen does; the rest run at once.
+    private func trigger(_ action: NativePullRequestAction, row: NativePullRequestRow) {
+        if action == .close { confirmingClose = row }
+        else { Task { await perform(action, row: row) } }
+    }
+
+    /// Runs through the same access as the detail screen, so the row hears
+    /// sent, done and failed the same way. A merge reads the detail at the tap
+    /// and refuses, before anything is sent, one this viewer cannot merge or
+    /// one that sits in a stack.
+    private func perform(_ action: NativePullRequestAction, row: NativePullRequestRow) async {
+        guard !quickActionRowIDs.contains(row.id) else { return }
+        let rowID = row.id
+        let access = FeaturePullRequestAccess(manager: manager, scope: Self.scope(row)) { name, phase in
+            feed.noteAction(name, phase: phase, rowID: rowID)
+        }
+        guard let run = access.runAction else { return }
+        quickActionRowIDs.insert(rowID)
+        defer { quickActionRowIDs.remove(rowID) }
+        var mergeMethod: String?
+        do {
+            if action == .merge {
+                let detail = try await access.overview(row.entry.number).detail
+                if let refusal = PullRequestActionLogic.quickMergeRefusal(detail) {
+                    return refuse(action, refusal)
+                }
+                // Nil when the server cannot read stacks; the row is GitHub's.
+                if try await access.stack(row.entry.number) != nil {
+                    return refuse(action, PullRequestActionLogic.stackedQuickMergeRefusal)
+                }
+                mergeMethod = PullRequestActionLogic.resolveMergeMethod(allowed: PullRequestActionLogic.mergeMethods(detail),
+                    current: nil, projectDefault: access.mergeMethodDefault(), lastUsed: PullRequestMergeMethodMemory.lastUsed())
+            }
+        } catch {
+            return refuse(action, error.localizedDescription)
+        }
+        do {
+            try await run(row.entry.number, row.entry.url, .init(action: action.rawValue, mergeMethod: mergeMethod, updateMethod: nil))
+            if action == .merge { T3HUD.show("Merged #\(row.entry.number)", systemImage: "arrow.triangle.merge") }
+            else { PlatformHapticEngine.shared.play(.success) }
+        } catch {
+            refuse(action, error.localizedDescription)
+        }
+    }
+
+    private func refuse(_ action: NativePullRequestAction, _ message: String) {
+        quickActionFailure = ThreadDetailsFailure(title: action.failureTitle, message: message)
+        PlatformHapticEngine.shared.play(.error)
     }
 
     @ViewBuilder private var emptyState: some View {

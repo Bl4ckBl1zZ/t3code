@@ -179,12 +179,121 @@ public actor EnvironmentStore {
         return environments
     }
 
+    /// Switches one saved environment on or off. Off moves the active
+    /// selection to the next environment that is still on, so nothing keeps
+    /// pointing at a server this device no longer connects to.
+    @discardableResult
+    public func setEnabled(id: String, enabled: Bool) throws -> [Environment] {
+        var document = try loadDocument()
+        guard let index = document.environments.firstIndex(where: { $0.id == id }) else {
+            return document.environments
+        }
+        guard document.environments[index].isEnabled != enabled else {
+            return document.environments
+        }
+        document.environments[index].isEnabled = enabled
+        if !enabled, document.activeEnvironmentID == id {
+            document.activeEnvironmentID = document.environments.first(where: \.isEnabled)?.id
+        }
+        try save(document)
+        return document.environments
+    }
+
+    /// Records the result of a protocol check. An incompatible environment is
+    /// switched off (and stops being the active one) with the reason kept for
+    /// Settings; a compatible result clears the reason but leaves the switch
+    /// to the caller. Returns the saved environment.
+    @discardableResult
+    public func setCompatibility(
+        id: String,
+        issue: EnvironmentCompatibilityIssue?
+    ) throws -> Environment? {
+        var document = try loadDocument()
+        guard let index = document.environments.firstIndex(where: { $0.id == id }) else {
+            return nil
+        }
+        var environment = document.environments[index]
+        environment.unsupportedReason = issue?.reason
+        environment.serverUpdateRequired = issue?.serverUpdateRequired ?? false
+        if issue != nil {
+            environment.isEnabled = false
+        }
+        guard environment != document.environments[index] else { return environment }
+        document.environments[index] = environment
+        if !environment.isEnabled, document.activeEnvironmentID == id {
+            document.activeEnvironmentID = document.environments.first(where: \.isEnabled)?.id
+        }
+        try save(document)
+        return environment
+    }
+
+    /// Saves the addresses a server reports as learned routes. Runs the merge
+    /// against the saved record inside this actor so a concurrent route edit
+    /// is never overwritten. Returns the new routes, or nil when nothing
+    /// changed or `activeRouteID` is no longer saved.
+    public func learnRoutes(
+        id: String,
+        activeRouteID: String,
+        reported: [ServerDirectEndpoint]
+    ) throws -> [EnvironmentRoute]? {
+        var document = try loadDocument()
+        guard let index = document.environments.firstIndex(where: { $0.id == id }),
+              let active = document.environments[index].routes.first(where: { $0.id == activeRouteID }),
+              let next = EnvironmentRoutes.mergingLearned(
+                  into: document.environments[index].routes,
+                  activeRoute: active,
+                  reported: reported
+              ) else {
+            return nil
+        }
+        document.environments[index].routes = next
+        try save(document)
+        return next
+    }
+
+    /// Puts the saved routes in the order of `routeIDs`, which must list each
+    /// once. Returns the new routes, or nil when the order is not valid.
+    public func reorderRoutes(id: String, routeIDs: [String]) throws -> [EnvironmentRoute]? {
+        var document = try loadDocument()
+        guard let index = document.environments.firstIndex(where: { $0.id == id }),
+              let next = EnvironmentRoutes.reordered(
+                  document.environments[index].routes,
+                  as: routeIDs
+              ) else {
+            return nil
+        }
+        guard next != document.environments[index].routes else { return next }
+        document.environments[index].routes = next
+        try save(document)
+        return next
+    }
+
+    /// Drops one route and the learned routes that borrow its credential.
+    /// Refuses to drop the last route; removing the environment does that.
+    /// Returns the routes before and after, or nil when nothing was removed.
+    public func removeRoute(
+        id: String,
+        routeID: String
+    ) throws -> (removed: [EnvironmentRoute], remaining: [EnvironmentRoute])? {
+        var document = try loadDocument()
+        guard let index = document.environments.firstIndex(where: { $0.id == id }) else {
+            return nil
+        }
+        let previous = document.environments[index].routes
+        let remaining = EnvironmentRoutes.removing(routeID, from: previous)
+        guard !remaining.isEmpty, remaining.count < previous.count else { return nil }
+        document.environments[index].routes = remaining
+        try save(document)
+        let remainingIDs = Set(remaining.map(\.id))
+        return (previous.filter { !remainingIDs.contains($0.id) }, remaining)
+    }
+
     @discardableResult
     public func remove(id: String) throws -> [Environment] {
         var document = try loadDocument()
         document.environments.removeAll { $0.id == id }
         if document.activeEnvironmentID == id {
-            document.activeEnvironmentID = document.environments.first?.id
+            document.activeEnvironmentID = document.environments.first(where: \.isEnabled)?.id
         }
         try save(document)
         return document.environments

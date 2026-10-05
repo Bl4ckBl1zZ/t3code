@@ -560,6 +560,8 @@ public enum T3McpToolPresentation {
         "link_pull_request": ("Link", "Linking", "Linked", "a pull request"),
         "unlink_pull_request": ("Unlink", "Unlinking", "Unlinked", "a pull request"),
         "list_thread_pull_requests": ("Check", "Checking", "Checked", "linked pull requests"),
+        "watch_pull_request": ("Watch", "Watching", "Watching", "a pull request"),
+        "unwatch_pull_request": ("Stop watching", "Stopping watching", "Stopped watching", "a pull request"),
         "orchestrator_capabilities": ("Get", "Getting", "Got", "orchestration capabilities"),
         "delegate_task": ("Delegate", "Delegating", "Delegated", "a child task"),
         "task_status": ("Get", "Getting", "Got", "delegated task status"),
@@ -611,7 +613,8 @@ public enum T3McpToolPresentation {
         default: verb = action
         }
         let target: String
-        if ["link_pull_request", "unlink_pull_request"].contains(resolved), let number = pullRequestNumber(input) {
+        if ["link_pull_request", "unlink_pull_request", "watch_pull_request", "unwatch_pull_request"].contains(resolved),
+           let number = pullRequestNumber(input) {
             target = "PR #\(number)"
         } else { target = detail }
         return "\(verb) \(target)"
@@ -625,13 +628,15 @@ public enum T3McpToolPresentation {
         case "link_pull_request": return .linkPR
         case "unlink_pull_request": return .unlinkPR
         case "list_thread_pull_requests": return .listPRs
+        case "watch_pull_request": return .watchPR
+        case "unwatch_pull_request": return .unwatchPR
         default: return name.hasPrefix("preview_") ? .browser : nil
         }
     }
 
     static func icon(for item: OrchestrationV2TurnItem) -> ThreadWorkLogRow.Icon? {
         switch historicalAction(for: item) {
-        case .linkPR, .unlinkPR, .listPRs: .pullRequest
+        case .linkPR, .unlinkPR, .listPRs, .watchPR, .unwatchPR: .pullRequest
         case .browser: .globe
         default: nil
         }
@@ -1015,12 +1020,17 @@ struct ThreadWorkLog: View {
     var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
     /// Resends the last user message after a failed turn.
     var onRetryTurn: (() -> Void)? = nil
+    /// Runs whose failed workspace preparation can be retried in place.
+    var retryableSetupRunIDs: Set<String> = []
+    /// Dispatches `prepared-run.retry` for a run, instead of resending.
+    var onRetrySetup: ((String) -> Void)? = nil
     /// `FeatureSettings.alwaysExpandActivity`: the log opens unfolded and every
     /// row opens with it, the way a provider CLI leaves its scrollback alone.
     var alwaysExpandActivity: Bool = false
 
     /// `nil` until the reader touches the fold, so the preference decides it.
     @SwiftUI.Environment(\.threadWorkLogHistory) private var sharedHistory
+    @SwiftUI.Environment(\.threadTurnItemDetails) private var turnItemDetails
     @State private var localHistory = ThreadWorkLogHistoryStore()
     private var history: ThreadWorkLogHistory {
         (sharedHistory ?? localHistory).entry("\(currentThreadID):\(rows.first?.id ?? "empty")")
@@ -1147,42 +1157,42 @@ struct ThreadWorkLog: View {
                 onOpenDiff: { onOpenDiff(checkpointID, $0) }
             )
         } else if row.item.type == "error" {
-            ProviderErrorCallout(row: row, onRetry: onRetryTurn)
+            if let runID = row.runID, retryableSetupRunIDs.contains(runID), let onRetrySetup {
+                ProviderErrorCallout(row: row, retryLabel: "Retry setup", onRetry: { onRetrySetup(runID) })
+            } else {
+                ProviderErrorCallout(row: row, onRetry: onRetryTurn)
+            }
         } else {
+            // Rows with nothing to show offer no disclosure, so they never
+            // open to an empty panel.
+            let canExpand = ThreadTurnItemDetail.hasDetail(row.item)
+            let isExpanded = canExpand && isRowExpanded(row.id)
             VStack(alignment: .leading, spacing: 0) {
                 WorkLogRowButton(
                     row: row,
                     workspaceRoot: workspaceRoot,
-                    isExpanded: isRowExpanded(row.id),
+                    isExpanded: isExpanded,
+                    canExpand: canExpand,
                     onToggle: { toggleRow(row.id) },
                     onCopy: { copy(row) }
                 )
 
-                if isRowExpanded(row.id) {
-                    ThreadActivityInspectorView(
-                        model: ThreadActivityInspector.build(
-                            row: row.projectedItem,
-                            support: itemSupport(row.projectedItem),
-                            currentThreadID: currentThreadID,
-                            currentWireThreadID: currentWireThreadID
-                        ),
+                if isExpanded {
+                    WorkLogRowInspector(
+                        row: row,
+                        support: itemSupport(row.projectedItem),
                         currentThreadID: currentThreadID,
                         currentWireThreadID: currentWireThreadID,
-                        activitySourceThreadID: row.projectedItem.sourceThreadId,
                         workspaceRoot: workspaceRoot,
                         onOpenFile: onOpenFile,
                         onOpenURL: onOpenURL,
                         onRollback: onRollback
                     )
-                    .padding(.leading, 12)
                     .padding(.top, 2)
                     .padding(.bottom, 6)
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(ChatTimelineStyle.hairline)
-                            .frame(width: 1)
-                    }
-                    .padding(.leading, 28)
+                    // Reasoning reads as prose under its row; tool detail
+                    // takes the full width instead of nesting under a rule.
+                    .padding(.leading, row.item.type == "reasoning" ? 28 : 0)
                 }
 
                 if row.prominent {
@@ -1235,8 +1245,9 @@ struct ThreadWorkLog: View {
     }
 
     private func copy(_ row: ThreadWorkLogRow) {
+        // Copies the fetched output too once the row has loaded it.
         let model = ThreadActivityInspector.build(
-            row: row.projectedItem,
+            row: turnItemDetails?.resolve(row.projectedItem).row ?? row.projectedItem,
             support: itemSupport(row.projectedItem),
             currentThreadID: currentThreadID,
             currentWireThreadID: currentWireThreadID
@@ -1303,10 +1314,50 @@ private struct WorkLogRowText: View {
     }
 }
 
+/// An open work row: the inspector over the row's item, with the output the
+/// wire withheld fetched while it stays open.
+private struct WorkLogRowInspector: View {
+    let row: ThreadWorkLogRow
+    let support: ThreadActivityItemSupport
+    let currentThreadID: String
+    let currentWireThreadID: String
+    let workspaceRoot: String?
+    let onOpenFile: (ThreadActivityFileOpenRequest) -> Void
+    let onOpenURL: (URL) -> Void
+    let onRollback: (ThreadActivityRollbackTarget) -> Void
+
+    @SwiftUI.Environment(\.threadTurnItemDetails) private var details
+
+    var body: some View {
+        let resolved = details?.resolve(row.projectedItem) ?? (row: row.projectedItem, output: nil)
+        ThreadActivityInspectorView(
+            model: ThreadActivityInspector.build(
+                row: resolved.row,
+                support: support,
+                currentThreadID: currentThreadID,
+                currentWireThreadID: currentWireThreadID
+            ),
+            currentThreadID: currentThreadID,
+            currentWireThreadID: currentWireThreadID,
+            activitySourceThreadID: row.projectedItem.sourceThreadId,
+            workspaceRoot: workspaceRoot,
+            outputState: resolved.output,
+            onOpenFile: onOpenFile,
+            onOpenURL: onOpenURL,
+            onRollback: onRollback
+        )
+        .task(id: ThreadTurnItemDetailStore.key(row.projectedItem)) {
+            await details?.load(row.projectedItem)
+        }
+    }
+}
+
 private struct WorkLogRowButton: View {
     let row: ThreadWorkLogRow
     let workspaceRoot: String?
     let isExpanded: Bool
+    /// False when opening the row would show nothing: no chevron, no toggle.
+    let canExpand: Bool
     let onToggle: () -> Void
     let onCopy: () -> Void
 
@@ -1340,7 +1391,8 @@ private struct WorkLogRowButton: View {
     }
 
     var body: some View {
-        Button(action: onToggle) {
+        // Still a button without detail: long-press copy works on every row.
+        Button { if canExpand { onToggle() } } label: {
             HStack(spacing: 8) {
                 ThreadToolActivityIcon(icon: row.waiting == nil ? row.activityIcon : nil, fallback: symbolName)
                     .font(ChatTimelineStyle.bodyStrong)
@@ -1360,7 +1412,10 @@ private struct WorkLogRowButton: View {
                         status: row.trailingStatus,
                         failureTint: isDestructive ? T3Colors.danger : T3Colors.textTertiary
                     )
+                    // Hidden rather than removed, so trailing glyphs stay
+                    // in one column down the log.
                     TimelineDisclosureChevron(isExpanded: isExpanded)
+                        .opacity(canExpand ? 1 : 0)
                 }
             }
             .frame(minHeight: T3Metrics.minimumTapTarget)
@@ -1375,8 +1430,9 @@ private struct WorkLogRowButton: View {
             }
         }
         .accessibilityLabel(accessibilityText)
-        .accessibilityValue([row.trailingStatus?.accessibilityLabel, isExpanded ? "Expanded" : "Collapsed"].compactMap { $0 }.joined(separator: ", "))
-        .accessibilityHint("Double tap to show full details.")
+        .accessibilityValue([row.trailingStatus?.accessibilityLabel, canExpand ? (isExpanded ? "Expanded" : "Collapsed") : nil].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityRemoveTraits(canExpand ? [] : .isButton)
+        .accessibilityHint(canExpand ? "Double tap to show full details." : "")
         .accessibilityAction(named: "Copy details", onCopy)
     }
 }
@@ -1385,6 +1441,9 @@ private struct WorkLogRowButton: View {
 /// adapter noise into the next step; a one-line row truncated exactly that.
 private struct ProviderErrorCallout: View {
     let row: ThreadWorkLogRow
+    /// "Retry setup" when the retry prepares the workspace again rather than
+    /// resending the message.
+    var retryLabel: String = "Try Again"
     let onRetry: (() -> Void)?
 
     private var message: String {
@@ -1405,7 +1464,7 @@ private struct ProviderErrorCallout: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let onRetry {
-                Button("Try Again", systemImage: "arrow.clockwise", action: onRetry)
+                Button(retryLabel, systemImage: "arrow.clockwise", action: onRetry)
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
                     .controlSize(.small)

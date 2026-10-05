@@ -77,6 +77,16 @@ public final class VoiceComposerCoordinator {
     /// Set when Voice Input needs an OpenRouter credential, so the composer can
     /// point at Settings.
     public private(set) var needsOpenRouter = false
+    /// Whether any composer is on screen and attached. A recording that keeps
+    /// running with this false has nowhere to render, so the app-wide edge
+    /// pill takes over, and a transcript that finishes meanwhile is stashed
+    /// for the composer it was recorded in instead of written into a draft
+    /// nobody is looking at.
+    public private(set) var hasVisibleComposer = false
+    /// The thread the current recording was anchored in, when it was recorded
+    /// in a thread composer. The edge pill's return button opens it; compose
+    /// sheets leave it nil.
+    public private(set) var recordingThreadID: String?
 
     @ObservationIgnored private let stash: VoiceTranscriptStash
     @ObservationIgnored private let preflight: VoicePreflightCache
@@ -90,6 +100,16 @@ public final class VoiceComposerCoordinator {
     /// the recording started in, not the one that happens to be attached now.
     @ObservationIgnored private var destinationName = "its conversation"
     @ObservationIgnored private var anchorDestinationName = "its conversation"
+    @ObservationIgnored private var threadID: String?
+    /// Every composer currently on screen, by the token it attached with.
+    /// Tracked per composer rather than per identity because SwiftUI may run
+    /// an incoming composer's `onAppear` before the outgoing one's
+    /// `onDisappear`, even when both name the same conversation.
+    @ObservationIgnored private var visibleComposers: Set<UUID> = []
+    /// False while the attached composer's host is still restoring its saved
+    /// draft. A transcript written in before that would be overwritten by the
+    /// restore, so it waits in the stash until `draftDidLoad`.
+    @ObservationIgnored private var draftLoaded = true
     @ObservationIgnored private var readDraft: () -> String = { "" }
     @ObservationIgnored private var writeDraft: (String) -> Void = { _ in }
     @ObservationIgnored private var readRange: (String) -> VoiceTextRange = {
@@ -134,10 +154,20 @@ public final class VoiceComposerCoordinator {
 
     /// Points the coordinator at one composer. Safe to call on every appearance
     /// and whenever the composer switches conversations: a transcript that
-    /// finished while the old identity was active is delivered here.
+    /// finished while the old identity was active, or while no composer was on
+    /// screen, is delivered here.
+    ///
+    /// `composer` identifies the attaching view for visibility bookkeeping and
+    /// must be passed again to `detach`. `threadID` names the thread a
+    /// recording started here belongs to, so the edge pill can lead back to it.
+    /// `draftLoaded` is false while the host is still restoring the saved
+    /// draft; stashed transcripts then wait for `draftDidLoad`.
     public func attach(
         identity: String,
+        composer: UUID,
         destinationName: String = "its conversation",
+        threadID: String? = nil,
+        draftLoaded: Bool = true,
         capability: (any FeatureVoiceTranscribing)?,
         readDraft: @escaping () -> String,
         writeDraft: @escaping (String) -> Void,
@@ -150,13 +180,28 @@ public final class VoiceComposerCoordinator {
         self.readRange = readRange
         self.moveCaret = moveCaret
         let identityChanged = self.identity != identity
+        let wasOffScreen = visibleComposers.isEmpty
         self.identity = identity
         self.destinationName = destinationName
+        self.threadID = threadID
+        self.draftLoaded = draftLoaded
+        visibleComposers.insert(composer)
+        updateVisibility()
         if controller == nil, capability != nil { makeController() }
         if let capability { preflight.prime(using: capability) }
         // Runs after the composer has settled on the new identity, so this never
-        // fights an in-flight gesture on the previous one.
-        if identityChanged { deliverStashedTranscript() }
+        // fights an in-flight gesture on the previous one. Coming back on screen
+        // counts too: a transcript that finished behind the edge pill was
+        // stashed under this same identity.
+        if identityChanged || wasOffScreen, draftLoaded { deliverStashedTranscript() }
+    }
+
+    /// The attached composer's saved draft finished restoring: hand it any
+    /// transcript that was held back meanwhile.
+    public func draftDidLoad(identity: String) {
+        guard self.identity == identity, hasVisibleComposer, !draftLoaded else { return }
+        draftLoaded = true
+        deliverStashedTranscript()
     }
 
     /// Releases the touch bookkeeping for a composer that is going away.
@@ -166,7 +211,9 @@ public final class VoiceComposerCoordinator {
     /// guarantee that the outgoing view's `onDisappear` runs before the incoming
     /// one's `onAppear`, so a coordinator already re-pointed at another
     /// conversation must be left alone.
-    public func detach(identity: String) {
+    public func detach(identity: String, composer: UUID) {
+        visibleComposers.remove(composer)
+        updateVisibility()
         guard self.identity == identity else { return }
         holdTask?.cancel()
         holdTask = nil
@@ -174,6 +221,13 @@ public final class VoiceComposerCoordinator {
         holdActive = false
         cancelArmed = false
         cancelProgress = 0
+    }
+
+    /// Written only on a real change: every write notifies observers, and
+    /// `attach` runs on every composer appearance.
+    private func updateVisibility() {
+        let visible = !visibleComposers.isEmpty
+        if hasVisibleComposer != visible { hasVisibleComposer = visible }
     }
 
     private func makeController() {
@@ -195,15 +249,19 @@ public final class VoiceComposerCoordinator {
     // MARK: - Transcript delivery
 
     private func deliver(_ transcript: String) {
-        let draft = readDraft()
+        // With no composer on screen the draft closures belong to a view that
+        // is gone, and a draft still being restored is about to be replaced;
+        // writing through them would drop the words.
+        let target: VoiceComposerTarget? = hasVisibleComposer && draftLoaded
+            ? {
+                let draft = readDraft()
+                return VoiceComposerTarget(identity: identity, draft: draft, range: readRange(draft))
+            }()
+            : nil
         let delivery = VoiceTranscriptInsertion.deliver(
             transcript: transcript,
             anchor: anchor,
-            target: VoiceComposerTarget(
-                identity: identity,
-                draft: draft,
-                range: readRange(draft)
-            )
+            target: target
         )
         // Neither outcome needs a decision, so neither is a modal alert: the
         // HUD says where the words went and gets out of the way.
@@ -246,6 +304,7 @@ public final class VoiceComposerCoordinator {
             range: readRange(draft)
         )
         anchorDestinationName = destinationName
+        if recordingThreadID != threadID { recordingThreadID = threadID }
     }
 
     /// Start when idle, stop when recording. Captures the anchor on both,
@@ -311,6 +370,20 @@ public final class VoiceComposerCoordinator {
         guard stopOnRecording else { return }
         stopOnRecording = false
         if controller.state.isRecording { await controller.stop() }
+    }
+
+    /// Finishes a recording from the edge pill, while no composer is on
+    /// screen. Unlike `toggle` it keeps the anchor captured at start: the
+    /// composer attached last is not the one being looked at, so the
+    /// transcript goes back to the conversation it was recorded in.
+    public func stopOffScreen() {
+        guard let controller, controller.state.isRecording else { return }
+        stopOnRecording = false
+        activeTask?.cancel()
+        activeTask = Task { @MainActor in
+            PlatformHapticEngine.shared.playImpact(.medium)
+            await controller.stop()
+        }
     }
 
     public func cancelRecording() {

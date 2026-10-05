@@ -1,0 +1,56 @@
+{
+  "instanceId": "claude-work",
+  "driver": "claudeAgent",
+  "enabled": true,
+  "installed": true,
+  "version": null,
+  "status": "ready",
+  "auth": {
+    "status": "authenticated"
+  },
+  "checkedAt": "2026-10-05T00:00:00Z",
+  "workspaceSnapshots": [
+    {
+      "cwd": "/work/app",
+      "checkedAt": "2026-10-05T00:01:00Z",
+      "slashCommands": [
+        {
+          "name": "deploy",
+          "description": "Ship the app",
+          "input": {
+            "hint": "env"
+          }
+        }
+      ],
+      "skills": [
+        {
+          "name": "release",
+          "description": "Cut a release",
+          "path": "/work/app/.claude/skills/release/SKILL.md",
+          "scope": "project",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "cwd": "/work/app-feature",
+      "checkedAt": "2026-10-05T00:02:00Z",
+      "slashCommands": [
+        {
+          "name": "deploy",
+          "description": "Ship the app"
+        }
+      ],
+      "slashCommandsPending": true,
+      "skills": []
+    }
+  ],
+  "models": [],
+  "slashCommands": [
+    {
+      "name": "compact",
+      "description": "Compact the conversation"
+    }
+  ],
+  "skills": []
+}

@@ -9,10 +9,45 @@ public enum EnvironmentKind: String, Codable, Sendable {
 public struct Environment: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public var label: String
-    public var httpBaseURL: URL
-    public var webSocketBaseURL: URL
-    public var kind: EnvironmentKind
+    /// Every way this device reaches the environment, preferred first. Never
+    /// empty: an environment saved before routes existed decodes as one route
+    /// whose credential stays under the environment id.
+    public var routes: [EnvironmentRoute] {
+        didSet {
+            if routes.isEmpty {
+                routes = oldValue
+            } else if EnvironmentRoutes.endpointKey(routes) != EnvironmentRoutes.endpointKey(oldValue) {
+                unsupportedReason = nil
+                serverUpdateRequired = false
+            }
+        }
+    }
     public var descriptor: EnvironmentDescriptor?
+    /// False when the user switched this environment off on this device. It
+    /// stays saved with its credential but never connects and stays out of
+    /// home until switched back on. Catalogs saved before the switch existed
+    /// decode as on.
+    public var isEnabled: Bool
+    /// Why this build cannot talk to the server, when its protocol check
+    /// failed. Such an environment stays switched off until a later check
+    /// finds it compatible. Cleared when a saved route is added or changed,
+    /// so the new address is checked; reordering and learning keep it.
+    public var unsupportedReason: String?
+    /// The rejection came from an outdated server that can be updated from
+    /// this app.
+    public var serverUpdateRequired: Bool
+
+    /// The preferred route's address. A client routed through another route
+    /// (`routed(through:)`) sees that route's address here.
+    public var httpBaseURL: URL { routes[0].httpBaseURL }
+    public var webSocketBaseURL: URL { routes[0].webSocketBaseURL }
+    /// How the preferred route authenticates.
+    public var kind: EnvironmentKind { routes[0].kind }
+    /// The Keychain account of the preferred route's credential.
+    public var credentialID: String { routes[0].credentialID }
+    /// The T3 Connect tunnel, which DPoP credential renewal goes through even
+    /// while requests use a LAN or tailnet address learned through it.
+    public var relayRoute: EnvironmentRoute? { routes.first(where: \.isRelay) }
 
     public init(
         id: String,
@@ -20,14 +55,124 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
         httpBaseURL: URL,
         webSocketBaseURL: URL,
         kind: EnvironmentKind = .bearer,
-        descriptor: EnvironmentDescriptor? = nil
+        descriptor: EnvironmentDescriptor? = nil,
+        isEnabled: Bool = true
     ) {
+        self.init(
+            id: id,
+            label: label,
+            routes: [
+                .saved(
+                    httpBaseURL: httpBaseURL,
+                    webSocketBaseURL: webSocketBaseURL,
+                    kind: kind,
+                    credentialID: id
+                ),
+            ],
+            descriptor: descriptor,
+            isEnabled: isEnabled
+        )
+    }
+
+    public init(
+        id: String,
+        label: String,
+        routes: [EnvironmentRoute],
+        descriptor: EnvironmentDescriptor? = nil,
+        isEnabled: Bool = true
+    ) {
+        precondition(!routes.isEmpty, "A saved environment needs at least one route.")
         self.id = id
         self.label = label
-        self.httpBaseURL = httpBaseURL
-        self.webSocketBaseURL = webSocketBaseURL
-        self.kind = kind
+        self.routes = routes
         self.descriptor = descriptor
+        self.isEnabled = isEnabled
+        unsupportedReason = nil
+        serverUpdateRequired = false
+    }
+
+    /// This environment with `route` preferred, which is how a client talks
+    /// over one route: requests, credentials, and sockets all read the
+    /// preferred route.
+    public func routed(through route: EnvironmentRoute) -> Environment {
+        var copy = self
+        copy.routes = [route] + routes.filter { $0.id != route.id }
+        return copy
+    }
+
+    /// Equal apart from the saved route list, which a live client can take
+    /// over without reconnecting.
+    public func sameExceptRoutes(as other: Environment) -> Bool {
+        id == other.id && label == other.label && descriptor == other.descriptor
+            && isEnabled == other.isEnabled && unsupportedReason == other.unsupportedReason
+            && serverUpdateRequired == other.serverUpdateRequired
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, httpBaseURL, webSocketBaseURL, kind, descriptor, routes
+        case isEnabled = "enabled"
+        case unsupportedReason, serverUpdateRequired
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        descriptor = try container.decodeIfPresent(EnvironmentDescriptor.self, forKey: .descriptor)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        unsupportedReason = try container.decodeIfPresent(String.self, forKey: .unsupportedReason)
+        serverUpdateRequired = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .serverUpdateRequired
+        ) ?? false
+        let decodedRoutes = try? container.decodeIfPresent(
+            [LossyEnvironmentRoute].self,
+            forKey: .routes
+        )
+        let saved = decodedRoutes?.compactMap(\.route) ?? []
+        if saved.isEmpty {
+            // Saved before routes: the one address, with the credential kept
+            // under the environment id.
+            let httpBaseURL = try container.decode(URL.self, forKey: .httpBaseURL)
+            let webSocketBaseURL = try container.decode(URL.self, forKey: .webSocketBaseURL)
+            let kind = try container.decode(EnvironmentKind.self, forKey: .kind)
+            routes = [
+                EnvironmentRoute.saved(
+                    httpBaseURL: httpBaseURL,
+                    webSocketBaseURL: webSocketBaseURL,
+                    kind: kind,
+                    credentialID: id
+                ),
+            ]
+        } else {
+            routes = saved
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(label, forKey: .label)
+        // The single-address fields keep describing the route whose credential
+        // lives under the environment id, so an older build still connects.
+        let legacy = routes.first { $0.credentialID == id && !$0.learned } ?? routes[0]
+        try container.encode(legacy.httpBaseURL, forKey: .httpBaseURL)
+        try container.encode(legacy.webSocketBaseURL, forKey: .webSocketBaseURL)
+        try container.encode(legacy.kind, forKey: .kind)
+        try container.encode(routes, forKey: .routes)
+        try container.encodeIfPresent(descriptor, forKey: .descriptor)
+        try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encodeIfPresent(unsupportedReason, forKey: .unsupportedReason)
+        if serverUpdateRequired { try container.encode(true, forKey: .serverUpdateRequired) }
+    }
+}
+
+/// Drops a saved route this build cannot read instead of the whole catalog.
+private struct LossyEnvironmentRoute: Decodable {
+    let route: EnvironmentRoute?
+
+    init(from decoder: any Decoder) throws {
+        route = try? EnvironmentRoute(from: decoder)
     }
 }
 
@@ -57,6 +202,10 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         /// sending a command the server will reject.
         public let threadPullRequestLinking: Bool?
         public let threadPullRequestsV2: Bool?
+        /// Whether `thread.pull-request.watch` is accepted: the server wakes the
+        /// thread's agent when a watched pull request's checks finish, someone
+        /// comments, or it starts to conflict.
+        public var threadPullRequestWatch: Bool? = nil
         public struct FileAttachments: Codable, Equatable, Sendable { public let maxUploadBytes: Int }
         public let attachmentUploads: Bool?
         public let fileAttachments: FileAttachments?
@@ -66,6 +215,9 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let projectDefaults: Bool?
         public let projectBrowserAccess: Bool?
         public let projectAutoPull: Bool?
+        /// Whether server settings carry `pullRequestMergeMethod` and
+        /// `projectPullRequestMergeMethodOverrides`.
+        public var pullRequestMergeMethodDefaults: Bool? = nil
         public let fileDocumentPreviews: Bool?
         public let agentSessionImport: Bool?
         public let providerTerminalEnvironment: Bool?
@@ -91,12 +243,14 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadTitleRegeneration
             case threadPullRequestLinking
             case threadPullRequestsV2
+            case threadPullRequestWatch
             case attachmentUploads, fileAttachments
             case assistantCitations
             case projectActionDefaults
             case projectDefaults
             case projectBrowserAccess
             case projectAutoPull
+            case pullRequestMergeMethodDefaults
             case fileDocumentPreviews
             case agentSessionImport, providerTerminalEnvironment
             case projectIcons
@@ -128,6 +282,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
                 forKey: .threadTitleRegeneration
             )
             threadPullRequestsV2 = try container.decodeIfPresent(Bool.self, forKey: .threadPullRequestsV2)
+            threadPullRequestWatch = try container.decodeIfPresent(Bool.self, forKey: .threadPullRequestWatch)
             attachmentUploads = try container.decodeIfPresent(Bool.self, forKey: .attachmentUploads)
             fileAttachments = try container.decodeIfPresent(FileAttachments.self, forKey: .fileAttachments)
             assistantCitations = try container.decodeIfPresent(Bool.self, forKey: .assistantCitations)
@@ -135,6 +290,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             projectDefaults = try container.decodeIfPresent(Bool.self, forKey: .projectDefaults)
             projectBrowserAccess = try container.decodeIfPresent(Bool.self, forKey: .projectBrowserAccess)
             projectAutoPull = try container.decodeIfPresent(Bool.self, forKey: .projectAutoPull)
+            pullRequestMergeMethodDefaults = try container.decodeIfPresent(Bool.self, forKey: .pullRequestMergeMethodDefaults)
             fileDocumentPreviews = try container.decodeIfPresent(Bool.self, forKey: .fileDocumentPreviews)
             agentSessionImport = try container.decodeIfPresent(Bool.self, forKey: .agentSessionImport)
             providerTerminalEnvironment = try container.decodeIfPresent(Bool.self, forKey: .providerTerminalEnvironment)
@@ -163,6 +319,9 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
     public let platform: Platform
     public let serverVersion: String
     public let capabilities: Capabilities
+    /// The orchestration protocol the server speaks. Absent on servers that
+    /// predate negotiation, which this fork treats as compatible.
+    public var orchestrationProtocolVersion: Int? = nil
 }
 
 public enum EnvironmentCredentialAuthorizationMethod: String, Codable, Sendable {

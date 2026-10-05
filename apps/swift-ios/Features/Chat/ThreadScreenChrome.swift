@@ -90,7 +90,13 @@ struct ThreadHeaderSubtitle: Equatable {
         case .input:
             return Status(label: "Needs input", tone: .input)
         case .background:
-            return Status(label: "Background", tone: .background, systemImage: "circle.dotted")
+            // Names what it waits on ("Waiting on subagent Review Diff") when
+            // the server lists it; older servers only send counts.
+            return Status(
+                label: thread.backgroundWorkStatusTitle ?? "Background",
+                tone: .background,
+                systemImage: "circle.dotted"
+            )
         case .failed, .done, .ready:
             break
         }

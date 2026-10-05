@@ -32,6 +32,8 @@ While a transcript is transcribing you can cancel the request. If transcription 
 
 Switching conversations or navigating elsewhere doesn't lose your words: the recording keeps going, and if the transcript finishes while you're somewhere else it's kept and inserted when you return to the conversation you dictated it for.
 
+On iPhone and iPad, a pill on the edge of the screen keeps a recording visible while its composer is out of view. It shows the elapsed time and your level; tap ↩ to go back to the conversation you're dictating into, or ■ to stop and transcribe.
+
 ## Settings
 
 Under **Settings → Voice Input** you can:

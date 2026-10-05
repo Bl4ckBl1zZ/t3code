@@ -232,8 +232,18 @@ public struct OrchestrationV2ThreadPullRequestLink: Codable, Equatable, Sendable
     public let linkedAt: String
     public let snapshot: OrchestrationV2ThreadPullRequestSnapshot?
     public let stack: OrchestrationV2ThreadPullRequestStack?
+    /// Present while the server watches this pull request for the thread's
+    /// agent. Absent on servers without watching.
+    public var watch: OrchestrationV2ThreadPullRequestWatch? = nil
 
     public var isVisible: Bool { source != "stack-dismissed" }
+}
+
+/// Narrowed to what the client shows: that a watch is running, and since when.
+/// The rest of the record is the server's bookkeeping of what the agent was
+/// already told.
+public struct OrchestrationV2ThreadPullRequestWatch: Codable, Equatable, Sendable {
+    public let startedAt: String
 }
 
 public struct OrchestrationV2ThreadPullRequestSnapshot: Codable, Equatable, Sendable {

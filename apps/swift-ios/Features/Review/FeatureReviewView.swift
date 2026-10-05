@@ -32,16 +32,29 @@ public struct FeatureReviewView: View {
     @State private var reloadAttempt = 0
     @State private var filterText = ""
 
-    /// What the review is pointed at, from the selection the feed armed.
-    ///
-    /// An id this build cannot read falls back to the working tree, and the
-    /// header then says "working tree" — the fallback is allowed to change what
-    /// is shown, never to mislabel it.
+    /// What the review is pointed at, from the selection the feed armed. Nil,
+    /// or an id this build cannot read, means the default git section.
+    private var requestedScope: ReviewSectionID? {
+        selection.selection(for: threadID).sectionID.flatMap(ReviewSectionID.init(rawValue:))
+    }
+
+    /// What is read from the server. Changes and Uncommitted are one read, so
+    /// switching between them never refetches.
     private var scope: ReviewSectionID {
-        guard let sectionID = selection.selection(for: threadID).sectionID else {
-            return .workingTree
-        }
-        return ReviewSectionID(rawValue: sectionID) ?? .workingTree
+        requestedScope?.checkpointID.map { .checkpoint(id: $0) } ?? .workingTree
+    }
+
+    /// The git section on screen: Changes by default when the server splits
+    /// the branch out, else the single working-tree list. The header always
+    /// names what this resolved to, so a fallback never mislabels the diff.
+    private var gitSection: ReviewSectionID {
+        ReviewSectionID.resolveGit(requestedScope, splitsBranchChanges: review?.splitsBranchChanges == true)
+    }
+
+    /// The loaded review narrowed to the section on screen.
+    private var shownReview: FeatureReview? {
+        guard let review else { return nil }
+        return isShowingCheckpoint ? review : review.section(gitSection)
     }
 
     public init(
@@ -61,7 +74,7 @@ public struct FeatureReviewView: View {
             if isLoading, review == nil {
                 ProgressView("Loading changes…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let review {
+            } else if let review = shownReview {
                 if review.files.isEmpty {
                     clean
                 } else {
@@ -93,8 +106,17 @@ public struct FeatureReviewView: View {
                         Button {
                             showWorkingTree()
                         } label: {
-                            Label("Show Working Tree", systemImage: "arrow.uturn.forward")
+                            Label("Show Current Changes", systemImage: "arrow.uturn.forward")
                         }
+                    } else if review?.splitsBranchChanges == true {
+                        Picker("Section", selection: Binding(
+                            get: { gitSection },
+                            set: { selection.selectSection($0.rawValue, for: threadID) }
+                        )) {
+                            Label("Changes", systemImage: "arrow.triangle.branch").tag(ReviewSectionID.changes)
+                            Label("Uncommitted", systemImage: "pencil").tag(ReviewSectionID.workingTree)
+                        }
+                        .pickerStyle(.inline)
                     }
                     Button {
                         reloadAttempt += 1
@@ -140,7 +162,7 @@ public struct FeatureReviewView: View {
     @ViewBuilder
     private var unavailable: some View {
         switch scope {
-        case .workingTree:
+        case .changes, .workingTree:
             ContentUnavailableView {
                 Label("Couldn't Load Changes", systemImage: "doc.text.magnifyingglass")
             } description: {
@@ -157,7 +179,7 @@ public struct FeatureReviewView: View {
             } actions: {
                 Button("Try Again") { reloadAttempt += 1 }
                     .t3SecondaryButtonStyle()
-                Button("Show the Working Tree Instead") { showWorkingTree() }
+                Button("Show Current Changes Instead") { showWorkingTree() }
             }
         }
     }
@@ -167,17 +189,26 @@ public struct FeatureReviewView: View {
         ContentUnavailableView {
             Label("No Changes", systemImage: "checkmark.circle")
         } description: {
-            Text(isShowingCheckpoint ? "This turn captured no file changes." : "The working tree is clean.")
+            Text(cleanMessage)
         } actions: {
             if isShowingCheckpoint {
-                Button("Show Working Tree") { showWorkingTree() }
+                Button("Show Current Changes") { showWorkingTree() }
                     .t3SecondaryButtonStyle()
             }
         }
     }
 
+    private var cleanMessage: String {
+        if isShowingCheckpoint { return "This turn captured no file changes." }
+        guard review?.splitsBranchChanges == true else { return "The working tree is clean." }
+        return gitSection == .changes ? "Nothing has changed on this branch." : "Everything is committed."
+    }
+
+    /// Back to the git sections, on Changes where the server has it, else the
+    /// working tree. A checkpoint review cannot tell which until it reloads,
+    /// so the label covers both.
     private func showWorkingTree() {
-        selection.selectSection(ReviewSectionID.workingTree.rawValue, for: threadID)
+        selection.selectSection(ReviewSectionID.changes.rawValue, for: threadID)
     }
 
     @ViewBuilder
@@ -255,12 +286,17 @@ public struct FeatureReviewView: View {
         loadedScope?.checkpointID != nil
     }
 
-    /// "Working tree", or "Turn 4 · since turn 3" for a checkpoint. Two diffs
-    /// that look alike in a file list can mean very different things, so what
-    /// is being shown is stated rather than left to be inferred.
+    /// "Changes · vs main", "Uncommitted", "Working tree", or "Turn 4 · since
+    /// turn 3" for a checkpoint. Two diffs that look alike in a file list can
+    /// mean very different things, so what is being shown is stated rather
+    /// than left to be inferred.
     private var scopeSubtitle: String {
-        guard isShowingCheckpoint, let review else { return "Working tree" }
-        return [review.title, review.baseReference].compactMap { $0 }.joined(separator: " · ")
+        guard let review = shownReview else { return "Working tree" }
+        if isShowingCheckpoint {
+            return [review.title, review.baseReference].compactMap { $0 }.joined(separator: " · ")
+        }
+        guard review.splitsBranchChanges else { return "Working tree" }
+        return [review.title, review.baseReference.map { "vs \($0)" }].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func load() async {
@@ -270,7 +306,7 @@ public struct FeatureReviewView: View {
         do {
             let loaded: FeatureReview
             switch scope {
-            case .workingTree:
+            case .changes, .workingTree:
                 loaded = try await client.loadReview(threadID: threadID)
             case let .checkpoint(id):
                 loaded = try await client.loadReview(threadID: threadID, checkpointID: id)
@@ -281,9 +317,10 @@ public struct FeatureReviewView: View {
             // Every load re-runs this, and the store is what makes that safe:
             // an unparsed diff leaves the request armed, and a parsed one spends
             // it whether or not the file was in this diff.
+            let shown = scope.isGit ? loaded.section(gitSection) : loaded
             if let target = selection.consumePreselectedFile(
                 for: threadID,
-                files: loaded.files
+                files: shown.files
             ) {
                 focusedFileID = target.id
             }

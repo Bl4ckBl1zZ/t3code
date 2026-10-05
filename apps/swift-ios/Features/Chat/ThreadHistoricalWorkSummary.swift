@@ -1,7 +1,7 @@
 import Foundation
 
 struct ThreadHistoricalWorkItem: Equatable, Sendable {
-    enum Action: String, Sendable { case read, edit, command, codeSearch, webSearch, tool, linkPR, unlinkPR, listPRs, browser }
+    enum Action: String, Sendable { case read, edit, command, codeSearch, webSearch, tool, linkPR, unlinkPR, listPRs, watchPR, unwatchPR, browser }
     let action: Action
     var files: [String] = []
     var successful = true
@@ -18,7 +18,7 @@ enum ThreadHistoricalWorkSummary {
         var files = Set<String>()
         var sources: [ToolActivitySource] = []
         for item in items {
-            if let source = item.source, ![.linkPR, .unlinkPR, .listPRs].contains(item.action) {
+            if let source = item.source, ![.linkPR, .unlinkPR, .listPRs, .watchPR, .unwatchPR].contains(item.action) {
                 if !sources.contains(where: { $0.key == source.key }) { sources.append(source) }
                 continue
             }
@@ -38,6 +38,8 @@ enum ThreadHistoricalWorkSummary {
             case .webSearch: label = "Searched the web \(count) \(count == 1 ? "time" : "times")"
             case .linkPR: label = "Linked \(count) \(count == 1 ? "pull request" : "pull requests")"
             case .unlinkPR: label = "Unlinked \(count) \(count == 1 ? "pull request" : "pull requests")"
+            case .watchPR: label = "Watching \(count) \(count == 1 ? "pull request" : "pull requests")"
+            case .unwatchPR: label = "Stopped watching \(count) \(count == 1 ? "pull request" : "pull requests")"
             case .listPRs: label = "Checked linked pull requests \(count) \(count == 1 ? "time" : "times")"
             case .browser: label = "Used the browser \(count) \(count == 1 ? "time" : "times")"
             case .tool: label = "Used \(count) \(count == 1 ? "tool" : "tools")"

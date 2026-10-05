@@ -134,6 +134,8 @@ Threads with unsent text or attachments show a **Draft** badge. Long-press a thr
 Choose **⋯ → Select Threads** on Home, choose **Select** from a row’s menu, or swipe across rows
 with two fingers, then select rows to snooze, settle, archive, pin or unpin, or delete together from
 the bar at the bottom. Each action is available when it applies to at least one selected thread.
+**Snooze → Unsnooze** wakes the snoozed threads in the selection, and **Reopen** replaces
+**Settle** when the selection holds settled threads and none left to settle.
 Delete asks for confirmation; unpin follows your confirmation preference.
 Successful rows leave the selection. Failed rows stay selected so you can retry. Deleting thread
 history does not remove worktree files from the environment. Threads that cannot be snoozed,
@@ -181,10 +183,10 @@ automatic ordering. Pinned threads have their own order, and Work’s main threa
 Older servers keep local-only drag ordering. If a section mixes older servers with threads that
 already have synced positions, update those servers before reordering the section.
 
-## Fold working threads on web and desktop (beta)
+## Fold working threads (beta)
 
 Turn on **Settings → General → Working section (beta)** to move active threads that are working,
-or waiting on background agents or commands, into a collapsed **Working** section below the active
+or waiting on subagents or monitors, into a collapsed **Working** section below the active
 list. A thread returns to the top of the active list when it finishes, fails, or needs an approval,
 an answer, or a decision on a plan. Pinned threads and Work's main thread stay where they are, and
 snoozed and settled threads keep their own sections. The Working section lists the thread you last
@@ -194,6 +196,10 @@ open stays visible even while the section is collapsed.
 While this is on, unpinned active threads are ordered by when each last came back to you, so you
 cannot drag them and **Reset thread position** is hidden. Pinned threads can still be dragged. Your
 saved order returns when you turn the setting off.
+
+On iPhone and iPad, turn on **Settings → Chat → Working Section** (under Beta). It works the same
+way on Home's Code and Work lists, applies to that device only, and hides **Arrange Threads** while
+it is on. Chat lists keep busy conversations in place.
 
 ## Drop files onto a native thread
 

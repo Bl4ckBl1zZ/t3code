@@ -249,6 +249,13 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         sourceControl.map(ThreadDetailsGitStatus.init(sourceControl:))
     }
 
+    /// What Review opens on: the branch's Changes where the server reports
+    /// them, else the working tree.
+    private var reviewTotals: (insertions: Int, deletions: Int)? {
+        if let branch = sourceControl?.branchChanges { return (branch.insertions, branch.deletions) }
+        return gitStatus.map { ($0.insertions, $0.deletions) }
+    }
+
     /// Code uses its T3 checkout; Hermes reports its native workspace separately.
     private var workspacePath: String? {
         thread.worktreePath ?? project?.path
@@ -535,10 +542,10 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                 branchRow
                 NavigationLink(value: ThreadDetailsDestination.tool(.review(filePath: nil))) {
                     ThreadSheetRowLabel(title: "Review Changes", systemImage: "text.bubble", tint: .teal) {
-                        if let gitStatus, gitStatus.insertions > 0 || gitStatus.deletions > 0 {
+                        if let totals = reviewTotals, totals.insertions > 0 || totals.deletions > 0 {
                             HStack(spacing: 4) {
-                                Text("+\(gitStatus.insertions)").foregroundStyle(T3Colors.diffAddition)
-                                Text("−\(gitStatus.deletions)").foregroundStyle(T3Colors.diffDeletion)
+                                Text("+\(totals.insertions)").foregroundStyle(T3Colors.diffAddition)
+                                Text("−\(totals.deletions)").foregroundStyle(T3Colors.diffDeletion)
                             }
                             .monospacedDigit()
                         }

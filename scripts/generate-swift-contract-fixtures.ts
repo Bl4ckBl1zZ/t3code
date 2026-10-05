@@ -1,6 +1,9 @@
 import { ORCHESTRATION_PROTOCOL_VERSION } from "../packages/contracts/src/environment.ts";
 import { WsHermesWorkModelAuthCancelRpc } from "../packages/contracts/src/rpc.ts";
-import { OrchestrationV2ProviderSession } from "../packages/contracts/src/orchestrationV2.ts";
+import {
+  OrchestrationV2ProviderSession,
+  OrchestrationV2ThreadShellJson,
+} from "../packages/contracts/src/orchestrationV2.ts";
 import { HermesWorkSetupState } from "../packages/contracts/src/hermesWorkSetup.ts";
 import {
   HermesWorkModelStatus,
@@ -41,6 +44,8 @@ import { formatAssistantCitationHref } from "../packages/shared/src/assistantCit
  */
 import {
   HostResourcesSnapshot,
+  ServerConfig,
+  ServerDirectEndpoint,
   ServerSettings,
   ServerSettingsPatch,
   GitPreparePullRequestThreadInput,
@@ -85,8 +90,16 @@ import {
   MessageId,
   NodeId,
   OrchestrationV2ThreadProjection,
+  OrchestrationV2Command,
+  CommandId,
+  VcsStatusResult,
+  ReviewDiffPreviewResult,
+  ProjectEnsureScratchResult,
   OrchestrationV2Run,
   OrchestrationV2ConversationMessage,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  OrchestrationV2GetTurnItemResult,
+  OrchestrationV2TurnItem as OrchestrationV2TurnItemSchema,
   PlanId,
   ProjectId,
   ProjectIconOverride,
@@ -404,6 +417,21 @@ const projection = {
         checksState: "passing" as const,
         mergeability: "mergeable" as const,
       },
+      // The bottom layer is watched, so the Swift row's "Watching" decodes.
+      ...(number === 41
+        ? {
+            watch: {
+              startedAt: DateTime.formatIso(now),
+              headSha: "abc123",
+              failedChecks: [],
+              passed: false,
+              remarksThrough: DateTime.formatIso(now),
+              remarkIds: [],
+              conflicting: false,
+              wakes: 0,
+            },
+          }
+        : {}),
       stack: {
         kind: "native" as const,
         id: "stack-9",
@@ -452,7 +480,32 @@ const projection = {
   runs: [],
   attempts: [],
   nodes: [],
-  subagents: [],
+  // One agent, so the Swift row's model / account / workspace line decodes the
+  // real shape rather than a hand-written literal.
+  subagents: [
+    {
+      id: NodeId.make("node-sub"),
+      threadId,
+      runId: null,
+      parentNodeId: nodeId,
+      origin: "app_owned" as const,
+      createdBy: "agent" as const,
+      driver: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: ProviderInstanceId.make("claude-work"),
+      providerThreadId: null,
+      childThreadId: ThreadId.make("thread-child"),
+      nativeTaskRef: null,
+      prompt: "Audit the mapper",
+      title: "Audit the mapper",
+      model: "claude-haiku-4-5",
+      status: "running" as const,
+      progress: "Reading the mapper",
+      result: null,
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+    },
+  ],
   providerSessions: [],
   providerThreads: [],
   providerTurns: [],
@@ -651,6 +704,50 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(machinePath, machineSerialized);
+
+// `ServerConfig.directEndpoints` is a forward-compatible list: an endpoint kind
+// added after a client shipped is dropped, never failing the whole config. The
+// fixture carries one such element so the Swift decode proves the same.
+const DirectEndpointsConfig = Schema.Struct({
+  directEndpoints: ServerConfig.fields.directEndpoints,
+});
+const directEndpointsWire = [
+  Schema.encodeSync(ServerDirectEndpoint)({
+    kind: "lan",
+    httpBaseUrl: "http://192.168.1.20:3773/",
+  }),
+  Schema.encodeSync(ServerDirectEndpoint)({
+    kind: "tailnet",
+    httpBaseUrl: "https://studio.tailnet.ts.net/",
+  }),
+  { kind: "wifi-direct", httpBaseUrl: "http://10.0.0.5:3773/" },
+];
+const decodedDirectEndpoints = Schema.decodeUnknownSync(DirectEndpointsConfig)({
+  directEndpoints: directEndpointsWire,
+}).directEndpoints;
+if (decodedDirectEndpoints?.length !== 2) {
+  throw new Error("[swift-fixtures] directEndpoints must drop the unknown endpoint kind.");
+}
+const directEndpointsPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "serverConfigDirectEndpoints.json",
+);
+const directEndpointsSerialized = `${JSON.stringify(
+  { providers: [], directEndpoints: directEndpointsWire },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(directEndpointsPath) ||
+    NodeFS.readFileSync(directEndpointsPath, "utf8") !== directEndpointsSerialized
+  ) {
+    console.error(
+      "[swift-fixtures] serverConfigDirectEndpoints.json is stale; regenerate fixtures.",
+    );
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(directEndpointsPath, directEndpointsSerialized);
 
 const customModelsPath = NodePath.join(NodePath.dirname(outputPath), "customModels.json");
 const customModelsSerialized = `${JSON.stringify(
@@ -1221,6 +1318,65 @@ if (process.argv.includes("--check")) {
   }
 } else NodeFS.writeFileSync(providerContextReportingPath, providerContextReportingSerialized);
 
+// Per-workspace skills and commands: one complete scan and one whose command
+// probe failed, which keeps the last known commands and asks for a retry.
+const providerWorkspaceSnapshotsPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "providerWorkspaceSnapshots.json",
+);
+const providerWorkspaceSnapshotsSerialized = `${JSON.stringify(
+  Schema.encodeSync(ServerProvider)({
+    instanceId: ProviderInstanceId.make("claude-work"),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-10-05T00:00:00Z",
+    models: [],
+    slashCommands: [{ name: "compact", description: "Compact the conversation" }],
+    skills: [],
+    workspaceSnapshots: [
+      {
+        cwd: "/work/app",
+        checkedAt: "2026-10-05T00:01:00Z",
+        slashCommands: [{ name: "deploy", description: "Ship the app", input: { hint: "env" } }],
+        skills: [
+          {
+            name: "release",
+            description: "Cut a release",
+            path: "/work/app/.claude/skills/release/SKILL.md",
+            scope: "project",
+            enabled: true,
+          },
+        ],
+      },
+      {
+        cwd: "/work/app-feature",
+        checkedAt: "2026-10-05T00:02:00Z",
+        slashCommands: [{ name: "deploy", description: "Ship the app" }],
+        slashCommandsPending: true,
+        skills: [],
+      },
+    ],
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(providerWorkspaceSnapshotsPath) ||
+    NodeFS.readFileSync(providerWorkspaceSnapshotsPath, "utf8") !==
+      providerWorkspaceSnapshotsSerialized
+  ) {
+    console.error(
+      "[swift-fixtures] providerWorkspaceSnapshots.json is stale; regenerate fixtures.",
+    );
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(providerWorkspaceSnapshotsPath, providerWorkspaceSnapshotsSerialized);
+
 const agentSessionFixturePath = NodePath.join(NodePath.dirname(outputPath), "agentSessions.json");
 const agentSessionFixture = `${JSON.stringify(
   {
@@ -1343,6 +1499,47 @@ if (process.argv.includes("--check")) {
   }
 } else {
   NodeFS.writeFileSync(autoPullFixturePath, autoPullFixture);
+}
+
+// Merge method defaults: the machine's method, one project's override, and a
+// patch that sets the machine and resets another project with null.
+const mergeDefaultsFixturePath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "pullRequestMergeDefaults.json",
+);
+const mergeDefaultsFixture = `${JSON.stringify(
+  {
+    patch: Schema.encodeSync(ServerSettingsPatch)({
+      pullRequestMergeMethod: "squash",
+      projectPullRequestMergeMethodOverrides: {
+        [ProjectId.make("rebased")]: "rebase",
+        [ProjectId.make("reset")]: null,
+      },
+    }),
+    settings: Schema.encodeSync(ServerSettings)(
+      Schema.decodeSync(ServerSettings)({
+        pullRequestMergeMethod: "squash",
+        projectPullRequestMergeMethodOverrides: { rebased: "rebase" },
+      }),
+    ),
+    capabilities: Schema.encodeSync(ExecutionEnvironmentCapabilities)({
+      repositoryIdentity: true,
+      pullRequestMergeMethodDefaults: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(mergeDefaultsFixturePath) ||
+    NodeFS.readFileSync(mergeDefaultsFixturePath, "utf8") !== mergeDefaultsFixture
+  ) {
+    console.error("[swift-fixtures] pullRequestMergeDefaults.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else {
+  NodeFS.writeFileSync(mergeDefaultsFixturePath, mergeDefaultsFixture);
 }
 
 const browserAccessFixturePath = NodePath.join(
@@ -1991,6 +2188,120 @@ if (process.argv.includes("--check")) {
   }
 } else NodeFS.writeFileSync(hermesWorkPath, hermesWorkFixture);
 
+// Watching a linked pull request: the capability the client gates on and the
+// command it sends, encoded through the real schema so the Swift builder is
+// compared against it field for field.
+const pullRequestWatchPath = NodePath.join(NodePath.dirname(outputPath), "pullRequestWatch.json");
+const pullRequestWatchFixture = `${JSON.stringify(
+  {
+    capabilities: Schema.decodeSync(ExecutionEnvironmentCapabilities)({
+      threadPullRequestWatch: true,
+    }),
+    command: Schema.encodeSync(OrchestrationV2Command)({
+      type: "thread.pull-request.watch",
+      commandId: CommandId.make("command-watch"),
+      threadId,
+      host: "github.com",
+      repository: "example/repo",
+      number: 41,
+      watching: true,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(pullRequestWatchPath) ||
+    NodeFS.readFileSync(pullRequestWatchPath, "utf8") !== pullRequestWatchFixture
+  ) {
+    console.error("[swift-fixtures] pullRequestWatch.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(pullRequestWatchPath, pullRequestWatchFixture);
+
+// The branch's Changes: the status totals the details row shows, and a review
+// preview with both sources, which is what splits Review into Changes and
+// Uncommitted.
+const reviewChangesPath = NodePath.join(NodePath.dirname(outputPath), "reviewChanges.json");
+const reviewChangesFixture = `${JSON.stringify(
+  {
+    status: Schema.encodeSync(VcsStatusResult)({
+      isRepo: true,
+      hasPrimaryRemote: true,
+      isDefaultRef: false,
+      refName: "feature/changes",
+      hasWorkingTreeChanges: true,
+      workingTree: {
+        files: [{ path: "src/new.ts", insertions: 3, deletions: 0 }],
+        insertions: 3,
+        deletions: 0,
+      },
+      branchChanges: { baseRef: "origin/main", insertions: 12, deletions: 4 },
+      hasUpstream: true,
+      aheadCount: 2,
+      behindCount: 0,
+      pr: null,
+    }),
+    preview: Schema.encodeSync(ReviewDiffPreviewResult)({
+      cwd: "/repo",
+      generatedAt: now,
+      sources: [
+        {
+          id: "working-tree",
+          kind: "working-tree",
+          title: "Uncommitted",
+          baseRef: "HEAD",
+          headRef: null,
+          diff: "diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+          diffHash: "hash-working-tree",
+          truncated: false,
+        },
+        {
+          id: "branch-range",
+          kind: "branch-range",
+          title: "Changes vs origin/main",
+          baseRef: "origin/main",
+          headRef: "feature/changes",
+          diff:
+            "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n" +
+            "diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n",
+          diffHash: "hash-branch-range",
+          truncated: true,
+        },
+      ],
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(reviewChangesPath) ||
+    NodeFS.readFileSync(reviewChangesPath, "utf8") !== reviewChangesFixture
+  ) {
+    console.error("[swift-fixtures] reviewChanges.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(reviewChangesPath, reviewChangesFixture);
+
+// "No project": what projects.ensureScratch answers.
+const scratchProjectPath = NodePath.join(NodePath.dirname(outputPath), "scratchProject.json");
+const scratchProjectFixture = `${JSON.stringify(
+  Schema.encodeSync(ProjectEnsureScratchResult)({ projectId: ProjectId.make("project-scratch") }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(scratchProjectPath) ||
+    NodeFS.readFileSync(scratchProjectPath, "utf8") !== scratchProjectFixture
+  ) {
+    console.error("[swift-fixtures] scratchProject.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(scratchProjectPath, scratchProjectFixture);
+
 // The Swift client mirrors the protocol version by hand. Pin it here so a bump
 // in `packages/contracts` fails the Swift test instead of shipping a build the
 // new server turns away.
@@ -2012,3 +2323,213 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(orchestrationProtocolPath, orchestrationProtocolFixture);
+
+// On-demand tool output: the wire withholds command and tool output and flags
+// it, and `orchestration.getTurnItem` returns the full item. The Swift client
+// decodes both and must keep the flag so it knows to fetch.
+const turnItemDetailPath = NodePath.join(NodePath.dirname(outputPath), "turnItemDetail.json");
+const omittedCommand: OrchestrationV2TurnItem = {
+  ...base("item-command-omitted"),
+  type: "command_execution",
+  input: "vp test",
+  outputOmitted: true,
+  exitCode: 0,
+};
+const omittedTool: OrchestrationV2TurnItem = {
+  ...base("item-tool-omitted"),
+  type: "dynamic_tool",
+  toolName: "read_file",
+  input: { summary: '{"path":"src/index.ts"}', truncated: true },
+  output: { summary: "export const value = 1;", truncated: true },
+  outputOmitted: true,
+};
+const encodeTurnItem = Schema.encodeSync(OrchestrationV2TurnItemSchema);
+const encodeTurnItemResult = Schema.encodeSync(OrchestrationV2GetTurnItemResult);
+const turnItemDetailFixture = `${JSON.stringify(
+  {
+    wireItems: [omittedCommand, omittedTool].map((item) => encodeTurnItem(item)),
+    result: encodeTurnItemResult({
+      item: { ...omittedCommand, outputOmitted: undefined, output: "12 tests passed" },
+    }),
+    missing: encodeTurnItemResult({ item: null }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(turnItemDetailPath) ||
+    NodeFS.readFileSync(turnItemDetailPath, "utf8") !== turnItemDetailFixture
+  ) {
+    console.error("[swift-fixtures] turnItemDetail.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(turnItemDetailPath, turnItemDetailFixture);
+
+// Retry a failed workspace preparation: the run records how its workspace is
+// prepared, the failure item carries the code, and `prepared-run.retry` is the
+// command the Swift client builds by hand.
+const workspacePreparationPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "workspacePreparation.json",
+);
+const preparationFailure = (status: "failed" | "cancelled"): OrchestrationV2TurnItem => ({
+  ...base(`item-setup-${status}`),
+  status,
+  type: "error",
+  failure: {
+    class: "provider_error",
+    message: "git worktree add failed",
+    code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+    retryable: true,
+  },
+});
+const workspacePreparationFixture = `${JSON.stringify(
+  {
+    run: Schema.encodeSync(OrchestrationV2Run)({
+      id: runId,
+      threadId,
+      ordinal: 1,
+      providerInstanceId,
+      modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+      providerThreadId: null,
+      userMessageId: MessageId.make("setup-message"),
+      rootNodeId: null,
+      activeAttemptId: null,
+      status: "failed",
+      requestedAt: now,
+      startedAt: null,
+      completedAt: now,
+      checkpointId: null,
+      contextHandoffId: null,
+      workspacePreparation: {
+        type: "worktree",
+        baseRef: "main",
+        branch: "t3/setup",
+        startFromOrigin: true,
+      },
+    }),
+    failedItem: encodeTurnItem(preparationFailure("failed")),
+    retriedItem: encodeTurnItem(preparationFailure("cancelled")),
+    retryCommand: Schema.encodeSync(OrchestrationV2Command)({
+      type: "prepared-run.retry",
+      commandId: CommandId.make("command-retry"),
+      threadId,
+      runId,
+    }),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(workspacePreparationPath) ||
+    NodeFS.readFileSync(workspacePreparationPath, "utf8") !== workspacePreparationFixture
+  ) {
+    console.error("[swift-fixtures] workspacePreparation.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(workspacePreparationPath, workspacePreparationFixture);
+
+// Thread shells as the live shell stream sends them. `latestUserAuthoredMessageAt`
+// orders the Working section; the legacy shell omits it, as a server that
+// predates the stamp does, and must decode to nil rather than fail.
+const threadShellPath = NodePath.join(NodePath.dirname(outputPath), "threadShell.json");
+const shellBase = {
+  id: threadId,
+  projectId,
+  title: "Thread",
+  providerInstanceId,
+  modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  activeProviderThreadId: null,
+  lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+  forkedFrom: null,
+  createdBy: "user",
+  creationSource: "web",
+  latestRunId: runId,
+  latestRunRequestedAt: DateTime.makeUnsafe("2026-06-20T00:05:00.000Z"),
+  activeRunId: runId,
+  status: "running",
+  pendingRuntimeRequest: null,
+  latestVisibleMessage: null,
+  latestUserMessageAt: DateTime.makeUnsafe("2026-06-20T00:05:00.000Z"),
+  hasActionableProposedPlan: false,
+  itemCount: 0,
+  visibleItemCount: 0,
+  createdAt: now,
+  updatedAt: now,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  lastVisitedAt: null,
+  deletedAt: null,
+} as const;
+const encodeSettledShell = (
+  pendingBackgroundTasks: OrchestrationV2ThreadShellJson["pendingBackgroundTasks"],
+) =>
+  Schema.encodeSync(OrchestrationV2ThreadShellJson)({
+    ...shellBase,
+    activeRunId: null,
+    status: "completed",
+    latestRunCompletedAt: DateTime.makeUnsafe("2026-06-20T00:06:00.000Z"),
+    ...(pendingBackgroundTasks === undefined ? {} : { pendingBackgroundTasks }),
+  });
+// A kind from a newer server. The schema refuses to encode one, so the entry is
+// written by hand and proven to decode as `background_task` before it ships.
+const unknownKindShell = {
+  ...encodeSettledShell([]),
+  pendingBackgroundTasks: [
+    { taskId: "task-future", description: "Scheduled wakeup", kind: "scheduled_wakeup" },
+  ],
+};
+if (
+  Schema.decodeUnknownSync(OrchestrationV2ThreadShellJson)(unknownKindShell)
+    .pendingBackgroundTasks?.[0]?.kind !== "background_task"
+) {
+  throw new Error("[swift-fixtures] an unknown background kind must decode as background_task");
+}
+const threadShellFixture = `${JSON.stringify(
+  {
+    stamped: Schema.encodeSync(OrchestrationV2ThreadShellJson)({
+      ...shellBase,
+      latestUserAuthoredMessageAt: DateTime.makeUnsafe("2026-06-20T00:02:00.000Z"),
+    }),
+    neverAuthored: Schema.encodeSync(OrchestrationV2ThreadShellJson)({
+      ...shellBase,
+      latestUserAuthoredMessageAt: null,
+    }),
+    legacy: Schema.encodeSync(OrchestrationV2ThreadShellJson)(shellBase),
+    // What a settled thread still runs. Only `command` leaves the run finished;
+    // `legacy` above omits the list, as a server that predates it does.
+    backgroundSubagent: encodeSettledShell([
+      {
+        taskId: "task-subagent",
+        description: "/root/review_diff",
+        kind: "subagent",
+        childThreadId: ThreadId.make("thread-child"),
+      },
+    ]),
+    backgroundCommand: encodeSettledShell([
+      { taskId: "task-command", description: "Start the dev server", kind: "command" },
+    ]),
+    backgroundMonitor: encodeSettledShell([
+      { taskId: "task-monitor", description: "Wait for CI", kind: "monitor" },
+    ]),
+    backgroundUnknownKind: unknownKindShell,
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(threadShellPath) ||
+    NodeFS.readFileSync(threadShellPath, "utf8") !== threadShellFixture
+  ) {
+    console.error("[swift-fixtures] threadShell.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(threadShellPath, threadShellFixture);

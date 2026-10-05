@@ -106,6 +106,32 @@ and learned routes keep it (`connectionEndpointKey` in
 Signing out of T3 Connect removes only the T3 Connect route; a machine with another route stays
 saved.
 
+#### Routes in the SwiftUI iOS client
+
+`apps/swift-ios` mirrors the same model by hand (`Core/EnvironmentRoutes.swift`,
+`Core/EnvironmentRouteSelector.swift`). Each saved `Environment` holds `routes`, preferred first;
+every route names the Keychain account of its credential (`credentialID`). A catalog saved before
+routes decodes as one route whose credential stays under the environment id, and the catalog keeps
+writing the old single-address fields for the route that owns that account, so an older build still
+connects. A second paired address gets its own account (`<environment id>#<route id>`); connecting
+T3 Connect to a machine already paired directly adds the relay route instead of replacing the
+machine. Learned routes borrow the credential of the route they were learned over: the paired
+bearer token, or the T3 Connect DPoP token, whose proofs are signed for the LAN or tailnet URL while
+renewal still goes through the relay endpoint.
+
+`EnvironmentRouteSelector` walks routes the way the driver does (concurrent 2.5 s descriptor checks,
+silent routes last after a confirming check, an address answering as another environment never
+gets a credential). It runs on every socket dial; idempotent HTTP reads (shell and thread snapshots,
+session reads) retry over the other routes once when the route itself fails. While connected over a
+later route, the client preflights the earlier ones every 60 seconds (descriptor plus an
+authenticated session read) and redials when one passes; a route that passed but then failed is not
+preferred again for five minutes. There is no network-change wakeup yet. Learned addresses come from
+the first `server.getConfig` per route a client connects over. The app allows plain HTTP
+(`NSAllowsArbitraryLoads`), so learned `http://` LAN and tailnet routes are kept; the first request
+to a LAN address can raise the iOS Local Network prompt (`NSLocalNetworkUsageDescription`), and if
+it is denied those requests fail like an unreachable route and the walk falls back to the next one.
+An environment with one route connects exactly as before: no checks, no preflight.
+
 ### AdvertisedEndpoint
 
 A server- or desktop-authored candidate endpoint for an environment: a concrete HTTP and WebSocket

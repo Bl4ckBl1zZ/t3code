@@ -27,6 +27,9 @@ struct ThreadActivityInspectorView: View {
     let currentWireThreadID: String
     let activitySourceThreadID: String
     var workspaceRoot: String?
+    /// Stands in for output the wire withheld while it loads, or says why it
+    /// never arrived. `nil` once the fetched output is in `model`.
+    var outputState: ThreadTurnItemOutputState? = nil
     var onOpenFile: (ThreadActivityFileOpenRequest) -> Void = { _ in }
     var onOpenURL: (URL) -> Void = { _ in }
     var onRollback: (ThreadActivityRollbackTarget) -> Void = { _ in }
@@ -40,6 +43,10 @@ struct ThreadActivityInspectorView: View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(model.blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
+            }
+
+            if let outputState {
+                section("Output") { outputStateText(outputState) }
             }
 
             if let ending = model.ending {
@@ -102,6 +109,21 @@ struct ThreadActivityInspectorView: View {
         }
     }
 
+    /// Static text, never a spinner: a slow server must not keep the
+    /// transcript repainting.
+    private func outputStateText(_ state: ThreadTurnItemOutputState) -> some View {
+        let (text, color): (String, Color) = switch state {
+        case .loading: ("Loading output…", T3Colors.textTertiary)
+        case let .failed(message): ("Couldn’t load output: \(message)", T3Colors.danger)
+        case .empty: ("No output.", T3Colors.textTertiary)
+        }
+        return Text(verbatim: text)
+            .font(ChatTimelineStyle.small)
+            .foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func endingColor(_ tone: ThreadActivityInspectorEnding.Tone) -> Color {
         switch tone {
         case .neutral: T3Colors.textTertiary
@@ -143,7 +165,8 @@ struct ThreadActivityInspectorView: View {
                 }
                 blockView(
                     ThreadActivityInspectorBlock(
-                        label: "Raw Item", value: model.structuredDetails, monospaced: true
+                        label: "Raw Item", value: model.structuredDetails, monospaced: true,
+                        language: "json"
                     )
                 )
             }
@@ -322,9 +345,41 @@ private struct InspectorBlockText: View {
         return block.value.count > Self.collapsedLineLimit * 60
     }
 
+    /// Fetched output runs to 256 KB. Collapsed, only the lines that can show
+    /// are handed to text layout.
+    private var displayedValue: String {
+        guard !isExpanded, isLong else { return block.value }
+        let value = block.value
+        var end = value.startIndex
+        for _ in 0..<Self.collapsedLineLimit {
+            guard let newline = value[end...].firstIndex(of: "\n") else {
+                end = value.endIndex
+                break
+            }
+            end = value.index(after: newline)
+        }
+        let limit = value.index(
+            value.startIndex,
+            offsetBy: Self.collapsedLineLimit * 120,
+            limitedBy: end
+        ) ?? end
+        return String(value[..<limit])
+    }
+
+    @ViewBuilder
+    private var valueText: some View {
+        let shown = displayedValue
+        if let language = block.language,
+           let highlighted = InspectorCodeHighlighting.highlighted(shown, language: language) {
+            Text(highlighted)
+        } else {
+            Text(verbatim: shown)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(verbatim: block.value)
+            valueText
                 .font(block.monospaced ? ChatTimelineStyle.smallMono : ChatTimelineStyle.small)
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(isExpanded ? nil : Self.collapsedLineLimit)
@@ -342,5 +397,34 @@ private struct InspectorBlockText: View {
                 .contentShape(Rectangle())
             }
         }
+    }
+}
+
+private final class InspectorHighlightBox: NSObject {
+    let value: AttributedString
+    init(_ value: AttributedString) { self.value = value }
+}
+
+/// Syntax colours for inspector blocks, from the lexer file previews and
+/// message code blocks use. Lexed once per text and cached, since an open row
+/// re-evaluates its body on every transcript update.
+@MainActor
+enum InspectorCodeHighlighting {
+    private static let cache: NSCache<NSString, InspectorHighlightBox> = {
+        let cache = NSCache<NSString, InspectorHighlightBox>()
+        cache.countLimit = 64
+        cache.totalCostLimit = 2 * 1_024 * 1_024
+        return cache
+    }()
+
+    /// Nil past the message code-block limit: a huge payload stays plain
+    /// rather than stalling the main thread.
+    static func highlighted(_ text: String, language: String) -> AttributedString? {
+        guard text.utf8.count <= MarkdownCodeHighlighting.maximumUTF8Count else { return nil }
+        let key = "\(language)\u{0}\(text)" as NSString
+        if let hit = cache.object(forKey: key) { return hit.value }
+        let value = MarkdownCodeHighlighting.highlight(text, language: language)
+        cache.setObject(InspectorHighlightBox(value), forKey: key, cost: max(64, text.utf8.count * 4))
+        return value
     }
 }

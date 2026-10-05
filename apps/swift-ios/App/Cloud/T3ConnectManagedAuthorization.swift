@@ -396,10 +396,11 @@ public actor T3ConnectRuntimeAuthorization: ManagedEnvironmentAuthorizing {
         authorization: T3ConnectEnvironmentAccessToken,
         environment: Environment
     ) throws -> EnvironmentCredential {
-        guard authorization.environmentID == environment.id,
+        guard let relay = environment.relayRoute,
+              authorization.environmentID == environment.id,
               authorization.proofKeyThumbprint.isEmpty == false,
-              authorization.endpoint.httpBaseURL == environment.httpBaseURL,
-              authorization.endpoint.webSocketBaseURL == environment.webSocketBaseURL else {
+              authorization.endpoint.httpBaseURL == relay.httpBaseURL,
+              authorization.endpoint.webSocketBaseURL == relay.webSocketBaseURL else {
             throw T3ConnectRelayError.environmentMismatch
         }
         return .managedDPoP(
@@ -415,24 +416,30 @@ public actor T3ConnectRuntimeAuthorization: ManagedEnvironmentAuthorizing {
         bootstrap: T3ConnectManagedEnvironmentCredential,
         environment: Environment
     ) throws {
-        guard bootstrap.environmentID == environment.id,
+        guard let relay = environment.relayRoute,
+              bootstrap.environmentID == environment.id,
               bootstrap.proofKeyThumbprint.isEmpty == false,
-              bootstrap.endpoint.httpBaseURL == environment.httpBaseURL,
-              bootstrap.endpoint.webSocketBaseURL == environment.webSocketBaseURL else {
+              bootstrap.endpoint.httpBaseURL == relay.httpBaseURL,
+              bootstrap.endpoint.webSocketBaseURL == relay.webSocketBaseURL else {
             throw T3ConnectRelayError.environmentMismatch
         }
     }
 
+    /// The T3 Connect tunnel's endpoint. Requests may go to a LAN or tailnet
+    /// address learned through it: the access token is not bound to an
+    /// origin and every proof signs the URL it is sent to, but renewal always
+    /// goes through the tunnel.
     private static func managedEndpoint(
         for environment: Environment
     ) -> T3ConnectManagedEndpoint? {
-        guard environment.httpBaseURL.scheme?.lowercased() == "https",
-              environment.webSocketBaseURL.scheme?.lowercased() == "wss",
-              environment.httpBaseURL.host != nil,
-              environment.webSocketBaseURL.host != nil else { return nil }
+        guard let relay = environment.relayRoute,
+              relay.httpBaseURL.scheme?.lowercased() == "https",
+              relay.webSocketBaseURL.scheme?.lowercased() == "wss",
+              relay.httpBaseURL.host != nil,
+              relay.webSocketBaseURL.host != nil else { return nil }
         return T3ConnectManagedEndpoint(
-            httpBaseUrl: environment.httpBaseURL.absoluteString,
-            wsBaseUrl: environment.webSocketBaseURL.absoluteString,
+            httpBaseUrl: relay.httpBaseURL.absoluteString,
+            wsBaseUrl: relay.webSocketBaseURL.absoluteString,
             providerKind: .t3Relay
         )
     }

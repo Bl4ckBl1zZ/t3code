@@ -121,6 +121,36 @@ enum DailyUXCreationContext {
         return (project.name, parts.isEmpty ? nil : parts.joined(separator: " · "))
     }
 
+    /// Machines that can start a task with no project: connected, and whose
+    /// server names a Scratch folder. Ports `availableScratchWorkspaceRoot`
+    /// from packages/client-runtime/src/operations/projects.ts.
+    static func scratchEnvironments(
+        in snapshot: FeatureSnapshot,
+        serverConfigs: [MobileWorkspaceEnvironmentConfig]
+    ) -> [FeatureEnvironment] {
+        let scratchIDs = Set(serverConfigs.filter { $0.scratchWorkspaceRoot != nil }.map(\.environmentID))
+        return snapshot.environments.filter { environment in
+            let state = environment.isActive ? snapshot.connection.state : environment.connectionState
+            return state == .connected && scratchIDs.contains(environment.id)
+        }
+    }
+
+    /// Whether a project is its machine's Scratch project, which the task sheet
+    /// names "No project" instead of listing it among the others.
+    static func isScratchProject(
+        _ project: FeatureProject,
+        serverConfigs: [MobileWorkspaceEnvironmentConfig]
+    ) -> Bool {
+        guard let root = serverConfigs.first(where: { $0.environmentID == project.environmentID })?
+            .scratchWorkspaceRoot else { return false }
+        func normalized(_ path: String) -> String {
+            var path = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+            return path
+        }
+        return normalized(project.path) == normalized(root)
+    }
+
     /// The projects a task can be started in.
     ///
     /// `serverConfigs` is required rather than defaulted because it is the only
@@ -215,9 +245,19 @@ enum DailyUXCreationContext {
     }
 }
 
+/// The Working section beta: busy threads fold into a Working shelf on Home
+/// until they need the user. Device-local, like the shelves' disclosure state,
+/// and off by default as on web.
+enum HomeWorkingSection {
+    static let enabledKey = "workspace.working-section-beta"
+}
+
 struct DailyUXSidebarIndex {
     let pinned: [FeatureThread]
     let active: [FeatureThread]
+    /// Working section beta: unpinned threads busy with work that does not
+    /// need the user. Always empty while the beta is off.
+    let working: [FeatureThread]
     let snoozed: [FeatureThread]
     let settled: [FeatureThread]
     let searchResults: [FeatureThread]
@@ -237,7 +277,8 @@ struct DailyUXSidebarIndex {
         query: String,
         projectID: String? = nil,
         now: Date = .now,
-        changeRequests: [String: FeaturePullRequest] = [:]
+        changeRequests: [String: FeaturePullRequest] = [:],
+        workingSectionEnabled: Bool = false
     ) {
         let visible = snapshot.threads.filter { thread in
             guard !thread.isArchived else { return false }
@@ -265,9 +306,18 @@ struct DailyUXSidebarIndex {
             .filter { $0.pinnedAt != nil && !isSettled($0) }
             .sorted(by: Self.activeOrder)
 
-        active = available
-            .filter { $0.pinnedAt == nil && !isSettled($0) }
-            .sorted(by: Self.activeOrder)
+        // Working beta: only inbox threads fold away. Pins and Work's Main
+        // thread stay put; snoozed and settled threads keep their shelves.
+        let unpinned = available.filter { $0.pinnedAt == nil && !isSettled($0) }
+        let foldsIntoWorking = { (thread: FeatureThread) in
+            workingSectionEnabled && thread.workInboxRole != "main" && thread.isHomeWorking
+        }
+        active = unpinned
+            .filter { !foldsIntoWorking($0) }
+            .sorted(by: workingSectionEnabled ? Self.inboxReturnOrder : Self.activeOrder)
+        working = unpinned
+            .filter(foldsIntoWorking)
+            .sorted(by: Self.workingOrder)
 
         snoozed = visible
             .filter(isShelfSnoozed)
@@ -290,7 +340,7 @@ struct DailyUXSidebarIndex {
             }
 
         searchResults = Self.matchingThreads(
-            pinned + active + snoozed + settled,
+            pinned + active + working + snoozed + settled,
             snapshot: snapshot,
             query: query
         )
@@ -305,6 +355,45 @@ struct DailyUXSidebarIndex {
     static func activeAnchor(_ thread: FeatureThread) -> Date {
         guard let unsettledAt = thread.unsettledAt else { return thread.createdAt }
         return max(thread.createdAt, unsettledAt)
+    }
+
+    /// Working beta inbox order, newest first by when each thread last came
+    /// back to the user, so a thread leaving the Working section lands on top.
+    /// The saved arrangement is kept, not applied, until the beta is off.
+    /// Mirrors web's `sortInboxThreadsByReturn`, minus the returns only a live
+    /// observer sees (an approval mid-run, background work ending).
+    static func inboxReturnOrder(_ lhs: FeatureThread, _ rhs: FeatureThread) -> Bool {
+        let lhsReturn = inboxReturnAnchor(lhs)
+        let rhsReturn = inboxReturnAnchor(rhs)
+        if lhsReturn != rhsReturn { return lhsReturn > rhsReturn }
+        return lhs.id < rhs.id
+    }
+
+    static func inboxReturnAnchor(_ thread: FeatureThread) -> Date {
+        [thread.unsettledAt, thread.latestUserActivityAt, thread.latestTurnCompletedAt]
+            .compactMap { $0 }
+            .reduce(thread.createdAt, max)
+    }
+
+    /// Working beta order: newest first by the last message the user wrote.
+    /// Runs ending and wakes (background results, delegated results) do not
+    /// move a row, so the section holds still while agents finish and resume.
+    /// Rows without the stamp — a server that predates it, or a thread the
+    /// user never wrote in — follow in the active list's own order. Mirrors
+    /// web's `sortWorkingThreadsBySend`.
+    static func workingOrder(_ lhs: FeatureThread, _ rhs: FeatureThread) -> Bool {
+        switch (workingSendAnchor(lhs), workingSendAnchor(rhs)) {
+        case let (left?, right?):
+            if left != right { return left > right }
+            return lhs.id < rhs.id
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return activeOrder(lhs, rhs)
+        }
+    }
+
+    static func workingSendAnchor(_ thread: FeatureThread) -> Date? {
+        thread.latestUserAuthoredMessageAt.map { max(thread.createdAt, $0) }
     }
 
     /// Static order, newest anchor on top. Activity never reorders the shelf —
@@ -493,8 +582,9 @@ enum HomeThreadStatus: String, Sendable, Equatable {
     case approval
     case input
     case working
-    /// Nothing is generating, but a delegated agent or a detached command is
-    /// still running and will wake the thread.
+    /// Nothing is generating, but a delegated agent or a monitor is still
+    /// running and will wake the thread. Commands left running, such as a dev
+    /// server, do not count (``FeatureThread/backgroundWorkHoldsThread``).
     case background
     case failed
     case done
@@ -536,6 +626,19 @@ enum HomeWorkingDuration {
 }
 
 extension FeatureThread {
+    /// Whether work the thread left running holds it in Background: it will
+    /// speak again without the user. Subagents and monitors do; a dev server
+    /// or other command does not, the agent is done with it. Servers that
+    /// predate the named list only send counts, which cannot tell a command
+    /// from a monitor, so any live work holds there as before. Mirrors web's
+    /// `sidebarBackgroundWorkHoldsThread`.
+    var backgroundWorkHoldsThread: Bool {
+        if let pendingBackgroundTasks {
+            return OrchestrationV2PendingBackgroundTask.holdCompletion(pendingBackgroundTasks)
+        }
+        return (backgroundWorkCount ?? 0) > 0
+    }
+
     var homeStatus: HomeThreadStatus {
         switch state {
         case .queued, .working:
@@ -550,8 +653,9 @@ extension FeatureThread {
             .done
         case .idle:
             // Ranked under Done, matching the web sidebar: a result the reader
-            // has not seen yet outranks work that is still going.
-            (backgroundWorkCount ?? 0) > 0 ? .background : .ready
+            // has not seen yet outranks work that is still going. A dev server
+            // left running does not hold the thread; it reads as ready.
+            backgroundWorkHoldsThread ? .background : .ready
         }
     }
 
@@ -566,6 +670,22 @@ extension FeatureThread {
     ///
     /// `nil` for a thread with nothing to report, which leaves the row's meta
     /// line as just its age rather than badging "Ready" on everything idle.
+    /// Busy with work that does not need the user: a turn in flight, or one
+    /// stopped with background work that will wake it. A plan waiting for a
+    /// decision outranks lingering background work. Approvals, questions,
+    /// failures and unseen results all need the user. Mirrors web's
+    /// `isSidebarThreadWorking`.
+    var isHomeWorking: Bool {
+        switch homeStatus {
+        case .working:
+            true
+        case .background:
+            !(interactionMode == .plan && hasActionableProposedPlan == true)
+        case .approval, .input, .failed, .done, .ready:
+            false
+        }
+    }
+
     var workInboxBadge: WorkInboxBadge? {
         switch homeStatus {
         case .approval, .input: .needsYou

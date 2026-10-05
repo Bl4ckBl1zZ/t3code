@@ -158,6 +158,9 @@ public struct ServerProviderWorkspaceSnapshot: Codable, Equatable, Sendable {
     public let cwd: String
     public let checkedAt: String
     public let slashCommands: [ServerProviderSlashCommandSnapshot]
+    /// Skills are scanned, but command discovery failed and needs a retry; the
+    /// commands are the cwd's last known list. Absent on older servers.
+    public var slashCommandsPending: Bool? = nil
     public let skills: [ServerProviderSkillSnapshot]
 }
 
@@ -192,6 +195,34 @@ public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable
     public let models: [ServerProviderModelSnapshot]
     public let slashCommands: [ServerProviderSlashCommandSnapshot]?
     public let skills: [ServerProviderSkillSnapshot]?
+}
+
+/// When a composer asks the server to scan a workspace's skills and commands
+/// (`server.refreshProviders` with `instanceId` and `cwd`). The server stores one
+/// entry per cwd; the composer resolves that entry, else the machine lists.
+public enum ProviderWorkspaceScan {
+    /// Wait before asking again for a cwd whose commands are still pending.
+    public static let retryCooldown: Duration = .seconds(10)
+    /// Pending retries per composer visit, so a probe that keeps failing is not
+    /// re-run for as long as a thread stays open.
+    public static let maxPendingRetries = 6
+
+    /// Whether `cwd` should be scanned: the instance is enabled and installed
+    /// (the server scans nothing else), and the cwd has no entry yet or its
+    /// commands are pending.
+    public static func needsScan(_ provider: ServerProviderSnapshot?, cwd: String) -> Bool {
+        guard let provider, provider.enabled, provider.installed else { return false }
+        guard let workspace = provider.workspaceSnapshots?.first(where: { $0.cwd == cwd }) else { return true }
+        return workspace.slashCommandsPending == true
+    }
+
+    /// Whether a scan's result asks for another try after the cooldown. A scan
+    /// that stored nothing (a driver without workspace discovery, a failed scan,
+    /// or an older server) is not retried until the composer opens again.
+    public static func shouldRetry(after provider: ServerProviderSnapshot?, cwd: String) -> Bool {
+        guard let provider, provider.enabled, provider.installed else { return false }
+        return provider.workspaceSnapshots?.first(where: { $0.cwd == cwd })?.slashCommandsPending == true
+    }
 }
 
 public enum ServerThreadEnvironmentMode: String, Codable, Equatable, Sendable {
@@ -289,6 +320,11 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let defaultAutoPull: Bool
     public let projectAgentBrowserAccessOverrides: [String: Bool]
     public let projectAutoPullOverrides: [String: Bool]
+    /// The merge method a pull request starts with on this machine; `nil`
+    /// reuses the method last chosen on this device. Absent on older servers.
+    public let pullRequestMergeMethod: String?
+    /// Per-project merge methods, laid over `pullRequestMergeMethod`.
+    public let projectPullRequestMergeMethodOverrides: [String: String]
     public let environmentIcon: String?
     public let usageLimitSources: [String: UsageLimitSourceConfig]?
     public let usagePriceOverrides: [String: UsageModelPriceOverride]?
@@ -341,6 +377,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         defaultAutoPull: Bool = false,
         projectAutoPullOverrides: [String: Bool] = [:],
         projectAgentBrowserAccessOverrides: [String: Bool] = [:],
+        pullRequestMergeMethod: String? = nil,
+        projectPullRequestMergeMethodOverrides: [String: String] = [:],
         environmentIcon: String? = nil,
         usageLimitSources: [String: UsageLimitSourceConfig]? = nil,
         usagePriceOverrides: [String: UsageModelPriceOverride]? = nil,
@@ -368,6 +406,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.defaultAutoPull = defaultAutoPull
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
+        self.pullRequestMergeMethod = pullRequestMergeMethod
+        self.projectPullRequestMergeMethodOverrides = projectPullRequestMergeMethodOverrides
         self.environmentIcon = environmentIcon
         self.usageLimitSources = usageLimitSources
         self.usagePriceOverrides = usagePriceOverrides
@@ -399,6 +439,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case defaultModelSelection
         case defaultProjectScripts, projectScriptOverrides
         case defaultAutoPull, projectAutoPullOverrides, projectAgentBrowserAccessOverrides
+        case pullRequestMergeMethod, projectPullRequestMergeMethodOverrides
         case environmentIcon
         case usageLimitSources
         case usagePriceOverrides
@@ -436,6 +477,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         defaultAutoPull = try container.decodeIfPresent(Bool.self, forKey: .defaultAutoPull) ?? false
         projectAgentBrowserAccessOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAgentBrowserAccessOverrides) ?? [:]
         projectAutoPullOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .projectAutoPullOverrides) ?? [:]
+        pullRequestMergeMethod = try container.decodeIfPresent(String.self, forKey: .pullRequestMergeMethod)
+        projectPullRequestMergeMethodOverrides = try container.decodeIfPresent([String: String].self, forKey: .projectPullRequestMergeMethodOverrides) ?? [:]
         environmentIcon = try container.decodeIfPresent(String.self, forKey: .environmentIcon)
         usageLimitSources = try container.decodeIfPresent([String: UsageLimitSourceConfig].self, forKey: .usageLimitSources)
         usagePriceOverrides = try container.decodeIfPresent([String: UsageModelPriceOverride].self, forKey: .usagePriceOverrides)
@@ -487,6 +530,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         try container.encode(defaultAutoPull, forKey: .defaultAutoPull)
         try container.encode(projectAgentBrowserAccessOverrides, forKey: .projectAgentBrowserAccessOverrides)
         try container.encode(projectAutoPullOverrides, forKey: .projectAutoPullOverrides)
+        try container.encode(pullRequestMergeMethod, forKey: .pullRequestMergeMethod)
+        try container.encode(projectPullRequestMergeMethodOverrides, forKey: .projectPullRequestMergeMethodOverrides)
         try container.encodeIfPresent(environmentIcon, forKey: .environmentIcon)
         try container.encodeIfPresent(usageLimitSources, forKey: .usageLimitSources)
         try container.encodeIfPresent(usagePriceOverrides, forKey: .usagePriceOverrides)
@@ -532,6 +577,10 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     public var defaultAutoPull: Bool?
     public var projectAgentBrowserAccessOverrides: [String: Bool?]?
     public var projectAutoPullOverrides: [String: Bool?]?
+    /// Outer nil omits it; a present nil restores the device's last-used method.
+    public var pullRequestMergeMethod: String??
+    /// A present nil entry resets that project to the machine's method.
+    public var projectPullRequestMergeMethodOverrides: [String: String?]?
     public var providerInstances: [String: JSONValue]?
     public var customModelsByDriver: [String: [JSONValue]]?
     /// A present nil entry resets one model. Omitted models are unchanged.
@@ -560,6 +609,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         defaultAutoPull: Bool? = nil,
         projectAutoPullOverrides: [String: Bool?]? = nil,
         projectAgentBrowserAccessOverrides: [String: Bool?]? = nil,
+        pullRequestMergeMethod: String?? = nil,
+        projectPullRequestMergeMethodOverrides: [String: String?]? = nil,
         providerInstances: [String: JSONValue]? = nil,
         customModelsByDriver: [String: [JSONValue]]? = nil,
         environmentIcon: String?? = nil,
@@ -582,6 +633,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         self.defaultAutoPull = defaultAutoPull
         self.projectAgentBrowserAccessOverrides = projectAgentBrowserAccessOverrides
         self.projectAutoPullOverrides = projectAutoPullOverrides
+        self.pullRequestMergeMethod = pullRequestMergeMethod
+        self.projectPullRequestMergeMethodOverrides = projectPullRequestMergeMethodOverrides
         self.providerInstances = providerInstances
         self.customModelsByDriver = customModelsByDriver
         self.environmentIcon = environmentIcon
@@ -613,6 +666,10 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         if let defaultAutoPull { fields["defaultAutoPull"] = .bool(defaultAutoPull) }
         if let projectAgentBrowserAccessOverrides { fields["projectAgentBrowserAccessOverrides"] = .object(projectAgentBrowserAccessOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
         if let projectAutoPullOverrides { fields["projectAutoPullOverrides"] = .object(projectAutoPullOverrides.mapValues { $0.map(JSONValue.bool) ?? .null }) }
+        if let pullRequestMergeMethod { fields["pullRequestMergeMethod"] = pullRequestMergeMethod.map(JSONValue.string) ?? .null }
+        if let projectPullRequestMergeMethodOverrides {
+            fields["projectPullRequestMergeMethodOverrides"] = .object(projectPullRequestMergeMethodOverrides.mapValues { $0.map(JSONValue.string) ?? .null })
+        }
         if let environmentIcon { fields["environmentIcon"] = environmentIcon.map(JSONValue.string) ?? .null }
         if let enableHermes { fields["enableHermes"] = .bool(enableHermes) }
         if let enableAgentBrowserAccess {
@@ -674,6 +731,13 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public let threadResumeCompletionMarker: Bool?
     /// Whether shell subscriptions can emit a catch-up completion marker.
     public let shellResumeCompletionMarker: Bool?
+    /// The folder behind this environment's Scratch project, for threads with
+    /// no project. Present only on servers that answer `projects.ensureScratch`.
+    public var scratchWorkspaceRoot: String? = nil
+    /// LAN and tailnet addresses the server listens on, learned as extra
+    /// routes to it. Absent on servers that predate it; elements this build
+    /// cannot decode are dropped.
+    public var directEndpoints: [ServerDirectEndpoint]? = nil
 
     public init(
         providers: [ServerProviderSnapshot],
@@ -700,6 +764,8 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case providers, settings, t3WorkDirectory, cwd, environment
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
+        case scratchWorkspaceRoot
+        case directEndpoints
     }
 
     public init(from decoder: any Decoder) throws {
@@ -724,6 +790,13 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .shellResumeCompletionMarker
         )
+        scratchWorkspaceRoot = try container.decodeIfPresent(String.self, forKey: .scratchWorkspaceRoot)
+        // Forward-compatible like the contract: an endpoint kind this build
+        // does not know is dropped, and a malformed list never fails the config.
+        directEndpoints = (try? container.decodeIfPresent(
+            [LossyDecodableElement<ServerDirectEndpoint>].self,
+            forKey: .directEndpoints
+        ))?.map { $0.compactMap(\.value) }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -742,6 +815,8 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             shellResumeCompletionMarker,
             forKey: .shellResumeCompletionMarker
         )
+        try container.encodeIfPresent(scratchWorkspaceRoot, forKey: .scratchWorkspaceRoot)
+        try container.encodeIfPresent(directEndpoints, forKey: .directEndpoints)
     }
 }
 

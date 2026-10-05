@@ -63,6 +63,10 @@ Your authored requests and requested reviews are fetched separately from the gen
 older work can still appear in those groups. Unavailable hosts show an explanation while other
 results remain readable. Some hosts search only loaded rows; the list identifies those hosts.
 Unknown change sizes stay blank until loaded. Long-press a row to copy its link or open its host.
+On GitHub rows, swipe right or long-press for the same quick actions as web: **Merge** and
+**Close** on open requests, **Ready for Review** and **Close** on drafts, and **Reopen** on closed
+ones. **Close** asks first. **Merge** picks its method the same way and refuses a stacked request;
+open it to merge from the stack controls.
 Tap a row for the existing summary, conversation, labels and reviewed stack actions.
 Closing, reopening, marking ready, or converting to draft updates the row as soon as you send it,
 and reverts if the host refuses. A merge updates the row once the host confirms it. A row that no

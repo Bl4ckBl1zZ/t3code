@@ -118,17 +118,18 @@ public extension VoiceTranscriptInsertion {
     /// Ported from `useVoiceComposer`'s `onCompleted`.
     ///
     /// A transcript belongs to the composer it was recorded against. If that
-    /// composer is no longer the active one, the text is stashed under its
-    /// identity instead of being pushed into whatever draft happens to be on
-    /// screen. If the draft changed while transcription was in flight, the
-    /// anchored range is stale and the live caret wins.
+    /// composer is no longer the active one — or no composer is on screen at
+    /// all (`target` is nil) — the text is stashed under its identity instead
+    /// of being pushed into whatever draft happens to be on screen. If the
+    /// draft changed while transcription was in flight, the anchored range is
+    /// stale and the live caret wins.
     static func deliver(
         transcript: String,
         anchor: VoiceComposerAnchor?,
-        target: VoiceComposerTarget
+        target: VoiceComposerTarget?
     ) -> VoiceTranscriptDelivery {
         guard let anchor else { return .discarded }
-        guard anchor.identity == target.identity else {
+        guard let target, anchor.identity == target.identity else {
             return .stashed(identity: anchor.identity, text: transcript)
         }
         let range = target.draft == anchor.draft

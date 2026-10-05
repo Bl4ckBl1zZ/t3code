@@ -11,9 +11,29 @@ public protocol FeatureClient: AnyObject {
     func pair(endpoint: String, token: String?) async throws
     func activateEnvironment(id: String) async throws
     func removeEnvironment(id: String) async throws
+    /// Switches a saved environment off (kept with its credential, never
+    /// connected, hidden from home) or back on.
+    func setEnvironmentEnabled(id: String, enabled: Bool) async throws
+    /// Pairs the same machine at another address and adds it as a route.
+    func addEnvironmentRoute(id: String, pairingURL: String) async throws
+    /// Reorders a saved environment's routes; `routeIDs` lists each once.
+    func reorderEnvironmentRoutes(id: String, routeIDs: [String]) async throws
+    /// Removes a route the user saved, and its credential.
+    func removeEnvironmentRoute(id: String, routeID: String) async throws
+    /// The route the environment's connection uses, if it has one.
+    func environmentRouteInUse(id: String) async -> String?
+    /// Updates a server too old for this app to connect to, then switches it
+    /// back on. Returns the version it came back on.
+    func updateOutdatedEnvironment(
+        id: String,
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> String
     func disconnect() async
 
     func addProject(path: String) async throws
+    /// Finds or creates a machine's Scratch project, for a thread with no
+    /// project, and returns its id.
+    func ensureScratchProject(environmentID: String) async throws -> String
     func createThread(projectID: String, title: String?, selection: FeatureSelection?) async throws -> FeatureThread
     func createThreadAndSend(
         projectID: String,
@@ -79,6 +99,9 @@ public protocol FeatureClient: AnyObject {
     ) async throws -> FeatureLinkedPullRequest?
     func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest?
     func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws
+    /// Starts or stops waking the thread's agent on a linked pull request's
+    /// checks, comments and conflicts.
+    func setThreadPullRequestWatched(threadID: String, link: FeatureLinkedPullRequest, watched: Bool) async throws
     func pullRequestLabelCandidates(threadID: String, number: Int) async throws -> PullRequestLabelCandidateList
     func setPullRequestLabels(threadID: String, number: Int, labels: [String], applied: Bool) async throws
     func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack?
@@ -152,6 +175,9 @@ public protocol FeatureClient: AnyObject {
     func editQueuedRun(threadID: String, runID: String, text: String) async throws
     /// Releases a queue that restart recovery held back.
     func resumeThreadQueue(threadID: String) async throws
+    /// Prepares the workspace again for a run whose preparation failed
+    /// (`prepared-run.retry`), instead of resending its message.
+    func retryWorkspacePreparation(threadID: String, runID: String) async throws
 
     func saveSettings(_ settings: FeatureSettings) async throws
 
@@ -187,6 +213,15 @@ public protocol FeatureClient: AnyObject {
         threadID: String,
         file: FeatureReviewFile
     ) async throws -> FeatureReviewFileContents?
+    /// The full turn item behind a work-log row whose output the wire withheld
+    /// (`outputOmitted`). `threadID` routes to the environment; `sourceThreadID`
+    /// is the row's source thread (a wire id), which differs for inherited rows.
+    func loadTurnItem(
+        threadID: String,
+        sourceThreadID: String,
+        itemID: String,
+        revision: String
+    ) async throws -> OrchestrationV2TurnItem?
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus
     /// Streams the change request matching each thread's branch, keyed by
@@ -256,8 +291,28 @@ public extension FeatureClient {
 
     func activateEnvironment(id: String) async throws {}
     func removeEnvironment(id: String) async throws {}
+    func setEnvironmentEnabled(id: String, enabled: Bool) async throws {
+        throw FeatureCapabilityUnavailable("Switching servers off")
+    }
+    func addEnvironmentRoute(id: String, pairingURL: String) async throws {
+        throw FeatureCapabilityUnavailable("Server routes")
+    }
+    func reorderEnvironmentRoutes(id: String, routeIDs: [String]) async throws {
+        throw FeatureCapabilityUnavailable("Server routes")
+    }
+    func removeEnvironmentRoute(id: String, routeID: String) async throws {
+        throw FeatureCapabilityUnavailable("Server routes")
+    }
+    func environmentRouteInUse(id: String) async -> String? { nil }
+    func updateOutdatedEnvironment(
+        id: String,
+        progress: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        throw FeatureCapabilityUnavailable("Server updates")
+    }
     func disconnect() async {}
     func addProject(path: String) async throws {}
+    func ensureScratchProject(environmentID: String) async throws -> String { throw FeatureCapabilityUnavailable("Threads without a project") }
     func releaseThread(id: String) {}
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws {
         guard attachments.isEmpty && !dismiss else { throw FeatureCapabilityUnavailable("Question actions") }
@@ -288,6 +343,7 @@ public extension FeatureClient {
     }
     func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest? { throw FeatureCapabilityUnavailable("Multiple pull requests") }
     func removeThreadPullRequest(threadID: String, link: FeatureLinkedPullRequest) async throws { throw FeatureCapabilityUnavailable("Multiple pull requests") }
+    func setThreadPullRequestWatched(threadID: String, link: FeatureLinkedPullRequest, watched: Bool) async throws { throw FeatureCapabilityUnavailable("Watching pull requests") }
     func pullRequestLabelCandidates(threadID: String, number: Int) async throws -> PullRequestLabelCandidateList { throw FeatureCapabilityUnavailable("Label editing") }
     func setPullRequestLabels(threadID: String, number: Int, labels: [String], applied: Bool) async throws { throw FeatureCapabilityUnavailable("Label editing") }
     func pullRequestStack(threadID: String, number: Int) async throws -> PullRequestStack? { nil }
@@ -356,6 +412,10 @@ public extension FeatureClient {
 
     func resumeThreadQueue(threadID: String) async throws {
         throw FeatureCapabilityUnavailable("Queue resume")
+    }
+
+    func retryWorkspacePreparation(threadID _: String, runID _: String) async throws {
+        throw FeatureCapabilityUnavailable("Retrying setup")
     }
 
     func loadReviewFileContents(
@@ -509,6 +569,15 @@ public extension FeatureClient {
 
     func loadReview(threadID: String, checkpointID: String) async throws -> FeatureReview {
         throw FeatureCapabilityUnavailable("Checkpoint diff")
+    }
+
+    func loadTurnItem(
+        threadID _: String,
+        sourceThreadID _: String,
+        itemID _: String,
+        revision _: String
+    ) async throws -> OrchestrationV2TurnItem? {
+        throw FeatureCapabilityUnavailable("Tool output")
     }
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus {

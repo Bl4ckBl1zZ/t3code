@@ -107,7 +107,10 @@ struct PullRequestStackActionSheet: View {
         }
         .presentationDetents([.medium, .large])
         .t3GlassSheetBackground()
-        .onAppear { method = request.mergeMethods.first ?? "" }
+        .onAppear {
+            method = PullRequestActionLogic.resolveMergeMethod(allowed: request.mergeMethods, current: nil,
+                projectDefault: access.mergeMethodDefault(), lastUsed: PullRequestMergeMethodMemory.lastUsed()) ?? ""
+        }
     }
 
     private func perform() {
@@ -116,6 +119,7 @@ struct PullRequestStackActionSheet: View {
         Task { @MainActor in
             do {
                 try await access.runStackAction(request.number, request.stack, request.action, isMerge ? method : nil)
+                if isMerge { PullRequestMergeMethodMemory.remember(method) }
                 PlatformHapticEngine.shared.play(.success)
                 onFinished()
             } catch {

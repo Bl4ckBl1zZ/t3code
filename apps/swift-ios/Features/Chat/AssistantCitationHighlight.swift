@@ -78,6 +78,8 @@ enum MarkdownCitationHighlight {
                     return .table(MarkdownRenderedTable(header: header, alignments: table.alignments, rows: rows, columnWidths: table.columnWidths))
                 case .codeBlock(let language, let code, _):
                     return .codeBlock(language: language, code: code, citationRange: localRange(code))
+                case .mermaid(let source, let terminated, _):
+                    return .mermaid(source: source, terminated: terminated, citationRange: localRange(source))
                 case .image, .htmlEmbed, .artifactTemplate, .thematicBreak: return block
                 }
             }

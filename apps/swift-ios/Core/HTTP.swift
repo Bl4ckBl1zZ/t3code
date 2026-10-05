@@ -127,6 +127,17 @@ public actor EnvironmentAPI {
         )
     }
 
+    /// The public descriptor with a short deadline, for checking whether a
+    /// route answers as the expected environment. Sends no credential.
+    public func descriptor(
+        at httpBaseURL: URL,
+        timeoutInterval: TimeInterval
+    ) async throws -> EnvironmentDescriptor {
+        var request = URLRequest(url: endpoint(httpBaseURL, path: "/.well-known/t3/environment"))
+        request.timeoutInterval = timeoutInterval
+        return try await send(request, as: EnvironmentDescriptor.self)
+    }
+
     public func shellSnapshot(
         for environment: Environment,
         timeoutInterval: TimeInterval? = nil
@@ -264,7 +275,9 @@ public actor EnvironmentAPI {
         isUnauthorizedResponse: @Sendable (Result) -> Bool = { _ in false },
         as type: Result.Type
     ) async throws -> Result {
-        guard let credential = try await credentials.credential(for: environment.id) else {
+        // Each route names its credential: routes saved before routes existed
+        // keep it under the environment id; learned routes borrow another's.
+        guard let credential = try await credentials.credential(for: environment.credentialID) else {
             throw HTTPError.missingCredential
         }
 
@@ -409,7 +422,7 @@ public actor EnvironmentAPI {
               refreshed.proofKeyThumbprint?.isEmpty == false else {
             throw HTTPError.incompatibleCredential
         }
-        try await credentials.setCredential(refreshed, for: environment.id)
+        try await credentials.setCredential(refreshed, for: environment.credentialID)
         return refreshed
     }
 
@@ -418,7 +431,7 @@ public actor EnvironmentAPI {
         environment: Environment,
         using managedAuthorization: any ManagedEnvironmentAuthorizing
     ) async throws -> EnvironmentCredential? {
-        guard let saved = try await credentials.credential(for: environment.id),
+        guard let saved = try await credentials.credential(for: environment.credentialID),
               saved != credential,
               saved.authorizationMethod == .dpop,
               saved.managedEnvironmentID == environment.id,

@@ -517,6 +517,10 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
     public var toolSurface: String? = nil
     public var toolIcon: ToolActivityIcon? = nil
     public var toolSource: ToolActivitySource? = nil
+    /// The server withheld this command or tool output on the wire; fetch it
+    /// with `orchestration.getTurnItem`. Older servers never set it, so their
+    /// rows keep whatever output they shipped inline.
+    public var outputOmitted: Bool = false
 
     public init(type: String, base: OrchestrationV2TurnItemBase, payload: Payload) {
         self.type = type
@@ -566,7 +570,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case streaming, planId, markdown, steps, explanation
         case requestId, questions, requestKind, prompt, options
         case fileName, additions, deletions, diffStr, oldStr, newStr, changes
-        case input, output, exitCode
+        case input, output, exitCode, outputOmitted
         case pattern, results, patterns
         case checkpointId, scopeId, files, restoredFileCount, rolledBackRunCount
         case message, failure, retry
@@ -588,6 +592,9 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             toolSurface = try container.decodeIfPresent(String.self, forKey: .toolSurface)
             toolIcon = try container.decodeIfPresent(ToolActivityIcon.self, forKey: .toolIcon)
             toolSource = try container.decodeIfPresent(ToolActivitySource.self, forKey: .toolSource)
+        }
+        if type == "dynamic_tool" || type == "command_execution" {
+            outputOmitted = try container.decodeIfPresent(Bool.self, forKey: .outputOmitted) ?? false
         }
 
         switch type {
@@ -750,6 +757,9 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             try container.encodeIfPresent(toolIcon, forKey: .toolIcon)
             try container.encodeIfPresent(toolSource, forKey: .toolSource)
         }
+        if outputOmitted {
+            try container.encode(true, forKey: .outputOmitted)
+        }
 
         switch payload {
         case let .userMessage(messageID, intent, text, attachments):
@@ -853,6 +863,12 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             break
         }
     }
+}
+
+/// `orchestration.getTurnItem`'s reply: the persisted item, size-bounded, or
+/// `nil` once it is gone.
+public struct OrchestrationV2GetTurnItemResult: Codable, Equatable, Sendable {
+    public let item: OrchestrationV2TurnItem?
 }
 
 public struct OrchestrationV2ProjectedTurnItem: Codable, Equatable, Sendable, Identifiable {
@@ -1048,6 +1064,12 @@ public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiabl
     /// which clients render as nothing rather than as a zero.
     public let workflow: OrchestrationV2WorkflowProgress?
     public let usage: OrchestrationV2TaskUsage?
+    /// What the agent runs on, for its detail line. Optional here although the
+    /// contract always sends driver and instance: `model` is null when the
+    /// provider does not report one, and an absent field must not drop the row.
+    public var model: String? = nil
+    public var driver: String? = nil
+    public var providerInstanceId: String? = nil
 }
 
 public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {
@@ -1111,7 +1133,23 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
     public let requestedAt: OrchestrationV2Timestamp
     public let startedAt: OrchestrationV2Timestamp?
     public let completedAt: OrchestrationV2Timestamp?
+    /// How a launch prepares this run's workspace; `prepared-run.retry`
+    /// repeats it. Older servers never record it, so they never offer the retry.
+    public var workspacePreparation: OrchestrationV2WorkspacePreparation? = nil
 }
+
+/// `OrchestrationV2ThreadLaunchWorkspaceStrategy`: where a launched run works.
+/// `type` stays a string so a strategy this build predates still decodes.
+public struct OrchestrationV2WorkspacePreparation: Codable, Equatable, Sendable {
+    public let type: String
+    public var baseRef: String? = nil
+    public var branch: String? = nil
+    public var worktreePath: String? = nil
+    public var startFromOrigin: Bool? = nil
+}
+
+/// Failure code on the error item a failed workspace preparation leaves.
+public let orchestrationV2WorkspacePreparationFailureCode = "workspace_preparation_failed"
 
 /// A conversation message row.
 ///
@@ -1345,6 +1383,64 @@ public struct OrchestrationV2ThreadLinkedPullRequest: Codable, Equatable, Sendab
     }
 }
 
+/// Work a settled thread still runs in the background, as the shell lists it
+/// (`OrchestrationV2PendingBackgroundTask`). Kinds a newer server adds, and an
+/// entry with no kind at all, decode as ``Kind/backgroundTask`` like the
+/// contract's fallback arm, so the list never fails a shell.
+public struct OrchestrationV2PendingBackgroundTask: Codable, Equatable, Hashable, Sendable {
+    public enum Kind: String, Codable, Equatable, Hashable, Sendable {
+        case subagent
+        case command
+        case monitor
+        case backgroundTask = "background_task"
+
+        /// Mirrors `backgroundWorkHoldsCompletion`: commands, such as a dev
+        /// server, do not hold a finished run. Subagents and monitors wake the
+        /// agent, and work the server cannot name holds as the safe choice.
+        public var holdsCompletion: Bool {
+            self != .command
+        }
+    }
+
+    public var taskId: String
+    /// The work's name: a subagent's title, a command's description, a monitor's.
+    public var description: String?
+    public var kind: Kind
+    /// A subagent's own thread, when it has one. Only subagents carry it.
+    public var childThreadId: String?
+
+    public init(taskId: String, description: String? = nil, kind: Kind, childThreadId: String? = nil) {
+        self.taskId = taskId
+        self.description = description
+        self.kind = kind
+        self.childThreadId = kind == .subagent ? childThreadId : nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskId, description, kind, childThreadId
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        taskId = try container.decode(String.self, forKey: .taskId)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        kind = try container.decodeIfPresent(String.self, forKey: .kind)
+            .flatMap(Kind.init(rawValue:)) ?? .backgroundTask
+        // The contract only carries a child thread on subagents.
+        if kind == .subagent {
+            childThreadId = try container.decodeIfPresent(String.self, forKey: .childThreadId)
+        } else {
+            childThreadId = nil
+        }
+    }
+
+    /// Whether any of `tasks` holds the run's completion. Mirrors the shared
+    /// `backgroundWorkHoldsCompletion`.
+    public static func holdCompletion(_ tasks: [Self]) -> Bool {
+        tasks.contains { $0.kind.holdsCompletion }
+    }
+}
+
 public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var projectId: String
@@ -1380,12 +1476,20 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     public var pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary?
     public var latestVisibleMessage: OrchestrationV2LatestVisibleMessageSummary?
     public var latestUserMessageAt: OrchestrationV2Timestamp?
+    /// The last message the user wrote. Wakes and agent messages also use the
+    /// user role, so they move `latestUserMessageAt` but not this. Absent on
+    /// servers that predate the stamp.
+    public var latestUserAuthoredMessageAt: OrchestrationV2Timestamp?
     public var hasActionableProposedPlan: Bool
     /// Background commands still running. Deliberately never persisted server
     /// side, so it is absent rather than zero on a cached read.
     public var backgroundProcessCount: Int?
     /// Delegated agents still running. Absent on servers that predate the field.
     public var activeAgentCount: Int?
+    /// What the thread still runs once its latest run has settled, named and
+    /// kinded. Empty while a run is in flight. Nil on servers that predate the
+    /// list, where the two counts above are all there is.
+    public var pendingBackgroundTasks: [OrchestrationV2PendingBackgroundTask]? = nil
     public var itemCount: Int
     public var visibleItemCount: Int
     public var createdAt: OrchestrationV2Timestamp

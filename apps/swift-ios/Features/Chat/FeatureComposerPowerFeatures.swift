@@ -75,6 +75,12 @@ enum FeatureComposerVoiceScope: Equatable, Sendable {
         }
     }
 
+    /// The thread this surface writes into, if it is a thread composer.
+    var threadID: String? {
+        if case let .thread(id) = self { return id }
+        return nil
+    }
+
     /// Where a stashed transcript will reappear, for the confirmation HUD.
     var destinationName: String {
         switch self {

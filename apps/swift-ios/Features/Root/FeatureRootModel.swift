@@ -64,6 +64,8 @@ public final class FeatureRootModel {
     public private(set) var isLoading = true
     public private(set) var isPerformingAction = false
     public private(set) var isManagingConnections = false
+    /// Outdated-server updates in progress: environment id to current stage.
+    public private(set) var serverUpdateStages: [String: String] = [:]
     /// The failure the root alert shows. Setting it clears `errorTitle`, so a
     /// caller that names what failed sets the message first, then the title.
     public var errorMessage: String? {
@@ -72,6 +74,9 @@ public final class FeatureRootModel {
     /// What failed, as the alert's title ("Couldn't Archive Thread"). Nil
     /// falls back to a generic title.
     public private(set) var errorTitle: String?
+    /// Why each thread's last message did not send, shown above its composer.
+    /// Send failures always have a thread, so they never raise the alert.
+    public private(set) var sendFailures = FeatureThreadSendFailures()
     /// What each thread's review is pointed at. Lives here rather than in the
     /// review screen because the thread feed arms it and the review — presented
     /// later, from a sheet that does not exist yet — spends it.
@@ -85,6 +90,7 @@ public final class FeatureRootModel {
     public var outboxCount: Int { pendingSubmissionsByID.count }
     public var outboxSubmissions: [FeatureQueuedSubmission] { pendingSubmissionsByID.values.sorted { $0.identity.createdAt < $1.identity.createdAt } }
     private var failedOutboxIDs: Set<String> = []
+    private var retryingSetupRunIDs: Set<String> = []
     private var sendingOutboxIDs: Set<String> = []
 
     public func outboxStatus(_ submission: FeatureQueuedSubmission) -> String {
@@ -101,7 +107,16 @@ public final class FeatureRootModel {
         return .waiting
     }
 
-    public func retryOutbox() { failedOutboxIDs.removeAll(); scheduleOutboxDrain() }
+    public func retryOutbox() {
+        // A retry that fails again records its reason again.
+        for id in failedOutboxIDs { sendFailures.clear(submissionID: id) }
+        failedOutboxIDs.removeAll()
+        scheduleOutboxDrain()
+    }
+
+    public func dismissSendFailure(threadID: String) {
+        sendFailures.clear(threadID: threadID)
+    }
     public func cancelOutbox(_ id: String) async {
         guard !sendingOutboxIDs.contains(id), let submission = pendingSubmissionsByID[id] else { return }
         _ = await discardQueuedSubmission(submission)
@@ -216,6 +231,7 @@ public final class FeatureRootModel {
         await stopOutboxDrain()
         await perform {
             try await client.removeEnvironment(id: id)
+            sendFailures.clear(environmentID: id)
             do {
                 try await outboxStore.removeAll(environmentID: id)
                 removePendingSubmissions(environmentID: id)
@@ -232,6 +248,77 @@ public final class FeatureRootModel {
         scheduleOutboxDrain()
     }
 
+    /// Switches a saved server off or back on. Off keeps its record,
+    /// credential, and queued messages; they send once it is back on.
+    @discardableResult
+    public func setEnvironmentEnabled(_ id: String, enabled: Bool) async -> Bool {
+        await perform {
+            try await client.setEnvironmentEnabled(id: id, enabled: enabled)
+            install(try await client.initialSnapshot())
+            clearDetails()
+        }
+    }
+
+    /// Pairs the same machine at another address. Returns false (with the
+    /// reason reported) when the link is for another machine or fails.
+    @discardableResult
+    public func addEnvironmentRoute(_ id: String, pairingURL: String) async -> Bool {
+        await perform(failureTitle: "Couldn't Add Route") {
+            try await client.addEnvironmentRoute(id: id, pairingURL: pairingURL)
+            install(try await client.initialSnapshot())
+        }
+    }
+
+    @discardableResult
+    public func reorderEnvironmentRoutes(_ id: String, routeIDs: [String]) async -> Bool {
+        await perform(failureTitle: "Couldn't Reorder Routes") {
+            try await client.reorderEnvironmentRoutes(id: id, routeIDs: routeIDs)
+            install(try await client.initialSnapshot())
+        }
+    }
+
+    @discardableResult
+    public func removeEnvironmentRoute(_ id: String, routeID: String) async -> Bool {
+        await perform(failureTitle: "Couldn't Remove Route") {
+            try await client.removeEnvironmentRoute(id: id, routeID: routeID)
+            install(try await client.initialSnapshot())
+        }
+    }
+
+    public func environmentRouteInUse(_ id: String) async -> String? {
+        await client.environmentRouteInUse(id: id)
+    }
+
+    /// Updates an outdated server this app cannot connect to and switches it
+    /// back on. `serverUpdateStages[id]` holds the current stage while it runs.
+    @discardableResult
+    public func updateOutdatedEnvironment(_ id: String) async -> Bool {
+        guard serverUpdateStages[id] == nil else { return false }
+        serverUpdateStages[id] = "starting"
+        defer { serverUpdateStages[id] = nil }
+        // Not `perform`: this runs for minutes and must not mark every other
+        // action busy meanwhile.
+        do {
+            _ = try await client.updateOutdatedEnvironment(id: id) { [weak self] stage in
+                guard let self else { return }
+                await self.noteServerUpdateStage(stage, environmentID: id)
+            }
+            install(try await client.initialSnapshot())
+            clearDetails()
+            return true
+        } catch {
+            if !Self.isBenignCancellation(error) {
+                reportFailure(error.localizedDescription, title: "Couldn't Update Server")
+            }
+            return false
+        }
+    }
+
+    private func noteServerUpdateStage(_ stage: String, environmentID: String) {
+        guard serverUpdateStages[environmentID] != nil else { return }
+        serverUpdateStages[environmentID] = stage
+    }
+
     public func disconnect() async {
         await stopOutboxDrain()
         isManagingConnections = false
@@ -244,6 +331,7 @@ public final class FeatureRootModel {
         }
         install(FeatureSnapshot(
             environments: disconnectedEnvironments,
+            switchedOffEnvironments: snapshot.switchedOffEnvironments,
             settings: snapshot.settings
         ))
         clearDetails()
@@ -258,6 +346,20 @@ public final class FeatureRootModel {
             try await client.addProject(path: path)
             install(try await client.initialSnapshot())
         }
+    }
+
+    /// Opens a machine's "No project" folder for a new task: finds or creates
+    /// its Scratch project and returns the id once the snapshot holds it, since
+    /// the task sheet selects from the snapshot.
+    /// Throws rather than raising the root alert, which a presented task
+    /// sheet would cover.
+    public func openScratchProject(environmentID: String) async throws -> String {
+        let projectID = try await client.ensureScratchProject(environmentID: environmentID)
+        install(try await client.initialSnapshot())
+        guard snapshot.projects.contains(where: { $0.id == projectID }) else {
+            throw ScratchProjectNotLoaded()
+        }
+        return projectID
     }
 
     public func createThread(
@@ -630,6 +732,8 @@ public final class FeatureRootModel {
     public func sendMessage(_ submission: FeatureMessageSubmission) async -> Bool {
         let trimmed = submission.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !submission.attachments.isEmpty else { return false }
+        // A new send supersedes the reason the previous one bounced back.
+        sendFailures.clear(threadID: submission.threadID)
 
         guard let thread = snapshot.threads.first(where: { $0.id == submission.threadID }),
               let environmentID = thread.environmentID else {
@@ -711,9 +815,24 @@ public final class FeatureRootModel {
                 scheduleOutboxRetry()
             }
             if discarded, !Self.isBenignCancellation(error) {
-                reportFailure(error.localizedDescription, title: "Couldn't Send Message")
+                // The composer gets the draft back; the thread says why.
+                sendFailures.record(
+                    threadID: submission.threadID,
+                    environmentID: environmentID,
+                    message: error.localizedDescription
+                )
             }
             return false
+        }
+    }
+
+    /// Prepares the workspace again for a run whose preparation failed. One
+    /// retry per run at a time: a second tap lands while it is preparing.
+    public func retryWorkspacePreparation(threadID: String, runID: String) async {
+        guard retryingSetupRunIDs.insert(runID).inserted else { return }
+        defer { retryingSetupRunIDs.remove(runID) }
+        await perform(failureTitle: "Couldn't Retry Setup") {
+            try await client.retryWorkspacePreparation(threadID: threadID, runID: runID)
         }
     }
 
@@ -1268,6 +1387,7 @@ public final class FeatureRootModel {
         pendingCompletionSubmissionIDs.remove(submission.id)
         pendingSubmissionsByID.removeValue(forKey: submission.id)
         pendingThreadsByID.removeValue(forKey: submission.threadID)
+        sendFailures.clear(submissionID: submission.id)
         markQueuedMessageDelivered(submission)
         outboxRetryAttempt = 0
         return true
@@ -1321,6 +1441,7 @@ public final class FeatureRootModel {
         }
         pendingDiscardSubmissionIDs.remove(submission.id)
         pendingSubmissionsByID.removeValue(forKey: submission.id)
+        sendFailures.clear(submissionID: submission.id)
         let wasPendingCreation = pendingThreadsByID.removeValue(forKey: submission.threadID) != nil
         if wasPendingCreation {
             removeThread(id: submission.threadID)
@@ -1496,7 +1617,12 @@ public final class FeatureRootModel {
                         needsRetry = true
                     } else {
                         failedOutboxIDs.insert(submission.id)
-                        reportFailure(error.localizedDescription, title: "Couldn't Send Message")
+                        sendFailures.record(
+                            threadID: submission.threadID,
+                            environmentID: submission.environmentID,
+                            message: error.localizedDescription,
+                            submissionID: submission.id
+                        )
                     }
                 }
             }
@@ -1551,5 +1677,12 @@ public final class FeatureRootModel {
 private extension FeatureDraftAttachment {
     var upload: FeatureUploadAttachment {
         FeatureUploadAttachment(data: data, name: filename, mimeType: mimeType)
+    }
+}
+
+/// The Scratch project was created, but this device has not received it yet.
+struct ScratchProjectNotLoaded: LocalizedError {
+    var errorDescription: String? {
+        "The folder for threads without a project has not reached this device yet. Try again."
     }
 }

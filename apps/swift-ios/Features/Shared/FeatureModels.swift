@@ -31,6 +31,18 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var name: String
     public var endpoint: String
     public var isActive: Bool
+    /// False when the user switched this environment off on this device.
+    /// Switched-off environments only appear in
+    /// `FeatureSnapshot.switchedOffEnvironments`, never in home.
+    public var isEnabled: Bool = true
+    /// The ways this device reaches the environment, preferred first.
+    public var routes: [FeatureEnvironmentRoute] = []
+    /// Why this app cannot talk to the server (another orchestration
+    /// protocol). Such a server stays switched off until a check finds it
+    /// compatible again.
+    public var unsupportedReason: String? = nil
+    /// The server is outdated and this app can update it.
+    public var serverUpdateRequired: Bool = false
     /// Reachability from the latest aggregate refresh. `nil` means the client
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?
@@ -51,6 +63,8 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         name: String,
         endpoint: String,
         isActive: Bool = false,
+        isEnabled: Bool = true,
+        routes: [FeatureEnvironmentRoute] = [],
         connectionState: FeatureConnection.State? = nil,
         connectionDetail: String? = nil,
         supportsPullRequests: Bool? = nil,
@@ -64,6 +78,8 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.name = name
         self.endpoint = endpoint
         self.isActive = isActive
+        self.isEnabled = isEnabled
+        self.routes = routes
         self.connectionState = connectionState
         self.connectionDetail = connectionDetail
         self.supportsPullRequests = supportsPullRequests
@@ -72,6 +88,47 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.supportsAssistantCitations = supportsAssistantCitations
         self.supportsCustomModelDefinitions = supportsCustomModelDefinitions
         self.supportsProjectIcons = supportsProjectIcons
+    }
+}
+
+/// One way to reach a saved environment, as Settings lists it.
+public struct FeatureEnvironmentRoute: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public let id: String
+    /// "LAN", "Tailscale", "T3 Connect", "This device", or a host name.
+    public var label: String
+    /// The address, or nil for T3 Connect.
+    public var address: String?
+    /// Reported by the server rather than paired: never offered for removal,
+    /// since it would be learned again.
+    public var isLearned: Bool
+    public var isRelay: Bool
+
+    public init(id: String, label: String, address: String?, isLearned: Bool, isRelay: Bool) {
+        self.id = id
+        self.label = label
+        self.address = address
+        self.isLearned = isLearned
+        self.isRelay = isRelay
+    }
+
+    public init(route: EnvironmentRoute) {
+        self.init(
+            id: route.id,
+            label: route.label,
+            address: route.address,
+            isLearned: route.learned,
+            isRelay: route.isRelay
+        )
+    }
+
+    public var systemImage: String {
+        if isRelay { return "cloud" }
+        switch label {
+        case "LAN": return "wifi"
+        case "Tailscale": return "point.3.connected.trianglepath.dotted"
+        case "This device": return "iphone"
+        default: return "globe"
+        }
     }
 }
 
@@ -251,6 +308,15 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// the thread when that turn finishes, while a user re-engaging after the
     /// merge blocks it for good. Nil falls back to `createdAt`.
     public var latestUserActivityAt: Date?
+    /// The last message the user actually wrote. Wakes and agent messages
+    /// carry the user role too, so they move ``latestUserActivityAt`` but not
+    /// this. The Working section orders on it so rows hold still while agents
+    /// finish and wake. Nil on servers that predate the stamp, and on threads
+    /// the user has never written in.
+    public var latestUserAuthoredMessageAt: Date?
+    /// A proposed plan is waiting for the user's decision. Optional so cached
+    /// rows written before the field decode unchanged.
+    public var hasActionableProposedPlan: Bool?
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
     public var pinnedAt: Date?
@@ -295,6 +361,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var linkedPullRequests: [FeatureLinkedPullRequest]? = nil
     public var branchPullRequest: FeatureLinkedPullRequest? = nil
     public var supportsMultiplePullRequests: Bool? = nil
+    /// Whether linked pull requests can be watched for the thread's agent.
+    public var supportsPullRequestWatch: Bool? = nil
     public var supportsPullRequestStackActions: Bool? = nil
 
     public var allLinkedPullRequests: [FeatureLinkedPullRequest] {
@@ -316,6 +384,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// again on its own. Optional so cached rows written before the field
     /// decode unchanged.
     public var backgroundWorkCount: Int?
+    /// What the settled thread still runs, named and kinded. Nil when the
+    /// server predates the list (or on rows cached before it), where
+    /// ``backgroundWorkCount`` is all there is.
+    public var pendingBackgroundTasks: [OrchestrationV2PendingBackgroundTask]? = nil
     public var runtimeMode: FeatureRuntimeMode
     public var interactionMode: FeatureInteractionMode
     /// A provider is executing a turn on this thread right now, so archiving
@@ -350,6 +422,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         autoSettleOnMerge: Bool = true,
         lastActivityAt: Date? = nil,
         latestUserActivityAt: Date? = nil,
+        latestUserAuthoredMessageAt: Date? = nil,
+        hasActionableProposedPlan: Bool? = nil,
         snoozedUntil: Date? = nil,
         snoozedAt: Date? = nil,
         pinnedAt: Date? = nil,
@@ -371,12 +445,14 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         linkedPullRequests: [FeatureLinkedPullRequest]? = nil,
         branchPullRequest: FeatureLinkedPullRequest? = nil,
         supportsMultiplePullRequests: Bool? = nil,
+        supportsPullRequestWatch: Bool? = nil,
         supportsPullRequestStackActions: Bool? = nil,
         supportsPullRequestLinking: Bool? = nil,
         attentionAt: Date? = nil,
         workingStartedAt: Date? = nil,
         latestTurnCompletedAt: Date? = nil,
         backgroundWorkCount: Int? = nil,
+        pendingBackgroundTasks: [OrchestrationV2PendingBackgroundTask]? = nil,
         runtimeMode: FeatureRuntimeMode = .fullAccess,
         interactionMode: FeatureInteractionMode = .standard,
         archiveBlockedByLiveRun: Bool? = nil
@@ -407,6 +483,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.autoSettleOnMerge = autoSettleOnMerge
         self.lastActivityAt = lastActivityAt
         self.latestUserActivityAt = latestUserActivityAt
+        self.latestUserAuthoredMessageAt = latestUserAuthoredMessageAt
+        self.hasActionableProposedPlan = hasActionableProposedPlan
         self.snoozedUntil = snoozedUntil
         self.snoozedAt = snoozedAt
         self.pinnedAt = pinnedAt
@@ -428,12 +506,14 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.linkedPullRequests = linkedPullRequests
         self.branchPullRequest = branchPullRequest
         self.supportsMultiplePullRequests = supportsMultiplePullRequests
+        self.supportsPullRequestWatch = supportsPullRequestWatch
         self.supportsPullRequestStackActions = supportsPullRequestStackActions
         self.supportsPullRequestLinking = supportsPullRequestLinking
         self.attentionAt = attentionAt
         self.workingStartedAt = workingStartedAt
         self.latestTurnCompletedAt = latestTurnCompletedAt
         self.backgroundWorkCount = backgroundWorkCount
+        self.pendingBackgroundTasks = pendingBackgroundTasks
         self.runtimeMode = runtimeMode
         self.interactionMode = interactionMode
         self.archiveBlockedByLiveRun = archiveBlockedByLiveRun
@@ -800,6 +880,9 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
     /// row in `timelineItems`, which is exactly the set a timeline row can be
     /// tapped from.
     public var subagentChildThreadIDs: [String: String] = [:]
+    /// Subagent id to what it runs on and where, for its timeline row. Absent
+    /// for a subagent whose projection row has not arrived.
+    public var subagentMetadata: [String: SubagentRowMetadata] = [:]
     /// The projection's relational tables, narrowed to what the queue control
     /// and the relationship graph take as input. One field rather than ten so a
     /// caller that rebuilds a detail from parts carries it across in one line.
@@ -815,6 +898,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         timelineRuns: [LifecycleTimelineRun] = [],
         itemSupport: [String: ThreadActivityItemSupport] = [:],
         subagentChildThreadIDs: [String: String] = [:],
+        subagentMetadata: [String: SubagentRowMetadata] = [:],
         workflow: FeatureThreadWorkflow = .empty
     ) {
         self.thread = thread
@@ -826,6 +910,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         self.timelineRuns = timelineRuns
         self.itemSupport = itemSupport
         self.subagentChildThreadIDs = subagentChildThreadIDs
+        self.subagentMetadata = subagentMetadata
         self.workflow = workflow
     }
 
@@ -1142,6 +1227,8 @@ public struct FeatureProviderWorkspace: Sendable, Equatable, Hashable, Codable {
     public let cwd: String
     public let slashCommands: [FeatureProviderSlashCommand]
     public let skills: [FeatureProviderSkill]
+    /// The scan kept the cwd's last known commands and wants a retry.
+    public var slashCommandsPending: Bool? = nil
 }
 
 public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Codable {
@@ -1159,9 +1246,19 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     /// Set when the installed version is known to be unsupported or broken on
     /// this server. The provider can still run, so it stays available.
     public var incompatibleVersionWarning: String? = nil
+    /// The `#RRGGBB` accent the instance was given in settings, which is how
+    /// two accounts on one provider are told apart.
+    public var accentColor: String? = nil
     public var workspaceSnapshots: [FeatureProviderWorkspace]? = nil
     public var slashCommands: [FeatureProviderSlashCommand]?
     public var skills: [FeatureProviderSkill]?
+
+    /// Whether the server holds a scan of `cwd` that needs no retry; a key for
+    /// re-running the scan when an instance installs or drops its entries.
+    public func hasCompleteWorkspace(_ cwd: String?) -> Bool {
+        guard let cwd, let workspace = workspaceSnapshots?.first(where: { $0.cwd == cwd }) else { return false }
+        return workspace.slashCommandsPending != true
+    }
 
     public func inWorkspace(_ cwd: String?) -> Self {
         guard let cwd, let workspace = workspaceSnapshots?.first(where: { $0.cwd == cwd }) else { return self }
@@ -1383,6 +1480,17 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
     /// subscription as the rest of this struct so the row stays honest when
     /// another client changes it.
     public var claudeAutoCompactWindow: String
+    /// Whether the server stores a default merge method. Nil on older servers,
+    /// which hide the setting and merge with this device's last choice.
+    public var supportsPullRequestMergeMethod: Bool? = nil
+    /// The machine's merge method ("merge", "squash" or "rebase"); nil reuses
+    /// the method last chosen on each device.
+    public var pullRequestMergeMethod: String? = nil
+
+    mutating func setPullRequestMergeMethod(_ method: String?, supported: Bool) {
+        supportsPullRequestMergeMethod = supported ? true : nil
+        pullRequestMergeMethod = supported ? method : nil
+    }
 
     public init(
         defaultWorkspaceMode: FeatureWorkspaceMode = .local,
@@ -1399,7 +1507,12 @@ public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
 
 public struct FeatureSnapshot: Sendable, Equatable, Codable {
     public var connection: FeatureConnection
+    /// Saved environments that are switched on. Everything that lists or
+    /// merges environments reads this, so switched-off ones stay out of home.
     public var environments: [FeatureEnvironment]
+    /// Saved environments the user switched off on this device. Only the
+    /// Servers settings list them, so they can be switched back on.
+    public var switchedOffEnvironments: [FeatureEnvironment]
     public var projects: [FeatureProject]
     public var threads: [FeatureThread]
     public var providers: [FeatureProvider]
@@ -1416,6 +1529,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
     public init(
         connection: FeatureConnection = .init(),
         environments: [FeatureEnvironment] = [],
+        switchedOffEnvironments: [FeatureEnvironment] = [],
         projects: [FeatureProject] = [],
         threads: [FeatureThread] = [],
         providers: [FeatureProvider] = [],
@@ -1426,6 +1540,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
     ) {
         self.connection = connection
         self.environments = environments
+        self.switchedOffEnvironments = switchedOffEnvironments
         self.projects = projects
         self.threads = threads
         self.providers = providers

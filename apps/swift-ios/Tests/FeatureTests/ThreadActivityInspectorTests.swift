@@ -256,6 +256,33 @@ final class ThreadActivityInspectorTests: XCTestCase {
         XCTAssertTrue(model.structuredDetails.contains("\"sourceThreadId\": \"thread-source\""))
     }
 
+    /// JSON payloads get JSON colours; a tool that answered in prose stays plain.
+    func testToolPayloadsThatReadAsJSONAreHighlightedAsJSON() {
+        let item = V2Fixture.turnItem(
+            id: "dynamic",
+            type: "dynamic_tool",
+            extra: [
+                "toolName": .string("custom"),
+                "input": .object(["path": .string("src/index.ts")]),
+                "output": .object([
+                    "content": .array([.object(["type": .string("text"), "text": .string("done")])]),
+                ]),
+            ]
+        )
+
+        let model = ThreadActivityInspector.build(
+            row: inheritedRow(item),
+            currentThreadID: sourceThreadID,
+            currentWireThreadID: sourceThreadID
+        )
+
+        XCTAssertEqual(block(model, "Input")?.language, "json")
+        XCTAssertEqual(block(model, "Output")?.value, "done")
+        XCTAssertNil(block(model, "Output")?.language)
+        XCTAssertEqual(ThreadActivityInspector.jsonLanguage(for: "  [1, 2]"), "json")
+        XCTAssertNil(ThreadActivityInspector.jsonLanguage(for: "ok"))
+    }
+
     func testRollbackIsOfferedOnlyForTheMatchingReadyCheckpoint() {
         let item = V2Fixture.turnItem(
             id: "checkpoint",

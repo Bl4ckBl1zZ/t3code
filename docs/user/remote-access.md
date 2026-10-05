@@ -271,8 +271,15 @@ shows which route is in use.
 Drag a route to change the order, or remove it; removing a paired route forgets its credential, so
 it asks first. The last route goes with the machine: use **Remove from this device…** for that.
 Signing out of T3 Connect removes only that route; a machine you can still reach another way stays
-saved. Machines saved before routes existed keep working as a machine with one route. Routes are
-managed on web and desktop; the mobile apps connect to a machine the way it was paired there.
+saved. Machines saved before routes existed keep working as a machine with one route.
+
+In the iOS app, open **Settings → Servers** and tap a server's info button. **Routes** lists them
+preferred first with the one **In use**; tap **Edit** to drag them into another order, swipe a route
+you paired to remove it, or choose **Add Route** and paste a pairing link the same machine created
+for another address. Connecting a machine through **T3 Connect** that you already paired directly
+adds T3 Connect as one more route. Learned LAN addresses can make iOS ask for Local Network access
+the first time; if you decline, the app keeps using your other routes. The React Native app connects
+to a machine the way it was paired there.
 
 ## Switching a Saved Environment Off
 
@@ -281,11 +288,23 @@ it off disconnects it and stops reconnect attempts, and its projects and threads
 but this device keeps its pairing, credentials, and cached threads. Switch it back on to reconnect
 with everything restored. An environment stays off across restarts and when you edit it.
 
+In the iOS app, open **Settings → Servers**, swipe a server (or touch and hold it) and choose
+**Switch Off**, or tap its info button and turn off **Connect on This Device**. A switched-off
+server shows **Off**, stays saved with its credentials, and its threads leave Home; messages queued
+for it wait until it is switched back on. Switching off the server in use moves to the next one
+that is on.
+
 When T3 Connect reports that a machine runs a T3 Code version this client cannot talk to, the
 machine is switched off and shows **Client not supported** with the reason, and T3 Connect lists
 it without a Connect button. Its switch stays locked until a later check finds the versions
 compatible; update the older side, then switch the machine back on. A server that does not report
 a protocol version is treated as compatible.
+
+The iOS app does the same when a saved server refuses a reconnect because it moved to another
+version, or when you pair an outdated server it can update: the server is switched off and shows
+**Not supported**, and its details give the reason. Switching it back on checks the server again
+first. See [Keeping T3 Code in Sync](./updating.md#a-server-too-old-to-connect) for updating it from
+the app.
 
 To forget an environment on this device instead, open its **⋯** menu and choose **Remove from this
 device…**. Removing asks first, because it deletes the pairing, credentials, and cached threads

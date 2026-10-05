@@ -15,12 +15,16 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     let query: String
     let selectedThreadID: String?
     let forceRichRows: Bool
+    /// Working section beta: whether its shelf is open. The shelf only
+    /// appears when the presentation holds working threads.
+    var isWorkingExpanded = false
     let isSnoozedExpanded: Bool
     let isSettledExpanded: Bool
     let isArchiveExpanded: Bool
     let settledLimit: Int
     let confirmThreadUnpin: Bool
     let onOpen: (String) -> Void
+    var onToggleWorking: () -> Void = {}
     let onToggleSnoozed: () -> Void
     let onToggleSettled: () -> Void
     let onToggleArchive: () -> Void
@@ -242,7 +246,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 // rows slide in; everything else (a turn landing, a row
                 // re-sorting) updates in place rather than moving under a
                 // reading eye.
-                let isUserDisclosure = previousParent.isSnoozedExpanded != parent.isSnoozedExpanded
+                let isUserDisclosure = previousParent.isWorkingExpanded != parent.isWorkingExpanded
+                    || previousParent.isSnoozedExpanded != parent.isSnoozedExpanded
                     || previousParent.isSettledExpanded != parent.isSettledExpanded
                     || previousParent.isArchiveExpanded != parent.isArchiveExpanded
                     || previousParent.settledLimit != parent.settledLimit
@@ -692,6 +697,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
 
         private func toggle(_ shelf: HomeShelf) {
             switch shelf {
+            case .working: parent.onToggleWorking()
             case .snoozed: parent.onToggleSnoozed()
             case .settled: parent.onToggleSettled()
             case .archived: parent.onToggleArchive()
@@ -974,7 +980,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         }
 
         let mainStyle = primaryRowStyle
-        let shelvesAreEmpty = presentation.snoozed.isEmpty
+        let shelvesAreEmpty = presentation.working.isEmpty
+            && presentation.snoozed.isEmpty
             && presentation.settled.isEmpty
             && presentation.archived.isEmpty
         if presentation.pinned.isEmpty, presentation.active.isEmpty, shelvesAreEmpty {
@@ -1008,6 +1015,16 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         // Chat has neither parking shelf: a conversation is either in the list
         // or deleted. Empty shelves are not drawn at all.
         if workspace != .chat {
+            // Working beta: busy threads wait here until they need the user.
+            // The open thread stays listed while the shelf is collapsed, so
+            // the selection never points at nothing.
+            if !presentation.working.isEmpty {
+                items.append(.shelfHeader(.working, presentation.working.count, isWorkingExpanded))
+                let shown = isWorkingExpanded
+                    ? presentation.working
+                    : presentation.working.filter { $0.id == selectedThreadID }
+                items.append(contentsOf: shown.map { row($0, style: mainStyle) })
+            }
             if !presentation.snoozed.isEmpty {
                 items.append(.shelfHeader(.snoozed, presentation.snoozed.count, isSnoozedExpanded))
                 if isSnoozedExpanded {
@@ -1067,6 +1084,7 @@ private final class HomeCollectionCell: UICollectionViewListCell {
 
 enum HomeShelf: String, Hashable {
     case active
+    case working
     case snoozed
     case settled
     case archived

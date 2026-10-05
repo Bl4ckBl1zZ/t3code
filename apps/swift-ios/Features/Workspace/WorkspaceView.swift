@@ -40,6 +40,8 @@ public struct WorkspaceView: View {
     /// to where that tab was left.
     @State private var selectedThreadIDs: [MobileWorkspace: String] = [:]
     @State private var compactColumns: [MobileWorkspace: NavigationSplitViewColumn] = [:]
+    /// Per tab, the threads Back returns to before the list.
+    @State private var threadBackStacks: [MobileWorkspace: ThreadBackStack] = [:]
     @State private var selectedProjectID: String?
     @State private var searchText = ""
     @State private var isSearchPresented = false
@@ -52,6 +54,10 @@ public struct WorkspaceView: View {
     @AppStorage("workspace.snoozed-expanded") private var isSnoozedExpanded = false
     @AppStorage("workspace.settled-expanded") private var isSettledExpanded = true
     @AppStorage("workspace.archive-expanded") private var isArchiveExpanded = false
+    /// Device-local, like the shelves: whether the Working section beta is on,
+    /// and whether its shelf is open (collapsed by default, as on web).
+    @AppStorage(HomeWorkingSection.enabledKey) private var isWorkingSectionEnabled = false
+    @AppStorage("workspace.working-expanded") private var isWorkingExpanded = false
     @State private var settledLimit = 12
     @State private var showingNewTask = false
     @State private var newTaskDraftID: String?
@@ -149,7 +155,23 @@ public struct WorkspaceView: View {
     }
 
     public var body: some View {
-        lifecycle(dialogs(sheets(homeTabs.background { keyboardShortcuts })))
+        lifecycle(dialogs(sheets(
+            homeTabs
+                .background { keyboardShortcuts }
+                .overlay(alignment: .bottomTrailing) { voiceEdgePill }
+        )))
+    }
+
+    /// A dictation whose composer left the screen keeps recording; this keeps
+    /// it visible and finishable. Docked to the trailing edge above the tab bar
+    /// and a collapsed thread composer.
+    private var voiceEdgePill: some View {
+        VoiceEdgePillHost(
+            voice: VoiceComposerCoordinator.shared,
+            threadExists: { id in model.snapshot.threads.contains { $0.id == id } },
+            onReturn: { revealThread($0) }
+        )
+        .padding(.bottom, 72)
     }
 
     /// Home-wide shortcuts for the iPad command overlay, matching web's
@@ -313,7 +335,10 @@ public struct WorkspaceView: View {
         let emptyState = isCurrent && presentation.isEmpty && !showsPlaceholders
             ? emptyState(for: tab)
             : nil
-        let canArrange = tab != .chat && presentation.active.contains { $0.supportsActiveOrder == true }
+        // The Working beta orders the inbox by time, so the saved arrangement
+        // is kept but has nothing to arrange until the beta is off.
+        let canArrange = tab != .chat && !isWorkingSectionEnabled
+            && presentation.active.contains { $0.supportsActiveOrder == true }
 
         return HomeThreadCollectionView(
             presentation: presentation,
@@ -322,12 +347,14 @@ public struct WorkspaceView: View {
             query: query,
             selectedThreadID: selectedThreadIDs[tab],
             forceRichRows: dynamicTypeSize.isAccessibilitySize,
+            isWorkingExpanded: isWorkingExpanded,
             isSnoozedExpanded: isSnoozedExpanded,
             isSettledExpanded: isSettledExpanded,
             isArchiveExpanded: isArchiveExpanded,
             settledLimit: settledLimit,
             confirmThreadUnpin: model.snapshot.settings.confirmThreadUnpin,
             onOpen: { openThread($0, in: tab) },
+            onToggleWorking: { isWorkingExpanded.toggle() },
             onToggleSnoozed: { isSnoozedExpanded.toggle() },
             onToggleSettled: { isSettledExpanded.toggle() },
             onToggleArchive: { isArchiveExpanded.toggle() },
@@ -656,32 +683,51 @@ public struct WorkspaceView: View {
         } else {
             if workspace != .chat {
                 Menu {
-                    ForEach(SnoozePresets.resolve()) { preset in
-                        Button {
-                            // Recomputed at tap time, like the row menu.
-                            guard let until = SnoozePresets.snoozedUntil(actionID: SnoozePresets.actionID(for: preset)) else { return }
-                            snoozeSelection(until: until)
-                        } label: {
-                            Text(preset.label)
-                            Text(preset.whenLabel)
+                    if availability.canWake {
+                        Button("Unsnooze", systemImage: "bell", action: wakeSelection)
+                            .accessibilityIdentifier("workspace-batch-unsnooze")
+                        Divider()
+                    }
+                    Group {
+                        ForEach(SnoozePresets.resolve()) { preset in
+                            Button {
+                                // Recomputed at tap time, like the row menu.
+                                guard let until = SnoozePresets.snoozedUntil(actionID: SnoozePresets.actionID(for: preset)) else { return }
+                                snoozeSelection(until: until)
+                            } label: {
+                                Text(preset.label)
+                                Text(preset.whenLabel)
+                            }
+                        }
+                        Divider()
+                        Button("Custom…", systemImage: "calendar") {
+                            customSnoozeTargets = CustomSnoozeTargets(threadIDs: batchSelection.sorted(), isBatch: true)
                         }
                     }
-                    Divider()
-                    Button("Custom…", systemImage: "calendar") {
-                        customSnoozeTargets = CustomSnoozeTargets(threadIDs: batchSelection.sorted(), isBatch: true)
-                    }
+                    .disabled(!availability.canSnooze)
                 } label: {
                     Label("Snooze", systemImage: "moon.zzz")
                 }
-                .disabled(!availability.canSnooze)
+                .disabled(!availability.canSnooze && !availability.canWake)
                 .accessibilityIdentifier("workspace-batch-snooze")
                 Spacer()
-                Button {
-                    settleSelection()
-                } label: {
-                    Label("Settle", systemImage: "checkmark")
+                // Like Pin and Unpin: Reopen takes the slot once nothing
+                // selected is left to settle.
+                if availability.canSettle || !availability.canUnsettle {
+                    Button {
+                        settleSelection()
+                    } label: {
+                        Label("Settle", systemImage: "checkmark")
+                    }
+                    .disabled(!availability.canSettle)
+                } else {
+                    Button {
+                        unsettleSelection()
+                    } label: {
+                        Label("Reopen", systemImage: "arrow.counterclockwise")
+                    }
+                    .accessibilityIdentifier("workspace-batch-reopen")
                 }
-                .disabled(!availability.canSettle)
                 Spacer()
             }
             Button {
@@ -772,6 +818,36 @@ public struct WorkspaceView: View {
         }
     }
 
+    /// The reverse of ``settleSelection()``, through the row menu's Reopen.
+    private func unsettleSelection() {
+        let now = Date.now
+        let reopenable = Set(model.snapshot.threads.filter {
+            HomeBatchAvailability.canUnsettle(
+                $0,
+                in: workspace,
+                now: now,
+                changeRequest: model.changeRequestsByThreadID[$0.id]
+            )
+        }.map(\.id))
+        runBatch(failureMessage: "Threads that can't be reopened, or failed to update, remain selected.") { id in
+            guard reopenable.contains(id) else { return false }
+            return await model.setSettled(id, settled: false)
+        }
+    }
+
+    /// The reverse of ``snoozeSelection(until:)``, through the row menu's
+    /// Unsnooze. Threads that are not snoozed stay selected.
+    private func wakeSelection() {
+        let now = Date.now
+        let snoozed = Set(model.snapshot.threads.filter {
+            HomeBatchAvailability.canWake($0, in: workspace, now: now)
+        }.map(\.id))
+        runBatch(failureMessage: "Threads that aren't snoozed, or failed to update, remain selected.") { id in
+            guard snoozed.contains(id) else { return false }
+            return await model.setSnoozed(id, until: nil)
+        }
+    }
+
     /// A thread with a live provider run stays selected: archiving it would
     /// detach the run.
     private func archiveSelection() {
@@ -784,24 +860,21 @@ public struct WorkspaceView: View {
 
     // MARK: - Detail
 
+    /// The thread column is a real navigation stack: a thread opened from
+    /// another one is pushed over it, so the system back button names the
+    /// parent and the edge swipe returns to it, in compact and regular width.
     @ViewBuilder
     private func detail(_ tab: MobileWorkspace) -> some View {
-        if let id = selectedThreadIDs[tab],
-           let thread = model.snapshot.threads.first(where: { $0.id == id }) {
-            ThreadDetailView(
-                model: model,
-                thread: thread,
-                submitMessage: submitMessage,
-                onNavigateBack: { closeSelectedThread(in: tab) },
-                // Subagent cards, fork dividers and lineage rows all point at
-                // another thread; an archived target also needs the shelf open
-                // or it lands on a list that does not contain it.
-                onOpenRelatedThread: { threadID, isArchived in
-                    if isArchived { isArchiveExpanded = true }
-                    openThread(threadID, in: tab)
-                }
-            )
-            .id(id)
+        if let route = threadRoute(in: tab),
+           model.snapshot.threads.contains(where: { $0.id == route.root }) {
+            NavigationStack(path: threadPath(for: tab)) {
+                threadDetail(route.root, in: tab)
+                    .navigationDestination(for: ThreadNavigationRoute.self) { pushed in
+                        threadDetail(pushed.threadID, in: tab)
+                    }
+            }
+            // A new root (picked from the list, a deep link) is a new trail.
+            .id(route.root)
         } else {
             ContentUnavailableView {
                 Label(
@@ -1224,7 +1297,8 @@ public struct WorkspaceView: View {
             projectID: WorkspaceSwitcher.projectFilter(listWorkspace, selectedProjectID: selectedProjectID),
             now: sidebarBoundaryNow,
             changeRequests: model.changeRequestsByThreadID,
-            contentMatchIDs: query.isEmpty ? [] : Set(currentContentMatches.keys)
+            contentMatchIDs: query.isEmpty ? [] : Set(currentContentMatches.keys),
+            workingSectionEnabled: isWorkingSectionEnabled
         )
     }
 
@@ -1407,11 +1481,12 @@ public struct WorkspaceView: View {
         return filterableProjects.contains { $0.id == selectedProjectID }
     }
 
-    /// A thread deleted elsewhere closes in whichever tab had it open.
+    /// A thread deleted elsewhere closes in whichever tab had it open, back to
+    /// the thread that opened it when there is one.
     private func closeMissingThreads() {
         let known = Set(model.snapshot.threads.map(\.id))
         for (tab, id) in selectedThreadIDs where !known.contains(id) {
-            closeSelectedThread(in: tab)
+            navigateBack(in: tab)
         }
     }
 
@@ -1436,12 +1511,77 @@ public struct WorkspaceView: View {
         return true
     }
 
+    @ViewBuilder
+    private func threadDetail(_ id: String, in tab: MobileWorkspace) -> some View {
+        if let thread = model.snapshot.threads.first(where: { $0.id == id }) {
+            ThreadDetailView(
+                model: model,
+                thread: thread,
+                submitMessage: submitMessage,
+                onNavigateBack: { navigateBack(in: tab) },
+                // Subagent cards, fork dividers and lineage rows all point at
+                // another thread; an archived target also needs the shelf open
+                // or it lands on a list that does not contain it.
+                onOpenRelatedThread: { threadID, isArchived in
+                    if isArchived { isArchiveExpanded = true }
+                    openRelatedThread(threadID, in: tab)
+                },
+                onStartNewThread: { projectID in
+                    openNewTaskOrProjectCreation(initialProjectID: projectID)
+                }
+            )
+            .id(id)
+        } else {
+            ContentUnavailableView("Thread Unavailable", systemImage: "exclamationmark.bubble")
+                .background(T3Colors.background)
+        }
+    }
+
+    private func threadRoute(in tab: MobileWorkspace) -> (root: String, path: [String])? {
+        guard let current = selectedThreadIDs[tab] else { return nil }
+        return (threadBackStacks[tab] ?? ThreadBackStack()).route(current: current)
+    }
+
+    /// The pushed part of the thread trail. The system writes a shorter path
+    /// when the back button or the edge swipe pops, which returns the tab to
+    /// that thread.
+    private func threadPath(for tab: MobileWorkspace) -> Binding<[ThreadNavigationRoute]> {
+        Binding(
+            get: { threadRoute(in: tab)?.path.map(ThreadNavigationRoute.init(threadID:)) ?? [] },
+            set: { path in
+                guard let id = threadBackStacks[tab]?.popTo(level: path.count) else { return }
+                selectedThreadIDs[tab] = id
+            }
+        )
+    }
+
+    /// Opening from the list, a deep link or a new task starts a fresh trail.
     private func openThread(_ id: String, in tab: MobileWorkspace) {
+        threadBackStacks[tab] = nil
         selectedThreadIDs[tab] = id
         compactColumns[tab] = .detail
     }
 
+    /// Opening from inside a thread remembers it, so Back returns there.
+    private func openRelatedThread(_ id: String, in tab: MobileWorkspace) {
+        threadBackStacks[tab, default: ThreadBackStack()].open(id, from: selectedThreadIDs[tab])
+        selectedThreadIDs[tab] = id
+        compactColumns[tab] = .detail
+    }
+
+    /// Back to the thread this one was opened from, else to the list.
+    private func navigateBack(in tab: MobileWorkspace) {
+        let known = Set(model.snapshot.threads.map(\.id))
+        if let parentID = threadBackStacks[tab]?.pop(where: known.contains) {
+            selectedThreadIDs[tab] = parentID
+            compactColumns[tab] = .detail
+        } else {
+            closeSelectedThread(in: tab)
+        }
+    }
+
     private func closeSelectedThread(in tab: MobileWorkspace) {
+        threadBackStacks[tab] = nil
         selectedThreadIDs[tab] = nil
         compactColumns[tab] = .sidebar
     }
@@ -1566,17 +1706,7 @@ public struct WorkspaceView: View {
         guard let navigationRequest, !isAwaitingData else { return }
         switch navigationRequest.destination {
         case let .thread(id):
-            guard let thread = model.snapshot.threads.first(where: { $0.id == id }) else { return }
-            dismissTransientPresentations()
-            // The thread opens in the tab that lists it.
-            let tab = WorkspaceSwitcher.workspace(
-                of: thread,
-                providerDrivers: WorkspaceSwitcher.providerDrivers(in: model.snapshot),
-                fallbackEnvironmentID: WorkspaceSwitcher.fallbackEnvironmentID(in: model.snapshot)
-            )
-            showTab(tab)
-            if thread.isArchived { isArchiveExpanded = true }
-            openThread(id, in: tab)
+            guard revealThread(id) else { return }
         case let .project(id):
             guard model.snapshot.projects.contains(where: { $0.id == id }) else { return }
             dismissTransientPresentations()
@@ -1603,6 +1733,23 @@ public struct WorkspaceView: View {
             }
         }
         onNavigationRequestConsumed(navigationRequest.id)
+    }
+
+    /// Opens a thread from outside its list — a deep link, the dictation
+    /// pill — in the tab that lists it. False when the thread is unknown.
+    @discardableResult
+    private func revealThread(_ id: String) -> Bool {
+        guard let thread = model.snapshot.threads.first(where: { $0.id == id }) else { return false }
+        dismissTransientPresentations()
+        let tab = WorkspaceSwitcher.workspace(
+            of: thread,
+            providerDrivers: WorkspaceSwitcher.providerDrivers(in: model.snapshot),
+            fallbackEnvironmentID: WorkspaceSwitcher.fallbackEnvironmentID(in: model.snapshot)
+        )
+        showTab(tab)
+        if thread.isArchived { isArchiveExpanded = true }
+        openThread(id, in: tab)
+        return true
     }
 
     /// Switches tabs for a deep link, leaving search and selection behind.
@@ -1673,6 +1820,9 @@ private struct CustomSnoozeTargets: Identifiable {
 struct HomePresentation {
     let pinned: [FeatureThread]
     let active: [FeatureThread]
+    /// Working section beta: busy threads folded out of `active` until they
+    /// need the user. Empty while the beta is off, and always in Chat.
+    let working: [FeatureThread]
     let snoozed: [FeatureThread]
     let settled: [FeatureThread]
     let archived: [FeatureThread]
@@ -1687,7 +1837,8 @@ struct HomePresentation {
 
     /// Nothing on any shelf: the list shows its empty state instead.
     var isEmpty: Bool {
-        pinned.isEmpty && active.isEmpty && snoozed.isEmpty && settled.isEmpty && archived.isEmpty
+        pinned.isEmpty && active.isEmpty && working.isEmpty && snoozed.isEmpty && settled.isEmpty
+            && archived.isEmpty
     }
 
     init(
@@ -1697,7 +1848,8 @@ struct HomePresentation {
         projectID: String?,
         now: Date,
         changeRequests: [String: FeaturePullRequest] = [:],
-        contentMatchIDs: Set<String> = []
+        contentMatchIDs: Set<String> = [],
+        workingSectionEnabled: Bool = false
     ) {
         // The two workspaces share one thread list; which rows belong to which
         // is decided here, before the shelves are built, so every shelf below
@@ -1717,7 +1869,9 @@ struct HomePresentation {
             query: "",
             projectID: projectID,
             now: now,
-            changeRequests: changeRequests
+            changeRequests: changeRequests,
+            // Chat has no shelves to fold anything into.
+            workingSectionEnabled: workingSectionEnabled && workspace != .chat
         )
         // Archived rows never reach `WorkspaceSwitcher.threads` — it drops them
         // along with subagents — so the shelf splits them by workspace itself.
@@ -1744,17 +1898,19 @@ struct HomePresentation {
                 if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
                 return $0.id < $1.id
             }
+            working = []
             snoozed = []
             settled = []
         } else {
             active = index.active
+            working = index.working
             snoozed = index.snoozed
             settled = index.settled
         }
         self.archived = archived
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = DailyUXSidebarIndex.matchingThreadGroups(
-            index.pinned + index.active + index.snoozed + index.settled + archived,
+            index.pinned + index.active + index.working + index.snoozed + index.settled + archived,
             snapshot: snapshot,
             query: normalizedQuery,
             contentMatchIDs: contentMatchIDs
@@ -1785,6 +1941,7 @@ final class HomePresentationCache {
         /// changed.
         let changeRequests: [String: FeaturePullRequest]
         let contentMatchIDs: Set<String>
+        let workingSectionEnabled: Bool
     }
 
     /// Most recent last.
@@ -1799,7 +1956,8 @@ final class HomePresentationCache {
         projectID: String?,
         now: Date,
         changeRequests: [String: FeaturePullRequest] = [:],
-        contentMatchIDs: Set<String> = []
+        contentMatchIDs: Set<String> = [],
+        workingSectionEnabled: Bool = false
     ) -> HomePresentation {
         let key = Key(
             revision: revision,
@@ -1808,7 +1966,8 @@ final class HomePresentationCache {
             projectID: projectID,
             now: now,
             changeRequests: changeRequests,
-            contentMatchIDs: contentMatchIDs
+            contentMatchIDs: contentMatchIDs,
+            workingSectionEnabled: workingSectionEnabled
         )
         if let index = entries.firstIndex(where: { $0.key == key }) {
             let entry = entries.remove(at: index)
@@ -1823,7 +1982,8 @@ final class HomePresentationCache {
             projectID: projectID,
             now: now,
             changeRequests: changeRequests,
-            contentMatchIDs: contentMatchIDs
+            contentMatchIDs: contentMatchIDs,
+            workingSectionEnabled: workingSectionEnabled
         )
         entries.append((key, presentation))
         if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
@@ -2530,7 +2690,7 @@ struct FeatureThreadRow: View, Equatable {
                 values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
             }
         case .inbox:
-            values.append(thread.homeStatusLabel ?? "Ready")
+            values.append(thread.backgroundWorkStatusTitle ?? thread.homeStatusLabel ?? "Ready")
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }
@@ -2538,7 +2698,7 @@ struct FeatureThreadRow: View, Equatable {
                 values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
             }
         case .rich, .slim:
-            values.append(thread.homeStatusLabel ?? "Ready")
+            values.append(thread.backgroundWorkStatusTitle ?? thread.homeStatusLabel ?? "Ready")
             if let duration = thread.homeWorkingDuration(at: now) {
                 values.append("for \(duration)")
             }

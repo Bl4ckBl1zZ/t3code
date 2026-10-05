@@ -33,6 +33,9 @@ public struct FeatureLinkedPullRequest: Sendable, Equatable, Hashable, Codable {
     public var linkedAt: String?
     public var snapshot: FeaturePullRequestSnapshot?
     public var stack: FeaturePullRequestStack?
+    /// The server wakes the thread's agent when this pull request's checks
+    /// finish, someone comments, or it starts to conflict.
+    public var isWatched: Bool? = nil
 
     public init(projectID: String, repository: String, number: Int, url: String,
                 host: String? = nil, source: String? = nil, linkedAt: String? = nil,

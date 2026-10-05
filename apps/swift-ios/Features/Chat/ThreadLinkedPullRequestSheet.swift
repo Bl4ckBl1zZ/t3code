@@ -57,7 +57,9 @@ struct ThreadLinkedPullRequestSheet: View {
                 } header: {
                     Text("Linked")
                 } footer: {
-                    Text("The task stays active while any linked pull request is open.")
+                    Text(thread.supportsPullRequestWatch == true
+                        ? "The task stays active while any linked pull request is open. Watch one from its menu to wake the agent when checks finish, someone comments, or it conflicts."
+                        : "The task stays active while any linked pull request is open.")
                 }
                 .t3GroupedRow()
             }
@@ -127,6 +129,9 @@ struct ThreadLinkedPullRequestSheet: View {
 
     private func linkRow(_ line: FeaturePullRequestLine, showsRepository: Bool) -> some View {
         let link = line.link
+        let watch = ThreadLinkedPullRequestPresentation.watchState(
+            link, supportsWatch: thread.supportsPullRequestWatch == true
+        )
         return NavigationLink {
             detail(for: link)
         } label: {
@@ -144,6 +149,12 @@ struct ThreadLinkedPullRequestSheet: View {
                         .font(T3Typography.threadBody)
                         .foregroundStyle(T3Colors.textPrimary)
                         .lineLimit(2)
+                    if watch == .watching {
+                        Label("Watching", systemImage: "eye")
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .accessibilityLabel("Watching: the agent wakes when checks finish, someone comments, or the branch conflicts")
+                    }
                     if let status = ThreadLinkedPullRequestPresentation.statusLine(link.snapshot) {
                         Text(status)
                             .font(T3Typography.supporting)
@@ -175,6 +186,15 @@ struct ThreadLinkedPullRequestSheet: View {
             if let url = URL(string: link.url) {
                 Button("Open in Browser", systemImage: "safari") { openURL(url) }
             }
+            if watch != .unavailable {
+                Button(
+                    watch == .watching ? "Stop Watching" : "Watch for Changes",
+                    systemImage: watch == .watching ? "eye.slash" : "eye"
+                ) {
+                    setWatched(link, watched: watch != .watching)
+                }
+                .disabled(isBusy)
+            }
             Button(link.source == "stack" ? "Dismiss from Thread" : "Unlink from Thread", systemImage: "xmark", role: .destructive) {
                 unlink(link)
             }
@@ -202,6 +222,21 @@ struct ThreadLinkedPullRequestSheet: View {
             defer { busyNumber = nil }
             do {
                 try await client.removeThreadPullRequest(threadID: thread.id, link: link)
+                PlatformHapticEngine.shared.play(.success)
+            } catch {
+                errorMessage = error.localizedDescription
+                PlatformHapticEngine.shared.play(.error)
+            }
+        }
+    }
+
+    private func setWatched(_ link: FeatureLinkedPullRequest, watched: Bool) {
+        guard !isBusy else { return }
+        busyNumber = link.number; errorMessage = nil
+        Task { @MainActor in
+            defer { busyNumber = nil }
+            do {
+                try await client.setThreadPullRequestWatched(threadID: thread.id, link: link, watched: watched)
                 PlatformHapticEngine.shared.play(.success)
             } catch {
                 errorMessage = error.localizedDescription
