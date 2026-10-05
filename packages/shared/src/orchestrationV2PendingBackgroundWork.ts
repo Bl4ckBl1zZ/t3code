@@ -2,6 +2,7 @@ import type {
   OrchestrationV2AgentKind,
   OrchestrationV2CommandWaitKind,
   OrchestrationV2PendingBackgroundTask,
+  OrchestrationV2Run,
   OrchestrationV2Subagent,
   OrchestrationV2TurnItem,
   ThreadId,
@@ -13,6 +14,13 @@ import {
 } from "@t3tools/contracts";
 
 export type PendingBackgroundWorkTask = OrchestrationV2PendingBackgroundTask;
+
+/** Turn item types whose lifecycle can outlive the run that started them. */
+const BACKGROUND_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
+  "command_execution",
+  "dynamic_tool",
+  "subagent",
+]);
 
 /**
  * Latest-run statuses that let the list surface. `waiting` is included: a
@@ -54,6 +62,48 @@ function backgroundWorkKindHoldsCompletion(kind: PendingBackgroundWorkTask["kind
     case "background_task":
       return true;
   }
+}
+
+type PendingBackgroundWorkRun = Pick<OrchestrationV2Run, "id" | "status">;
+
+type PendingBackgroundStopItem = {
+  readonly type: OrchestrationV2TurnItem["type"];
+  readonly status: OrchestrationV2TurnItem["status"];
+  readonly runId: OrchestrationV2Run["id"] | null;
+  readonly input?: unknown;
+  readonly origin?: OrchestrationV2Subagent["origin"];
+  readonly childThreadId?: ThreadId | null;
+};
+
+function isPersistentDynamicToolInput(input: unknown): boolean {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    return false;
+  }
+  return Reflect.get(input, "persistent") === true;
+}
+
+/**
+ * The turn items a Stop on a settled thread ends: live commands, dynamic tools
+ * and subagent rows, which no provider process will report on once its
+ * provider has stopped. Persistent monitors, work of rolled-back runs, and
+ * delegate_task children (their own thread runs, and is stopped, on its own)
+ * are left alone.
+ */
+export function pendingBackgroundTurnItems<Item extends PendingBackgroundStopItem>(input: {
+  readonly turnItems: ReadonlyArray<Item>;
+  readonly runs: ReadonlyArray<PendingBackgroundWorkRun>;
+}): ReadonlyArray<Item> {
+  const rolledBackRunIds = new Set(
+    input.runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
+  );
+  return input.turnItems.filter(
+    (item) =>
+      BACKGROUND_TURN_ITEM_TYPES.has(item.type) &&
+      isOrchestrationV2WorkActive(item.status) &&
+      !(item.type === "dynamic_tool" && isPersistentDynamicToolInput(item.input)) &&
+      !(item.type === "subagent" && item.origin === "app_owned" && item.childThreadId != null) &&
+      (item.runId === null || !rolledBackRunIds.has(item.runId)),
+  );
 }
 
 /** A command item as the list reads it. Every field past status is optional on the wire. */

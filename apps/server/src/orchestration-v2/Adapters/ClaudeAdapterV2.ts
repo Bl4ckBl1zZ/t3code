@@ -6341,23 +6341,23 @@ export function makeClaudeAdapterV2(
         const interruptTurn = Effect.fn("ClaudeAdapterV2.interruptTurn")(
           function* (turnInput: ProviderAdapterV2InterruptInput) {
             const existing = yield* Ref.get(queryContext);
-            if (existing === null) {
-              return yield* new ProviderAdapterProtocolError({
-                driver: CLAUDE_PROVIDER,
-                detail: `Claude provider thread ${turnInput.providerThread.id} has no live query.`,
-              });
-            }
             const currentTurn = yield* Ref.get(activeTurn);
             const nativeThreadId = turnInput.providerThread.nativeThreadRef?.nativeId ?? null;
-            if (
-              currentTurn === null &&
-              turnInput.requestRuntimeRestart === true &&
-              nativeThreadId !== null &&
-              existing.nativeThreadId === nativeThreadId
-            ) {
-              // Stop after the turn settled: the background work belongs to
-              // the CLI process, so closing its query is what stops it. The
-              // query-exit path retires the background command rows.
+            if (currentTurn === null && turnInput.requestRuntimeRestart === true) {
+              // Stop after the turn settled. With no CLI process of this
+              // native thread left, nothing it started is still running; the
+              // orchestrator settles the items the thread still shows.
+              if (nativeThreadId === null) return;
+              if (existing === null) {
+                yield* forgetProcessBackgroundWork(nativeThreadId);
+                return;
+              }
+              // The live process serves another native thread: its work is
+              // its own, and none of this thread's is left in it.
+              if (existing.nativeThreadId !== nativeThreadId) return;
+              // The background work belongs to the CLI process, so closing its
+              // query is what stops it. The query-exit path retires the
+              // background command rows.
               yield* closeLiveQueryForNativeThread(nativeThreadId);
               // A turn started while the close was pending may have opened a
               // replacement process. Its pending and wake state are its own.
@@ -6366,6 +6366,12 @@ export function makeClaudeAdapterV2(
                 yield* forgetProcessBackgroundWork(nativeThreadId);
               }
               return;
+            }
+            if (existing === null) {
+              return yield* new ProviderAdapterProtocolError({
+                driver: CLAUDE_PROVIDER,
+                detail: `Claude provider thread ${turnInput.providerThread.id} has no live query.`,
+              });
             }
             if (currentTurn?.providerTurnId !== turnInput.providerTurnId) {
               return yield* new ProviderAdapterProtocolError({

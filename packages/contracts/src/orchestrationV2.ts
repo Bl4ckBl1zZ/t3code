@@ -3173,6 +3173,19 @@ export const OrchestrationV2Command = Schema.Union([
     runId: RunId,
     reason: Schema.optional(Schema.String),
   }),
+  /**
+   * Server-only. Follows a Stop once its provider returned: background work
+   * the settled thread still shows on that provider thread is no longer
+   * reported by any provider process, so it is marked interrupted. Only the
+   * stopped turn's run and older runs are settled; a later run's work is its own.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.background-work.settle"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    providerThreadId: ProviderThreadId,
+    providerTurnId: ProviderTurnId,
+  }),
   Schema.Struct({
     type: Schema.Literal("queued-message.promote-to-steer"),
     commandId: CommandId,

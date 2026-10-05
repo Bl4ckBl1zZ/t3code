@@ -318,6 +318,13 @@ it.effect("Stop reaches background work after the newest run fails before provid
           interrupts.map((interrupt) => [interrupt.providerThread.id, interrupt.providerTurnId]),
           [[providerThread.id, codexTurn.id]],
         );
+        // The provider returned without reporting the dev server ending, so the
+        // Stop's settle follow-up ends what the thread still shows.
+        const afterStop = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          afterStop.turnItems.find((item) => item.id === devServerId)?.status,
+          "interrupted",
+        );
       }).pipe(
         Effect.provide(
           makeOrchestratorV2ReplayLayerWithRegistry(

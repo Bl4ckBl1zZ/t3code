@@ -27,6 +27,7 @@ import { unavailableLayer as textGenerationUnavailableLayer } from "../../textGe
 import { layer as contextHandoffServiceLayer } from "../ContextHandoffService.ts";
 import { layer as effectOutboxLayer } from "../EffectOutbox.ts";
 import {
+  backgroundWorkSettleLayer,
   executorLayer as effectExecutorLayer,
   layer as effectWorkerLayer,
   runDaemon as runEffectWorkerDaemon,
@@ -377,28 +378,12 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const runFinalizationServiceProvided = runFinalizationServiceLayer.pipe(
     Layer.provide(Layer.merge(checkpointCaptureServiceProvided, storesLayer)),
   );
-  const effectExecutorProvided = effectExecutorLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        runFinalizationServiceProvided,
-        checkpointRollbackServiceProvided,
-        providerSessionManagerProvided,
-        providerTurnControlServiceProvided,
-        providerTurnStartServiceProvided,
-        runtimeRequestServiceProvided,
-      ),
-    ),
-  );
-  const effectWorkerProvided = effectWorkerLayer.pipe(
-    Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
-  );
   const orchestratorProvided = orchestratorLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
         checkpointServiceProvided,
         commandPolicyLayer,
         contextHandoffServiceProvided,
-        effectWorkerProvided,
         persistenceLayer,
         registryLayer,
         runtimeLayer,
@@ -408,6 +393,22 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         threadForkServiceLayer,
       ),
     ),
+  );
+  const effectExecutorProvided = effectExecutorLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        runFinalizationServiceProvided,
+        checkpointRollbackServiceProvided,
+        providerSessionManagerProvided,
+        providerTurnControlServiceProvided,
+        providerTurnStartServiceProvided,
+        runtimeRequestServiceProvided,
+        backgroundWorkSettleLayer.pipe(Layer.provide(orchestratorProvided)),
+      ),
+    ),
+  );
+  const effectWorkerProvided = effectWorkerLayer.pipe(
+    Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
   );
   const replayRuntime = Layer.mergeAll(
     orchestratorProvided,
