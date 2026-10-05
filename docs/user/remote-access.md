@@ -244,6 +244,27 @@ Do not use hosted pairing for plain HTTP LAN URLs such as `http://192.168.x.y:37
 
 Hosted pairing does not proxy traffic through T3 Code. The browser still connects directly to the backend URL in the pairing link.
 
+## Reach One Machine Several Ways
+
+A machine can have more than one route: LAN, Tailscale, a public URL, SSH, or T3 Connect. On web
+and desktop, select **Routes** under the machine's name in **Settings → Connections** (or **Routes**
+in its **⋯** menu) to see them, then choose **Add route** and pair the same machine over another
+address. If the machine is on your T3 Connect account, the dialog also offers **Add T3 Connect**,
+and the T3 Connect list shows **Add route** next to a machine saved without it. Pairing a different
+machine there is refused, so a route always leads to the machine you picked.
+
+T3 Code connects over the first route that answers. Away from home, a LAN address that does not
+answer is checked briefly and skipped. It is only tried again, after the other routes, if none of
+them connect. While connected over a later route, T3 Code checks the earlier ones when your network
+changes, when you return to the app, and every minute, and moves back as soon as one works. The row
+shows which route is in use.
+
+Drag a route to change the order, or remove it; removing a paired route forgets its credential, so
+it asks first. The last route goes with the machine: use **Remove from this device…** for that.
+Signing out of T3 Connect removes only that route; a machine you can still reach another way stays
+saved. Machines saved before routes existed keep working as a machine with one route. Routes are
+managed on web and desktop; the mobile apps connect to a machine the way it was paired there.
+
 ## Switching a Saved Environment Off
 
 On web and desktop, each saved environment in **Settings → Connections** has a switch. Switching

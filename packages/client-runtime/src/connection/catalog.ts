@@ -36,9 +36,21 @@ export class SshConnectionProfile extends Schema.TaggedClass<SshConnectionProfil
 export const ConnectionProfile = Schema.Union([BearerConnectionProfile, SshConnectionProfile]);
 export type ConnectionProfile = typeof ConnectionProfile.Type;
 
+/** One way to reach an environment: T3 Connect, a direct URL, or SSH. */
+export interface ConnectionRoute {
+  readonly target: ConnectionTarget;
+  readonly profile: Option.Option<ConnectionProfile>;
+}
+
+/**
+ * A saved environment. `target` and `profile` are its preferred route;
+ * `alternateRoutes` holds the others in preference order. Read them together
+ * with `connectionRoutes`.
+ */
 export interface ConnectionCatalogEntry {
   readonly target: ConnectionTarget;
   readonly profile: Option.Option<ConnectionProfile>;
+  readonly alternateRoutes?: ReadonlyArray<ConnectionRoute>;
   /** False when the user switched the environment off: saved, but never connects. */
   readonly enabled: boolean;
   /** Discovery rejection stays visible while the saved connection is switched off. */
@@ -138,19 +150,32 @@ export function connectionRegistrationCatalogEntry(
 }
 
 /**
- * Identifies the saved endpoint behind an entry: the relay environment, the
- * SSH host, or the normalized HTTP/WS base URLs. Two entries with the same key
- * reach the same server the same way, so state learned about one (such as a
- * discovery rejection) carries over when the entry is re-registered. Null when
- * the entry has no saved endpoint to compare (a bearer target whose profile is
+ * Identifies the saved endpoints behind an entry: the relay environment, the
+ * SSH host, or the normalized HTTP/WS base URLs of each route. Two entries
+ * with the same key reach the same server the same ways, so state learned
+ * about one (such as a discovery rejection) carries over when the entry is
+ * re-registered. With several routes the key covers all of them, sorted so
+ * reordering keeps it but adding or changing an address changes it. Null when
+ * a route has no saved endpoint to compare (a bearer target whose profile is
  * missing, or a URL that is not a plain http/ws origin).
  */
 export function connectionEndpointKey(entry: ConnectionCatalogEntry): string | null {
-  const target = entry.target;
+  const alternates = entry.alternateRoutes ?? [];
+  if (alternates.length === 0) return routeEndpointKey(entry.target, entry.profile);
+  const keys = [{ target: entry.target, profile: entry.profile }, ...alternates].map((route) =>
+    routeEndpointKey(route.target, route.profile),
+  );
+  return keys.every((key) => key !== null) ? JSON.stringify([...keys].sort()) : null;
+}
+
+function routeEndpointKey(
+  target: ConnectionTarget,
+  routeProfile: Option.Option<ConnectionProfile>,
+): string | null {
   if (target._tag === "RelayConnectionTarget") {
     return JSON.stringify([target._tag, target.environmentId]);
   }
-  const profile = Option.getOrNull(entry.profile);
+  const profile = Option.getOrNull(routeProfile);
   if (target._tag === "SshConnectionTarget") {
     if (profile?._tag !== "SshConnectionProfile") return null;
     const { alias, hostname, username, port } = profile.target;

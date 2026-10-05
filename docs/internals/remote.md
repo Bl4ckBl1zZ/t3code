@@ -63,6 +63,32 @@ separate target kind. A Tailscale URL is paired through the ordinary bearer path
 host plus pairing code. Tailscale is an endpoint provider and transport, not a distinct runtime
 concept.
 
+A saved environment holds an ordered list of these targets, its routes
+([`connection/routes.ts`](../../packages/client-runtime/src/connection/routes.ts)). The catalog
+document keeps every route of an environment in `targets`, preferred first, so a catalog written
+before routes existed loads as one route per environment. Pairing again with `expectedEnvironmentId`
+adds a route to the saved machine instead of a second one, and a different machine answering there
+is refused. New bearer pairings use `bearer:<environmentId>:<origin>` as the connection id so two
+addresses of one machine keep separate credentials; older `bearer:<environmentId>` ids keep working.
+
+The [driver](../../packages/client-runtime/src/connection/driver.ts) connects over the first route
+that works. Each direct route is first checked with the public descriptor, so a saved LAN address
+that a different machine answers on another network receives no credential. That check is not
+proof of a working route: when every route stays silent, each is still tried. A route that fails to
+connect, including a blocked one such as a signed-out T3 Connect, moves on to the next; only an
+incompatible server stops the walk, because it is the same server on every route. While connected
+over a later route the [supervisor](../../packages/client-runtime/src/connection/supervisor.ts)
+preflights the earlier ones on a network change, on return to the app, and every minute, and
+replaces the session when one would connect. Preflight includes authorization so a route that
+answers but rejects this client never costs a working session; a route that still fails afterwards
+is held back for a cooldown so a flaky network cannot bounce the connection.
+
+Compatibility state (`unsupportedReason`, `serverUpdateRequired`) belongs to the route list as a
+whole: adding or changing a route clears it so the new address is checked, and reordering keeps it
+(`connectionEndpointKey` in [`catalog.ts`](../../packages/client-runtime/src/connection/catalog.ts)).
+Signing out of T3 Connect removes only the T3 Connect route; a machine with another route stays
+saved.
+
 ### AdvertisedEndpoint
 
 A server- or desktop-authored candidate endpoint for an environment: a concrete HTTP and WebSocket

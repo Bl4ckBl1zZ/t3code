@@ -17,8 +17,10 @@ supply. There is no legacy connection owner or supported mixed mode.
 
 - `ConnectionResolver` ([resolver.ts][resolver]) resolves a catalog entry into a
   prepared, authenticated endpoint for primary, bearer, relay, or SSH targets.
-- `ConnectionDriver` ([driver.ts][driver]) prepares through the resolver, opens
-  one RPC session, and reports `preparing`, `opening`, and `synchronizing`.
+- `ConnectionDriver` ([driver.ts][driver]) walks the entry's routes
+  (`connectOverRoutes`), prepares the first that answers through the resolver,
+  opens one RPC session, and reports `preparing`, `opening`, and
+  `synchronizing`. `checkRoute` preflights one route without opening a session.
 - `RpcSessionFactory` ([rpc/session.ts][session]) performs one transport
   attempt. It does not retry. `RpcSession` is the interface it returns,
   exposing `client`, `initialConfig`, `ready`, `probe`, and `closed`.
@@ -81,6 +83,15 @@ The supervisor is the transport retry owner.
    re-registration of the same endpoint (`connectionEndpointKey`). A
    descriptor without `orchestrationProtocolVersion` is compatible: every fork
    server before negotiation speaks the current wire.
+10. An entry's `alternateRoutes` ([routes.ts][routes]) are further targets for
+    the same environment, preferred after `target`. `register` upserts a route
+    (a second pairing of the same address replaces it), `removeRoute` drops one
+    route and its credential, and `reorderRoutes` changes preference without
+    resetting compatibility. While connected over a later route the supervisor
+    checks earlier ones every 60 seconds and on `network-changed` or
+    application activation; a route that answers ends the session with
+    `BetterRouteAvailable` and the replacement attempt prefers that route, and
+    a route that fails its check is held back for a cooldown.
 
 ### Wakeups
 
@@ -216,6 +227,7 @@ Required coverage includes:
 [driver]: ../../packages/client-runtime/src/connection/driver.ts
 [registry]: ../../packages/client-runtime/src/connection/registry.ts
 [supervisor]: ../../packages/client-runtime/src/connection/supervisor.ts
+[routes]: ../../packages/client-runtime/src/connection/routes.ts
 [session]: ../../packages/client-runtime/src/rpc/session.ts
 [client]: ../../packages/client-runtime/src/rpc/client.ts
 

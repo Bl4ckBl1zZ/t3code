@@ -30,6 +30,8 @@ export {
 } from "./registry.ts";
 export { ConnectionResolver } from "./resolver.ts";
 export { EnvironmentSupervisor, type EnvironmentSupervisorOptions } from "./supervisor.ts";
+export * from "./routes.ts";
+export { type RouteCheck } from "./driver.ts";
 export * as Wakeups from "./wakeups.ts";
 
 export { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
