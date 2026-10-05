@@ -97,6 +97,15 @@ function resolveProviderWorkspaceSnapshot(
   return provider.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd);
 }
 
+/** Whether the cwd was scanned and its command discovery needs no retry. */
+export function hasCompleteProviderWorkspaceSnapshot(
+  provider: ServerProvider | null | undefined,
+  cwd: string | null | undefined,
+): boolean {
+  const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
+  return Boolean(snapshot && !snapshot.slashCommandsPending);
+}
+
 /** Skills for a workspace, falling back to the machine list until that cwd is scanned. */
 export function resolveProviderSkillsForCwd(
   provider: ServerProvider,

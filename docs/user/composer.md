@@ -172,6 +172,10 @@ same `$name` skill token to your message. The original skill name remains search
 also reports that skill as a native slash command, T3 Code hides the duplicate native entry and keeps
 the `/skill:Skill Name` label.
 
+With Claude, Codex, OpenCode, and Antigravity, the menus show the skills of the thread's project or
+worktree. Claude and Antigravity also show that workspace's commands. T3 Code reads each workspace once; until
+it has, the menus show the provider's general list.
+
 After you add or change skills, plugins, or MCP servers, use **Restart agent session** in the
 command palette on web and desktop. The conversation continues, and your next message starts the
 agent again with the new setup. The action is available once the agent has finished working.

@@ -15,6 +15,7 @@ import {
   type ClaudeSettings,
   type ModelCapabilities,
   type ModelSelection,
+  type ServerProvider,
   type ServerProviderSlashCommand,
   type ServerProviderResetCredits,
 } from "@t3tools/contracts";
@@ -41,6 +42,7 @@ import {
 
 import {
   buildServerProvider,
+  COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
   isCommandMissingCause,
   parseGenericCliVersion,
@@ -51,6 +53,7 @@ import {
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
+import type { ProviderWorkspaceSnapshot } from "../ProviderDriver.ts";
 
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -366,6 +369,7 @@ const probeClaudeCapabilities = (
   claudeSettings: ClaudeSettings,
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
+  includeUsage = true,
 ) => {
   const abort = new AbortController();
   return Effect.gen(function* () {
@@ -393,14 +397,18 @@ const probeClaudeCapabilities = (
       const init = await q.initializationResult();
       // A bounded enrichment on the existing no-prompt probe. A slow usage
       // request cannot discard the account and commands already discovered.
-      const usage = await Effect.runPromise(
-        Effect.tryPromise(() => q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()).pipe(
-          Effect.timeoutOption(2_000),
-          Effect.map(Option.getOrUndefined),
-          Effect.orElseSucceed(() => undefined),
-        ),
-        { signal: abort.signal },
-      );
+      const usage = includeUsage
+        ? await Effect.runPromise(
+            Effect.tryPromise(() =>
+              q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+            ).pipe(
+              Effect.timeoutOption(2_000),
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            ),
+            { signal: abort.signal },
+          )
+        : undefined;
       const account = init.account as
         | {
             readonly email?: string;
@@ -447,6 +455,31 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
     shell: spawnCommand.shell,
   });
   return yield* spawnAndCollect(claudeSettings.binaryPath, command);
+});
+
+/**
+ * Read skills and commands from the same cwd Claude uses for a workspace
+ * session. Skills are filesystem reads and always land; a failed command probe
+ * keeps them and marks the commands pending so the next request retries.
+ */
+export const probeClaudeWorkspaceSnapshot = Effect.fn("probeClaudeWorkspaceSnapshot")(function* (
+  claudeSettings: ClaudeSettings,
+  machineSnapshot: ServerProvider,
+  cwd: string,
+  environment?: NodeJS.ProcessEnv,
+): Effect.fn.Return<ProviderWorkspaceSnapshot, never, FileSystem.FileSystem | Path.Path> {
+  if (!claudeSettings.enabled) return machineSnapshot;
+  const skills = yield* discoverClaudeSkills(claudeSettings, cwd, environment);
+  const capabilities = yield* probeClaudeCapabilities(claudeSettings, environment, cwd, false);
+  return {
+    ...machineSnapshot,
+    skills,
+    slashCommands: dedupeSlashCommands([
+      COMPACT_SLASH_COMMAND,
+      ...(capabilities?.slashCommands ?? []),
+    ]),
+    slashCommandsPending: !capabilities,
+  };
 });
 
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
@@ -567,13 +600,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
   const skills = yield* discoverClaudeSkills(claudeSettings, cwd, resolvedEnvironment);
-  const slashCommands = [
-    {
-      name: "compact",
-      description: "Summarize the conversation and reduce context usage",
-    },
-    ...(capabilities?.slashCommands ?? []),
-  ];
+  const slashCommands = [COMPACT_SLASH_COMMAND, ...(capabilities?.slashCommands ?? [])];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
   if (!capabilities) {

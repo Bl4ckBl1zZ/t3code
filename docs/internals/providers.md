@@ -39,6 +39,23 @@ directory to route session and turn operations for a thread, so callers name a t
 Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
 orchestration, contract, or client change is required for the common case.
 
+## Workspace snapshots
+
+A provider snapshot describes the machine: its skills and slash commands come from the server's
+cwd. Drivers that can read a workspace implement `snapshotForCwd`, and
+`ProviderRegistry.refreshWorkspaceSnapshot` stores the result as one `workspaceSnapshots` entry per
+cwd (16 per instance, newest last). Clients request it with `server.refreshProviders`
+`{ instanceId, cwd }` and resolve skills and commands for a thread's cwd from that entry, falling
+back to the machine lists. A cwd is scanned once; `fresh` rescans it past the instance's discovery
+caches. A failed scan stores nothing. Claude scans skills from disk and commands with a no-prompt
+SDK probe in the cwd; when only the probe fails it stores the skills with `slashCommandsPending`,
+keeping the cwd's last known commands, and the next request scans again. Entries are never written
+to the status cache and are dropped when an instance is rebuilt.
+
+Codex, Claude, OpenCode and Antigravity implement `snapshotForCwd`; Antigravity also records the
+workspaces its sessions report. Cursor, Grok, Pi, ACP Registry, Hermes and OpenClaw show their
+machine lists in every workspace.
+
 ## OpenCode server ownership and catalog
 
 Each OpenCode provider instance owns one lazy local server for catalog discovery and
