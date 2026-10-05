@@ -1,6 +1,9 @@
 import { ORCHESTRATION_PROTOCOL_VERSION } from "../packages/contracts/src/environment.ts";
 import { WsHermesWorkModelAuthCancelRpc } from "../packages/contracts/src/rpc.ts";
-import { OrchestrationV2ProviderSession } from "../packages/contracts/src/orchestrationV2.ts";
+import {
+  OrchestrationV2ProviderSession,
+  OrchestrationV2ThreadShellJson,
+} from "../packages/contracts/src/orchestrationV2.ts";
 import { HermesWorkSetupState } from "../packages/contracts/src/hermesWorkSetup.ts";
 import {
   HermesWorkModelStatus,
@@ -2124,3 +2127,65 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(workspacePreparationPath, workspacePreparationFixture);
+
+// Thread shells as the live shell stream sends them. `latestUserAuthoredMessageAt`
+// orders the Working section; the legacy shell omits it, as a server that
+// predates the stamp does, and must decode to nil rather than fail.
+const threadShellPath = NodePath.join(NodePath.dirname(outputPath), "threadShell.json");
+const shellBase = {
+  id: threadId,
+  projectId,
+  title: "Thread",
+  providerInstanceId,
+  modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  activeProviderThreadId: null,
+  lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+  forkedFrom: null,
+  createdBy: "user",
+  creationSource: "web",
+  latestRunId: runId,
+  latestRunRequestedAt: DateTime.makeUnsafe("2026-06-20T00:05:00.000Z"),
+  activeRunId: runId,
+  status: "running",
+  pendingRuntimeRequest: null,
+  latestVisibleMessage: null,
+  latestUserMessageAt: DateTime.makeUnsafe("2026-06-20T00:05:00.000Z"),
+  hasActionableProposedPlan: false,
+  itemCount: 0,
+  visibleItemCount: 0,
+  createdAt: now,
+  updatedAt: now,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  lastVisitedAt: null,
+  deletedAt: null,
+} as const;
+const threadShellFixture = `${JSON.stringify(
+  {
+    stamped: Schema.encodeSync(OrchestrationV2ThreadShellJson)({
+      ...shellBase,
+      latestUserAuthoredMessageAt: DateTime.makeUnsafe("2026-06-20T00:02:00.000Z"),
+    }),
+    neverAuthored: Schema.encodeSync(OrchestrationV2ThreadShellJson)({
+      ...shellBase,
+      latestUserAuthoredMessageAt: null,
+    }),
+    legacy: Schema.encodeSync(OrchestrationV2ThreadShellJson)(shellBase),
+  },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(threadShellPath) ||
+    NodeFS.readFileSync(threadShellPath, "utf8") !== threadShellFixture
+  ) {
+    console.error("[swift-fixtures] threadShell.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(threadShellPath, threadShellFixture);

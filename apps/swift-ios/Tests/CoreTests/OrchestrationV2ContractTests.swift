@@ -73,6 +73,25 @@ final class OrchestrationV2ContractTests: XCTestCase {
         )
     }
 
+    /// The Working section orders on the last message the user wrote. A
+    /// server that predates the stamp omits it, which must decode to nil
+    /// rather than fail the shell.
+    func testThreadShellLatestUserAuthoredMessageStamp() throws {
+        struct Fixture: Decodable {
+            let stamped: OrchestrationV2ThreadShell
+            let neverAuthored: OrchestrationV2ThreadShell
+            let legacy: OrchestrationV2ThreadShell
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/threadShell.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.stamped.latestUserAuthoredMessageAt, "2026-06-20T00:02:00.000Z")
+        // Wakes move latestUserMessageAt; the authored stamp stays behind.
+        XCTAssertEqual(fixture.stamped.latestUserMessageAt, "2026-06-20T00:05:00.000Z")
+        XCTAssertNil(fixture.neverAuthored.latestUserAuthoredMessageAt)
+        XCTAssertNil(fixture.legacy.latestUserAuthoredMessageAt)
+    }
+
     /// Every turn item type the contract defines, as of the generated fixture.
     /// Kept explicit so adding a contract variant without a Swift case fails
     /// loudly rather than silently decoding to `.unknown`.

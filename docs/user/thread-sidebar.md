@@ -181,7 +181,7 @@ automatic ordering. Pinned threads have their own order, and Work’s main threa
 Older servers keep local-only drag ordering. If a section mixes older servers with threads that
 already have synced positions, update those servers before reordering the section.
 
-## Fold working threads on web and desktop (beta)
+## Fold working threads (beta)
 
 Turn on **Settings → General → Working section (beta)** to move active threads that are working,
 or waiting on background agents or commands, into a collapsed **Working** section below the active
@@ -194,6 +194,10 @@ open stays visible even while the section is collapsed.
 While this is on, unpinned active threads are ordered by when each last came back to you, so you
 cannot drag them and **Reset thread position** is hidden. Pinned threads can still be dragged. Your
 saved order returns when you turn the setting off.
+
+On iPhone and iPad, turn on **Settings → Chat → Working Section** (under Beta). It works the same
+way on Home's Code and Work lists, applies to that device only, and hides **Arrange Threads** while
+it is on. Chat lists keep busy conversations in place.
 
 ## Drop files onto a native thread
 

@@ -251,6 +251,15 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// the thread when that turn finishes, while a user re-engaging after the
     /// merge blocks it for good. Nil falls back to `createdAt`.
     public var latestUserActivityAt: Date?
+    /// The last message the user actually wrote. Wakes and agent messages
+    /// carry the user role too, so they move ``latestUserActivityAt`` but not
+    /// this. The Working section orders on it so rows hold still while agents
+    /// finish and wake. Nil on servers that predate the stamp, and on threads
+    /// the user has never written in.
+    public var latestUserAuthoredMessageAt: Date?
+    /// A proposed plan is waiting for the user's decision. Optional so cached
+    /// rows written before the field decode unchanged.
+    public var hasActionableProposedPlan: Bool?
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
     public var pinnedAt: Date?
@@ -350,6 +359,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         autoSettleOnMerge: Bool = true,
         lastActivityAt: Date? = nil,
         latestUserActivityAt: Date? = nil,
+        latestUserAuthoredMessageAt: Date? = nil,
+        hasActionableProposedPlan: Bool? = nil,
         snoozedUntil: Date? = nil,
         snoozedAt: Date? = nil,
         pinnedAt: Date? = nil,
@@ -407,6 +418,8 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.autoSettleOnMerge = autoSettleOnMerge
         self.lastActivityAt = lastActivityAt
         self.latestUserActivityAt = latestUserActivityAt
+        self.latestUserAuthoredMessageAt = latestUserAuthoredMessageAt
+        self.hasActionableProposedPlan = hasActionableProposedPlan
         self.snoozedUntil = snoozedUntil
         self.snoozedAt = snoozedAt
         self.pinnedAt = pinnedAt

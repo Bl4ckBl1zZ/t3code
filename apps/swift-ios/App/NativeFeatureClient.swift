@@ -5301,6 +5301,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 latestUserMessageAt: thread.latestUserMessageAt,
                 latestRunRequestedAt: thread.latestRunRequestedAt
             ),
+            latestUserAuthoredMessageAt: thread.latestUserAuthoredMessageAt.flatMap(parseValidDate),
+            hasActionableProposedPlan: thread.hasActionableProposedPlan,
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),

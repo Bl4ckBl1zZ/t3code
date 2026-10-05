@@ -52,6 +52,10 @@ public struct WorkspaceView: View {
     @AppStorage("workspace.snoozed-expanded") private var isSnoozedExpanded = false
     @AppStorage("workspace.settled-expanded") private var isSettledExpanded = true
     @AppStorage("workspace.archive-expanded") private var isArchiveExpanded = false
+    /// Device-local, like the shelves: whether the Working section beta is on,
+    /// and whether its shelf is open (collapsed by default, as on web).
+    @AppStorage(HomeWorkingSection.enabledKey) private var isWorkingSectionEnabled = false
+    @AppStorage("workspace.working-expanded") private var isWorkingExpanded = false
     @State private var settledLimit = 12
     @State private var showingNewTask = false
     @State private var newTaskDraftID: String?
@@ -329,7 +333,10 @@ public struct WorkspaceView: View {
         let emptyState = isCurrent && presentation.isEmpty && !showsPlaceholders
             ? emptyState(for: tab)
             : nil
-        let canArrange = tab != .chat && presentation.active.contains { $0.supportsActiveOrder == true }
+        // The Working beta orders the inbox by time, so the saved arrangement
+        // is kept but has nothing to arrange until the beta is off.
+        let canArrange = tab != .chat && !isWorkingSectionEnabled
+            && presentation.active.contains { $0.supportsActiveOrder == true }
 
         return HomeThreadCollectionView(
             presentation: presentation,
@@ -338,12 +345,14 @@ public struct WorkspaceView: View {
             query: query,
             selectedThreadID: selectedThreadIDs[tab],
             forceRichRows: dynamicTypeSize.isAccessibilitySize,
+            isWorkingExpanded: isWorkingExpanded,
             isSnoozedExpanded: isSnoozedExpanded,
             isSettledExpanded: isSettledExpanded,
             isArchiveExpanded: isArchiveExpanded,
             settledLimit: settledLimit,
             confirmThreadUnpin: model.snapshot.settings.confirmThreadUnpin,
             onOpen: { openThread($0, in: tab) },
+            onToggleWorking: { isWorkingExpanded.toggle() },
             onToggleSnoozed: { isSnoozedExpanded.toggle() },
             onToggleSettled: { isSettledExpanded.toggle() },
             onToggleArchive: { isArchiveExpanded.toggle() },
@@ -1240,7 +1249,8 @@ public struct WorkspaceView: View {
             projectID: WorkspaceSwitcher.projectFilter(listWorkspace, selectedProjectID: selectedProjectID),
             now: sidebarBoundaryNow,
             changeRequests: model.changeRequestsByThreadID,
-            contentMatchIDs: query.isEmpty ? [] : Set(currentContentMatches.keys)
+            contentMatchIDs: query.isEmpty ? [] : Set(currentContentMatches.keys),
+            workingSectionEnabled: isWorkingSectionEnabled
         )
     }
 
@@ -1696,6 +1706,9 @@ private struct CustomSnoozeTargets: Identifiable {
 struct HomePresentation {
     let pinned: [FeatureThread]
     let active: [FeatureThread]
+    /// Working section beta: busy threads folded out of `active` until they
+    /// need the user. Empty while the beta is off, and always in Chat.
+    let working: [FeatureThread]
     let snoozed: [FeatureThread]
     let settled: [FeatureThread]
     let archived: [FeatureThread]
@@ -1710,7 +1723,8 @@ struct HomePresentation {
 
     /// Nothing on any shelf: the list shows its empty state instead.
     var isEmpty: Bool {
-        pinned.isEmpty && active.isEmpty && snoozed.isEmpty && settled.isEmpty && archived.isEmpty
+        pinned.isEmpty && active.isEmpty && working.isEmpty && snoozed.isEmpty && settled.isEmpty
+            && archived.isEmpty
     }
 
     init(
@@ -1720,7 +1734,8 @@ struct HomePresentation {
         projectID: String?,
         now: Date,
         changeRequests: [String: FeaturePullRequest] = [:],
-        contentMatchIDs: Set<String> = []
+        contentMatchIDs: Set<String> = [],
+        workingSectionEnabled: Bool = false
     ) {
         // The two workspaces share one thread list; which rows belong to which
         // is decided here, before the shelves are built, so every shelf below
@@ -1740,7 +1755,9 @@ struct HomePresentation {
             query: "",
             projectID: projectID,
             now: now,
-            changeRequests: changeRequests
+            changeRequests: changeRequests,
+            // Chat has no shelves to fold anything into.
+            workingSectionEnabled: workingSectionEnabled && workspace != .chat
         )
         // Archived rows never reach `WorkspaceSwitcher.threads` — it drops them
         // along with subagents — so the shelf splits them by workspace itself.
@@ -1767,17 +1784,19 @@ struct HomePresentation {
                 if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
                 return $0.id < $1.id
             }
+            working = []
             snoozed = []
             settled = []
         } else {
             active = index.active
+            working = index.working
             snoozed = index.snoozed
             settled = index.settled
         }
         self.archived = archived
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = DailyUXSidebarIndex.matchingThreadGroups(
-            index.pinned + index.active + index.snoozed + index.settled + archived,
+            index.pinned + index.active + index.working + index.snoozed + index.settled + archived,
             snapshot: snapshot,
             query: normalizedQuery,
             contentMatchIDs: contentMatchIDs
@@ -1808,6 +1827,7 @@ final class HomePresentationCache {
         /// changed.
         let changeRequests: [String: FeaturePullRequest]
         let contentMatchIDs: Set<String>
+        let workingSectionEnabled: Bool
     }
 
     /// Most recent last.
@@ -1822,7 +1842,8 @@ final class HomePresentationCache {
         projectID: String?,
         now: Date,
         changeRequests: [String: FeaturePullRequest] = [:],
-        contentMatchIDs: Set<String> = []
+        contentMatchIDs: Set<String> = [],
+        workingSectionEnabled: Bool = false
     ) -> HomePresentation {
         let key = Key(
             revision: revision,
@@ -1831,7 +1852,8 @@ final class HomePresentationCache {
             projectID: projectID,
             now: now,
             changeRequests: changeRequests,
-            contentMatchIDs: contentMatchIDs
+            contentMatchIDs: contentMatchIDs,
+            workingSectionEnabled: workingSectionEnabled
         )
         if let index = entries.firstIndex(where: { $0.key == key }) {
             let entry = entries.remove(at: index)
@@ -1846,7 +1868,8 @@ final class HomePresentationCache {
             projectID: projectID,
             now: now,
             changeRequests: changeRequests,
-            contentMatchIDs: contentMatchIDs
+            contentMatchIDs: contentMatchIDs,
+            workingSectionEnabled: workingSectionEnabled
         )
         entries.append((key, presentation))
         if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }

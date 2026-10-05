@@ -1412,6 +1412,10 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     public var pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary?
     public var latestVisibleMessage: OrchestrationV2LatestVisibleMessageSummary?
     public var latestUserMessageAt: OrchestrationV2Timestamp?
+    /// The last message the user wrote. Wakes and agent messages also use the
+    /// user role, so they move `latestUserMessageAt` but not this. Absent on
+    /// servers that predate the stamp.
+    public var latestUserAuthoredMessageAt: OrchestrationV2Timestamp?
     public var hasActionableProposedPlan: Bool
     /// Background commands still running. Deliberately never persisted server
     /// side, so it is absent rather than zero on a cached read.
