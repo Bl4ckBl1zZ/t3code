@@ -165,7 +165,8 @@ struct ThreadActivityInspectorView: View {
                 }
                 blockView(
                     ThreadActivityInspectorBlock(
-                        label: "Raw Item", value: model.structuredDetails, monospaced: true
+                        label: "Raw Item", value: model.structuredDetails, monospaced: true,
+                        language: "json"
                     )
                 )
             }
@@ -365,9 +366,20 @@ private struct InspectorBlockText: View {
         return String(value[..<limit])
     }
 
+    @ViewBuilder
+    private var valueText: some View {
+        let shown = displayedValue
+        if let language = block.language,
+           let highlighted = InspectorCodeHighlighting.highlighted(shown, language: language) {
+            Text(highlighted)
+        } else {
+            Text(verbatim: shown)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(verbatim: displayedValue)
+            valueText
                 .font(block.monospaced ? ChatTimelineStyle.smallMono : ChatTimelineStyle.small)
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(isExpanded ? nil : Self.collapsedLineLimit)
@@ -385,5 +397,34 @@ private struct InspectorBlockText: View {
                 .contentShape(Rectangle())
             }
         }
+    }
+}
+
+private final class InspectorHighlightBox: NSObject {
+    let value: AttributedString
+    init(_ value: AttributedString) { self.value = value }
+}
+
+/// Syntax colours for inspector blocks, from the lexer file previews and
+/// message code blocks use. Lexed once per text and cached, since an open row
+/// re-evaluates its body on every transcript update.
+@MainActor
+enum InspectorCodeHighlighting {
+    private static let cache: NSCache<NSString, InspectorHighlightBox> = {
+        let cache = NSCache<NSString, InspectorHighlightBox>()
+        cache.countLimit = 64
+        cache.totalCostLimit = 2 * 1_024 * 1_024
+        return cache
+    }()
+
+    /// Nil past the message code-block limit: a huge payload stays plain
+    /// rather than stalling the main thread.
+    static func highlighted(_ text: String, language: String) -> AttributedString? {
+        guard text.utf8.count <= MarkdownCodeHighlighting.maximumUTF8Count else { return nil }
+        let key = "\(language)\u{0}\(text)" as NSString
+        if let hit = cache.object(forKey: key) { return hit.value }
+        let value = MarkdownCodeHighlighting.highlight(text, language: language)
+        cache.setObject(InspectorHighlightBox(value), forKey: key, cost: max(64, text.utf8.count * 4))
+        return value
     }
 }

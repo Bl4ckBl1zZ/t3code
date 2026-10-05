@@ -1175,15 +1175,11 @@ struct ThreadWorkLog: View {
                         onOpenURL: onOpenURL,
                         onRollback: onRollback
                     )
-                    .padding(.leading, 12)
                     .padding(.top, 2)
                     .padding(.bottom, 6)
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(ChatTimelineStyle.hairline)
-                            .frame(width: 1)
-                    }
-                    .padding(.leading, 28)
+                    // Reasoning reads as prose under its row; tool detail
+                    // takes the full width instead of nesting under a rule.
+                    .padding(.leading, row.item.type == "reasoning" ? 28 : 0)
                 }
 
                 if row.prominent {

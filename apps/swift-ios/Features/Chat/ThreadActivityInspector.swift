@@ -19,11 +19,15 @@ public struct ThreadActivityInspectorBlock: Equatable, Sendable {
     public let label: String?
     public let value: String
     public let monospaced: Bool
+    /// Lexer language for syntax colours (`FeatureSourceHighlighter`); nil
+    /// renders plain text.
+    public let language: String?
 
-    public init(label: String?, value: String, monospaced: Bool) {
+    public init(label: String?, value: String, monospaced: Bool, language: String? = nil) {
         self.label = label
         self.value = value
         self.monospaced = monospaced
+        self.language = language
     }
 }
 
@@ -422,11 +426,11 @@ public enum ThreadActivityInspector {
             }
 
         case let .dynamicTool(_, input, output):
-            addBlock(&blocks, "Input", ThreadTurnItemDetail.formatToolValue(input))
+            addToolBlock(&blocks, "Input", ThreadTurnItemDetail.formatToolValue(input))
             // A withheld output arrives as a one-line summary; the open row
             // fetches the real one instead of showing that.
             if !item.outputOmitted {
-                addBlock(&blocks, "Output", ThreadTurnItemDetail.formatToolValue(output))
+                addToolBlock(&blocks, "Output", ThreadTurnItemDetail.formatToolValue(output))
             }
 
         case let .approvalRequest(_, _, prompt, _):
@@ -594,6 +598,24 @@ public enum ThreadActivityInspector {
     ) {
         guard let value, !value.isEmpty else { return }
         blocks.append(.init(label: label, value: value, monospaced: monospaced))
+    }
+
+    /// Tool payloads that read as JSON get JSON colours; text blocks stay plain.
+    private static func addToolBlock(
+        _ blocks: inout [ThreadActivityInspectorBlock],
+        _ label: String,
+        _ value: String?
+    ) {
+        guard let value, !value.isEmpty else { return }
+        blocks.append(
+            .init(label: label, value: value, monospaced: true, language: jsonLanguage(for: value))
+        )
+    }
+
+    /// "json" when the text opens like a JSON document.
+    static func jsonLanguage(for value: String) -> String? {
+        let first = value.first { !$0.isWhitespace }
+        return first == "{" || first == "[" ? "json" : nil
     }
 
     // MARK: - Duration
