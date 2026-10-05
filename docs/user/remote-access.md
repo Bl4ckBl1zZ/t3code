@@ -253,6 +253,15 @@ address. If the machine is on your T3 Connect account, the dialog also offers **
 and the T3 Connect list shows **Add route** next to a machine saved without it. Pairing a different
 machine there is refused, so a route always leads to the machine you picked.
 
+While connected through T3 Connect or a paired address, T3 Code also learns the machine's current
+LAN and Tailscale addresses and adds them as routes marked **found automatically**, so pairing once
+through T3 Connect is enough to use the LAN at home. When the machine's LAN address changes, for
+example after it joins another Wi-Fi network, the learned route follows it. The machine must allow
+network access for its LAN address to be learned. The hosted web app only learns HTTPS addresses
+such as a Tailscale Serve name, because browsers block plain HTTP from an HTTPS page. You can
+reorder a learned route, but not remove it; it goes away with the route it was learned through, or
+when the machine stops reporting that address.
+
 T3 Code connects over the first route that answers. Away from home, a LAN address that does not
 answer is checked briefly and skipped. It is only tried again, after the other routes, if none of
 them connect. While connected over a later route, T3 Code checks the earlier ones when your network

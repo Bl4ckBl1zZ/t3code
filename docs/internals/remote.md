@@ -83,9 +83,26 @@ replaces the session when one would connect. Preflight includes authorization so
 answers but rejects this client never costs a working session; a route that still fails afterwards
 is held back for a cooldown so a flaky network cannot bounce the connection.
 
+A connected server reports the LAN and tailnet addresses it is bound to in
+`ServerConfig.directEndpoints` (`apps/server/src/environment/DirectEndpoints.ts`), and the client
+saves them as learned routes (`mergeLearnedRoutes`). Only numeric private-network and tailnet IPv4
+addresses on non-virtual interfaces are listed, plus the Tailscale Serve HTTPS name once it answers;
+a loopback-only server lists none. A learned route reuses the credential of the route it was
+learned over: the T3 Connect access token (`authorization: "t3-connect"`), which is not bound to an
+origin because each DPoP proof names the URL it signs, or the paired bearer token (its connection
+id ends in `@<owner id>`, see `credentialConnectionId`). Learned routes the server stops reporting
+are dropped, which is how a changed LAN address replaces the old one; routes the user saved are
+never touched, and removing a route also removes the learned routes that borrow its credential.
+The reported addresses are hints like any advertised endpoint, so a learned route still has to
+answer as this environment before a credential is sent. An HTTPS page (hosted web) skips plain
+HTTP addresses, which mixed-content rules would block. Learning runs on the initial config of each
+session, and the live session is never replaced for it; a learned route that ranks higher is picked
+up by the next better-route check.
+
 Compatibility state (`unsupportedReason`, `serverUpdateRequired`) belongs to the route list as a
-whole: adding or changing a route clears it so the new address is checked, and reordering keeps it
-(`connectionEndpointKey` in [`catalog.ts`](../../packages/client-runtime/src/connection/catalog.ts)).
+whole: adding or changing a paired route clears it so the new address is checked, while reordering
+and learned routes keep it (`connectionEndpointKey` in
+[`catalog.ts`](../../packages/client-runtime/src/connection/catalog.ts)).
 Signing out of T3 Connect removes only the T3 Connect route; a machine with another route stays
 saved.
 

@@ -22,6 +22,17 @@ export class BearerConnectionProfile extends Schema.TaggedClass<BearerConnection
     ...ConnectionProfileBase,
     httpBaseUrl: Schema.String,
     wsBaseUrl: Schema.String,
+    /**
+     * Set on a route the server reported while this client was connected,
+     * rather than one the user paired. Learned routes are replaced when the
+     * server reports a different address, for example after a DHCP change.
+     */
+    learned: Schema.optionalKey(Schema.Literal(true)),
+    /**
+     * "t3-connect" when the route authenticates with the environment's T3
+     * Connect credential instead of a stored bearer token.
+     */
+    authorization: Schema.optionalKey(Schema.Literal("t3-connect")),
   },
 ) {}
 
@@ -160,11 +171,17 @@ export function connectionRegistrationCatalogEntry(
  * missing, or a URL that is not a plain http/ws origin).
  */
 export function connectionEndpointKey(entry: ConnectionCatalogEntry): string | null {
-  const alternates = entry.alternateRoutes ?? [];
-  if (alternates.length === 0) return routeEndpointKey(entry.target, entry.profile);
-  const keys = [{ target: entry.target, profile: entry.profile }, ...alternates].map((route) =>
-    routeEndpointKey(route.target, route.profile),
-  );
+  // Learned routes come and go with the server's addresses and reach the same
+  // server, so they leave compatibility state where it was.
+  const routes = [
+    { target: entry.target, profile: entry.profile },
+    ...(entry.alternateRoutes ?? []),
+  ].filter((route) => {
+    const profile = Option.getOrNull(route.profile);
+    return !(profile?._tag === "BearerConnectionProfile" && profile.learned === true);
+  });
+  if (routes.length === 1) return routeEndpointKey(routes[0]!.target, routes[0]!.profile);
+  const keys = routes.map((route) => routeEndpointKey(route.target, route.profile));
   return keys.every((key) => key !== null) ? JSON.stringify([...keys].sort()) : null;
 }
 
