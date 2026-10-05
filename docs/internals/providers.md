@@ -39,6 +39,25 @@ directory to route session and turn operations for a thread, so callers name a t
 Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
 orchestration, contract, or client change is required for the common case.
 
+## Workspace snapshots
+
+A provider snapshot describes the machine: its skills and slash commands come from the server's
+cwd. Drivers that can read a workspace implement `snapshotForCwd`, and
+`ProviderRegistry.refreshWorkspaceSnapshot` stores the result as one `workspaceSnapshots` entry per
+cwd (16 per instance, newest last). Clients request it with `server.refreshProviders`
+`{ instanceId, cwd }` and resolve skills and commands for a thread's cwd from that entry, falling
+back to the machine lists. A cwd is scanned once; `fresh` rescans it past the instance's discovery
+caches. A failed scan stores nothing. An instance that is not installed, or has not finished its
+first probe, is not scanned, so a scan never freezes the empty startup lists. Claude scans skills
+from disk and commands with a no-prompt SDK probe in the cwd; when only the probe fails it stores
+the skills with `slashCommandsPending`, keeping the cwd's last known commands, and the next request
+scans again. Entries are never written to the status cache and are dropped when an instance is
+rebuilt.
+
+Codex, Claude, OpenCode and Antigravity implement `snapshotForCwd`; Antigravity also records the
+workspaces its sessions report. Cursor, Grok, Pi, ACP Registry, Hermes and OpenClaw show their
+machine lists in every workspace.
+
 ## OpenCode server ownership and catalog
 
 Each OpenCode provider instance owns one lazy local server for catalog discovery and
@@ -232,6 +251,23 @@ every item that outlived one before any client reads. The query selects the live
 count, so the monitor-folding rule stays in `orchestrationV2BackgroundProcessCount` and the sidebar
 cannot disagree with the timeline.
 
+The same rows also feed `pendingBackgroundTasks`, the named list of what a settled thread still runs
+([`orchestrationV2PendingBackgroundWork.ts`][pendingwork], `derivePendingBackgroundWork`): each live
+background command as `command`, a monitor as its own `monitor` entry, each delegated agent as
+`subagent`. It is derived, never persisted, and empty while a run is in flight. Clients read its kinds
+through `backgroundWorkHoldsCompletion`: subagents and monitors wake the agent, so they hold the
+thread in Background and hold back its completion alert and automatic settlement; a command such as a
+dev server does not. Unlike upstream, no adapter reports a separate provider-thread roster: Claude
+and Codex already project that work as live background items.
+
+Stop on a settled thread interrupts the provider turn the work belongs to, and every other provider
+thread with pending work and a live session (a Codex dev server left before a switch to Claude), as
+long as its provider can end work after a turn settled (Codex, Claude). Once each interrupt returns,
+the effect worker dispatches `thread.background-work.settle` through `BackgroundWorkSettleDispatch`,
+which marks interrupted whatever the thread still shows on that provider thread, or on one with no
+live session, for the stopped run and older ones (`pendingBackgroundTurnItems`). A Stop whose session
+is gone settles directly.
+
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
@@ -252,3 +288,4 @@ cannot disagree with the timeline.
 [claudeadapter]: ../../apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
 [recovery]: ../../apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts
 [restartnote]: ../../apps/server/src/orchestration-v2/RestartBackgroundNote.ts
+[pendingwork]: ../../packages/shared/src/orchestrationV2PendingBackgroundWork.ts

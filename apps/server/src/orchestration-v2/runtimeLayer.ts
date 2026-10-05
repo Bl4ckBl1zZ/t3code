@@ -23,6 +23,7 @@ import { layerFromApplicationReceipts as commandReceiptStoreLayer } from "./Comm
 import { layer as contextHandoffServiceLayer } from "./ContextHandoffService.ts";
 import { layer as effectOutboxLayer } from "./EffectOutbox.ts";
 import {
+  backgroundWorkSettleLayer,
   executorLayer as effectExecutorLayer,
   layer as effectWorkerLayer,
 } from "./EffectWorker.ts";
@@ -204,6 +205,30 @@ const runFinalizationServiceProvided = runFinalizationServiceLayer.pipe(
   Layer.provide(Layer.merge(checkpointCaptureServiceProvided, projectionStoreLayer)),
 );
 
+const orchestratorProvided = orchestratorLayer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      checkpointServiceProvided,
+      commandPolicyLayer,
+      storesLayer,
+      eventSinkProvided,
+      commandReceiptStoreProvided,
+      contextHandoffServiceProvided,
+      idAllocatorLayer,
+      providerAdapterRegistryProvided,
+      // Same layer reference as the continuation worker and the adapter
+      // infrastructure so layer memoization yields one shared request queue.
+      providerContinuationRequestsLayer,
+      providerEventIngestorProvided,
+      runtimePolicyProvided,
+      providerSessionManagerProvided,
+      providerSwitchServiceProvided,
+      runExecutionServiceProvided,
+      threadForkServiceLayer,
+    ),
+  ),
+);
+
 const effectExecutorProvided = effectExecutorLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -213,6 +238,8 @@ const effectExecutorProvided = effectExecutorLayer.pipe(
       providerTurnControlServiceProvided,
       providerTurnStartServiceProvided,
       runtimeRequestServiceProvided,
+      // The settle that follows a Stop goes back through the orchestrator.
+      backgroundWorkSettleLayer.pipe(Layer.provide(orchestratorProvided)),
     ),
   ),
 );
@@ -227,31 +254,6 @@ const providerRuntimeRecoveryProvided = providerRuntimeRecoveryLayer.pipe(
       eventSinkProvided,
       idAllocatorLayer,
       projectionStoreLayer,
-    ),
-  ),
-);
-
-const orchestratorProvided = orchestratorLayer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      checkpointServiceProvided,
-      commandPolicyLayer,
-      storesLayer,
-      eventSinkProvided,
-      effectWorkerProvided,
-      commandReceiptStoreProvided,
-      contextHandoffServiceProvided,
-      idAllocatorLayer,
-      providerAdapterRegistryProvided,
-      // Same layer reference as the continuation worker and the adapter
-      // infrastructure so layer memoization yields one shared request queue.
-      providerContinuationRequestsLayer,
-      providerEventIngestorProvided,
-      runtimePolicyProvided,
-      providerSessionManagerProvided,
-      providerSwitchServiceProvided,
-      runExecutionServiceProvided,
-      threadForkServiceLayer,
     ),
   ),
 );

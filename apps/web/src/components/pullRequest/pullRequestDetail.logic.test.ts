@@ -30,7 +30,9 @@ import {
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   pullRequestReviewOutcome,
+  pullRequestSpeedActions,
   readableFailure,
+  resolvePullRequestMergeMethod,
   resolvePullRequestPrimaryControl,
   shouldRefreshPullRequestActivity,
   resolveBaseFreshness,
@@ -1315,5 +1317,37 @@ describe("which actions need the host read again after they run", () => {
     ] as const) {
       expect(pullRequestActionNeedsHostRefresh(action)).toBe(false);
     }
+  });
+});
+
+describe("pull request merge method", () => {
+  it("uses the current choice, then the project default, then the last choice", () => {
+    expect(
+      resolvePullRequestMergeMethod(["merge", "squash", "rebase"], null, "squash", "rebase"),
+    ).toBe("squash");
+    expect(
+      resolvePullRequestMergeMethod(["merge", "squash", "rebase"], "rebase", "squash", "merge"),
+    ).toBe("rebase");
+    expect(resolvePullRequestMergeMethod(["merge", "rebase"], null, "squash", "rebase")).toBe(
+      "rebase",
+    );
+    expect(resolvePullRequestMergeMethod(["squash"], null, "merge", "rebase")).toBe("squash");
+    expect(resolvePullRequestMergeMethod(["merge", "squash"], null, null, "squash")).toBe("squash");
+  });
+});
+
+describe("pull request quick actions", () => {
+  it("offers the next step and a close for open GitHub pull requests only", () => {
+    const github = { provider: "github" as const, isDraft: false };
+    expect(pullRequestSpeedActions({ ...github, state: "open" })).toEqual(["close", "merge"]);
+    expect(pullRequestSpeedActions({ ...github, state: "open", isDraft: true })).toEqual([
+      "close",
+      "ready",
+    ]);
+    expect(pullRequestSpeedActions({ ...github, state: "closed" })).toEqual(["reopen"]);
+    expect(pullRequestSpeedActions({ ...github, state: "merged" })).toEqual([]);
+    expect(pullRequestSpeedActions({ provider: "gitlab", state: "open", isDraft: false })).toEqual(
+      [],
+    );
   });
 });

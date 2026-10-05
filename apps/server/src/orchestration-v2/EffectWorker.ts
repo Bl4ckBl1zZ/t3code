@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { CommandId, type OrchestrationV2Command } from "@t3tools/contracts";
 
 import {
   increment,
@@ -28,6 +29,30 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderTurnControlServiceV2 } from "./ProviderTurnControlService.ts";
 import { ProviderTurnStartServiceV2 } from "./ProviderTurnStartService.ts";
 import { RuntimeRequestServiceV2 } from "./RuntimeRequestService.ts";
+import { OrchestratorV2, type OrchestratorV2Error } from "./Orchestrator.ts";
+
+/**
+ * Dispatches the settle that follows a Stop's provider interrupt
+ * (`thread.background-work.settle`). The executor sits below the
+ * orchestrator in the layer graph, so the live runtime binds this to the
+ * orchestrator with `backgroundWorkSettleLayer`; the default does nothing,
+ * which keeps executor-only tests free of an orchestrator.
+ */
+export class BackgroundWorkSettleDispatch extends Context.Reference<{
+  readonly settle: (
+    command: Extract<OrchestrationV2Command, { readonly type: "thread.background-work.settle" }>,
+  ) => Effect.Effect<void, OrchestratorV2Error>;
+}>("t3/orchestration-v2/BackgroundWorkSettleDispatch", {
+  defaultValue: () => ({ settle: () => Effect.void }),
+}) {}
+
+export const backgroundWorkSettleLayer = Layer.effect(
+  BackgroundWorkSettleDispatch,
+  Effect.gen(function* () {
+    const orchestrator = yield* OrchestratorV2;
+    return { settle: (command) => orchestrator.dispatch(command).pipe(Effect.asVoid) };
+  }),
+);
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedErrorClass<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -116,6 +141,7 @@ export const executorLayer: Layer.Layer<
     const providerTurnControl = yield* ProviderTurnControlServiceV2;
     const providerTurnStart = yield* ProviderTurnStartServiceV2;
     const runtimeRequests = yield* RuntimeRequestServiceV2;
+    const backgroundWorkSettle = yield* BackgroundWorkSettleDispatch;
     return OrchestrationEffectExecutorV2.of({
       execute: (effect) => {
         switch (effect.request.type) {
@@ -161,6 +187,20 @@ export const executorLayer: Layer.Layer<
                 providerTurnId: effect.request.providerTurnId,
               })
               .pipe(
+                // The provider has stopped what it still ran and reported it.
+                // Whatever the thread still shows on that provider thread is
+                // work no process will report on, so the Stop ends it too.
+                // One Stop can interrupt several provider threads, so the
+                // settle is keyed by effect, not by the Stop command.
+                Effect.andThen(
+                  backgroundWorkSettle.settle({
+                    type: "thread.background-work.settle",
+                    commandId: CommandId.make(`${effect.id}:background-work-settled`),
+                    threadId: effect.threadId,
+                    providerThreadId: effect.request.providerThreadId,
+                    providerTurnId: effect.request.providerTurnId,
+                  }),
+                ),
                 Effect.mapError(
                   (cause) =>
                     new OrchestrationEffectExecutionError({

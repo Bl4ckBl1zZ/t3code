@@ -6,6 +6,7 @@ import {
   type ModelSelection,
   type ProjectId,
   type ProviderDriverKind,
+  type PullRequestMergeMethod,
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
@@ -37,6 +38,19 @@ export function resolveProjectAutoPull(
   projectId: ProjectId,
 ): boolean {
   return settings.projectAutoPullOverrides[projectId] ?? settings.defaultAutoPull;
+}
+
+/** A project's merge method, then the machine's; `null` means the client's last choice. */
+export function resolveProjectPullRequestMergeMethod(
+  settings: Pick<
+    ServerSettings,
+    "pullRequestMergeMethod" | "projectPullRequestMergeMethodOverrides"
+  >,
+  projectId: ProjectId,
+): PullRequestMergeMethod | null {
+  return (
+    settings.projectPullRequestMergeMethodOverrides[projectId] ?? settings.pullRequestMergeMethod
+  );
 }
 
 const ServerSettingsJson = fromLenientJson(ServerSettings);
@@ -160,6 +174,7 @@ export function applyServerSettingsPatch(
     defaultProjectScripts: defaultScriptsPatch,
     projectAutoPullOverrides: autoPullPatch,
     projectAgentBrowserAccessOverrides: browserAccessPatch,
+    projectPullRequestMergeMethodOverrides: mergeMethodPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -223,6 +238,13 @@ export function applyServerSettingsPatch(
     if (enabled === null) delete projectAgentBrowserAccessOverrides[projectId as ProjectId];
     else projectAgentBrowserAccessOverrides[projectId as ProjectId] = enabled;
   }
+  const projectPullRequestMergeMethodOverrides = {
+    ...current.projectPullRequestMergeMethodOverrides,
+  };
+  for (const [projectId, method] of Object.entries(mergeMethodPatch ?? {})) {
+    if (method === null) delete projectPullRequestMergeMethodOverrides[projectId as ProjectId];
+    else projectPullRequestMergeMethodOverrides[projectId as ProjectId] = method;
+  }
   const nextWithReplacementsBase = {
     ...next,
     usagePriceOverrides,
@@ -232,6 +254,7 @@ export function applyServerSettingsPatch(
     projectScriptOverrides: { ...current.projectScriptOverrides, ...scriptOverridesPatch },
     projectAutoPullOverrides,
     projectAgentBrowserAccessOverrides,
+    projectPullRequestMergeMethodOverrides,
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {

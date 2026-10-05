@@ -16,6 +16,7 @@ export type ThreadNotificationThread = Pick<
   | "hasPendingUserInput"
   | "backgroundProcessCount"
   | "activeAgentCount"
+  | "pendingBackgroundTasks"
 >;
 
 export interface ThreadNotificationMemory {
@@ -63,6 +64,8 @@ export function resolveThreadNotificationEvents(
       status === "input" || status === "approval" || status === "failed" || status === "limited"
         ? `${thread.latestRun?.runId ?? ""}:${status}`
         : null;
+    // Commands left running (a dev server) read as ready; subagents and
+    // monitors hold the thread in Background until they wake the agent.
     const completion =
       status === "ready" && thread.latestRun?.status === "completed"
         ? thread.latestRun.runId

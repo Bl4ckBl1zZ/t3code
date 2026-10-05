@@ -5606,6 +5606,34 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  // The CLI process exits on its own after the turn settled (idle, crash).
+  // Stop must still succeed, so the orchestrator goes on to settle what the
+  // thread still shows.
+  it.effect("a settled Stop with no CLI process left succeeds", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarnessWithOptions();
+        yield* startBackgroundCommand({
+          harness,
+          attemptId: "attempt-claude-settled-stop-no-process",
+        });
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
+
+        yield* Queue.shutdown(harness.sdkMessages);
+        let quietYields = 0;
+        yield* awaitUntil(() => quietYields++ >= 50, "query exit");
+
+        yield* harness.runtime.interruptTurn({
+          providerThread: harness.providerThread,
+          providerTurnId: harness.terminalEvents()[0]!.providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("refuses a model change that would kill a running background subagent", () =>
     Effect.scoped(
       Effect.gen(function* () {

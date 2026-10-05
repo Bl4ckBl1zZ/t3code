@@ -46,6 +46,8 @@
     },
     "defaultAutoPull": false,
     "projectAutoPullOverrides": {},
+    "pullRequestMergeMethod": null,
+    "projectPullRequestMergeMethodOverrides": {},
     "backgroundActivity": {
       "schemaVersion": 1,
       "profile": "balanced",

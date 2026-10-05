@@ -35,7 +35,7 @@ import type { TextGenerationShape } from "../textGeneration/TextGeneration.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
 import type { HermesSessionCatalogShape } from "../hermes/HermesSessionCatalog.ts";
 import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
-import type { ServerProvider } from "@t3tools/contracts";
+import type { ServerProvider, ServerProviderWorkspaceSnapshot } from "@t3tools/contracts";
 import type { ProviderDriverError } from "./Errors.ts";
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
 
@@ -55,6 +55,9 @@ export interface ProviderDriverMetadata {
    */
   readonly supportsMultipleInstances?: boolean;
 }
+
+export type ProviderWorkspaceSnapshot = ServerProvider &
+  Pick<ServerProviderWorkspaceSnapshot, "slashCommandsPending">;
 
 /**
  * One materialized provider instance. Held by the registry, looked up by
@@ -82,7 +85,10 @@ export interface ProviderInstance {
   readonly refreshModels?: () => Effect.Effect<void, ProviderDriverError>;
   /** Invalidate T3-owned discovery caches before an explicit provider refresh. */
   readonly invalidateCaches?: Effect.Effect<void>;
-  readonly snapshotForCwd?: (cwd: string) => Effect.Effect<ServerProvider, ProviderDriverError>;
+  /** Machine snapshot with this workspace's skills and commands; registry-stored per cwd. */
+  readonly snapshotForCwd?: (
+    cwd: string,
+  ) => Effect.Effect<ProviderWorkspaceSnapshot, ProviderDriverError>;
   readonly orchestrationAdapter: ProviderAdapterV2Shape;
   readonly textGeneration: TextGenerationShape;
   /**

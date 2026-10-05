@@ -36,7 +36,6 @@ import {
   DndContext,
   type DragCancelEvent,
   type CollisionDetection,
-  PointerSensor,
   type DragStartEvent,
   closestCorners,
   pointerWithin,
@@ -47,6 +46,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
+import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -107,6 +107,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
@@ -197,6 +198,8 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveAdjacentThreadId,
+  resolveSidebarSweepKeys,
+  sidebarThreadKeyAtY,
   resolveWorkspaceSwitchNavigation,
   resolveSettledTimestamp,
   resolveSidebarRowAccessibility,
@@ -970,13 +973,42 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   );
 });
 
+// Pointer travel before a press on a row starts a drag, or a press on its
+// action button starts a sweep. Shorter presses stay clicks.
+const SIDEBAR_DRAG_DISTANCE = 6;
+
+type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
+
+// What a row will do when the sweep passing over it is released.
+const sweepActionBadge: Record<SidebarSweepAction, ReactNode> = {
+  settle: (
+    <>
+      <CircleCheckIcon aria-hidden className="size-3" />
+      Settle
+    </>
+  ),
+  unsettle: (
+    <>
+      <Undo2Icon aria-hidden className="size-3" />
+      Un-settle
+    </>
+  ),
+  unsnooze: (
+    <>
+      <AlarmClockOffIcon aria-hidden className="size-3" />
+      Wake
+    </>
+  ),
+};
+
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
   sortable?: SidebarThreadRowSortable;
-  // Slim rows are either settled (action: un-settle) or merely quiet
-  // (seen Ready threads — action: settle).
-  variantAction: "settle" | "unsettle" | "unsnooze";
+  // Settled rows un-settle, snoozed rows wake, and cards settle.
+  variantAction: SidebarSweepAction;
+  // The action this row will take when the sweep is released.
+  sweepAction: SidebarSweepAction | null;
   // False on environments whose server predates thread.settle/unsettle:
   // the lifecycle affordances hide entirely rather than fail on click.
   settlementSupported: boolean;
@@ -1013,6 +1045,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   renamingTitle: string;
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
+  onActionSweepStart: (
+    threadRef: ScopedThreadRef,
+    action: SidebarSweepAction,
+    event: PointerEvent,
+  ) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
   onSnooze: (threadRef: ScopedThreadRef, preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
@@ -1032,6 +1069,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onContextMenu,
     onRenameTitleChange,
     onSettle,
+    onActionSweepStart,
     onSnooze,
     onStartRename,
     onThreadActivate,
@@ -1353,6 +1391,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onSettle, threadRef],
   );
+  const handleActionPointerDown = useCallback(
+    (event: ReactPointerEvent) => {
+      if (!event.isPrimary || event.button !== 0) return;
+      // Action buttons sweep their section rather than picking up the row.
+      event.stopPropagation();
+      onActionSweepStart(threadRef, variantAction, event.nativeEvent);
+    },
+    [onActionSweepStart, threadRef, variantAction],
+  );
   const handleUnsettleClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -1428,7 +1475,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
-      : isSelected
+      : isSelected || props.sweepAction !== null
         ? "bg-sidebar-row-selected text-sidebar-foreground"
         : hasUnsentDraft
           ? "bg-warning/4 text-sidebar-foreground hover:bg-warning/8"
@@ -1598,10 +1645,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     )
   ) : null;
 
+  // A sweep hides the row's status slot rather than unmounting it, so the
+  // pressed action button stays connected and a cancelled sweep's release
+  // click still fires and is consumed.
+  const sweepBadge =
+    props.sweepAction !== null ? (
+      <span
+        role="status"
+        className="pointer-events-none ml-auto inline-flex h-5 shrink-0 items-center gap-1 rounded-sm border border-primary/40 bg-primary/10 px-1.5 text-2xs font-medium text-primary"
+      >
+        {sweepActionBadge[props.sweepAction]}
+      </span>
+    ) : null;
+
   if (variant === "slim") {
     return (
       <li
-        data-thread-item
+        data-thread-item={threadKey}
         {...fileDrop.handlers}
         className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
       >
@@ -1664,7 +1724,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
             {prBadge}
-            <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
+            <span
+              className={cn(
+                "relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
+                props.sweepAction !== null && "hidden",
+              )}
+            >
               <span
                 className={cn(
                   "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
@@ -1710,6 +1775,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     type="button"
                     aria-label="Wake thread now"
                     onClick={handleUnsnoozeClick}
+                    onPointerDown={handleActionPointerDown}
                     className={cn(
                       "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
                       isWoke && "group-any-hover/sidebar-row:static",
@@ -1726,6 +1792,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         type="button"
                         aria-label="Un-settle thread"
                         onClick={handleUnsettleClick}
+                        onPointerDown={handleActionPointerDown}
                         className={cn(
                           "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
                           isWoke && "group-any-hover/sidebar-row:static",
@@ -1742,6 +1809,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   type="button"
                   aria-label="Settle thread"
                   onClick={handleSettleClick}
+                  onPointerDown={handleActionPointerDown}
                   className={cn(
                     "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
                     isWoke && "group-any-hover/sidebar-row:static",
@@ -1751,6 +1819,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </button>
               )}
             </span>
+            {sweepBadge}
             {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
           </TooltipTrigger>
           {detailsTooltip}
@@ -1769,7 +1838,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // out of flow lets the label beside it reclaim space without either state
   // overlapping it. Code uses the meta line; Work and Chat use the title line.
   const statusSlot = (
-    <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
+    <span
+      className={cn(
+        "group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs",
+        props.sweepAction !== null && "hidden",
+      )}
+    >
       {/* Read-only status labels yield to the hover actions. Woke is
           itself an action, so it stays pointer-enabled and visible
           while the other controls appear beside it. */}
@@ -1872,6 +1946,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     type="button"
                     aria-label="Settle thread"
                     onClick={handleSettleClick}
+                    onPointerDown={handleActionPointerDown}
                     className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
                   />
                 }
@@ -1949,7 +2024,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       style={props.sortable?.style}
       {...props.sortable?.listeners}
       {...fileDrop.handlers}
-      data-thread-item
+      data-thread-item={threadKey}
       className={cn(
         "list-none py-0.5 [content-visibility:auto]",
         isChat || isWork
@@ -2004,6 +2079,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <div className="flex min-w-0 items-center gap-1.5">
                   {titleLine}
                   {statusSlot}
+                  {sweepBadge}
                 </div>
                 <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
                   {isChat && status === "working" ? (
@@ -2042,6 +2118,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     )}
                   </>
                   {statusSlot}
+                  {sweepBadge}
                 </div>
                 <div className="mt-1 flex min-w-0">{titleLine}</div>
                 <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
@@ -2912,9 +2989,24 @@ export default function Sidebar() {
     };
   }, [activeThreads]);
 
+  // Row drags and action sweeps share one gesture at a time. Unmounting the
+  // list (search) cancels whichever is in flight.
+  const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
+  const threadListRef = useRef<HTMLUListElement | null>(null);
+  const attachDragSensor = useCallback((sensor: SidebarPointerSensor) => {
+    dragSensorRef.current = sensor;
+  }, []);
+  const releaseDragSensor = useCallback(() => {
+    dragSensorRef.current = null;
+  }, []);
+  const cancelThreadGesture = useCallback(() => {
+    dragSensorRef.current?.cancel();
+  }, []);
   const threadDragSensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 6 },
+    useSensor(SidebarPointerSensor, {
+      distance: SIDEBAR_DRAG_DISTANCE,
+      onAttach: attachDragSensor,
+      onFinish: releaseDragSensor,
     }),
   );
   const threadCollisionDetection = useCallback<CollisionDetection>((args) => {
@@ -3658,6 +3750,110 @@ export default function Sidebar() {
     },
     [unsnoozeThread],
   );
+  // Post-settle navigation must skip threads settling in this same batch —
+  // they are all leaving the card block together. Rows that are already
+  // explicitly settled are skipped: nothing to do on a valid mixed selection.
+  // Pinned rows ARE included: the decider clears the pin as part of settling,
+  // so they park like the rest.
+  const settleThreads = useCallback(
+    (threadKeys: readonly string[]) => {
+      const coSettlingKeys = new Set(threadKeys);
+      for (const threadKey of threadKeys) {
+        const thread = threadByKeyRef.current.get(threadKey);
+        if (!thread || thread.settledOverride === "settled") continue;
+        attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
+      }
+    },
+    [attemptSettle],
+  );
+  const sectionByThreadKey = useMemo(() => {
+    const map = new Map<string, "active" | "working" | "snoozed" | "settled">();
+    const add = (
+      list: readonly EnvironmentThreadShell[],
+      section: "active" | "working" | "snoozed" | "settled",
+    ) => {
+      for (const thread of list) {
+        map.set(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), section);
+      }
+    };
+    add(activeThreads, "active");
+    add(workingThreads, "working");
+    add(snoozedThreads, "snoozed");
+    add(settledThreads, "settled");
+    return map;
+  }, [activeThreads, settledThreads, snoozedThreads, workingThreads]);
+  const sectionByThreadKeyRef = useRef(sectionByThreadKey);
+  sectionByThreadKeyRef.current = sectionByThreadKey;
+  // Drag a row action to apply it to the rows it passes over in the same
+  // section. Staying in one section keeps an overshoot from changing
+  // neighboring sections. The sweep runs on the row drag's sensor ref, so
+  // unmounting the list cancels it.
+  const [actionSweep, setActionSweep] = useState<{
+    action: SidebarSweepAction;
+    keys: ReadonlySet<string>;
+  } | null>(null);
+  const startActionSweep = useCallback(
+    (threadRef: ScopedThreadRef, action: SidebarSweepAction, event: PointerEvent) => {
+      // A gesture whose release was missed would otherwise linger.
+      dragSensorRef.current?.cancel();
+      const originKey = scopedThreadKey(threadRef);
+      const originSection = sectionByThreadKeyRef.current.get(originKey);
+      // The same gate the row uses to show the button: Work's main thread
+      // never parks, and older servers lack the commands.
+      const canApply = (key: string) => {
+        const thread = threadByKeyRef.current.get(key);
+        if (thread === undefined || thread.workInboxRole === "main") return false;
+        if (sectionByThreadKeyRef.current.get(key) !== originSection) return false;
+        const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
+        return action === "unsnooze"
+          ? capabilities?.threadSnooze === true
+          : capabilities?.threadSettlement === true;
+      };
+      let targetKey: string | null = null;
+      let sweptKeys: string[] = [];
+      const sweepTo = (key: string | null) => {
+        if (key === null || key === targetKey) return;
+        targetKey = key;
+        sweptKeys = resolveSidebarSweepKeys(orderedThreadKeysRef.current, originKey, key, canApply);
+        setActionSweep({ action, keys: new Set(sweptKeys) });
+      };
+      dragSensorRef.current = new SidebarPointerSensor({
+        active: originKey,
+        event,
+        options: {
+          distance: SIDEBAR_DRAG_DISTANCE,
+          onAttach: () => {},
+          onFinish: () => {
+            dragSensorRef.current = null;
+            setActionSweep(null);
+          },
+        },
+        onPending: () => {},
+        onStart: () => sweepTo(originKey),
+        onMove: ({ y }) =>
+          sweepTo(threadListRef.current && sidebarThreadKeyAtY(threadListRef.current, y)),
+        // Also runs after a press that never moved. Nothing is swept then,
+        // and the button's own click applies its action. Rows that changed
+        // section mid-gesture, say settled from another device, are skipped.
+        onEnd: () => {
+          const keys = sweptKeys.filter(canApply);
+          if (action === "settle") {
+            settleThreads(keys);
+            return;
+          }
+          for (const key of keys) {
+            const ref = parseScopedThreadKey(key);
+            if (ref === null) continue;
+            if (action === "unsettle") attemptUnsettle(ref);
+            else attemptUnsnooze(ref);
+          }
+        },
+        onCancel: () => {},
+        onAbort: () => {},
+      });
+    },
+    [attemptUnsettle, attemptUnsnooze, serverConfigs, settleThreads],
+  );
   // One snooze per thread at a time — same double-dispatch guard as settle.
   const snoozingThreadKeysRef = useRef(new Set<string>());
   const attemptSnooze = useCallback(
@@ -3827,17 +4023,7 @@ export default function Sidebar() {
         return;
       }
       if (clicked.value === "settle") {
-        // Post-settle navigation must skip threads settling in this same
-        // batch — they are all leaving the card block together. Rows that
-        // are already explicitly settled are skipped: nothing to do on a
-        // valid mixed selection. Pinned rows ARE included: the decider
-        // clears the pin as part of settling, so they park like the rest.
-        const coSettlingKeys = new Set(threadKeys);
-        for (const threadKey of threadKeys) {
-          const thread = threadByKeyRef.current.get(threadKey);
-          if (!thread || thread.settledOverride === "settled") continue;
-          attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
-        }
+        settleThreads(threadKeys);
         clearSelection();
         return;
       }
@@ -3890,7 +4076,6 @@ export default function Sidebar() {
       );
     },
     [
-      attemptSettle,
       attemptSnooze,
       toggleThreadPin,
       clearSelection,
@@ -3899,6 +4084,7 @@ export default function Sidebar() {
       markThreadUnread,
       removeFromSelection,
       serverConfigs,
+      settleThreads,
       updateThreadMetadata,
     ],
   );
@@ -4492,6 +4678,7 @@ export default function Sidebar() {
   }, [shouldShowJumpHintsNow, updateThreadJumpHintsVisibility]);
 
   const attachListAutoAnimateRef = useCallback((node: HTMLUListElement | null) => {
+    threadListRef.current = node;
     if (!node) {
       listAutoAnimateControllerRef.current = null;
       return;
@@ -4961,6 +5148,7 @@ export default function Sidebar() {
                 onDragEnd={handleThreadDragEnd}
                 onDragCancel={handleThreadDragCancel}
               >
+                <SidebarDragLifecycle onUnmount={cancelThreadGesture} />
                 <SortableContext items={sortableThreadKeys} strategy={verticalListSortingStrategy}>
                   <ul
                     ref={attachListAutoAnimateRef}
@@ -4969,7 +5157,13 @@ export default function Sidebar() {
                     // presentational list also makes its implicit listitems
                     // presentational while preserving every descendant control.
                     role="presentation"
-                    className="flex flex-col gap-px"
+                    className={cn(
+                      "flex flex-col gap-px",
+                      // An action sweep owns the pointer: rows it passes over
+                      // neither show hover actions nor open tooltips, even
+                      // controls that opt back in, like the Woke pill.
+                      actionSweep !== null && "**:pointer-events-none",
+                    )}
                   >
                     {(() => {
                       const renderThreadRow = (
@@ -5005,6 +5199,7 @@ export default function Sidebar() {
                               : section === "settled"
                                 ? "unsettle"
                                 : "settle",
+                          sweepAction: actionSweep?.keys.has(threadKey) ? actionSweep.action : null,
                           settlementSupported:
                             thread.workInboxRole !== "main" &&
                             serverConfigs.get(thread.environmentId)?.environment.capabilities
@@ -5073,6 +5268,7 @@ export default function Sidebar() {
                           renamingTitle: renamingThreadKey === threadKey ? renamingTitle : "",
                           onContextMenu: handleThreadContextMenu,
                           onSettle: attemptSettle,
+                          onActionSweepStart: startActionSweep,
                           onUnsettle: attemptUnsettle,
                           onSnooze: attemptSnooze,
                           onUnsnooze: attemptUnsnooze,

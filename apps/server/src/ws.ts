@@ -178,6 +178,7 @@ import {
   makeThreadHandoffTranscript,
 } from "./orchestration-v2/ThreadHandoffScript.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -227,41 +228,22 @@ export const resolveFileManagerRevealKindForConfig = <E, R>(
   discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
 ) => resolveDiscoveryForConfig(discovery, () => undefined);
 
-/** A fresh workspace refresh also re-reads the instance's machine snapshot. */
-export const isFreshWorkspaceRefresh = (input: {
-  readonly instanceId?: ProviderInstanceId | undefined;
-  readonly cwd?: string | undefined;
-  readonly fresh?: boolean | undefined;
-}) => input.fresh === true && input.instanceId !== undefined && input.cwd !== undefined;
-
 /**
  * Runs first in `server.refreshProviders`. An explicit catalog refresh
  * (`refreshModels`) bypasses T3-owned caches: the remote model manifest, each
  * targeted instance's discovery caches and maintenance resolution, and the
- * npm latest-version cache. A fresh workspace refresh bypasses only the
- * targeted instance's discovery caches, so new skills and plugin commands
- * show up. Other workspace discovery and background status checks keep their
- * timers.
+ * npm latest-version cache. A fresh workspace refresh invalidates only the
+ * targeted instance's discovery caches, inside
+ * `ProviderRegistry.refreshWorkspaceSnapshot`. Other workspace discovery and
+ * background status checks keep their timers.
  */
 export const bypassOwnedProviderCachesForRefresh = Effect.fn(
   "ws.bypassOwnedProviderCachesForRefresh",
 )(function* (input: {
   readonly instanceId?: ProviderInstanceId | undefined;
-  readonly cwd?: string | undefined;
-  readonly fresh?: boolean | undefined;
   readonly refreshModels?: boolean | undefined;
 }) {
-  if (!input.refreshModels) {
-    if (!isFreshWorkspaceRefresh(input)) return;
-    const instances = yield* (yield* ProviderInstanceRegistry.ProviderInstanceRegistry)
-      .listInstances;
-    yield* Effect.forEach(
-      instances.filter((instance) => instance.instanceId === input.instanceId),
-      (instance) => instance.invalidateCaches ?? Effect.void,
-      { discard: true },
-    );
-    return;
-  }
+  if (!input.refreshModels) return;
   const modelManifest = yield* ModelManifest.ModelManifest;
   const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const providerVersionCache = yield* ProviderMaintenance.ProviderVersionCache;
@@ -706,6 +688,7 @@ const makeWsRpcLayer = (
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
+      const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
@@ -825,6 +808,7 @@ const makeWsRpcLayer = (
           remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
             remoteOpenTargets.resolveTargets(),
           ),
+          directEndpoints: yield* resolveAvailableEditorsForConfig(directEndpoints.resolve()),
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
@@ -1821,6 +1805,21 @@ const makeWsRpcLayer = (
             WS_METHODS.serverRefreshProviders,
             Effect.gen(function* () {
               yield* bypassOwnedProviderCachesForRefresh(input);
+              if (
+                input.cwd !== undefined &&
+                input.instanceId !== undefined &&
+                !input.refreshModels
+              ) {
+                // Workspace discovery is registry-owned: each cwd is scanned once
+                // (again only when `fresh`), and selecting a thread never launches
+                // a disposable provider health-check process.
+                const providers = yield* providerRegistry.refreshWorkspaceSnapshot({
+                  instanceId: input.instanceId,
+                  cwd: input.cwd,
+                  fresh: input.fresh === true,
+                });
+                return { providers };
+              }
               const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
               const candidates = (yield* instances.listInstances).filter(
                 (instance) =>
@@ -1842,33 +1841,6 @@ const makeWsRpcLayer = (
                     ),
                   );
                 }
-                if (input.cwd && instance.snapshotForCwd) {
-                  yield* instance.snapshotForCwd(input.cwd).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new ProviderSetupError({
-                          instanceId: instance.instanceId,
-                          operation: "refreshWorkspace",
-                          detail: cause.message,
-                          cause,
-                        }),
-                    ),
-                  );
-                }
-              }
-              if (input.cwd && !input.refreshModels && !isFreshWorkspaceRefresh(input)) {
-                // Workspace discovery only reads skills. Selecting a thread must
-                // not launch a disposable provider health-check process.
-                const snapshots = yield* Effect.forEach(
-                  candidates,
-                  (instance) => instance.snapshot.getSnapshot,
-                );
-                const providers = (yield* providerRegistry.getProviders).map(
-                  (provider) =>
-                    snapshots.find((snapshot) => snapshot.instanceId === provider.instanceId) ??
-                    provider,
-                );
-                return { providers };
               }
               const providers = yield* input.instanceId !== undefined
                 ? providerRegistry.refreshInstance(input.instanceId)

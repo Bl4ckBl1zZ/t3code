@@ -176,11 +176,11 @@ export function HermesThreadDetailsPanel({
               </span>
               <CopyIcon className="size-3.5 shrink-0 text-muted-foreground" />
             </Button>
-            <div className="flex h-9 items-center gap-2.5 px-2.5 text-[13px] text-foreground/80">
+            <div className="flex h-8 items-center gap-2.5 px-2.5 text-[13px] text-foreground/80">
               <MonitorIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
               <span className="truncate">{environment?.label ?? "Hosting environment"}</span>
             </div>
-            <div className="flex h-9 items-center gap-2.5 px-2.5 text-[13px] text-foreground/80">
+            <div className="flex h-8 items-center gap-2.5 px-2.5 text-[13px] text-foreground/80">
               <BotIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
               <span className="truncate">
                 {details.profile === "default"

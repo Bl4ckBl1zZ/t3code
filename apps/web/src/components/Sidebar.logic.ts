@@ -1,4 +1,6 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import { presentPendingBackgroundWork } from "@t3tools/client-runtime/state/thread-execution";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
   isAtomCommandInterrupted,
@@ -426,6 +428,7 @@ type ThreadStatusInput = Pick<
   lastVisitedAt?: string | null | undefined;
   backgroundProcessCount?: number | undefined;
   activeAgentCount?: number | undefined;
+  pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"];
 };
 
 export interface ThreadJumpHintVisibilityController {
@@ -676,6 +679,33 @@ export function resolveAdjacentThreadId<T>(input: {
   return currentIndex < threadIds.length - 1 ? (threadIds[currentIndex + 1] ?? null) : null;
 }
 
+/** Eligible rows between the pressed action and the pointer, in sidebar order. */
+export function resolveSidebarSweepKeys(
+  orderedKeys: readonly string[],
+  originKey: string,
+  targetKey: string,
+  canApply: (key: string) => boolean,
+): string[] {
+  const origin = orderedKeys.indexOf(originKey);
+  const target = orderedKeys.indexOf(targetKey);
+  if (origin === -1 || target === -1) return [];
+  return orderedKeys.slice(Math.min(origin, target), Math.max(origin, target) + 1).filter(canApply);
+}
+
+/** The thread row at a pointer height, clamped to the rows visible in the
+    sidebar's scroll viewport. A gap between rows resolves to the row above
+    it. Rows carry their key in data-thread-item. */
+export function sidebarThreadKeyAtY(list: HTMLElement, y: number): string | null {
+  const viewport = list.closest('[data-slot="scroll-area-viewport"]')?.getBoundingClientRect();
+  const visibleY = viewport ? Math.min(Math.max(y, viewport.top), viewport.bottom - 1) : y;
+  let key: string | null = null;
+  for (const row of list.querySelectorAll<HTMLElement>("li[data-thread-item]")) {
+    if (key !== null && row.getBoundingClientRect().top > visibleY) break;
+    key = row.dataset.threadItem || null;
+  }
+  return key;
+}
+
 export function shouldNavigateAfterProjectRemoval(input: {
   routeTarget: ThreadRouteTarget | null;
   projectThreads: readonly {
@@ -751,6 +781,9 @@ export function buildDraftActionMenuItems(options: {
 // (approval), "in motion" (working and background), and "broken" (failed).
 // Ready is the unlabeled resting state — the agent stopped and is waiting on
 // the user, whether it finished, asked a question, or proposed a plan.
+// Background is the agent stopped with work that will wake it (subagents,
+// monitors). Commands it left running, such as a dev server, do not hold the
+// thread: it reads as ready, so its unseen completion still shows.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
 export type SidebarThreadStatus =
@@ -766,6 +799,8 @@ export type SidebarThreadStatus =
 interface SidebarBackgroundWorkInput {
   readonly backgroundProcessCount?: number | undefined;
   readonly activeAgentCount?: number | undefined;
+  /** The named list; absent on servers that predate it, where the counts speak. */
+  readonly pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"];
 }
 
 type SidebarThreadStatusInput = Pick<
@@ -775,13 +810,17 @@ type SidebarThreadStatusInput = Pick<
   SidebarBackgroundWorkInput;
 
 /**
- * Live work the thread is waiting on with no run of its own in flight:
- * delegated agents and detached commands. Counted together because the row
- * shows one state either way — what it means to the reader is the same, "this
- * will speak again without me".
+ * Whether work the thread left running holds it in the Background state: the
+ * row says "this will speak again without me". Delegated agents and monitors
+ * do; a dev server or other command does not, the agent is done with it.
+ * Servers that predate the named list only send counts, which cannot tell a
+ * command from a monitor, so any live work holds there as before.
  */
-export function sidebarBackgroundWorkCount(thread: SidebarBackgroundWorkInput): number {
-  return (thread.backgroundProcessCount ?? 0) + (thread.activeAgentCount ?? 0);
+export function sidebarBackgroundWorkHoldsThread(thread: SidebarBackgroundWorkInput): boolean {
+  if (thread.pendingBackgroundTasks !== undefined) {
+    return backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks);
+  }
+  return (thread.backgroundProcessCount ?? 0) + (thread.activeAgentCount ?? 0) > 0;
 }
 
 const pluralize = (count: number, singular: string, plural: string) =>
@@ -789,9 +828,14 @@ const pluralize = (count: number, singular: string, plural: string) =>
 
 /**
  * Names what is actually still running, since "Background" alone does not say
- * whether the user is waiting on an agent or on a shell command.
+ * whether the user is waiting on an agent or on a shell command. The server's
+ * named list says which one; older servers only send counts.
  */
 export function formatBackgroundWorkTooltip(thread: SidebarBackgroundWorkInput): string {
+  const presentation = presentPendingBackgroundWork(thread.pendingBackgroundTasks ?? []);
+  if (presentation !== null) {
+    return presentation.title;
+  }
   const agents = thread.activeAgentCount ?? 0;
   const processes = thread.backgroundProcessCount ?? 0;
   const parts = [
@@ -818,9 +862,9 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   // The state between working and ready: the turn settled, but a delegated
-  // agent or a detached command is still running and will wake the thread.
+  // agent or a monitor is still running and will wake the thread.
   // Ranked below failed so a broken run still owns the row.
-  if (sidebarBackgroundWorkCount(thread) > 0) {
+  if (sidebarBackgroundWorkHoldsThread(thread)) {
     return "background";
   }
   return "ready";
@@ -1215,11 +1259,10 @@ export function resolveThreadStatusPill(input: {
   }
 
   // The third state, between working and idle: nothing is generating right now,
-  // but a delegated agent or a detached command is still running and the thread
-  // will speak again on its own. Ranked below "Completed" so a result the reader
+  // but a delegated agent or a monitor is still running and the thread will
+  // speak again on its own. Ranked below "Completed" so a result the reader
   // has not seen yet still wins the dot.
-  const backgroundWorkCount = sidebarBackgroundWorkCount(thread);
-  if (backgroundWorkCount > 0) {
+  if (sidebarBackgroundWorkHoldsThread(thread)) {
     return {
       label: "Background",
       tooltip: formatBackgroundWorkTooltip(thread),

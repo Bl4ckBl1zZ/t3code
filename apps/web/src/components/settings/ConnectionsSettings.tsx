@@ -2,7 +2,15 @@ import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { EnvironmentIconPicker } from "./EnvironmentIconPicker";
-import { ChevronsLeftRightEllipsisIcon, PlusIcon, QrCodeIcon, TerminalIcon } from "lucide-react";
+import {
+  ChevronRightIcon,
+  ChevronsLeftRightEllipsisIcon,
+  EllipsisIcon,
+  PlusIcon,
+  QrCodeIcon,
+  RouteIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   type KeyboardEvent,
@@ -36,7 +44,14 @@ import {
   type DesktopWslState,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import { connectionStatusText } from "@t3tools/client-runtime/connection";
+import {
+  RelayConnectionRegistration,
+  RelayConnectionTarget,
+  connectionRouteId,
+  connectionRouteLabel,
+  connectionRoutes,
+  connectionStatusText,
+} from "@t3tools/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -97,6 +112,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { QRCodeSvg } from "../ui/qr-code";
 import { Spinner } from "../ui/spinner";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -143,12 +159,21 @@ import {
   type EnvironmentPresentation,
   useEnvironments,
   usePrimaryEnvironment,
+  useRelayEnvironmentDiscovery,
 } from "~/state/environments";
+import { APP_VERSION } from "~/branding";
+import { requestConfirmDialog } from "~/confirmDialog";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
-import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
+import {
+  OutdatedServerUpdateAction,
+  ServerUpdateAction,
+  ServerUpdateProgress,
+} from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
+import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
+import { usePreparedConnection } from "~/state/session";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import {
   resolveShortcutCommand,
@@ -1375,29 +1400,40 @@ function NetworkAccessDescription({
 type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
   removingEnvironmentId: EnvironmentId | null;
-  onConnect: (environmentId: EnvironmentId) => void;
+  onSetEnabled: (environmentId: EnvironmentId, enabled: boolean) => void;
   onRemove: (environment: EnvironmentPresentation) => void;
+  onAddRoute: (environment: EnvironmentPresentation) => void;
 };
 
 function SavedBackendListRow({
   environment,
   removingEnvironmentId,
-  onConnect,
+  onSetEnabled,
   onRemove,
+  onAddRoute,
 }: SavedBackendListRowProps) {
+  const [routesOpen, setRoutesOpen] = useState(false);
   const environmentId = environment.environmentId;
+  // Discovery or a socket preflight found this server incompatible: it stays
+  // switched off with its reason until compatibility changes.
+  const unsupported = environment.connection.phase === "unsupported";
+  const enabled = environment.entry.enabled && !unsupported;
   const connectionState = environment.connection.phase;
   const isConnected = connectionState === "connected";
-  const isConnecting = connectionState === "connecting" || connectionState === "reconnecting";
-  const stateDotClassName =
-    connectionState === "connected"
-      ? "bg-success"
-      : connectionState === "connecting" || connectionState === "reconnecting"
-        ? "bg-warning"
-        : connectionState === "error"
-          ? "bg-destructive"
-          : "bg-muted-foreground/40";
-  const statusTooltip = connectionStatusText(environment.connection);
+  const isRemoving = removingEnvironmentId === environmentId;
+  const stateDotClassName = unsupported
+    ? "bg-destructive"
+    : !enabled
+      ? "bg-muted-foreground/40"
+      : connectionState === "connected"
+        ? "bg-success"
+        : connectionState === "connecting" || connectionState === "reconnecting"
+          ? "bg-warning"
+          : connectionState === "error"
+            ? "bg-destructive"
+            : "bg-muted-foreground/40";
+  const statusTooltip =
+    enabled || unsupported ? connectionStatusText(environment.connection) : "Off";
   const errorTraceId = environment.connection.traceId;
   const { copyToClipboard: copyTraceIdToClipboard } = useCopyToClipboard<{ traceId: string }>({
     target: "trace ID",
@@ -1426,6 +1462,12 @@ function SavedBackendListRow({
   );
   const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
   const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
+  // An outdated host never delivers a server config, so its current version
+  // comes from T3 Connect discovery when the machine is linked there.
+  const relayDiscovery = useRelayEnvironmentDiscovery();
+  const discoveredDescriptor = Option.getOrNull(
+    relayDiscovery.environments.get(environmentId)?.status ?? Option.none(),
+  )?.descriptor;
   const resumingServerUpdate =
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const sshTarget =
@@ -1434,9 +1476,27 @@ function SavedBackendListRow({
     environment.entry.profile.value._tag === "SshConnectionProfile"
       ? environment.entry.profile.value.target
       : null;
+  // A machine with several routes names the one in use, or its preferred one.
+  const routes = connectionRoutes(environment.entry);
+  const prepared = usePreparedConnection(environmentId);
+  const activeRoute =
+    routes.length > 1 && isConnected && prepared._tag === "Some"
+      ? routes.find(
+          (route) => connectionRouteId(route.target) === connectionRouteId(prepared.value.target),
+        )
+      : undefined;
   const metadataBits = [
-    sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
-    environment.relayManaged ? "T3 Connect" : null,
+    ...(routes.length > 1
+      ? [
+          activeRoute === undefined
+            ? connectionRouteLabel(routes[0]!)
+            : `via ${connectionRouteLabel(activeRoute)}`,
+        ]
+      : [
+          sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
+          environment.relayManaged ? "T3 Connect" : null,
+        ]),
+    enabled || unsupported ? null : "Off",
   ].filter((value): value is string => value !== null);
 
   // The WSL backend is a desktop-managed local backend (it surfaces as a bearer
@@ -1444,9 +1504,33 @@ function SavedBackendListRow({
   // environment you connect to or remove here — its lifecycle is driven by the
   // WSL on/off + distro picker on this page.
   const isWslEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
+  const routesToggle = isWslEnvironment ? null : (
+    <button
+      type="button"
+      aria-expanded={routesOpen}
+      onClick={() => setRoutesOpen((open) => !open)}
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      {routes.length === 1 ? "Routes" : `${routes.length} routes`}
+      <ChevronRightIcon
+        aria-hidden
+        className={cn(
+          "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+          routesOpen && "rotate-90",
+        )}
+      />
+    </button>
+  );
+  // Only a connected, enabled machine can take a remote update; a switched-off
+  // one keeps the "update available" note so the icon is not a surprise later.
+  const showUpdateAction =
+    enabled &&
+    isConnected &&
+    versionMismatch !== null &&
+    (serverUpdateState.status === "idle" || serverUpdateState.status === "failed");
 
   return (
-    <div className={ITEM_ROW_CLASSNAME}>
+    <div className={cn(ITEM_ROW_CLASSNAME, !enabled && "opacity-60")}>
       <div className={ITEM_ROW_INNER_CLASSNAME}>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
@@ -1454,7 +1538,7 @@ function SavedBackendListRow({
               tooltipText={statusTooltip}
               dotClassName={stateDotClassName}
               pingClassName={
-                connectionState === "connecting" || connectionState === "reconnecting"
+                enabled && (connectionState === "connecting" || connectionState === "reconnecting")
                   ? "bg-warning/60 duration-2000"
                   : null
               }
@@ -1467,8 +1551,18 @@ function SavedBackendListRow({
               {environment.label}
             </h3>
           </div>
-          {metadataBits.length > 0 ? (
-            <p className="truncate text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
+          {metadataBits.length > 0 || routesToggle !== null ? (
+            <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+              {metadataBits.length > 0 ? (
+                <span className="min-w-0 truncate">{metadataBits.join(" · ")}</span>
+              ) : null}
+              {metadataBits.length > 0 && routesToggle !== null ? (
+                <span aria-hidden className="shrink-0">
+                  ·
+                </span>
+              ) : null}
+              {routesToggle}
+            </p>
           ) : null}
           {isConnected && (
             <div className="pt-1">
@@ -1501,10 +1595,12 @@ function SavedBackendListRow({
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          {environment.connection.error && !resumingServerUpdate ? (
+          {(enabled || unsupported) && environment.connection.error && !resumingServerUpdate ? (
             <p className="flex min-w-0 items-center gap-2 text-destructive text-xs">
               <span className="min-w-0 break-words">
-                {connectionStatusText(environment.connection)}
+                {unsupported
+                  ? environment.connection.error
+                  : connectionStatusText(environment.connection)}
               </span>
               {errorTraceId ? (
                 <button
@@ -1518,9 +1614,19 @@ function SavedBackendListRow({
             </p>
           ) : null}
         </div>
-        <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-          {versionMismatch &&
-          (serverUpdateState.status === "idle" || serverUpdateState.status === "failed") ? (
+        <div className="flex w-full shrink-0 items-center gap-1 sm:w-auto sm:justify-end">
+          {unsupported &&
+          environment.entry.serverUpdateRequired === true &&
+          serverUpdateState.status !== "running" ? (
+            <OutdatedServerUpdateAction
+              environmentId={environmentId}
+              serverLabel={`${environment.label} server`}
+              fromVersion={discoveredDescriptor?.serverVersion}
+              targetVersion={APP_VERSION}
+              label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
+            />
+          ) : null}
+          {showUpdateAction ? (
             <ServerUpdateAction
               environmentId={environmentId}
               serverLabel={`${environment.label} server`}
@@ -1528,7 +1634,8 @@ function SavedBackendListRow({
               installation={environment.serverConfig?.environment.capabilities.serverInstallation}
               desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
               targetVersion={versionMismatch.clientVersion}
-              label={serverUpdateState.status === "failed" ? "Retry" : "Update"}
+              label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
+              appearance="icon"
             />
           ) : null}
           {isWslEnvironment ? (
@@ -1546,36 +1653,62 @@ function SavedBackendListRow({
             </Tooltip>
           ) : (
             <>
-              {!isConnected ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={removingEnvironmentId === environmentId}
-                  onClick={() => void onRemove(environment)}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Switch
+                      size="sm"
+                      checked={enabled}
+                      disabled={isRemoving || unsupported}
+                      aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
+                      onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
+                    />
+                  }
+                />
+                <TooltipPopup side="top">
+                  {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+                </TooltipPopup>
+              </Tooltip>
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="text-muted-foreground hover:text-foreground"
+                      disabled={isRemoving}
+                      aria-label={`More actions for ${environment.label}`}
+                    />
+                  }
                 >
-                  {removingEnvironmentId === environmentId ? "Removing…" : "Remove"}
-                </Button>
-              ) : null}
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={isConnecting || removingEnvironmentId === environmentId}
-                onClick={() =>
-                  void (isConnected ? onRemove(environment) : onConnect(environmentId))
-                }
-              >
-                {isConnected
-                  ? removingEnvironmentId === environmentId
-                    ? "Disconnecting…"
-                    : "Disconnect"
-                  : isConnecting
-                    ? "Connecting…"
-                    : "Connect"}
-              </Button>
+                  <EllipsisIcon className="size-3.5" />
+                </MenuTrigger>
+                <MenuPopup align="end" className="min-w-52">
+                  <MenuItem onClick={() => setRoutesOpen((open) => !open)}>
+                    <RouteIcon />
+                    {routesOpen ? "Hide routes" : "Routes"}
+                  </MenuItem>
+                  {errorTraceId ? (
+                    <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
+                  ) : null}
+                  <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
+                    {isRemoving ? "Removing…" : "Remove from this device…"}
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
             </>
           )}
         </div>
       </div>
+      {routesOpen && !isWslEnvironment ? (
+        <div className="min-w-0">
+          <EnvironmentRoutesList
+            environment={environment}
+            onAddRoute={() => onAddRoute(environment)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1756,7 +1889,13 @@ export function ConnectionsSettings() {
     reportFailure: false,
   });
   const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
-  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
+  const registerEnvironment = useAtomCommand(environmentCatalog.register, {
+    reportFailure: false,
+  });
+  const relayDiscoveryState = useRelayEnvironmentDiscovery();
+  const setEnvironmentEnabled = useAtomCommand(environmentCatalog.setEnabled, {
+    reportFailure: false,
+  });
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const primarySessionState = usePrimarySessionState();
   const currentSessionScopes = desktopBridge
@@ -1770,6 +1909,12 @@ export function ConnectionsSettings() {
       environments
         .filter((environment) => environment.entry.target._tag !== "PrimaryConnectionTarget")
         .toSorted((left, right) => left.label.localeCompare(right.label)),
+    [environments],
+  );
+  // Switched-off machines never receive threads, so they stay out of the
+  // load balancing list.
+  const loadBalancingEnvironments = useMemo(
+    () => environments.filter((environment) => environment.entry.enabled),
     [environments],
   );
   const savedDesktopSshEnvironmentKeys = useMemo(() => {
@@ -1803,6 +1948,8 @@ export function ConnectionsSettings() {
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
+  // Set when the dialog adds a route to a saved machine instead of a new one.
+  const [routeTarget, setRouteTarget] = useState<EnvironmentPresentation | null>(null);
   const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
   const [savedBackendHost, setSavedBackendHost] = useState("");
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
@@ -2143,7 +2290,11 @@ export function ConnectionsSettings() {
     async (target: DesktopSshEnvironmentTarget) => {
       setIsAddingSavedBackend(true);
       setSavedBackendError(null);
-      const result = await connectSshEnvironment({ target, label: "" });
+      const result = await connectSshEnvironment({
+        target,
+        label: "",
+        ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
+      });
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
           setSavedBackendError(formatDesktopSshConnectionError(squashAtomCommandFailure(result)));
@@ -2160,12 +2311,14 @@ export function ConnectionsSettings() {
       setAddBackendDialogOpen(false);
       toastManager.add({
         type: "success",
-        title: "Environment connected",
-        description: `${target.alias} is ready over an SSH-managed tunnel.`,
+        title: routeTarget ? "Route added" : "Environment connected",
+        description: routeTarget
+          ? `${routeTarget.label} can now be reached over SSH ${target.alias}.`
+          : `${target.alias} is ready over an SSH-managed tunnel.`,
       });
       setIsAddingSavedBackend(false);
     },
-    [connectSshEnvironment],
+    [connectSshEnvironment, routeTarget],
   );
 
   const handleAddSavedBackend = useCallback(async () => {
@@ -2208,7 +2361,10 @@ export function ConnectionsSettings() {
       return;
     }
 
-    const result = await connectPairing(remotePairingInput);
+    const result = await connectPairing({
+      ...remotePairingInput,
+      ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
+    });
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
@@ -2232,13 +2388,22 @@ export function ConnectionsSettings() {
     setSavedBackendSshUsername("");
     setSavedBackendSshPort("");
     setAddBackendDialogOpen(false);
-    toastManager.add({
-      type: "success",
-      title: "Backend added",
-      description: "The environment is saved and will reconnect on app startup.",
-    });
+    toastManager.add(
+      routeTarget
+        ? {
+            type: "success",
+            title: "Route added",
+            description: `${routeTarget.label} now has another way to connect.`,
+          }
+        : {
+            type: "success",
+            title: "Backend added",
+            description: "The environment is saved and will reconnect on app startup.",
+          },
+    );
     setIsAddingSavedBackend(false);
   }, [
+    routeTarget,
     connectPairing,
     connectSavedBackendSshTarget,
     savedBackendHost,
@@ -2335,24 +2500,27 @@ export function ConnectionsSettings() {
     ],
   );
 
-  const handleConnectSavedBackend = useCallback(
-    async (environmentId: EnvironmentId) => {
+  const handleSetSavedBackendEnabled = useCallback(
+    async (environmentId: EnvironmentId, enabled: boolean) => {
       setSavedBackendError(null);
-      const result = await retryEnvironment(environmentId);
+      const result = await setEnvironmentEnabled({ environmentId, enabled });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
-        const message = error instanceof Error ? error.message : "Failed to connect backend.";
+        const message =
+          error instanceof Error
+            ? error.message
+            : `Failed to switch the backend ${enabled ? "on" : "off"}.`;
         setSavedBackendError(message);
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not connect backend",
+            title: `Could not switch backend ${enabled ? "on" : "off"}`,
             description: message,
           }),
         );
       }
     },
-    [retryEnvironment],
+    [setEnvironmentEnabled],
   );
 
   const removeSavedBackend = useCallback(
@@ -2382,13 +2550,23 @@ export function ConnectionsSettings() {
   // it confirms first and points to where it can be deregistered.
   const [pendingT3ConnectRemoval, setPendingT3ConnectRemoval] =
     useState<EnvironmentPresentation | null>(null);
+  // Removing forgets the pairing, credentials, and cached threads on this
+  // device. Switching off is the reversible path, so removal always confirms.
   const handleRemoveSavedBackend = useCallback(
-    (environment: EnvironmentPresentation) => {
+    async (environment: EnvironmentPresentation) => {
       if (environment.relayManaged && hasCloudPublicConfig()) {
         setPendingT3ConnectRemoval(environment);
         return;
       }
-      void removeSavedBackend(environment);
+      // Fail closed: no mounted confirm host means no removal.
+      const confirmed = await requestConfirmDialog(
+        `Remove ${environment.label} from this device?\nThis forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.`,
+        { variant: "destructive" },
+      );
+      if (confirmed !== true) {
+        return;
+      }
+      await removeSavedBackend(environment);
     },
     [removeSavedBackend],
   );
@@ -2520,8 +2698,58 @@ export function ConnectionsSettings() {
       </div>
     </div>
   );
+  // T3 Connect is offered as a route when this account can reach the machine
+  // through it and it is not one of the machine's routes yet.
+  const relayRouteOffer =
+    routeTarget !== null &&
+    !routeTarget.relayManaged &&
+    relayDiscoveryState.environments.has(routeTarget.environmentId)
+      ? relayDiscoveryState.environments.get(routeTarget.environmentId)!.environment
+      : null;
+  const addRelayRoute = async () => {
+    if (relayRouteOffer === null || routeTarget === null) return;
+    setIsAddingSavedBackend(true);
+    setSavedBackendError(null);
+    const result = await registerEnvironment(
+      new RelayConnectionRegistration({
+        target: new RelayConnectionTarget({
+          environmentId: relayRouteOffer.environmentId,
+          label: routeTarget.label,
+        }),
+      }),
+    );
+    setIsAddingSavedBackend(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setSavedBackendError(error instanceof Error ? error.message : "Could not add the route.");
+      }
+      return;
+    }
+    setAddBackendDialogOpen(false);
+    toastManager.add({
+      type: "success",
+      title: "Route added",
+      description: `${routeTarget.label} falls back to T3 Connect when its other routes are unreachable.`,
+    });
+  };
   const renderRemoteModeBody = () => (
     <div className="space-y-4">
+      {relayRouteOffer !== null ? (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+          <p className="text-xs text-muted-foreground">
+            This machine is on your T3 Connect account. Use it as a fallback route.
+          </p>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={isAddingSavedBackend}
+            onClick={() => void addRelayRoute()}
+          >
+            Add T3 Connect
+          </Button>
+        </div>
+      ) : null}
       {renderRemoteFields()}
       {savedBackendError ? <p className="text-xs text-destructive">{savedBackendError}</p> : null}
       <Button
@@ -2531,7 +2759,7 @@ export function ConnectionsSettings() {
         onClick={() => void handleAddSavedBackend()}
       >
         <PlusIcon className="size-3.5" />
-        {isAddingSavedBackend ? "Adding…" : "Add environment"}
+        {isAddingSavedBackend ? "Adding…" : routeTarget ? "Add route" : "Add environment"}
       </Button>
     </div>
   );
@@ -2652,7 +2880,7 @@ export function ConnectionsSettings() {
           onClick={() => void handleAddSavedBackend()}
         >
           <PlusIcon className="size-3.5" />
-          {isAddingSavedBackend ? "Adding…" : "Add environment"}
+          {isAddingSavedBackend ? "Adding…" : routeTarget ? "Add route" : "Add environment"}
         </Button>
       </div>
     </div>
@@ -3498,7 +3726,9 @@ export function ConnectionsSettings() {
             open={addBackendDialogOpen}
             onOpenChange={(open) => {
               setAddBackendDialogOpen(open);
-              if (!open) {
+              if (open) {
+                setRouteTarget(null);
+              } else {
                 setSavedBackendError(null);
               }
             }}
@@ -3525,8 +3755,14 @@ export function ConnectionsSettings() {
             </Tooltip>
             <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
               <DialogHeader>
-                <DialogTitle>Add Environment</DialogTitle>
-                <DialogDescription>Pair another environment to this client.</DialogDescription>
+                <DialogTitle>
+                  {routeTarget ? `Add a route to ${routeTarget.label}` : "Add Environment"}
+                </DialogTitle>
+                <DialogDescription>
+                  {routeTarget
+                    ? "Pair this machine again over another address, such as its Tailscale name. It joins the existing routes instead of adding a second machine."
+                    : "Pair another environment to this client."}
+                </DialogDescription>
               </DialogHeader>
               <DialogPanel>
                 <div className="space-y-4">
@@ -3560,8 +3796,13 @@ export function ConnectionsSettings() {
             key={environment.environmentId}
             environment={environment}
             removingEnvironmentId={removingSavedEnvironmentId}
-            onConnect={handleConnectSavedBackend}
+            onSetEnabled={handleSetSavedBackendEnabled}
             onRemove={handleRemoveSavedBackend}
+            onAddRoute={(target) => {
+              setRouteTarget(target);
+              setSavedBackendError(null);
+              setAddBackendDialogOpen(true);
+            }}
           />
         ))}
         <CloudRemoteEnvironmentRows
@@ -3580,7 +3821,7 @@ export function ConnectionsSettings() {
           }}
         />
       ) : null}
-      <LoadBalancingSettings environments={environments} />
+      <LoadBalancingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>
   );
 }

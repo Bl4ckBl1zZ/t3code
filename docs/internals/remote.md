@@ -63,6 +63,49 @@ separate target kind. A Tailscale URL is paired through the ordinary bearer path
 host plus pairing code. Tailscale is an endpoint provider and transport, not a distinct runtime
 concept.
 
+A saved environment holds an ordered list of these targets, its routes
+([`connection/routes.ts`](../../packages/client-runtime/src/connection/routes.ts)). The catalog
+document keeps every route of an environment in `targets`, preferred first, so a catalog written
+before routes existed loads as one route per environment. Pairing again with `expectedEnvironmentId`
+adds a route to the saved machine instead of a second one, and a different machine answering there
+is refused. New bearer pairings use `bearer:<environmentId>:<origin>` as the connection id so two
+addresses of one machine keep separate credentials; older `bearer:<environmentId>` ids keep working.
+
+The [driver](../../packages/client-runtime/src/connection/driver.ts) connects over the first route
+that works. Each direct route is first checked with the public descriptor, so a saved LAN address
+that a different machine answers on another network receives no credential. That check is not
+proof of a working route: when every route stays silent, each is still tried. A route that fails to
+connect, including a blocked one such as a signed-out T3 Connect, moves on to the next; only an
+incompatible server stops the walk, because it is the same server on every route. While connected
+over a later route the [supervisor](../../packages/client-runtime/src/connection/supervisor.ts)
+preflights the earlier ones on a network change, on return to the app, and every minute, and
+replaces the session when one would connect. Preflight includes authorization so a route that
+answers but rejects this client never costs a working session; a route that still fails afterwards
+is held back for a cooldown so a flaky network cannot bounce the connection.
+
+A connected server reports the LAN and tailnet addresses it is bound to in
+`ServerConfig.directEndpoints` (`apps/server/src/environment/DirectEndpoints.ts`), and the client
+saves them as learned routes (`mergeLearnedRoutes`). Only numeric private-network and tailnet IPv4
+addresses on non-virtual interfaces are listed, plus the Tailscale Serve HTTPS name once it answers;
+a loopback-only server lists none. A learned route reuses the credential of the route it was
+learned over: the T3 Connect access token (`authorization: "t3-connect"`), which is not bound to an
+origin because each DPoP proof names the URL it signs, or the paired bearer token (its connection
+id ends in `@<owner id>`, see `credentialConnectionId`). Learned routes the server stops reporting
+are dropped, which is how a changed LAN address replaces the old one; routes the user saved are
+never touched, and removing a route also removes the learned routes that borrow its credential.
+The reported addresses are hints like any advertised endpoint, so a learned route still has to
+answer as this environment before a credential is sent. An HTTPS page (hosted web) skips plain
+HTTP addresses, which mixed-content rules would block. Learning runs on the initial config of each
+session, and the live session is never replaced for it; a learned route that ranks higher is picked
+up by the next better-route check.
+
+Compatibility state (`unsupportedReason`, `serverUpdateRequired`) belongs to the route list as a
+whole: adding or changing a paired route clears it so the new address is checked, while reordering
+and learned routes keep it (`connectionEndpointKey` in
+[`catalog.ts`](../../packages/client-runtime/src/connection/catalog.ts)).
+Signing out of T3 Connect removes only the T3 Connect route; a machine with another route stays
+saved.
+
 ### AdvertisedEndpoint
 
 A server- or desktop-authored candidate endpoint for an environment: a concrete HTTP and WebSocket

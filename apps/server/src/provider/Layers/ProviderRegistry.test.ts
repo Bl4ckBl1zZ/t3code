@@ -2,6 +2,7 @@ import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -46,11 +47,13 @@ import {
   haveProvidersChanged,
   mergeProviderSnapshot,
   ProviderRegistryLive,
+  upsertProviderWorkspaceSnapshot,
 } from "./ProviderRegistry.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
 import { readProviderStatusCache, resolveProviderStatusCachePath } from "../providerStatusCache.ts";
-import type { ProviderInstance } from "../ProviderDriver.ts";
+import type { ProviderInstance, ProviderWorkspaceSnapshot } from "../ProviderDriver.ts";
+import { COMPACT_SLASH_COMMAND } from "../providerSnapshot.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
@@ -589,6 +592,74 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         assert.strictEqual(haveProvidersChanged(providers, [...providers]), false);
       });
 
+      it("stores workspace skills and commands without changing machine metadata", () => {
+        const provider = {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-03-25T00:00:00.000Z",
+          version: "1.0.0",
+          models: [],
+          slashCommands: [{ name: "global" }],
+          skills: [{ name: "global", path: "/global/SKILL.md", enabled: true }],
+        } satisfies ServerProvider;
+        const scopedSnapshot = {
+          ...provider,
+          checkedAt: "2026-03-25T00:01:00.000Z",
+          slashCommands: [{ name: "project" }],
+          skills: [{ name: "project", path: "/project/SKILL.md", enabled: true }],
+        } satisfies ServerProvider;
+
+        const result = upsertProviderWorkspaceSnapshot(provider, "/project", scopedSnapshot);
+
+        assert.deepStrictEqual(result.slashCommands, provider.slashCommands);
+        assert.deepStrictEqual(result.skills, provider.skills);
+        assert.deepStrictEqual(result.workspaceSnapshots, [
+          {
+            cwd: "/project",
+            checkedAt: scopedSnapshot.checkedAt,
+            slashCommands: scopedSnapshot.slashCommands,
+            skills: scopedSnapshot.skills,
+          },
+        ]);
+        const pendingSnapshot = {
+          ...scopedSnapshot,
+          slashCommands: [COMPACT_SLASH_COMMAND],
+          slashCommandsPending: true,
+        } satisfies ProviderWorkspaceSnapshot;
+        const partial = upsertProviderWorkspaceSnapshot(result, "/project", pendingSnapshot);
+        assert.deepStrictEqual(partial.workspaceSnapshots?.[0]?.slashCommands, [
+          { name: "project" },
+        ]);
+        assert.strictEqual(partial.workspaceSnapshots?.[0]?.slashCommandsPending, true);
+        const otherProject = upsertProviderWorkspaceSnapshot(
+          partial,
+          "/other-project",
+          pendingSnapshot,
+        );
+        assert.deepStrictEqual(otherProject.workspaceSnapshots?.[1]?.slashCommands, [
+          COMPACT_SLASH_COMMAND,
+        ]);
+        const recovered = upsertProviderWorkspaceSnapshot(partial, "/project", {
+          ...scopedSnapshot,
+          slashCommands: [COMPACT_SLASH_COMMAND, { name: "replacement" }],
+        });
+        assert.deepStrictEqual(recovered.workspaceSnapshots?.[0]?.slashCommands, [
+          COMPACT_SLASH_COMMAND,
+          { name: "replacement" },
+        ]);
+        assert.strictEqual(recovered.workspaceSnapshots?.[0]?.slashCommandsPending, undefined);
+        // A machine refresh without workspace data keeps the stored scans.
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(result, { ...provider, checkedAt: "2026-03-25T00:02:00.000Z" })
+            .workspaceSnapshots,
+          result.workspaceSnapshots,
+        );
+      });
+
       it("preserves previously discovered provider models when a refresh returns none", () => {
         const previousProvider = {
           instanceId: ProviderInstanceId.make("cursor"),
@@ -996,6 +1067,263 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             assert.deepStrictEqual(maintenanceReads, [true]);
           }).pipe(Effect.provide(runtimeServices));
         }),
+      );
+
+      it.effect(
+        "scans each cwd once, rescans fresh, and clears snapshots when an instance rebuilds",
+        () =>
+          Effect.gen(function* () {
+            const driver = ProviderDriverKind.make("codex");
+            const instanceId = ProviderInstanceId.make("codex");
+            const machineProvider = {
+              instanceId,
+              driver,
+              status: "ready",
+              enabled: true,
+              installed: true,
+              auth: { status: "authenticated" },
+              checkedAt: "2026-06-10T00:00:00.000Z",
+              version: "1.0.0",
+              models: [],
+              slashCommands: [{ name: "global" }],
+              skills: [{ name: "global", path: "/global/SKILL.md", enabled: true }],
+            } as const satisfies ServerProvider;
+            const scopedProvider = {
+              ...machineProvider,
+              checkedAt: "2026-06-10T00:01:00.000Z",
+              slashCommands: [{ name: "project" }],
+              skills: [{ name: "project", path: "/workspace/SKILL.md", enabled: true }],
+            } as const satisfies ServerProvider;
+            const failedScopedProvider = {
+              ...scopedProvider,
+              status: "error",
+              installed: false,
+              slashCommands: [],
+            } as const satisfies ServerProvider;
+            const snapshotCalls = yield* Ref.make(0);
+            const scopedResult = yield* Ref.make<ProviderWorkspaceSnapshot>({
+              ...scopedProvider,
+              status: "error",
+              slashCommands: [COMPACT_SLASH_COMMAND],
+              slashCommandsPending: true,
+            });
+            const cacheInvalidations = yield* Ref.make(0);
+            const scanGate = yield* Ref.make<{
+              readonly started: Deferred.Deferred<void>;
+              readonly release: Deferred.Deferred<void>;
+            } | null>(null);
+            const returnFailedSnapshot = yield* Ref.make(true);
+            const probeStarted = yield* Deferred.make<void>();
+            const releaseProbe = yield* Deferred.make<void>();
+            // The CLI starts unprobed; nothing is scanned until it is installed.
+            const machineSnapshot = yield* Ref.make<ServerProvider>({
+              ...machineProvider,
+              installed: false,
+              status: "warning",
+              slashCommands: [],
+              skills: [],
+            });
+            const makeInstance = (
+              provider: Effect.Effect<ServerProvider>,
+              snapshotForCwd: NonNullable<ProviderInstance["snapshotForCwd"]>,
+            ): ProviderInstance => ({
+              instanceId,
+              driverKind: driver,
+              continuationIdentity: {
+                driverKind: driver,
+                continuationKey: "codex:instance:codex",
+              },
+              displayName: undefined,
+              enabled: true,
+              snapshot: {
+                maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: driver,
+                  packageName: null,
+                }),
+                getSnapshot: provider,
+                refresh: provider,
+                streamChanges: Stream.empty,
+              },
+              snapshotForCwd,
+              invalidateCaches: Ref.update(cacheInvalidations, (count) => count + 1),
+              orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+              textGeneration: {} as ProviderInstance["textGeneration"],
+            });
+            const firstInstance = makeInstance(Ref.get(machineSnapshot), () =>
+              Effect.gen(function* () {
+                yield* Ref.update(snapshotCalls, (count) => count + 1);
+                if (yield* Ref.get(returnFailedSnapshot)) return failedScopedProvider;
+                yield* Deferred.succeed(probeStarted, undefined);
+                yield* Deferred.await(releaseProbe);
+                const result = yield* Ref.get(scopedResult);
+                const gate = yield* Ref.getAndSet(scanGate, null);
+                if (gate) {
+                  yield* Deferred.succeed(gate.started, undefined);
+                  yield* Deferred.await(gate.release);
+                }
+                return result;
+              }),
+            );
+            const rebuiltProvider = {
+              ...machineProvider,
+              checkedAt: "2026-06-10T00:02:00.000Z",
+              status: "warning",
+              installed: false,
+              auth: { status: "unknown" },
+            } satisfies ServerProvider;
+            const rebuiltInstance = makeInstance(Effect.succeed(rebuiltProvider), () =>
+              Ref.update(snapshotCalls, (count) => count + 1).pipe(Effect.as(scopedProvider)),
+            );
+            const registryChanges = yield* PubSub.unbounded<void>();
+            const instancesRef = yield* Ref.make<ReadonlyArray<ProviderInstance>>([firstInstance]);
+            const instanceRegistryLayer = Layer.succeed(
+              ProviderInstanceRegistry.ProviderInstanceRegistry,
+              {
+                getInstance: (requestedId) =>
+                  Ref.get(instancesRef).pipe(
+                    Effect.map((instances) =>
+                      instances.find((instance) => instance.instanceId === requestedId),
+                    ),
+                  ),
+                listInstances: Ref.get(instancesRef),
+                listUnavailable: Effect.succeed([]),
+                streamChanges: Stream.fromPubSub(registryChanges),
+                subscribeChanges: PubSub.subscribe(registryChanges),
+              },
+            );
+            const scope = yield* Scope.make();
+            yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+            const runtimeServices = yield* Layer.build(
+              ProviderRegistryLive.pipe(
+                Layer.provideMerge(instanceRegistryLayer),
+                Layer.provideMerge(
+                  ServerConfig.layerTest(process.cwd(), {
+                    prefix: "t3-provider-registry-workspace-snapshot-",
+                  }),
+                ),
+                Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ).pipe(Scope.provide(scope));
+
+            yield* Effect.gen(function* () {
+              const registry = yield* ProviderRegistry.ProviderRegistry;
+              yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+              assert.strictEqual(yield* Ref.get(snapshotCalls), 0);
+              yield* Ref.set(machineSnapshot, machineProvider);
+              yield* registry.refreshInstance(instanceId);
+              // A failed scan stores nothing, so the next request scans again.
+              yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+              assert.strictEqual((yield* registry.getProviders)[0]?.workspaceSnapshots, undefined);
+              yield* Ref.set(returnFailedSnapshot, false);
+              const workspaceUpdate = yield* registry.streamChanges.pipe(
+                Stream.runHead,
+                Effect.forkChild,
+              );
+              yield* Effect.yieldNow;
+              const firstRefresh = yield* registry
+                .refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" })
+                .pipe(Effect.forkChild);
+              yield* Deferred.await(probeStarted);
+              const duplicateRefresh = yield* registry
+                .refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" })
+                .pipe(Effect.forkChild);
+              yield* Effect.yieldNow;
+              assert.strictEqual(yield* Ref.get(snapshotCalls), 2);
+              yield* Deferred.succeed(releaseProbe, undefined);
+              yield* Fiber.join(firstRefresh);
+              yield* Fiber.join(duplicateRefresh);
+              const published = yield* Fiber.join(workspaceUpdate);
+              assert.strictEqual(published._tag, "Some");
+              const providers = yield* registry.getProviders;
+              assert.deepStrictEqual(providers[0]?.skills, machineProvider.skills);
+              assert.deepStrictEqual(
+                providers[0]?.workspaceSnapshots?.[0]?.skills,
+                scopedProvider.skills,
+              );
+              // Skills landed but commands are pending: the next request retries.
+              assert.deepStrictEqual(providers[0]?.workspaceSnapshots?.[0]?.slashCommands, [
+                COMPACT_SLASH_COMMAND,
+              ]);
+              assert.strictEqual(providers[0]?.workspaceSnapshots?.[0]?.slashCommandsPending, true);
+              yield* Ref.set(scopedResult, {
+                ...scopedProvider,
+                status: "error",
+                slashCommandsPending: false,
+              });
+              yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+              assert.strictEqual(yield* Ref.get(snapshotCalls), 3);
+              assert.deepStrictEqual(
+                (yield* registry.getProviders)[0]?.workspaceSnapshots?.[0]?.slashCommands,
+                scopedProvider.slashCommands,
+              );
+              assert.strictEqual(
+                (yield* registry.getProviders)[0]?.workspaceSnapshots?.[0]?.slashCommandsPending,
+                undefined,
+              );
+              yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+              assert.strictEqual(yield* Ref.get(snapshotCalls), 3);
+
+              // Fresh rescans past the stored scan and the discovery caches.
+              const newSkills = [
+                ...scopedProvider.skills,
+                { name: "added", path: "/workspace/added/SKILL.md", enabled: true },
+              ];
+              yield* Ref.set(scopedResult, { ...scopedProvider, skills: newSkills });
+              yield* registry.refreshWorkspaceSnapshot({
+                instanceId,
+                cwd: "/workspace",
+                fresh: true,
+              });
+              assert.strictEqual(yield* Ref.get(snapshotCalls), 4);
+              assert.strictEqual(yield* Ref.get(cacheInvalidations), 1);
+              assert.deepStrictEqual(
+                (yield* registry.getProviders)[0]?.workspaceSnapshots?.map((s) => s.skills),
+                [newSkills],
+              );
+
+              // A slow fresh scan that read older files must not overwrite a
+              // newer scan that finished first.
+              const slowStarted = yield* Deferred.make<void>();
+              const releaseSlow = yield* Deferred.make<void>();
+              yield* Ref.set(scanGate, { started: slowStarted, release: releaseSlow });
+              yield* Ref.set(scopedResult, scopedProvider);
+              const slowScan = yield* registry
+                .refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace", fresh: true })
+                .pipe(Effect.forkChild);
+              yield* Deferred.await(slowStarted);
+              const latestSkills = [
+                ...newSkills,
+                { name: "latest", path: "/workspace/latest/SKILL.md", enabled: true },
+              ];
+              yield* Ref.set(scopedResult, { ...scopedProvider, skills: latestSkills });
+              yield* registry.refreshWorkspaceSnapshot({
+                instanceId,
+                cwd: "/workspace",
+                fresh: true,
+              });
+              yield* Deferred.succeed(releaseSlow, undefined);
+              yield* Fiber.join(slowScan);
+              assert.deepStrictEqual(
+                (yield* registry.getProviders)[0]?.workspaceSnapshots?.map((s) => s.skills),
+                [latestSkills],
+              );
+
+              yield* Ref.set(instancesRef, [rebuiltInstance]);
+              yield* PubSub.publish(registryChanges, undefined);
+              let rebuilt = yield* registry.getProviders;
+              for (
+                let attempt = 0;
+                attempt < 50 && rebuilt[0]?.checkedAt !== rebuiltProvider.checkedAt;
+                attempt += 1
+              ) {
+                yield* Effect.yieldNow;
+                rebuilt = yield* registry.getProviders;
+              }
+              assert.strictEqual(rebuilt[0]?.checkedAt, rebuiltProvider.checkedAt);
+              assert.strictEqual(rebuilt[0]?.workspaceSnapshots, undefined);
+            }).pipe(Effect.provide(runtimeServices));
+          }),
       );
 
       it.effect("refreshes OpenCode catalogs and preserves other providers", () =>

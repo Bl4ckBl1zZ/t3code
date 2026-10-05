@@ -147,6 +147,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["git", "clean", "default branch", "project", "fast forward"],
   },
   {
+    id: "pull-request-merge-method",
+    title: "Pull request merge method",
+    to: "/settings/general",
+    searchTerms: ["squash", "rebase", "merge", "default", "project", "pr"],
+  },
+  {
     id: "diff-color-scheme",
     title: "Diff colors",
     to: "/settings/appearance",

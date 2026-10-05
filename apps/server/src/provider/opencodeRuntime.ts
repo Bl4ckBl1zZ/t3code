@@ -139,6 +139,23 @@ export const runOpenCodeSdk = <A>(
       new OpenCodeRuntimeError({ operation, detail: openCodeRuntimeErrorDetail(cause), cause }),
   }).pipe(Effect.withSpan(`opencode.${operation}`));
 
+/**
+ * Skills the server resolves for the client's directory. Failures stay typed
+ * so a workspace scan is retried instead of caching an empty list.
+ */
+export const loadOpenCodeSkills = (client: OpencodeClient) =>
+  runOpenCodeSdk("app.skills", (signal) => client.app.skills(undefined, { signal })).pipe(
+    Effect.map((result) =>
+      (result.data ?? []).map(
+        (skill): OpenCodeSkill => ({
+          name: skill.name,
+          ...(skill.description === undefined ? {} : { description: skill.description }),
+          location: skill.location,
+        }),
+      ),
+    ),
+  );
+
 export const verifyOpenCodeServerVersion = Effect.fn("verifyOpenCodeServerVersion")(function* (
   client: OpencodeClient,
 ) {
@@ -862,16 +879,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     );
 
   const loadSkills = (client: OpencodeClient) =>
-    runOpenCodeSdk("app.skills", () => client.app.skills()).pipe(
-      Effect.map((result) =>
-        (result.data ?? []).map((skill) => ({
-          name: skill.name,
-          ...(skill.description === undefined ? {} : { description: skill.description }),
-          location: skill.location,
-        })),
-      ),
-      Effect.orElseSucceed((): ReadonlyArray<OpenCodeSkill> => []),
-    );
+    loadOpenCodeSkills(client).pipe(Effect.orElseSucceed((): ReadonlyArray<OpenCodeSkill> => []));
 
   const loadOpenCodeInventory: OpenCodeRuntimeShape["loadOpenCodeInventory"] = (client) =>
     Effect.all([loadProviders(client), loadAgents(client), loadSkills(client)], {

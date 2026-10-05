@@ -432,7 +432,7 @@ export function ThreadRelationshipsPanel(props: {
             </>
           );
           return (
-            <li key={threadId} className="group flex h-9 items-center rounded-lg">
+            <li key={threadId} className="group flex h-8 items-center rounded-lg">
               {isMergeTarget ? (
                 <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
                   <Tooltip>
@@ -584,7 +584,7 @@ export function ThreadRelationshipsPanel(props: {
                   aria-expanded={subagentsExpanded}
                   data-thread-relationships-subagents-toggle
                   onClick={() => setSubagentsExpanded((value) => !value)}
-                  className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-muted/50"
+                  className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-muted/50"
                 >
                   <span className="flex shrink-0 items-center -space-x-1">
                     {summaryOrbRows.map(({ threadId, edge }) => (

@@ -307,6 +307,9 @@ import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
+  hasCompleteProviderWorkspaceSnapshot,
+  resolveProviderSkillsForCwd,
+  resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -316,6 +319,8 @@ import { ComposerAttachmentChips } from "./ComposerAttachmentChips";
 import { isAttachmentLimitReached } from "./ComposerAttachmentChips.logic";
 import { resolvePastePolicy } from "./composerAttachmentIntake.logic";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+
+const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="popover-popup"]',
@@ -1109,31 +1114,100 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     threadIsAuthoritative: threadOwnsModelSelection,
     settings,
   });
+  // Skills and slash commands follow this thread's workspace once the
+  // selected instance has scanned it; until then the machine lists apply.
   const selectedProviderStatus = useMemo(() => {
     const snapshot = selectedProviderEntry?.snapshot;
     if (!snapshot) return null;
-    const workspace = snapshot.workspaceSnapshots?.find((entry) => entry.cwd === gitCwd);
-    return workspace
-      ? { ...snapshot, slashCommands: workspace.slashCommands, skills: workspace.skills }
-      : snapshot;
+    return {
+      ...snapshot,
+      slashCommands: resolveProviderSlashCommandsForCwd(snapshot, gitCwd),
+      skills: resolveProviderSkillsForCwd(snapshot, gitCwd),
+    };
   }, [selectedProviderEntry, gitCwd]);
-  const refreshWorkspace = useAtomCommand(serverEnvironment.refreshProviders, {
+  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
+  // One scan per instance and cwd. A failed scan retries after a cooldown on
+  // next use; a scan whose commands are pending retries when the cooldown ends.
+  const workspaceRefreshKeyRef = useRef<string | null>(null);
+  const [workspaceRefreshRetry, setWorkspaceRefreshRetry] = useState<{
+    key: string;
+    notBefore: number;
+  } | null>(null);
+  const workspaceRefreshScopeKey =
+    gitCwd && selectedProviderEntry
+      ? `${environmentId}:${selectedProviderEntry.instanceId}:${gitCwd}`
+      : null;
+  const workspaceSlashCommandsPending =
+    selectedProviderEntry?.snapshot.workspaceSnapshots?.some(
+      (snapshot) => snapshot.cwd === gitCwd && snapshot.slashCommandsPending === true,
+    ) ?? false;
   useEffect(() => {
-    if (!gitCwd || selectedProvider !== "antigravity" || !selectedProviderEntry?.snapshot.enabled)
+    if (
+      !workspaceSlashCommandsPending ||
+      !workspaceRefreshRetry ||
+      workspaceRefreshRetry.key !== workspaceRefreshScopeKey
+    )
       return;
-    void refreshWorkspace({
-      environmentId,
-      input: { instanceId: selectedInstanceId, cwd: gitCwd },
-    });
+    const timeout = setTimeout(
+      () => {
+        setWorkspaceRefreshRetry((current) => (current === workspaceRefreshRetry ? null : current));
+      },
+      Math.max(0, workspaceRefreshRetry.notBefore - Date.now()),
+    );
+    return () => clearTimeout(timeout);
+  }, [workspaceRefreshRetry, workspaceRefreshScopeKey, workspaceSlashCommandsPending]);
+  const hadWorkspaceSnapshotRef = useRef(false);
+  useEffect(() => {
+    const hasWorkspaceSnapshot = hasCompleteProviderWorkspaceSnapshot(
+      selectedProviderEntry?.snapshot,
+      gitCwd,
+    );
+    // A fresh rescan or rebuilt instance dropped this cwd: scan it again.
+    if (hadWorkspaceSnapshotRef.current && !hasWorkspaceSnapshot) {
+      workspaceRefreshKeyRef.current = null;
+      setWorkspaceRefreshRetry(null);
+    }
+    hadWorkspaceSnapshotRef.current = hasWorkspaceSnapshot;
+  }, [gitCwd, selectedProviderEntry]);
+  useEffect(() => {
+    if (!gitCwd || !selectedProviderEntry?.snapshot.enabled) return;
+    const instanceId = selectedProviderEntry.instanceId;
+    const key = `${environmentId}:${instanceId}:${gitCwd}`;
+    if (workspaceRefreshKeyRef.current === key) return;
+    if (hasCompleteProviderWorkspaceSnapshot(selectedProviderEntry.snapshot, gitCwd)) {
+      workspaceRefreshKeyRef.current = key;
+      setWorkspaceRefreshRetry(null);
+      return;
+    }
+    const retry = workspaceRefreshRetry;
+    if (retry?.key === key && Date.now() < retry.notBefore) return;
+    workspaceRefreshKeyRef.current = key;
+    const retryLater = () => {
+      if (workspaceRefreshKeyRef.current !== key) return;
+      workspaceRefreshKeyRef.current = null;
+      setWorkspaceRefreshRetry({
+        key,
+        notBefore: Date.now() + WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS,
+      });
+    };
+    void refreshProviders({ environmentId, input: { instanceId, cwd: gitCwd } }).then((result) => {
+      const scanned =
+        result._tag === "Success" &&
+        hasCompleteProviderWorkspaceSnapshot(
+          result.value.providers.find((provider) => provider.instanceId === instanceId),
+          gitCwd,
+        );
+      if (!scanned && workspaceRefreshKeyRef.current === key) retryLater();
+    }, retryLater);
   }, [
     environmentId,
-    selectedInstanceId,
-    selectedProvider,
-    selectedProviderEntry?.snapshot.enabled,
     gitCwd,
-    refreshWorkspace,
+    prompt,
+    refreshProviders,
+    selectedProviderEntry,
+    workspaceRefreshRetry,
   ]);
   const selectedProviderModels = useMemo<ReadonlyArray<ServerProvider["models"][number]>>(
     () => selectedProviderEntry?.models ?? [],

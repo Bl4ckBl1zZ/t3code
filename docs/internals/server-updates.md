@@ -88,6 +88,17 @@ advertise remote self-update only when they have valid launcher context and a li
 Desktop-managed servers direct the user to update the desktop app. Other process shapes provide a
 manual command; the old detached foreground respawn path no longer exists.
 
+A host on an older orchestration protocol than the client can still be updated. Its compatibility
+error carries `serverUpdateRequired` when its descriptor advertises a self-update path, the
+registry keeps that flag beside `unsupportedReason`, and pairing saves such a host (switched off)
+instead of refusing it. `updateOutdatedHost` (`connection/outdatedHostUpdate.ts`) then authorizes
+a socket with `ConnectionResolver.prepareForUpdate` — the normal broker plus a descriptor read,
+with no protocol query parameter, which every server accepts — and calls only the self-update RPCs,
+whose wire shape is protocol-independent. It polls the descriptor until the host answers on a
+compatible protocol, refreshes T3 Connect discovery so a stale relay descriptor cannot re-block it,
+clears the compatibility error, and switches the environment back on. Normal connects keep skipping
+the descriptor round trip: the socket names the client's protocol and the server refuses a mismatch.
+
 ## Source Map
 
 - Launcher and state machine: `apps/server/src/serviceLauncher.ts`

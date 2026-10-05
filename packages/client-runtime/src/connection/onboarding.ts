@@ -32,16 +32,24 @@ import {
 } from "./model.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentRegistry from "./registry.ts";
+import { connectionRoutes, routeEntry, sshTargetKey } from "./routes.ts";
 
 export interface PairingConnectionInput {
   readonly pairingUrl?: string;
   readonly host?: string;
   readonly pairingCode?: string;
+  /**
+   * Set when adding a route to a saved machine: the pairing must reach this
+   * environment, or nothing is saved.
+   */
+  readonly expectedEnvironmentId?: EnvironmentId;
 }
 
 export interface SshConnectionInput {
   readonly target: DesktopSshEnvironmentTarget;
   readonly label?: string;
+  /** Set when adding a route to a saved machine; see `PairingConnectionInput`. */
+  readonly expectedEnvironmentId?: EnvironmentId;
 }
 
 export interface BearerConnectionUpdateInput {
@@ -84,26 +92,57 @@ const resolvePairingTarget = Effect.fn("clientRuntime.connection.onboarding.reso
   },
 );
 
-export const preparePairingRegistration = Effect.fn(
-  "clientRuntime.connection.onboarding.preparePairingRegistration",
-)(function* (input: PairingConnectionInput) {
+/**
+ * One bearer route per address, so pairing over Tailscale adds a route next
+ * to the LAN one instead of replacing it. Pairing the same address again
+ * reuses the id and replaces that route.
+ */
+function bearerConnectionId(environmentId: EnvironmentId, httpBaseUrl: string): string {
+  return `bearer:${environmentId}:${new URL(httpBaseUrl).origin}`;
+}
+
+function differentMachineError(label: string) {
+  return new ConnectionBlockedError({
+    reason: "configuration",
+    detail: `That address reaches ${label}, a different machine. Add it as its own environment instead.`,
+  });
+}
+
+/**
+ * Pairs and builds the registration. An outdated server that can update
+ * itself is still paired, and its compatibility error comes back with the
+ * registration so it can be saved switched off with the update path.
+ */
+const preparePairing = Effect.fn("clientRuntime.connection.onboarding.preparePairing")(function* (
+  input: PairingConnectionInput,
+) {
   const target = yield* resolvePairingTarget(input);
   const presentation = yield* ClientCapabilities.ClientPresentation;
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({
     httpBaseUrl: target.httpBaseUrl,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
+  // Checked before redeeming the one-time code, so a wrong link is not spent.
+  if (
+    input.expectedEnvironmentId !== undefined &&
+    descriptor.environmentId !== input.expectedEnvironmentId
+  ) {
+    return yield* differentMachineError(descriptor.label);
+  }
   // Say so before minting a session against a server we cannot talk to.
   const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
-  if (compatibilityError !== null) return yield* compatibilityError;
+  // An outdated server is still saved so it can be updated from this client.
+  if (compatibilityError !== null && compatibilityError.serverUpdateRequired !== true) {
+    return yield* compatibilityError;
+  }
   const access = yield* bootstrapRemoteBearerSession({
     httpBaseUrl: target.httpBaseUrl,
     credential: target.credential,
     scopes: presentation.scopes,
     clientMetadata: presentation.metadata,
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
-  const connectionId = `bearer:${descriptor.environmentId}`;
+  const connectionId = bearerConnectionId(descriptor.environmentId, target.httpBaseUrl);
 
-  return new BearerConnectionRegistration({
+  const registration = new BearerConnectionRegistration({
     target: new BearerConnectionTarget({
       environmentId: descriptor.environmentId,
       label: descriptor.label,
@@ -120,14 +159,27 @@ export const preparePairingRegistration = Effect.fn(
       token: access.access_token,
     }),
   });
+  return { registration, compatibilityError };
+});
+
+export const preparePairingRegistration = Effect.fn(
+  "clientRuntime.connection.onboarding.preparePairingRegistration",
+)(function* (input: PairingConnectionInput) {
+  return (yield* preparePairing(input)).registration;
 });
 
 export const registerPairingConnection = Effect.fn(
   "clientRuntime.connection.onboarding.registerPairingConnection",
 )(function* (input: PairingConnectionInput) {
-  const registration = yield* preparePairingRegistration(input);
+  const { registration, compatibilityError } = yield* preparePairing(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
+  // Normal connects learn of an outdated server only from a refused socket,
+  // which reads as a network failure. Record what pairing already knows so
+  // the machine is saved switched off with its Update action.
+  if (compatibilityError !== null) {
+    yield* registry.setCompatibility(registration.target.environmentId, compatibilityError);
+  }
   return registration.target.environmentId;
 });
 
@@ -139,7 +191,15 @@ export const updateBearerConnection = Effect.fn(
 )(function* (input: BearerConnectionUpdateInput) {
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
-  const entry = (yield* SubscriptionRef.get(registry.entries)).get(input.environmentId);
+  const saved = (yield* SubscriptionRef.get(registry.entries)).get(input.environmentId);
+  // Editing changes the environment's first direct route; others stay as saved.
+  const route =
+    saved === undefined
+      ? undefined
+      : connectionRoutes(saved).find(
+          (candidate) => candidate.target._tag === "BearerConnectionTarget",
+        );
+  const entry = saved === undefined || route === undefined ? saved : routeEntry(saved, route);
   const credential =
     entry?.target._tag === "BearerConnectionTarget"
       ? yield* credentials.get(entry.target.connectionId)
@@ -218,8 +278,10 @@ export const prepareSshRegistration = Effect.fn(
   "clientRuntime.connection.onboarding.prepareSshRegistration",
 )(function* (input: SshConnectionInput) {
   const gateway = yield* ClientCapabilities.SshEnvironmentGateway;
-  const provisioned = yield* gateway.provision(input.target);
-  const connectionId = `ssh:${provisioned.environmentId}`;
+  const provisioned = yield* gateway.provision(input.target, input.expectedEnvironmentId);
+  // One id per SSH target, so a second host or alias for the same machine
+  // adds a route instead of replacing the first.
+  const connectionId = `ssh:${provisioned.environmentId}:${sshTargetKey(provisioned.bootstrap.target)}`;
   const label = input.label?.trim() || provisioned.label || provisioned.bootstrap.target.alias;
 
   return new SshConnectionRegistration({
@@ -241,6 +303,12 @@ export const registerSshConnection = Effect.fn(
   "clientRuntime.connection.onboarding.registerSshConnection",
 )(function* (input: SshConnectionInput) {
   const registration = yield* prepareSshRegistration(input);
+  if (
+    input.expectedEnvironmentId !== undefined &&
+    registration.target.environmentId !== input.expectedEnvironmentId
+  ) {
+    return yield* differentMachineError(registration.target.label);
+  }
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
   return registration.target.environmentId;

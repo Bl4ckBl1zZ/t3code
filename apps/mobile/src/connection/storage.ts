@@ -5,6 +5,8 @@ import {
   putRemoteDpopTokenInCatalog,
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
+  setConnectionEnabledInCatalog,
+  setRoutesInCatalog,
   removeCatalogValue,
   replaceCatalogValue,
 } from "@t3tools/client-runtime/platform";
@@ -22,7 +24,13 @@ import * as Option from "effect/Option";
 import * as CatalogStore from "./catalog-store";
 
 function targetPersistenceError(
-  operation: "list-targets" | "register-connection" | "remove-connection",
+  operation:
+    | "list-targets"
+    | "list-disabled-targets"
+    | "register-connection"
+    | "set-connection-routes"
+    | "remove-connection"
+    | "set-connection-enabled",
   error: ConnectionTransientError,
 ) {
   return new ConnectionPersistenceError({
@@ -40,16 +48,30 @@ export const connectionStorageLayer = Layer.effectContext(
         Effect.map((document) => document.targets),
         Effect.mapError((error) => targetPersistenceError("list-targets", error)),
       ),
+      listDisabled: catalog.read.pipe(
+        Effect.map((document) => document.disabledEnvironmentIds),
+        Effect.mapError((error) => targetPersistenceError("list-disabled-targets", error)),
+      ),
     });
     const registrationStore = ConnectionRegistrationStore.of({
-      register: (registration) =>
+      register: (registration, routes) =>
         catalog
-          .update((document) => registerConnectionInCatalog(document, registration))
+          .update((document) => registerConnectionInCatalog(document, registration, routes))
           .pipe(Effect.mapError((error) => targetPersistenceError("register-connection", error))),
-      remove: (target) =>
+      setRoutes: (environmentId, routes) =>
         catalog
-          .update((document) => removeConnectionFromCatalog(document, target))
+          .update((document) => setRoutesInCatalog(document, environmentId, routes))
+          .pipe(Effect.mapError((error) => targetPersistenceError("set-connection-routes", error))),
+      remove: (environmentId) =>
+        catalog
+          .update((document) => removeConnectionFromCatalog(document, environmentId))
           .pipe(Effect.mapError((error) => targetPersistenceError("remove-connection", error))),
+      setEnabled: (environmentId, enabled) =>
+        catalog
+          .update((document) => setConnectionEnabledInCatalog(document, environmentId, enabled))
+          .pipe(
+            Effect.mapError((error) => targetPersistenceError("set-connection-enabled", error)),
+          ),
     });
     const profileStore = ProfileStore.make({
       get: (connectionId) =>

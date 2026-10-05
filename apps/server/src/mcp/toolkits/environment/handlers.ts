@@ -10,6 +10,8 @@ export function preferences(settings: ServerSettings) {
     defaultThreadEnvMode,
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,
+    pullRequestMergeMethod,
+    projectPullRequestMergeMethodOverrides,
     backgroundActivity,
     sourceControlWritingStyle,
   } = settings;
@@ -18,6 +20,8 @@ export function preferences(settings: ServerSettings) {
     defaultThreadEnvMode,
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,
+    pullRequestMergeMethod,
+    projectPullRequestMergeMethodOverrides,
     backgroundActivity: { profile: backgroundActivity.profile },
     sourceControlWritingStyle: {
       ...sourceControlWritingStyle,

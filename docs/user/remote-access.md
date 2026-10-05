@@ -244,6 +244,53 @@ Do not use hosted pairing for plain HTTP LAN URLs such as `http://192.168.x.y:37
 
 Hosted pairing does not proxy traffic through T3 Code. The browser still connects directly to the backend URL in the pairing link.
 
+## Reach One Machine Several Ways
+
+A machine can have more than one route: LAN, Tailscale, a public URL, SSH, or T3 Connect. On web
+and desktop, select **Routes** under the machine's name in **Settings → Connections** (or **Routes**
+in its **⋯** menu) to see them, then choose **Add route** and pair the same machine over another
+address. If the machine is on your T3 Connect account, the dialog also offers **Add T3 Connect**,
+and the T3 Connect list shows **Add route** next to a machine saved without it. Pairing a different
+machine there is refused, so a route always leads to the machine you picked.
+
+While connected through T3 Connect or a paired address, T3 Code also learns the machine's current
+LAN and Tailscale addresses and adds them as routes marked **found automatically**, so pairing once
+through T3 Connect is enough to use the LAN at home. When the machine's LAN address changes, for
+example after it joins another Wi-Fi network, the learned route follows it. The machine must allow
+network access for its LAN address to be learned. The hosted web app only learns HTTPS addresses
+such as a Tailscale Serve name, because browsers block plain HTTP from an HTTPS page. You can
+reorder a learned route, but not remove it; it goes away with the route it was learned through, or
+when the machine stops reporting that address.
+
+T3 Code connects over the first route that answers. Away from home, a LAN address that does not
+answer is checked briefly and skipped. It is only tried again, after the other routes, if none of
+them connect. While connected over a later route, T3 Code checks the earlier ones when your network
+changes, when you return to the app, and every minute, and moves back as soon as one works. The row
+shows which route is in use.
+
+Drag a route to change the order, or remove it; removing a paired route forgets its credential, so
+it asks first. The last route goes with the machine: use **Remove from this device…** for that.
+Signing out of T3 Connect removes only that route; a machine you can still reach another way stays
+saved. Machines saved before routes existed keep working as a machine with one route. Routes are
+managed on web and desktop; the mobile apps connect to a machine the way it was paired there.
+
+## Switching a Saved Environment Off
+
+On web and desktop, each saved environment in **Settings → Connections** has a switch. Switching
+it off disconnects it and stops reconnect attempts, and its projects and threads leave the sidebar,
+but this device keeps its pairing, credentials, and cached threads. Switch it back on to reconnect
+with everything restored. An environment stays off across restarts and when you edit it.
+
+When T3 Connect reports that a machine runs a T3 Code version this client cannot talk to, the
+machine is switched off and shows **Client not supported** with the reason, and T3 Connect lists
+it without a Connect button. Its switch stays locked until a later check finds the versions
+compatible; update the older side, then switch the machine back on. A server that does not report
+a protocol version is treated as compatible.
+
+To forget an environment on this device instead, open its **⋯** menu and choose **Remove from this
+device…**. Removing asks first, because it deletes the pairing, credentials, and cached threads
+here.
+
 ## Managing Access Later
 
 Use `t3 auth` to manage access after the initial pairing flow.

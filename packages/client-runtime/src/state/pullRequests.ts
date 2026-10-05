@@ -110,6 +110,13 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    /** A one-off stack read for a click, without mounting the stack query. */
+    readStack: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:read-stack",
+      tag: WS_METHODS.pullRequestsStack,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     threadComments: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:thread-comments",
       tag: WS_METHODS.pullRequestsThreadComments,

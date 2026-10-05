@@ -98,6 +98,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   projectActionDefaults: Schema.optionalKey(Schema.Boolean),
   projectDefaults: Schema.optionalKey(Schema.Boolean),
   projectAutoPull: Schema.optionalKey(Schema.Boolean),
+  /** Server stores `pullRequestMergeMethod` and per-project merge-method overrides. */
+  pullRequestMergeMethodDefaults: Schema.optionalKey(Schema.Boolean),
   fileDocumentPreviews: Schema.optionalKey(Schema.Boolean),
   /** Bounded CLI transcript discovery and V2 history import. */
   agentSessionImport: Schema.optionalKey(Schema.Boolean),

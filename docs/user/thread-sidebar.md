@@ -34,6 +34,10 @@ their pinned threads keep the default newest-first order below the ones you have
 On web and desktop, pinning or unpinning a thread keeps the sidebar at your current scroll
 position instead of following the thread to its new place in the list.
 
+On web and desktop, press a thread's **Settle** button and drag up or down to settle every thread in
+that section between it and the one you release on. The **Un-settle** and **Wake** buttons work the
+same way in their sections. Press `Escape` while dragging to cancel.
+
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show a notice at
 the bottom of the sidebar with **Undo** for five seconds. Undo restores the thread's previous
 state, including its pinned position, and reopens an archived thread you were viewing.

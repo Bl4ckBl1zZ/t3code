@@ -17,8 +17,10 @@ supply. There is no legacy connection owner or supported mixed mode.
 
 - `ConnectionResolver` ([resolver.ts][resolver]) resolves a catalog entry into a
   prepared, authenticated endpoint for primary, bearer, relay, or SSH targets.
-- `ConnectionDriver` ([driver.ts][driver]) prepares through the resolver, opens
-  one RPC session, and reports `preparing`, `opening`, and `synchronizing`.
+- `ConnectionDriver` ([driver.ts][driver]) walks the entry's routes
+  (`connectOverRoutes`), prepares the first that answers through the resolver,
+  opens one RPC session, and reports `preparing`, `opening`, and
+  `synchronizing`. `checkRoute` preflights one route without opening a session.
 - `RpcSessionFactory` ([rpc/session.ts][session]) performs one transport
   attempt. It does not retry. `RpcSession` is the interface it returns,
   exposing `client`, `initialConfig`, `ready`, `probe`, and `closed`.
@@ -60,6 +62,36 @@ The supervisor is the transport retry owner.
 6. An involuntary session close keeps the registration and cache, then retries.
 7. Explicit removal closes the session and deletes the registration,
    credentials, shell cache, and thread cache.
+8. `EnvironmentRegistry.setEnabled(id, false)` switches a saved environment
+   off: the supervisor disconnects in place (it keeps its generation and
+   durable streams), a managed SSH backend is torn down, and the id is written
+   to the catalog document's `disabledEnvironmentIds`. Registration,
+   credentials, and cache stay. Disabled entries remain in
+   `EnvironmentRegistry.entries` so Settings can list them, but the workspace
+   projections (projects, threads, shell summary) iterate
+   `enabledEnvironmentIds` only. Re-registering an entry keeps its flag;
+   platform environments never persist it.
+9. `EnvironmentRegistry.setCompatibility(id, error)` records an incompatible
+   server as `unsupportedReason` on the entry and switches it off (persisted for
+   saved entries). Two sources feed it: `watchDiscoveredCompatibility` in
+   [layer.ts][layer] checks each T3 Connect discovery descriptor with
+   `orchestrationProtocolCompatibilityError`, and the registry watches each
+   supervisor for a `blocked`/`unsupported` failure. Only a fresh discovery
+   check (new `checkedAt`, protocol, or server version) clears the reason, so a
+   replayed health result cannot undo a newer socket rejection; clearing it
+   leaves the entry off until the user switches it on. The reason survives
+   re-registration of the same endpoint (`connectionEndpointKey`). A
+   descriptor without `orchestrationProtocolVersion` is compatible: every fork
+   server before negotiation speaks the current wire.
+10. An entry's `alternateRoutes` ([routes.ts][routes]) are further targets for
+    the same environment, preferred after `target`. `register` upserts a route
+    (a second pairing of the same address replaces it), `removeRoute` drops one
+    route and its credential, and `reorderRoutes` changes preference without
+    resetting compatibility. While connected over a later route the supervisor
+    checks earlier ones every 60 seconds and on `network-changed` or
+    application activation; a route that answers ends the session with
+    `BetterRouteAvailable` and the replacement attempt prefers that route, and
+    a route that fails its check is held back for a cooldown.
 
 ### Wakeups
 
@@ -195,6 +227,7 @@ Required coverage includes:
 [driver]: ../../packages/client-runtime/src/connection/driver.ts
 [registry]: ../../packages/client-runtime/src/connection/registry.ts
 [supervisor]: ../../packages/client-runtime/src/connection/supervisor.ts
+[routes]: ../../packages/client-runtime/src/connection/routes.ts
 [session]: ../../packages/client-runtime/src/rpc/session.ts
 [client]: ../../packages/client-runtime/src/rpc/client.ts
 

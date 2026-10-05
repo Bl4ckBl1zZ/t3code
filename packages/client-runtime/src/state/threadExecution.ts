@@ -10,14 +10,18 @@ import {
   type ModelSelection,
   type ServerProviderModel,
   type OrchestrationV2ExecutionNode,
+  type OrchestrationV2PendingBackgroundTask,
   type OrchestrationV2ThreadProjection,
   orchestrationV2RunWorkStartedAt,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { getProviderOptionCurrentLabel, getProviderOptionDescriptors } from "@t3tools/shared/model";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "./models.ts";
+import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
 
 const ACTIVITY_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
 const INTERRUPTIBLE_RUN_STATUSES = new Set(["preparing", "starting", "running"]);
@@ -237,4 +241,98 @@ export function threadRuntimeHasInterruptibleRun(
   runtime: ThreadRuntimeSummary | null | undefined,
 ): boolean {
   return runtime?.activeRunId !== null && runtime?.activeRunId !== undefined;
+}
+
+type BackgroundWorkKind = OrchestrationV2PendingBackgroundTask["kind"];
+
+// `order` groups work the way a reader thinks about it: agents first, loose tasks last.
+const BACKGROUND_WORK_KINDS: Record<
+  BackgroundWorkKind,
+  { readonly order: number; readonly singular: string; readonly plural: string }
+> = {
+  subagent: { order: 0, singular: "subagent", plural: "subagents" },
+  command: { order: 1, singular: "command", plural: "commands" },
+  monitor: { order: 2, singular: "monitor", plural: "monitors" },
+  background_task: { order: 3, singular: "background task", plural: "background tasks" },
+};
+
+export interface PendingBackgroundWorkItem {
+  readonly taskId: string;
+  readonly kind: BackgroundWorkKind;
+  /** The work's name, or its noun when the server gave none. */
+  readonly label: string;
+  /** A subagent's own thread, when it has one. */
+  readonly childThreadId: ThreadId | undefined;
+}
+
+export interface PendingBackgroundWorkPresentation {
+  /**
+   * "Waiting on subagent Review src/math.ts", "Waiting on 2 subagents and 1 command",
+   * or "Running: Start the dev server" when only commands remain.
+   */
+  readonly title: string;
+  readonly items: ReadonlyArray<PendingBackgroundWorkItem>;
+  /**
+   * True when the work will wake the agent (subagents, monitors). False when
+   * only commands remain, such as a dev server: the agent is done.
+   */
+  readonly waiting: boolean;
+}
+
+function joinWithAnd(parts: ReadonlyArray<string>): string {
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+/**
+ * Names what a settled thread still runs, grouped by kind, from the shell's
+ * `pendingBackgroundTasks`. The sidebar's Background tooltip reads it.
+ */
+export function presentPendingBackgroundWork(
+  tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+): PendingBackgroundWorkPresentation | null {
+  if (tasks.length === 0) return null;
+  const waiting = backgroundWorkHoldsCompletion(tasks);
+  const items = tasks
+    .map((task): PendingBackgroundWorkItem => {
+      const description = task.description?.trim();
+      const label =
+        task.kind === "subagent" && description !== undefined
+          ? formatSubagentDisplayTitle(description).trim()
+          : description;
+      return {
+        taskId: task.taskId,
+        kind: task.kind,
+        label:
+          label === undefined || label.length === 0
+            ? BACKGROUND_WORK_KINDS[task.kind].singular
+            : label,
+        childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
+      };
+    })
+    // `map` returned a new array, so sorting it in place is safe.
+    .sort(
+      (left, right) =>
+        BACKGROUND_WORK_KINDS[left.kind].order - BACKGROUND_WORK_KINDS[right.kind].order,
+    );
+  const [only] = items;
+  if (items.length === 1 && only !== undefined) {
+    const noun = BACKGROUND_WORK_KINDS[only.kind].singular;
+    const named = only.label !== noun;
+    const title = waiting
+      ? named
+        ? `Waiting on ${noun} ${only.label}`
+        : `Waiting on a ${noun}`
+      : named
+        ? `Running: ${only.label}`
+        : `Running a ${noun}`;
+    return { title, items, waiting };
+  }
+  const counts = new Map<BackgroundWorkKind, number>();
+  for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
+  const groups = Array.from(counts, ([kind, count]) => {
+    const { singular, plural } = BACKGROUND_WORK_KINDS[kind];
+    return `${count} ${count === 1 ? singular : plural}`;
+  });
+  return { title: `${waiting ? "Waiting on" : "Running"} ${joinWithAnd(groups)}`, items, waiting };
 }

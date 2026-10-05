@@ -1,4 +1,4 @@
-import type { ChatCanvasSize, ChatLane } from "./chatCanvasLayout";
+import { DETAILS_CARD_CLEARANCE, type ChatCanvasSize } from "./chatCanvasLayout";
 
 export type ThreadDetailsCardDensity = "full" | "compact" | "essential";
 
@@ -16,25 +16,25 @@ export function resolveThreadDetailsCardDensity(
 }
 
 const GAP = 12;
-const MAX_WIDTH = 312;
-const MIN_WIDTH = 240;
+// Keep in sync with --thread-details-panel-width, which sizes the popover.
+const WIDTH = 280;
 const MIN_HEIGHT = 160;
 
 /**
- * The card uses the space right of the chat lane. It never changes the
- * conversation's width: when the margin cannot hold readable controls there
- * is no inline placement and the card becomes a popover instead.
+ * The card pins to the top right while a readable chat lane fits beside it;
+ * the chat canvas moves the lane over to make room. Otherwise there is no
+ * inline placement and the card becomes a popover instead.
  */
 export function resolveThreadDetailsCardLayout({
   container,
-  chat,
+  lane,
 }: {
   container: ChatCanvasSize;
-  chat: ChatLane;
+  lane: { readonly padding: number; readonly minChatWidth: number };
 }) {
-  const width = Math.min(MAX_WIDTH, container.width - chat.left - chat.width - GAP * 2);
-  if (width < MIN_WIDTH) return null;
+  const x = container.width - WIDTH - GAP;
+  if (x - DETAILS_CARD_CLEARANCE - lane.padding < lane.minChatWidth) return null;
   const height = container.height - GAP * 2;
   if (height < MIN_HEIGHT) return null;
-  return { x: container.width - width - GAP, y: GAP, width, height } as const;
+  return { x, y: GAP, width: WIDTH, height } as const;
 }

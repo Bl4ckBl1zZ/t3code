@@ -19,12 +19,16 @@ import {
 import {
   ConnectionCatalogDocument,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
+  catalogRoutes,
+  setRoutesInCatalog,
   putRemoteDpopTokenInCatalog,
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
+  setConnectionEnabledInCatalog,
 } from "./storageDocument.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
+const decodeCatalogDocument = Schema.decodeUnknownSync(ConnectionCatalogDocument);
 
 const RELAY_TARGET = new RelayConnectionTarget({
   environmentId: ENVIRONMENT_ID,
@@ -139,7 +143,7 @@ describe("ConnectionCatalogDocument", () => {
       }),
     );
 
-    expect(removeConnectionFromCatalog(registered, BEARER_TARGET)).toEqual(
+    expect(removeConnectionFromCatalog(registered, ENVIRONMENT_ID)).toEqual(
       EMPTY_CONNECTION_CATALOG_DOCUMENT,
     );
   });
@@ -161,7 +165,7 @@ describe("ConnectionCatalogDocument", () => {
       EMPTY_CONNECTION_CATALOG_DOCUMENT,
       new RelayConnectionRegistration({ target: RELAY_TARGET }),
     );
-    const removed = removeConnectionFromCatalog(registered, RELAY_TARGET);
+    const removed = removeConnectionFromCatalog(registered, ENVIRONMENT_ID);
 
     expect(putRemoteDpopTokenInCatalog(removed, REMOTE_TOKEN)).toEqual(
       EMPTY_CONNECTION_CATALOG_DOCUMENT,
@@ -175,7 +179,7 @@ describe("ConnectionCatalogDocument", () => {
     );
     const refreshed = putRemoteDpopTokenInCatalog(registered, REMOTE_TOKEN);
 
-    expect(removeConnectionFromCatalog(refreshed, RELAY_TARGET)).toEqual(
+    expect(removeConnectionFromCatalog(refreshed, ENVIRONMENT_ID)).toEqual(
       EMPTY_CONNECTION_CATALOG_DOCUMENT,
     );
   });
@@ -203,6 +207,56 @@ describe("ConnectionCatalogDocument", () => {
     expect(putRemoteDpopTokenInCatalog(otherRelay, REMOTE_TOKEN)).toBe(otherRelay);
   });
 
+  it("decodes a document written before the disabled list existed", () => {
+    const decoded = decodeCatalogDocument({
+      schemaVersion: 1,
+      targets: [],
+      profiles: [],
+      credentials: [],
+      remoteDpopTokens: [],
+    });
+
+    expect(decoded.disabledEnvironmentIds).toEqual([]);
+  });
+
+  it("switches a saved environment off and back on without touching its records", () => {
+    const registered = registerConnectionInCatalog(
+      EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      new BearerConnectionRegistration({
+        target: BEARER_TARGET,
+        profile: BEARER_PROFILE,
+        credential: BEARER_CREDENTIAL,
+      }),
+    );
+
+    const disabled = setConnectionEnabledInCatalog(registered, ENVIRONMENT_ID, false);
+    expect(disabled.disabledEnvironmentIds).toEqual([ENVIRONMENT_ID]);
+    expect(disabled.targets).toEqual(registered.targets);
+    expect(disabled.credentials).toEqual(registered.credentials);
+    // Idempotent: switching off twice stores the id once.
+    expect(
+      setConnectionEnabledInCatalog(disabled, ENVIRONMENT_ID, false).disabledEnvironmentIds,
+    ).toEqual([ENVIRONMENT_ID]);
+
+    expect(
+      setConnectionEnabledInCatalog(disabled, ENVIRONMENT_ID, true).disabledEnvironmentIds,
+    ).toEqual([]);
+    // Re-registering (editing label or URL) keeps the flag.
+    expect(
+      registerConnectionInCatalog(
+        disabled,
+        new BearerConnectionRegistration({
+          target: BEARER_TARGET,
+          profile: BEARER_PROFILE,
+          credential: BEARER_CREDENTIAL,
+        }),
+      ).disabledEnvironmentIds,
+    ).toEqual([ENVIRONMENT_ID]);
+    expect(removeConnectionFromCatalog(disabled, ENVIRONMENT_ID).disabledEnvironmentIds).toEqual(
+      [],
+    );
+  });
+
   it("persists the normalized SSH profile beside its target", () => {
     const target = new SshConnectionTarget({
       environmentId: ENVIRONMENT_ID,
@@ -228,5 +282,127 @@ describe("ConnectionCatalogDocument", () => {
     expect(document.targets).toEqual([target]);
     expect(document.profiles).toEqual([profile]);
     expect(document.credentials).toEqual([]);
+  });
+
+  it("keeps every route of an environment and drops only a removed route's records", () => {
+    const withBearer = registerConnectionInCatalog(
+      { ...EMPTY_CONNECTION_CATALOG_DOCUMENT, remoteDpopTokens: [REMOTE_TOKEN] },
+      new BearerConnectionRegistration({
+        target: BEARER_TARGET,
+        profile: BEARER_PROFILE,
+        credential: BEARER_CREDENTIAL,
+      }),
+    );
+    const withRelay = registerConnectionInCatalog(
+      withBearer,
+      new RelayConnectionRegistration({ target: RELAY_TARGET }),
+      [BEARER_TARGET, RELAY_TARGET],
+    );
+    expect(catalogRoutes(withRelay, ENVIRONMENT_ID)).toEqual([BEARER_TARGET, RELAY_TARGET]);
+    expect(withRelay.credentials).toHaveLength(1);
+
+    // Dropping the bearer route forgets its credential; T3 Connect keeps its token.
+    const relayOnly = setRoutesInCatalog(withRelay, ENVIRONMENT_ID, [RELAY_TARGET]);
+    expect(relayOnly.targets).toEqual([RELAY_TARGET]);
+    expect(relayOnly.profiles).toEqual([]);
+    expect(relayOnly.credentials).toEqual([]);
+    expect(relayOnly.remoteDpopTokens).toEqual([REMOTE_TOKEN]);
+
+    // Dropping T3 Connect forgets its token; the bearer route keeps its records.
+    const bearerOnly = setRoutesInCatalog(withRelay, ENVIRONMENT_ID, [BEARER_TARGET]);
+    expect(bearerOnly.credentials).toHaveLength(1);
+    expect(bearerOnly.remoteDpopTokens).toEqual([]);
+  });
+
+  it("loads a catalog saved before routes as one route and adds routes beside it", () => {
+    // As written by a client before routes: one target per environment, the
+    // bearer id without an origin, and no disabled list.
+    const legacy = decodeCatalogDocument({
+      schemaVersion: 1,
+      targets: [
+        {
+          _tag: "BearerConnectionTarget",
+          environmentId: ENVIRONMENT_ID,
+          label: "Remote",
+          connectionId: "bearer:environment-1",
+        },
+      ],
+      profiles: [
+        {
+          _tag: "BearerConnectionProfile",
+          connectionId: "bearer:environment-1",
+          environmentId: ENVIRONMENT_ID,
+          label: "Remote",
+          httpBaseUrl: "http://192.168.1.20:3773",
+          wsBaseUrl: "ws://192.168.1.20:3773",
+        },
+      ],
+      credentials: [
+        {
+          connectionId: "bearer:environment-1",
+          credential: { _tag: "BearerConnectionCredential", token: "legacy-token" },
+        },
+      ],
+      remoteDpopTokens: [],
+    });
+    const [legacyRoute] = catalogRoutes(legacy, ENVIRONMENT_ID);
+    expect(catalogRoutes(legacy, ENVIRONMENT_ID)).toHaveLength(1);
+    expect(legacyRoute).toMatchObject({ connectionId: "bearer:environment-1" });
+
+    // T3 Connect joins as a fallback; the paired route keeps its credential.
+    const withRelay = registerConnectionInCatalog(
+      legacy,
+      new RelayConnectionRegistration({ target: RELAY_TARGET }),
+      [legacyRoute!, RELAY_TARGET],
+    );
+    expect(catalogRoutes(withRelay, ENVIRONMENT_ID)).toEqual([legacyRoute, RELAY_TARGET]);
+    expect(withRelay.profiles).toEqual(legacy.profiles);
+    expect(withRelay.credentials).toEqual(legacy.credentials);
+
+    // Pairing again over another address saves a second bearer route under
+    // the origin-scoped id, beside the legacy one.
+    const tailnetTarget = new BearerConnectionTarget({
+      environmentId: ENVIRONMENT_ID,
+      label: "Remote",
+      connectionId: "bearer:environment-1:https://devbox.tailnet.ts.net",
+    });
+    const withTailnet = registerConnectionInCatalog(
+      withRelay,
+      new BearerConnectionRegistration({
+        target: tailnetTarget,
+        profile: new BearerConnectionProfile({
+          connectionId: tailnetTarget.connectionId,
+          environmentId: ENVIRONMENT_ID,
+          label: "Remote",
+          httpBaseUrl: "https://devbox.tailnet.ts.net",
+          wsBaseUrl: "wss://devbox.tailnet.ts.net",
+        }),
+        credential: new BearerConnectionCredential({ token: "tailnet-token" }),
+      }),
+      [legacyRoute!, tailnetTarget, RELAY_TARGET],
+    );
+    expect(catalogRoutes(withTailnet, ENVIRONMENT_ID)).toEqual([
+      legacyRoute,
+      tailnetTarget,
+      RELAY_TARGET,
+    ]);
+    expect(withTailnet.credentials.map((value) => value.connectionId)).toEqual([
+      "bearer:environment-1",
+      tailnetTarget.connectionId,
+    ]);
+  });
+
+  it("keeps an environment's position in the catalog when its routes change", () => {
+    const other = new RelayConnectionTarget({
+      environmentId: EnvironmentId.make("environment-2"),
+      label: "Other",
+    });
+    const document = {
+      ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      targets: [RELAY_TARGET, other],
+    };
+    expect(
+      setRoutesInCatalog(document, ENVIRONMENT_ID, [BEARER_TARGET, RELAY_TARGET]).targets,
+    ).toEqual([BEARER_TARGET, RELAY_TARGET, other]);
   });
 });

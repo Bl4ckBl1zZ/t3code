@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   MessageId,
   OrchestrationProjectShell,
+  OrchestrationV2PendingBackgroundTask,
   OrchestrationV2RunStatus,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ProviderFailureClass,
@@ -135,6 +136,11 @@ export interface EnvironmentThreadShell {
    * thing as a background command: idle now, will speak again on its own.
    */
   readonly activeAgentCount: number;
+  /**
+   * What the settled thread still runs in the background, named and kinded.
+   * `undefined` means the server predates the list; read the counts instead.
+   */
+  readonly pendingBackgroundTasks?: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   /** Provider instances that have owned the root conversation, oldest first. */
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
   readonly itemCount: number;
@@ -309,6 +315,9 @@ export function presentThreadShell(
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     backgroundProcessCount: thread.backgroundProcessCount ?? 0,
     activeAgentCount: thread.activeAgentCount ?? 0,
+    ...(thread.pendingBackgroundTasks === undefined
+      ? {}
+      : { pendingBackgroundTasks: thread.pendingBackgroundTasks }),
     providerInstanceHistory: thread.providerInstanceHistory ?? [],
     itemCount: thread.itemCount,
     visibleItemCount: thread.visibleItemCount,

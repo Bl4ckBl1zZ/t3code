@@ -178,6 +178,7 @@ export const make = Effect.gen(function* () {
       projectActionDefaults: true,
       projectDefaults: true,
       projectAutoPull: true,
+      pullRequestMergeMethodDefaults: true,
       fileDocumentPreviews: true,
       providerTerminalEnvironment: true,
       assistantCitations: true,

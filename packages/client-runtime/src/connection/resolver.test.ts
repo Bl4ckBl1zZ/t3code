@@ -1,4 +1,8 @@
-import { EnvironmentId, type DesktopSshEnvironmentTarget } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ORCHESTRATION_PROTOCOL_VERSION,
+  type DesktopSshEnvironmentTarget,
+} from "@t3tools/contracts";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -28,6 +32,7 @@ import {
   type ConnectionTarget,
 } from "./model.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
+import { remoteHttpClientLayer } from "../rpc/http.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const ENDPOINT = {
@@ -45,7 +50,7 @@ function catalogEntry(
   target: ConnectionTarget,
   profile: Option.Option<ConnectionProfile> = Option.none(),
 ): ConnectionCatalogEntry {
-  return { target, profile };
+  return { target, profile, enabled: true };
 }
 
 function collectingTracer(spans: Array<string>): Tracer.Tracer {
@@ -69,6 +74,8 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly authorizeDpop?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"];
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
+  readonly descriptorProtocolVersion?: number;
+  readonly descriptorRequests?: Array<string>;
 }) => {
   const profiles = new Map(
     (options?.profiles ?? []).map((profile) => [profile.connectionId, profile]),
@@ -134,6 +141,20 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   });
 
   const dependencies = Layer.mergeAll(
+    remoteHttpClientLayer(((input) => {
+      options?.descriptorRequests?.push(String(input));
+      return Promise.resolve(
+        Response.json({
+          environmentId: ENVIRONMENT_ID,
+          label: "Outdated environment",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "0.0.1",
+          orchestrationProtocolVersion:
+            options?.descriptorProtocolVersion ?? ORCHESTRATION_PROTOCOL_VERSION,
+          capabilities: { repositoryIdentity: true, serverSelfUpdate: "boot-service" },
+        }),
+      );
+    }) satisfies typeof fetch),
     Layer.succeed(ConnectionProfileStore.ConnectionProfileStore, profileStore),
     Layer.succeed(ConnectionCredentialStore.ConnectionCredentialStore, credentialStore),
     Layer.succeed(
@@ -157,6 +178,53 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
 });
 
 describe("ConnectionResolver", () => {
+  it.effect("prepares a normal connection without a descriptor round trip", () =>
+    Effect.gen(function* () {
+      const descriptorRequests: Array<string> = [];
+      const brokerLayer = yield* makeDependencies({
+        descriptorProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION - 1,
+        descriptorRequests,
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      const target = new PrimaryConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Primary",
+        httpBaseUrl: "http://127.0.0.1:3777",
+        wsBaseUrl: "ws://127.0.0.1:3777",
+      });
+
+      // The socket names this client's protocol and the server refuses a
+      // mismatch, so a normal connect costs no extra request.
+      const prepared = yield* broker.prepare(catalogEntry(target));
+      expect(prepared.socketUrl).toContain(
+        `orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`,
+      );
+      expect(descriptorRequests).toEqual([]);
+    }),
+  );
+
+  it.effect("prepares an update socket for an outdated host without the protocol gate", () =>
+    Effect.gen(function* () {
+      const descriptorRequests: Array<string> = [];
+      const brokerLayer = yield* makeDependencies({
+        descriptorProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION - 1,
+        descriptorRequests,
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      const target = new PrimaryConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Primary",
+        httpBaseUrl: "http://127.0.0.1:3777",
+        wsBaseUrl: "ws://127.0.0.1:3777",
+      });
+
+      const { prepared, descriptor } = yield* broker.prepareForUpdate(catalogEntry(target));
+      expect(prepared.socketUrl).not.toContain("orchestrationProtocol=");
+      expect(descriptor.orchestrationProtocolVersion).toBe(ORCHESTRATION_PROTOCOL_VERSION - 1);
+      expect(descriptorRequests).toEqual(["http://127.0.0.1:3777/.well-known/t3/environment"]);
+    }),
+  );
+
   it.effect("prepares a primary environment without remote capabilities", () =>
     Effect.gen(function* () {
       const brokerLayer = yield* makeDependencies();

@@ -8,10 +8,11 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { CircleArrowUpIcon } from "lucide-react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { serverEnvironment } from "~/state/server";
+import { serverEnvironment, updateOutdatedServer } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { manualServerUpdateCommand } from "~/versionSkew";
 import { Button } from "./ui/button";
@@ -82,6 +83,7 @@ export function ServerUpdateAction({
   desktopAppUpdate = false,
   targetVersion,
   label = "Update",
+  appearance = "button",
 }: {
   readonly environmentId: EnvironmentId;
   readonly serverLabel: string;
@@ -94,6 +96,8 @@ export function ServerUpdateAction({
   readonly desktopAppUpdate?: boolean;
   readonly targetVersion: string;
   readonly label?: string;
+  /** "icon" renders a compact icon button with the label in a tooltip. */
+  readonly appearance?: "button" | "icon";
 }) {
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
   const updateServer = useAtomCommand(serverEnvironment.updateServer, {
@@ -177,17 +181,95 @@ export function ServerUpdateAction({
     );
   }
 
-  if (selfUpdate === null) {
-    const command = manualServerUpdateCommand(targetVersion, installation);
+  const manualCommand =
+    selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
+  const actionLabel =
+    manualCommand === null
+      ? label
+      : installation?.kind === "npm-global"
+        ? "Copy update command"
+        : "Copy relaunch command";
+  const onClick =
+    manualCommand !== null
+      ? () => copyToClipboard(manualCommand, { command: manualCommand })
+      : () => void handleUpdate();
+
+  if (appearance === "icon") {
     return (
-      <Button size="xs" variant="outline" onClick={() => copyToClipboard(command, { command })}>
-        {installation?.kind === "npm-global" ? "Copy update command" : "Copy relaunch command"}
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={`${actionLabel} for ${serverLabel}`}
+              onClick={onClick}
+            />
+          }
+        >
+          <CircleArrowUpIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">{actionLabel}</TooltipPopup>
+      </Tooltip>
     );
   }
 
   return (
-    <Button size="xs" onClick={() => void handleUpdate()}>
+    <Button size="xs" variant={manualCommand === null ? "default" : "outline"} onClick={onClick}>
+      {actionLabel}
+    </Button>
+  );
+}
+
+/**
+ * Updates a host too old for this client to connect to. Its version comes
+ * from the host descriptor because the host never delivers a server config.
+ */
+export function OutdatedServerUpdateAction({
+  environmentId,
+  serverLabel,
+  fromVersion,
+  targetVersion,
+  label = "Update",
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly serverLabel: string;
+  readonly fromVersion: string | undefined;
+  readonly targetVersion: string;
+  readonly label?: string;
+}) {
+  const update = useAtomCommand(updateOutdatedServer, { reportFailure: false });
+  const handleUpdate = async () => {
+    if (pendingUpdateEnvironmentIds.has(environmentId)) return;
+    pendingUpdateEnvironmentIds.add(environmentId);
+    try {
+      const result = await update({
+        environmentId,
+        input: { targetVersion },
+        ...(fromVersion === undefined ? {} : { fromVersion }),
+      });
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) return;
+        throw squashAtomCommandFailure(result);
+      }
+      toastManager.add({
+        type: "success",
+        title: `${serverLabel} updated`,
+        description: `Reconnected on t3@${result.value.targetVersion}.`,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Server update failed",
+        description: updateFailureMessage(error),
+      });
+    } finally {
+      pendingUpdateEnvironmentIds.delete(environmentId);
+    }
+  };
+  return (
+    <Button size="xs" variant="outline" onClick={() => void handleUpdate()}>
       {label}
     </Button>
   );

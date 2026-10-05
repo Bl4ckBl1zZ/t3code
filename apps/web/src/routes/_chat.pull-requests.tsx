@@ -1,5 +1,7 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
+import { useShortcutModifierState } from "~/shortcutModifierState";
+import type { PullRequestSpeedActionResult } from "~/components/pullRequest/PullRequestSpeedActions";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import {
   pullRequestListPreferences,
@@ -316,6 +318,11 @@ export const Route = createFileRoute("/_chat/pull-requests")({
 
 function PullRequestsRouteView() {
   useEscapeToGoBack();
+  // Shift alone, and never while typing: a capital letter in the search is not a request for
+  // the merge buttons.
+  const modifiers = useShortcutModifierState(true);
+  const speedMode =
+    modifiers.shiftKey && !modifiers.metaKey && !modifiers.ctrlKey && !modifiers.altKey;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const search = Route.useSearch();
   const sort = search.sort ?? "ready";
@@ -922,8 +929,51 @@ function PullRequestsRouteView() {
       return next;
     });
   };
-  /** The detail panel's own writes, by row, so its failure takes back its own note. */
-  const detailOverrideTokens = useRef(new Map<string, number | null>());
+  /** Each in-flight action's write, by row, so its failure takes back its own note. */
+  const actionOverrideTokens = useRef(new Map<string, number | null>());
+  /**
+   * One action's phases on the row it acted on, from the detail panel or a row's quick actions
+   * alike. An action that only moves a row's state is written onto the row as it is sent, and
+   * taken back if the host refuses; the host invalidates its caches, so the next scheduled read
+   * confirms it. The rest change what the counts and checks say, and those need the reads once
+   * they are done.
+   */
+  const applyRowAction = (
+    acted: EnvironmentPullRequestEntry | undefined,
+    action: PullRequestAction | undefined,
+    phase: "sent" | "done" | "failed",
+  ) => {
+    const refreshListAndCounts = () => {
+      refreshList();
+      baselineQuery.refresh();
+      authoredQuery.refresh();
+      reviewingQuery.refresh();
+    };
+    const stateOnly =
+      action !== undefined &&
+      acted !== undefined &&
+      pullRequestOverrideAfterAction(acted, action, new Date(), 0) !== null;
+    if (stateOnly) {
+      const key = pullRequestEntryKey(acted);
+      // A merge is written on once the host has done it, since a host that only queues one
+      // leaves the pull request open; the rest go on as they are sent.
+      if (phase === "sent" && action !== "merge") {
+        actionOverrideTokens.current.set(key, overrideEntry(acted, action));
+      }
+      // A merge wrote nothing on the way out, so its failure has nothing to take back; an
+      // earlier action's note on the same row is left standing.
+      if (phase === "failed" && action !== "merge") {
+        revertOverride(key, actionOverrideTokens.current.get(key) ?? null);
+      }
+      if (phase !== "sent") actionOverrideTokens.current.delete(key);
+      if (phase === "done" && action === "merge") {
+        overrideEntry(acted, action);
+        refreshListAndCounts();
+      }
+      return;
+    }
+    if (phase === "done") refreshListAndCounts();
+  };
   // A reload recreates the registry the queries live in, so with nothing held the page would
   // cold-start into skeletons even though almost every row is unchanged. The last answer for
   // this set of environments is kept across reloads and hydrated here as the carried rows: they
@@ -1362,11 +1412,11 @@ function PullRequestsRouteView() {
     [statsBatches],
   );
   const statsObserver = useRef<IntersectionObserver | null>(null);
-  const statsRows = useRef(new Set<HTMLButtonElement>());
+  const statsRows = useRef(new Set<HTMLDivElement>());
   const statsPending = useRef(true);
   const statsPolicyRef = useRef(statsPolicy);
   statsPolicyRef.current = statsPolicy;
-  const registerStatsRow = useCallback((node: HTMLButtonElement | null) => {
+  const registerStatsRow = useCallback((node: HTMLDivElement | null) => {
     if (node === null || typeof IntersectionObserver === "undefined") return;
     statsRows.current.add(node);
     statsObserver.current?.observe(node);
@@ -1669,6 +1719,25 @@ function PullRequestsRouteView() {
     [rightPanelRef, updateSearch],
   );
 
+  // Rows are memoized, so their quick actions get a stable callback that reads this render's state.
+  const speedActionRef = useRef<(result: PullRequestSpeedActionResult) => void>(() => {});
+  speedActionRef.current = ({ entry, action, phase }) => {
+    applyRowAction(entry, action, phase);
+    // The open detail reads its own pull request, so it is told to read again when a row's
+    // action changed the one it is showing.
+    if (
+      phase === "done" &&
+      selected?.environmentId === entry.environmentId &&
+      selected.repository === entry.repository &&
+      selected.number === entry.number
+    ) {
+      setDetailRefreshToken((token) => token + 1);
+    }
+  };
+  const onSpeedAction = useCallback((result: PullRequestSpeedActionResult) => {
+    speedActionRef.current(result);
+  }, []);
+
   const searchInput = (
     <PullRequestSearchInput
       value={search.q ?? ""}
@@ -1753,7 +1822,9 @@ function PullRequestsRouteView() {
           onLoadMore={loadMore}
         />
       ) : (
-        <div className="space-y-3">
+        // Holding Shift shows every row's quick actions through this attribute rather than a
+        // prop, so the memoized rows do not re-render for it.
+        <div className="group/pr-list space-y-3" data-speed-actions={speedMode ? "" : undefined}>
           {displayGroups.map((group) => (
             <div key={group.key} className="space-y-0.5">
               {group.label ? (
@@ -1787,6 +1858,7 @@ function PullRequestsRouteView() {
                       selected.number === entry.number
                     }
                     onSelect={selectEntry}
+                    onActed={onSpeedAction}
                   />
                 );
               })}
@@ -2046,45 +2118,13 @@ function PullRequestsRouteView() {
               refreshToken={detailRefreshToken}
               // Merging, closing or reopening changes the row this panel was opened from, so
               // the list behind it is out of date the moment the host takes the action.
-              onActed={(action, phase = "done") => {
-                const refreshListAndCounts = () => {
-                  refreshList();
-                  baselineQuery.refresh();
-                  authoredQuery.refresh();
-                  reviewingQuery.refresh();
-                };
-                // An action that only moves a row's state is written onto the row as it is
-                // sent, and taken back if the host refuses; the host invalidates its caches,
-                // so the next scheduled read confirms it. The rest change what the counts and
-                // checks say, and those need the reads once they are done.
-                const acted = heldPullRequestsBySurface.get(
-                  pullRequestListEntryId(renderedPullRequestSurface),
-                );
-                const stateOnly =
-                  action !== undefined &&
-                  acted !== undefined &&
-                  pullRequestOverrideAfterAction(acted, action, new Date(), 0) !== null;
-                if (stateOnly) {
-                  const key = pullRequestEntryKey(acted);
-                  // A merge is written on once the host has done it, since a host that only
-                  // queues one leaves the pull request open; the rest go on as they are sent.
-                  if (phase === "sent" && action !== "merge") {
-                    detailOverrideTokens.current.set(key, overrideEntry(acted, action));
-                  }
-                  // A merge wrote nothing on the way out, so its failure has nothing to take
-                  // back; an earlier action's note on the same row is left standing.
-                  if (phase === "failed" && action !== "merge") {
-                    revertOverride(key, detailOverrideTokens.current.get(key) ?? null);
-                  }
-                  if (phase !== "sent") detailOverrideTokens.current.delete(key);
-                  if (phase === "done" && action === "merge") {
-                    overrideEntry(acted, action);
-                    refreshListAndCounts();
-                  }
-                  return;
-                }
-                if (phase === "done") refreshListAndCounts();
-              }}
+              onActed={(action, phase = "done") =>
+                applyRowAction(
+                  heldPullRequestsBySurface.get(pullRequestListEntryId(renderedPullRequestSurface)),
+                  action,
+                  phase,
+                )
+              }
               onStateChange={handlePullRequestTabStatusChange}
             />
           </RightPanelTabs>

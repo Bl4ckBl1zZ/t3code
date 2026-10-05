@@ -3,13 +3,17 @@ import {
   type EnvironmentConnectionPresentation,
   RelayConnectionRegistration,
   RelayConnectionTarget,
+  orchestrationProtocolCompatibilityError,
 } from "@t3tools/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
+import type {
+  RelayClientEnvironmentRecord,
+  RelayEnvironmentStatusResponse,
+} from "@t3tools/contracts/relay";
 import * as Option from "effect/Option";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 
@@ -25,9 +29,18 @@ import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { presentSavedCloudEnvironmentConnection } from "./cloudEnvironmentConnectionPresentation";
 
+function discoveredCompatibilityError(
+  status: Option.Option<RelayEnvironmentStatusResponse> | undefined,
+) {
+  const descriptor = status === undefined ? undefined : Option.getOrNull(status)?.descriptor;
+  return descriptor === undefined ? null : orchestrationProtocolCompatibilityError(descriptor);
+}
+
 export interface SavedCloudEnvironmentConnection {
   readonly environmentId: EnvironmentId;
   readonly connection: EnvironmentConnectionPresentation;
+  /** False for a machine saved over another route (LAN, Tailscale, SSH) only. */
+  readonly relayManaged: boolean;
 }
 
 export function RemoteEnvironmentRowsSkeleton() {
@@ -85,7 +98,15 @@ export function CloudEnvironmentConnectRows({
     null,
   );
   const savedById = new Map(
-    savedEnvironments.map((environment) => [environment.environmentId, environment]),
+    savedEnvironments
+      .filter((environment) => environment.relayManaged)
+      .map((environment) => [environment.environmentId, environment]),
+  );
+  // Saved over another route only: T3 Connect would be an added fallback.
+  const savedWithoutRelay = new Set(
+    savedEnvironments
+      .filter((environment) => !environment.relayManaged)
+      .map((environment) => environment.environmentId),
   );
 
   useEffect(() => {
@@ -93,14 +114,26 @@ export function CloudEnvironmentConnectRows({
   }, [refreshRelayEnvironments]);
 
   const connectEnvironment = async (environment: RelayClientEnvironmentRecord) => {
+    // Discovery already knows this server cannot talk to this client.
+    if (
+      discoveredCompatibilityError(
+        environmentsState.environments.get(environment.environmentId)?.status,
+      ) !== null
+    ) {
+      return;
+    }
     setConnectingEnvironmentId(environment.environmentId);
     const result = await connectRelayEnvironment(environment);
     setConnectingEnvironmentId(null);
     if (result._tag === "Success") {
       toastManager.add({
         type: "success",
-        title: "Environment added",
-        description: `Connecting to ${environment.label} through T3 Connect.`,
+        title: savedWithoutRelay.has(environment.environmentId)
+          ? "T3 Connect route added"
+          : "Environment added",
+        description: savedWithoutRelay.has(environment.environmentId)
+          ? `${environment.label} falls back to T3 Connect when its other routes are unreachable.`
+          : `Connecting to ${environment.label} through T3 Connect.`,
       });
       return;
     }
@@ -171,11 +204,20 @@ export function CloudEnvironmentConnectRows({
     return empty;
   }
 
-  return visibleEnvironments.map(({ environment, availability, error }) => {
+  return visibleEnvironments.map(({ environment, availability, error, status }) => {
     const savedEnvironment = savedById.get(environment.environmentId);
-    const savedConnection = savedEnvironment
-      ? presentSavedCloudEnvironmentConnection(savedEnvironment.connection)
-      : null;
+    const compatibilityError = discoveredCompatibilityError(status);
+    const unsupported =
+      compatibilityError !== null || savedEnvironment?.connection.phase === "unsupported";
+    const savedConnection = unsupported
+      ? presentSavedCloudEnvironmentConnection({
+          phase: "unsupported",
+          error: compatibilityError?.message ?? savedEnvironment?.connection.error ?? null,
+          traceId: null,
+        })
+      : savedEnvironment
+        ? presentSavedCloudEnvironmentConnection(savedEnvironment.connection)
+        : null;
     const dotClassName = savedConnection
       ? savedConnection.tone === "connected"
         ? "bg-success"
@@ -191,15 +233,18 @@ export function CloudEnvironmentConnectRows({
           : availability === "checking"
             ? "bg-warning"
             : "bg-muted-foreground/35";
+    const available = savedWithoutRelay.has(environment.environmentId)
+      ? "Saved without T3 Connect"
+      : "Available";
     const statusText = savedConnection
       ? savedConnection.statusText
       : availability === "online"
-        ? "Available · Relay online"
+        ? `${available} · Relay online`
         : availability === "offline"
-          ? "Available · Relay offline"
+          ? `${available} · Relay offline`
           : availability === "checking"
-            ? "Available · Checking relay status…"
-            : (Option.getOrNull(error)?.message ?? "Available · Relay status unavailable");
+            ? `${available} · Checking relay status…`
+            : (Option.getOrNull(error)?.message ?? `${available} · Relay status unavailable`);
     return (
       <div key={environment.environmentId} className={ITEM_ROW_CLASSNAME}>
         <div className={ITEM_ROW_INNER_CLASSNAME}>
@@ -250,7 +295,11 @@ export function CloudEnvironmentConnectRows({
               disabled={connectingEnvironmentId !== null}
               onClick={() => void connectEnvironment(environment)}
             >
-              {connectingEnvironmentId === environment.environmentId ? "Connecting…" : "Connect"}
+              {connectingEnvironmentId === environment.environmentId
+                ? "Connecting…"
+                : savedWithoutRelay.has(environment.environmentId)
+                  ? "Add route"
+                  : "Connect"}
             </Button>
           )}
         </div>

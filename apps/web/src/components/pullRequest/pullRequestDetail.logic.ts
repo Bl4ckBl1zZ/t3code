@@ -11,6 +11,7 @@ import type {
   PullRequestCommit,
   PullRequestDetailView,
   PullRequestMergeability,
+  PullRequestMergeMethod,
   PullRequestReaction,
   PullRequestReviewThread,
   PullRequestState,
@@ -20,6 +21,49 @@ import type {
 } from "@t3tools/contracts";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
+
+export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
+  merge: "Merge",
+  squash: "Squash",
+  rebase: "Rebase",
+};
+
+/**
+ * The merge method a pull request starts with: what the reader picked for this one, then the
+ * project's (or machine's) default, then the method last chosen on this device — each only if the
+ * repository allows it — and otherwise the first one it does.
+ */
+export function resolvePullRequestMergeMethod(
+  allowed: ReadonlyArray<PullRequestMergeMethod>,
+  current: PullRequestMergeMethod | null,
+  projectDefault: PullRequestMergeMethod | null | undefined,
+  lastSelected: PullRequestMergeMethod,
+): PullRequestMergeMethod {
+  for (const method of [current, projectDefault, lastSelected]) {
+    if (method && allowed.includes(method)) return method;
+  }
+  return allowed[0] ?? "merge";
+}
+
+export type PullRequestSpeedAction = Extract<
+  PullRequestAction,
+  "close" | "merge" | "ready" | "reopen"
+>;
+
+/**
+ * The one-press actions a list row offers while Shift is held: the next step for its state and a
+ * way to close it. GitHub only, where the row's state is enough to know what the host offers;
+ * nothing on a merged pull request, which has no step left.
+ */
+export function pullRequestSpeedActions(entry: {
+  readonly provider: SourceControlProviderKind;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
+}): ReadonlyArray<PullRequestSpeedAction> {
+  if (entry.provider !== "github" || entry.state === "merged") return [];
+  if (entry.state === "closed") return ["reopen"];
+  return entry.isDraft ? ["close", "ready"] : ["close", "merge"];
+}
 
 const safeShellArgument = /^[A-Za-z0-9._/@+=,-]+$/;
 const bitbucketRepositoryName = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
