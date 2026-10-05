@@ -279,7 +279,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environment,
             credential: savedCredential
         )
-        await adoptEnvironment(environment, client: managedClient)
+        // A machine already saved over another route keeps those routes and
+        // gains T3 Connect, so adopt the saved record rather than the relay-only one.
+        await adoptEnvironment(managedClient.environment, client: managedClient)
         do {
             try await refresh(client: managedClient)
         } catch {
@@ -321,6 +323,26 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             // environment that is on; the caller reloads the snapshot.
             await clearActiveEnvironment(disconnectClient: false)
         }
+    }
+
+    func addEnvironmentRoute(id: String, pairingURL: String) async throws {
+        try await runtime.addRoute(
+            to: id,
+            pairingURL: pairingURL,
+            client: PairingClientIdentity.current
+        )
+    }
+
+    func reorderEnvironmentRoutes(id: String, routeIDs: [String]) async throws {
+        try await runtime.reorderRoutes(environmentID: id, routeIDs: routeIDs)
+    }
+
+    func removeEnvironmentRoute(id: String, routeID: String) async throws {
+        try await runtime.removeRoute(environmentID: id, routeID: routeID)
+    }
+
+    func environmentRouteInUse(id: String) async -> String? {
+        await runtime.routeInUse(environmentID: id)
     }
 
     func removeEnvironment(id: String) async throws {
@@ -4736,9 +4758,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         FeatureEnvironment(
             id: environment.id,
             name: environment.label,
-            endpoint: environment.httpBaseURL.absoluteString,
+            // The address the user saved, which a learned route ranked ahead
+            // of it does not replace.
+            endpoint: (environment.routes.first { !$0.learned } ?? environment.routes[0])
+                .httpBaseURL.absoluteString,
             isActive: environment.id == activeID,
             isEnabled: environment.isEnabled,
+            routes: environment.routes.map(FeatureEnvironmentRoute.init(route:)),
             connectionState: environmentConnectionStates[environment.id],
             connectionDetail: environmentConnectionDetails[environment.id],
             supportsPullRequests: environment.descriptor?.capabilities.pullRequests,

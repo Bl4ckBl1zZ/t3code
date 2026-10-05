@@ -257,6 +257,36 @@ public final class FeatureRootModel {
         }
     }
 
+    /// Pairs the same machine at another address. Returns false (with the
+    /// reason reported) when the link is for another machine or fails.
+    @discardableResult
+    public func addEnvironmentRoute(_ id: String, pairingURL: String) async -> Bool {
+        await perform(failureTitle: "Couldn't Add Route") {
+            try await client.addEnvironmentRoute(id: id, pairingURL: pairingURL)
+            install(try await client.initialSnapshot())
+        }
+    }
+
+    @discardableResult
+    public func reorderEnvironmentRoutes(_ id: String, routeIDs: [String]) async -> Bool {
+        await perform(failureTitle: "Couldn't Reorder Routes") {
+            try await client.reorderEnvironmentRoutes(id: id, routeIDs: routeIDs)
+            install(try await client.initialSnapshot())
+        }
+    }
+
+    @discardableResult
+    public func removeEnvironmentRoute(_ id: String, routeID: String) async -> Bool {
+        await perform(failureTitle: "Couldn't Remove Route") {
+            try await client.removeEnvironmentRoute(id: id, routeID: routeID)
+            install(try await client.initialSnapshot())
+        }
+    }
+
+    public func environmentRouteInUse(_ id: String) async -> String? {
+        await client.environmentRouteInUse(id: id)
+    }
+
     public func disconnect() async {
         await stopOutboxDrain()
         isManagingConnections = false

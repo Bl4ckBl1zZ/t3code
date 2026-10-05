@@ -14,6 +14,14 @@ public protocol FeatureClient: AnyObject {
     /// Switches a saved environment off (kept with its credential, never
     /// connected, hidden from home) or back on.
     func setEnvironmentEnabled(id: String, enabled: Bool) async throws
+    /// Pairs the same machine at another address and adds it as a route.
+    func addEnvironmentRoute(id: String, pairingURL: String) async throws
+    /// Reorders a saved environment's routes; `routeIDs` lists each once.
+    func reorderEnvironmentRoutes(id: String, routeIDs: [String]) async throws
+    /// Removes a route the user saved, and its credential.
+    func removeEnvironmentRoute(id: String, routeID: String) async throws
+    /// The route the environment's connection uses, if it has one.
+    func environmentRouteInUse(id: String) async -> String?
     func disconnect() async
 
     func addProject(path: String) async throws
@@ -280,6 +288,16 @@ public extension FeatureClient {
     func setEnvironmentEnabled(id: String, enabled: Bool) async throws {
         throw FeatureCapabilityUnavailable("Switching servers off")
     }
+    func addEnvironmentRoute(id: String, pairingURL: String) async throws {
+        throw FeatureCapabilityUnavailable("Server routes")
+    }
+    func reorderEnvironmentRoutes(id: String, routeIDs: [String]) async throws {
+        throw FeatureCapabilityUnavailable("Server routes")
+    }
+    func removeEnvironmentRoute(id: String, routeID: String) async throws {
+        throw FeatureCapabilityUnavailable("Server routes")
+    }
+    func environmentRouteInUse(id: String) async -> String? { nil }
     func disconnect() async {}
     func addProject(path: String) async throws {}
     func ensureScratchProject(environmentID: String) async throws -> String { throw FeatureCapabilityUnavailable("Threads without a project") }

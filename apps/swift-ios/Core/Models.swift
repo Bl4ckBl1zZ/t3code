@@ -9,15 +9,30 @@ public enum EnvironmentKind: String, Codable, Sendable {
 public struct Environment: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public var label: String
-    public var httpBaseURL: URL
-    public var webSocketBaseURL: URL
-    public var kind: EnvironmentKind
+    /// Every way this device reaches the environment, preferred first. Never
+    /// empty: an environment saved before routes existed decodes as one route
+    /// whose credential stays under the environment id.
+    public var routes: [EnvironmentRoute] {
+        didSet { if routes.isEmpty { routes = oldValue } }
+    }
     public var descriptor: EnvironmentDescriptor?
     /// False when the user switched this environment off on this device. It
     /// stays saved with its credential but never connects and stays out of
     /// home until switched back on. Catalogs saved before the switch existed
     /// decode as on.
     public var isEnabled: Bool
+
+    /// The preferred route's address. A client routed through another route
+    /// (`routed(through:)`) sees that route's address here.
+    public var httpBaseURL: URL { routes[0].httpBaseURL }
+    public var webSocketBaseURL: URL { routes[0].webSocketBaseURL }
+    /// How the preferred route authenticates.
+    public var kind: EnvironmentKind { routes[0].kind }
+    /// The Keychain account of the preferred route's credential.
+    public var credentialID: String { routes[0].credentialID }
+    /// The T3 Connect tunnel, which DPoP credential renewal goes through even
+    /// while requests use a LAN or tailnet address learned through it.
+    public var relayRoute: EnvironmentRoute? { routes.first(where: \.isRelay) }
 
     public init(
         id: String,
@@ -28,17 +43,55 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
         descriptor: EnvironmentDescriptor? = nil,
         isEnabled: Bool = true
     ) {
+        self.init(
+            id: id,
+            label: label,
+            routes: [
+                .saved(
+                    httpBaseURL: httpBaseURL,
+                    webSocketBaseURL: webSocketBaseURL,
+                    kind: kind,
+                    credentialID: id
+                ),
+            ],
+            descriptor: descriptor,
+            isEnabled: isEnabled
+        )
+    }
+
+    public init(
+        id: String,
+        label: String,
+        routes: [EnvironmentRoute],
+        descriptor: EnvironmentDescriptor? = nil,
+        isEnabled: Bool = true
+    ) {
+        precondition(!routes.isEmpty, "A saved environment needs at least one route.")
         self.id = id
         self.label = label
-        self.httpBaseURL = httpBaseURL
-        self.webSocketBaseURL = webSocketBaseURL
-        self.kind = kind
+        self.routes = routes
         self.descriptor = descriptor
         self.isEnabled = isEnabled
     }
 
+    /// This environment with `route` preferred, which is how a client talks
+    /// over one route: requests, credentials, and sockets all read the
+    /// preferred route.
+    public func routed(through route: EnvironmentRoute) -> Environment {
+        var copy = self
+        copy.routes = [route] + routes.filter { $0.id != route.id }
+        return copy
+    }
+
+    /// Equal apart from the saved route list, which a live client can take
+    /// over without reconnecting.
+    public func sameExceptRoutes(as other: Environment) -> Bool {
+        id == other.id && label == other.label && descriptor == other.descriptor
+            && isEnabled == other.isEnabled
+    }
+
     private enum CodingKeys: String, CodingKey {
-        case id, label, httpBaseURL, webSocketBaseURL, kind, descriptor
+        case id, label, httpBaseURL, webSocketBaseURL, kind, descriptor, routes
         case isEnabled = "enabled"
     }
 
@@ -46,22 +99,54 @@ public struct Environment: Codable, Identifiable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         label = try container.decode(String.self, forKey: .label)
-        httpBaseURL = try container.decode(URL.self, forKey: .httpBaseURL)
-        webSocketBaseURL = try container.decode(URL.self, forKey: .webSocketBaseURL)
-        kind = try container.decode(EnvironmentKind.self, forKey: .kind)
         descriptor = try container.decodeIfPresent(EnvironmentDescriptor.self, forKey: .descriptor)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        let decodedRoutes = try? container.decodeIfPresent(
+            [LossyEnvironmentRoute].self,
+            forKey: .routes
+        )
+        let saved = decodedRoutes?.compactMap(\.route) ?? []
+        if saved.isEmpty {
+            // Saved before routes: the one address, with the credential kept
+            // under the environment id.
+            let httpBaseURL = try container.decode(URL.self, forKey: .httpBaseURL)
+            let webSocketBaseURL = try container.decode(URL.self, forKey: .webSocketBaseURL)
+            let kind = try container.decode(EnvironmentKind.self, forKey: .kind)
+            routes = [
+                EnvironmentRoute.saved(
+                    httpBaseURL: httpBaseURL,
+                    webSocketBaseURL: webSocketBaseURL,
+                    kind: kind,
+                    credentialID: id
+                ),
+            ]
+        } else {
+            routes = saved
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(label, forKey: .label)
-        try container.encode(httpBaseURL, forKey: .httpBaseURL)
-        try container.encode(webSocketBaseURL, forKey: .webSocketBaseURL)
-        try container.encode(kind, forKey: .kind)
+        // The single-address fields keep describing the route whose credential
+        // lives under the environment id, so an older build still connects.
+        let legacy = routes.first { $0.credentialID == id && !$0.learned } ?? routes[0]
+        try container.encode(legacy.httpBaseURL, forKey: .httpBaseURL)
+        try container.encode(legacy.webSocketBaseURL, forKey: .webSocketBaseURL)
+        try container.encode(legacy.kind, forKey: .kind)
+        try container.encode(routes, forKey: .routes)
         try container.encodeIfPresent(descriptor, forKey: .descriptor)
         try container.encode(isEnabled, forKey: .isEnabled)
+    }
+}
+
+/// Drops a saved route this build cannot read instead of the whole catalog.
+private struct LossyEnvironmentRoute: Decodable {
+    let route: EnvironmentRoute?
+
+    init(from decoder: any Decoder) throws {
+        route = try? EnvironmentRoute(from: decoder)
     }
 }
 

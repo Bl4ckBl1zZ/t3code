@@ -44,6 +44,8 @@ import { formatAssistantCitationHref } from "../packages/shared/src/assistantCit
  */
 import {
   HostResourcesSnapshot,
+  ServerConfig,
+  ServerDirectEndpoint,
   ServerSettings,
   ServerSettingsPatch,
   GitPreparePullRequestThreadInput,
@@ -702,6 +704,50 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(machinePath, machineSerialized);
+
+// `ServerConfig.directEndpoints` is a forward-compatible list: an endpoint kind
+// added after a client shipped is dropped, never failing the whole config. The
+// fixture carries one such element so the Swift decode proves the same.
+const DirectEndpointsConfig = Schema.Struct({
+  directEndpoints: ServerConfig.fields.directEndpoints,
+});
+const directEndpointsWire = [
+  Schema.encodeSync(ServerDirectEndpoint)({
+    kind: "lan",
+    httpBaseUrl: "http://192.168.1.20:3773/",
+  }),
+  Schema.encodeSync(ServerDirectEndpoint)({
+    kind: "tailnet",
+    httpBaseUrl: "https://studio.tailnet.ts.net/",
+  }),
+  { kind: "wifi-direct", httpBaseUrl: "http://10.0.0.5:3773/" },
+];
+const decodedDirectEndpoints = Schema.decodeUnknownSync(DirectEndpointsConfig)({
+  directEndpoints: directEndpointsWire,
+}).directEndpoints;
+if (decodedDirectEndpoints?.length !== 2) {
+  throw new Error("[swift-fixtures] directEndpoints must drop the unknown endpoint kind.");
+}
+const directEndpointsPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "serverConfigDirectEndpoints.json",
+);
+const directEndpointsSerialized = `${JSON.stringify(
+  { providers: [], directEndpoints: directEndpointsWire },
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(directEndpointsPath) ||
+    NodeFS.readFileSync(directEndpointsPath, "utf8") !== directEndpointsSerialized
+  ) {
+    console.error(
+      "[swift-fixtures] serverConfigDirectEndpoints.json is stale; regenerate fixtures.",
+    );
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(directEndpointsPath, directEndpointsSerialized);
 
 const customModelsPath = NodePath.join(NodePath.dirname(outputPath), "customModels.json");
 const customModelsSerialized = `${JSON.stringify(

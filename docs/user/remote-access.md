@@ -271,8 +271,15 @@ shows which route is in use.
 Drag a route to change the order, or remove it; removing a paired route forgets its credential, so
 it asks first. The last route goes with the machine: use **Remove from this device…** for that.
 Signing out of T3 Connect removes only that route; a machine you can still reach another way stays
-saved. Machines saved before routes existed keep working as a machine with one route. Routes are
-managed on web and desktop; the mobile apps connect to a machine the way it was paired there.
+saved. Machines saved before routes existed keep working as a machine with one route.
+
+In the iOS app, open **Settings → Servers** and tap a server's info button. **Routes** lists them
+preferred first with the one **In use**; tap **Edit** to drag them into another order, swipe a route
+you paired to remove it, or choose **Add Route** and paste a pairing link the same machine created
+for another address. Connecting a machine through **T3 Connect** that you already paired directly
+adds T3 Connect as one more route. Learned LAN addresses can make iOS ask for Local Network access
+the first time; if you decline, the app keeps using your other routes. The React Native app connects
+to a machine the way it was paired there.
 
 ## Switching a Saved Environment Off
 

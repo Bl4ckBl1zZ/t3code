@@ -265,6 +265,15 @@ public actor WebSocketRPCClient {
         connection != nil
     }
 
+    /// Drops the open socket so the connection loop dials again, for example
+    /// over a better route. Subscriptions resubscribe on the new socket; unary
+    /// calls in flight fail like on any dropped connection.
+    public func reconnectNow() async {
+        guard desired, connection != nil else { return }
+        ConnectionLog.logger.info("[conn] reconnect-requested reason=route-change")
+        await disconnected()
+    }
+
     public func stop() async {
         ConnectionLog.logger.info(
             "[conn] stopped deliberate=true subscriptions=\(self.subscriptions.count)"

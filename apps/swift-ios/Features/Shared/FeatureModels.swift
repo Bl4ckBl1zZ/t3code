@@ -35,6 +35,8 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     /// Switched-off environments only appear in
     /// `FeatureSnapshot.switchedOffEnvironments`, never in home.
     public var isEnabled: Bool = true
+    /// The ways this device reaches the environment, preferred first.
+    public var routes: [FeatureEnvironmentRoute] = []
     /// Reachability from the latest aggregate refresh. `nil` means the client
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?
@@ -56,6 +58,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         endpoint: String,
         isActive: Bool = false,
         isEnabled: Bool = true,
+        routes: [FeatureEnvironmentRoute] = [],
         connectionState: FeatureConnection.State? = nil,
         connectionDetail: String? = nil,
         supportsPullRequests: Bool? = nil,
@@ -70,6 +73,7 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.endpoint = endpoint
         self.isActive = isActive
         self.isEnabled = isEnabled
+        self.routes = routes
         self.connectionState = connectionState
         self.connectionDetail = connectionDetail
         self.supportsPullRequests = supportsPullRequests
@@ -78,6 +82,47 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.supportsAssistantCitations = supportsAssistantCitations
         self.supportsCustomModelDefinitions = supportsCustomModelDefinitions
         self.supportsProjectIcons = supportsProjectIcons
+    }
+}
+
+/// One way to reach a saved environment, as Settings lists it.
+public struct FeatureEnvironmentRoute: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public let id: String
+    /// "LAN", "Tailscale", "T3 Connect", "This device", or a host name.
+    public var label: String
+    /// The address, or nil for T3 Connect.
+    public var address: String?
+    /// Reported by the server rather than paired: never offered for removal,
+    /// since it would be learned again.
+    public var isLearned: Bool
+    public var isRelay: Bool
+
+    public init(id: String, label: String, address: String?, isLearned: Bool, isRelay: Bool) {
+        self.id = id
+        self.label = label
+        self.address = address
+        self.isLearned = isLearned
+        self.isRelay = isRelay
+    }
+
+    public init(route: EnvironmentRoute) {
+        self.init(
+            id: route.id,
+            label: route.label,
+            address: route.address,
+            isLearned: route.learned,
+            isRelay: route.isRelay
+        )
+    }
+
+    public var systemImage: String {
+        if isRelay { return "cloud" }
+        switch label {
+        case "LAN": return "wifi"
+        case "Tailscale": return "point.3.connected.trianglepath.dotted"
+        case "This device": return "iphone"
+        default: return "globe"
+        }
     }
 }
 

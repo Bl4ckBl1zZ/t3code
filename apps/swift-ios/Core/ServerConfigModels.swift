@@ -734,6 +734,10 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     /// The folder behind this environment's Scratch project, for threads with
     /// no project. Present only on servers that answer `projects.ensureScratch`.
     public var scratchWorkspaceRoot: String? = nil
+    /// LAN and tailnet addresses the server listens on, learned as extra
+    /// routes to it. Absent on servers that predate it; elements this build
+    /// cannot decode are dropped.
+    public var directEndpoints: [ServerDirectEndpoint]? = nil
 
     public init(
         providers: [ServerProviderSnapshot],
@@ -761,6 +765,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         case providers, settings, t3WorkDirectory, cwd, environment
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
         case scratchWorkspaceRoot
+        case directEndpoints
     }
 
     public init(from decoder: any Decoder) throws {
@@ -786,6 +791,12 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             forKey: .shellResumeCompletionMarker
         )
         scratchWorkspaceRoot = try container.decodeIfPresent(String.self, forKey: .scratchWorkspaceRoot)
+        // Forward-compatible like the contract: an endpoint kind this build
+        // does not know is dropped, and a malformed list never fails the config.
+        directEndpoints = (try? container.decodeIfPresent(
+            [LossyDecodableElement<ServerDirectEndpoint>].self,
+            forKey: .directEndpoints
+        ))?.map { $0.compactMap(\.value) }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -805,6 +816,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             forKey: .shellResumeCompletionMarker
         )
         try container.encodeIfPresent(scratchWorkspaceRoot, forKey: .scratchWorkspaceRoot)
+        try container.encodeIfPresent(directEndpoints, forKey: .directEndpoints)
     }
 }
 

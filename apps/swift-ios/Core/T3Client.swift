@@ -1,9 +1,24 @@
 import Foundation
 
 public actor T3Client {
+    /// Reports the addresses a server listens on so they can be saved as
+    /// learned routes. Called with the route the report arrived over.
+    public typealias RouteLearner = @Sendable (
+        _ environmentID: String,
+        _ activeRoute: EnvironmentRoute,
+        _ reported: [ServerDirectEndpoint]
+    ) async -> Void
+
+    /// The environment as saved when this client was made. Requests go over
+    /// `routeSelector`, which follows later route edits without a new client.
     public let environment: Environment
+    /// Which of the environment's routes this client talks over.
+    public let routeSelector: EnvironmentRouteSelector
     private let api: EnvironmentAPI
     private let rpc: WebSocketRPCClient
+    private let routeLearner: RouteLearner?
+    private var betterRouteTask: Task<Void, Never>?
+    private var learnedRouteID: String?
 
     public init(
         environment: Environment,
@@ -12,64 +27,120 @@ public actor T3Client {
         webSocketConnector: any WebSocketConnecting = URLSessionWebSocketConnector(),
         managedAuthorization: (any ManagedEnvironmentAuthorizing)? = nil,
         rpcConnectionWaitTimeout: Duration = .seconds(4),
-        connectionIdentity: ClientConnectionIdentity = .current
+        connectionIdentity: ClientConnectionIdentity = .current,
+        routeLearner: RouteLearner? = nil
     ) {
         self.environment = environment
+        self.routeLearner = routeLearner
         let api = EnvironmentAPI(
             transport: httpTransport,
             credentials: credentialStore,
             managedAuthorization: managedAuthorization
         )
         self.api = api
+        let routeSelector = EnvironmentRouteSelector(
+            environment: environment,
+            probe: { url, timeout in
+                try? await api.descriptor(at: url, timeoutInterval: timeout).environmentId
+            },
+            preflight: { routed in
+                (try? await api.session(for: routed))?.authenticated == true
+            }
+        )
+        self.routeSelector = routeSelector
         self.rpc = WebSocketRPCClient(
             connector: webSocketConnector,
             connectionWaitTimeout: rpcConnectionWaitTimeout
         ) {
-            let ticket: WebSocketTicket
-            do {
-                ticket = try await api.webSocketTicket(for: environment)
-            } catch {
-                // A failing mint is retried by the connection loop and looks
-                // identical to socket flapping unless distinguished here.
-                ConnectionLog.logger.error(
-                    """
-                    [conn] ticket-mint-failed env=\(environment.id, privacy: .public) \
-                    error=\(ConnectionLog.describe(error), privacy: .public)
-                    """
-                )
-                throw error
+            try await routeSelector.connect { environment in
+                let ticket: WebSocketTicket
+                do {
+                    ticket = try await api.webSocketTicket(for: environment)
+                } catch {
+                    // A failing mint is retried by the connection loop and looks
+                    // identical to socket flapping unless distinguished here.
+                    ConnectionLog.logger.error(
+                        """
+                        [conn] ticket-mint-failed env=\(environment.id, privacy: .public) \
+                        route=\(environment.routes[0].id, privacy: .public) \
+                        error=\(ConnectionLog.describe(error), privacy: .public)
+                        """
+                    )
+                    throw error
+                }
+                var components = URLComponents(
+                    url: environment.webSocketBaseURL,
+                    resolvingAgainstBaseURL: false
+                )!
+                if components.path.isEmpty || components.path == "/" {
+                    components.path = "/ws"
+                }
+                var query = components.queryItems ?? []
+                query.removeAll { $0.name == "wsTicket" }
+                query.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
+                // Announce who is connecting so the session is attributable in
+                // Settings -> Connections and in analytics. Stale values are dropped
+                // first: the base URL is user-supplied and a reconnect reuses it.
+                query.removeAll { ClientConnectionIdentity.queryItemNames.contains($0.name) }
+                query.append(contentsOf: connectionIdentity.queryItems)
+                // Named so a server that has moved past this protocol turns the
+                // upgrade away instead of handing us frames we cannot decode.
+                query.removeAll { $0.name == OrchestrationProtocol.queryItemName }
+                query.append(OrchestrationProtocol.queryItem)
+                components.queryItems = query
+                guard let url = components.url else { throw PairingURLError.invalidURL }
+                return url
             }
-            var components = URLComponents(
-                url: environment.webSocketBaseURL,
-                resolvingAgainstBaseURL: false
-            )!
-            if components.path.isEmpty || components.path == "/" {
-                components.path = "/ws"
-            }
-            var query = components.queryItems ?? []
-            query.removeAll { $0.name == "wsTicket" }
-            query.append(URLQueryItem(name: "wsTicket", value: ticket.ticket))
-            // Announce who is connecting so the session is attributable in
-            // Settings -> Connections and in analytics. Stale values are dropped
-            // first: the base URL is user-supplied and a reconnect reuses it.
-            query.removeAll { ClientConnectionIdentity.queryItemNames.contains($0.name) }
-            query.append(contentsOf: connectionIdentity.queryItems)
-            // Named so a server that has moved past this protocol turns the
-            // upgrade away instead of handing us frames we cannot decode.
-            query.removeAll { $0.name == OrchestrationProtocol.queryItemName }
-            query.append(OrchestrationProtocol.queryItem)
-            components.queryItems = query
-            guard let url = components.url else { throw PairingURLError.invalidURL }
-            return url
         }
     }
 
     public func connect() async {
         await rpc.start()
+        startBetterRouteChecks()
     }
 
     public func disconnect() async {
+        betterRouteTask?.cancel()
+        betterRouteTask = nil
         await rpc.stop()
+    }
+
+    /// Takes an edited route list without replacing this client. A user edit
+    /// (`preferFirst`) that changes which route should be in use, or removes
+    /// the one in use, reconnects so the new order takes effect at once.
+    public func adoptRoutes(_ routes: [EnvironmentRoute], preferFirst: Bool) async {
+        if routeSelector.adopt(routes, preferFirst: preferFirst) {
+            await rpc.reconnectNow()
+        }
+    }
+
+    /// While connected over a fallback route, looks for a better one every
+    /// minute and moves the connection there once it would connect. A check
+    /// on the preferred route (or with one route) is a no-op.
+    private func startBetterRouteChecks() {
+        guard betterRouteTask == nil else { return }
+        let selector = routeSelector
+        let rpc = self.rpc
+        betterRouteTask = Task { [weak rpc] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: EnvironmentRouteSelector.betterRouteInterval)
+                guard !Task.isCancelled, let rpc else { return }
+                guard await rpc.isConnected() else { continue }
+                if await selector.checkForBetterRoute() {
+                    await rpc.reconnectNow()
+                }
+            }
+        }
+    }
+
+    /// Saves the addresses the server reports as learned routes, once per
+    /// route this client connects over.
+    private func learnRoutes(from config: ServerConfigSnapshot) async {
+        guard let routeLearner, let reported = config.directEndpoints else { return }
+        let active = routeSelector.current().routes[0]
+        guard learnedRouteID != active.id else { return }
+        learnedRouteID = active.id
+        await routeLearner(environment.id, active, reported)
     }
 
     public func liveConnectionActive() async -> Bool {
@@ -79,10 +150,12 @@ public actor T3Client {
     public func shellSnapshot(
         timeoutInterval: TimeInterval? = nil
     ) async throws -> OrchestrationV2ShellSnapshot {
-        try await api.shellSnapshot(
-            for: environment,
-            timeoutInterval: timeoutInterval
-        )
+        try await routeSelector.perform { environment in
+            try await api.shellSnapshot(
+                for: environment,
+                timeoutInterval: timeoutInterval
+            )
+        }
     }
 
     /// The archived snapshot is the shell snapshot without an `archivedThreads`
@@ -113,11 +186,13 @@ public actor T3Client {
         id: String,
         maxVisibleItems: Int? = nil
     ) async throws -> OrchestrationV2ThreadDetailSnapshot {
-        try await api.threadSnapshot(
-            id: id,
-            environment: environment,
-            maxVisibleItems: maxVisibleItems
-        )
+        try await routeSelector.perform { environment in
+            try await api.threadSnapshot(
+                id: id,
+                environment: environment,
+                maxVisibleItems: maxVisibleItems
+            )
+        }
     }
 
     public func updateDesktopApp(progress: @escaping @Sendable (String) async -> Void) async throws -> String {
@@ -208,10 +283,12 @@ public actor T3Client {
     }
 
     public func serverConfig() async throws -> ServerConfigSnapshot {
-        try await rpc.request(
+        let config = try await rpc.request(
             RPCMethod.serverGetConfig.rawValue,
             as: ServerConfigSnapshot.self
         )
+        await learnRoutes(from: config)
+        return config
     }
 
     /// Finds or creates the environment's Scratch project, the folder behind
@@ -261,21 +338,25 @@ public actor T3Client {
     }
 
     public func clientSessions() async throws -> [AuthClientSession] {
-        try await api.clientSessions(for: environment)
+        try await routeSelector.perform { environment in
+            try await api.clientSessions(for: environment)
+        }
     }
 
     public func authSession() async throws -> AuthSessionState {
-        try await api.session(for: environment)
+        try await routeSelector.perform { environment in
+            try await api.session(for: environment)
+        }
     }
 
     @discardableResult
     public func revokeClientSession(id: String) async throws -> Bool {
-        try await api.revokeClientSession(id: id, environment: environment).revoked
+        try await api.revokeClientSession(id: id, environment: routeSelector.current()).revoked
     }
 
     @discardableResult
     public func revokeOtherClientSessions() async throws -> Int {
-        try await api.revokeOtherClientSessions(for: environment).revokedCount
+        try await api.revokeOtherClientSessions(for: routeSelector.current()).revokedCount
     }
 
     /// HTTP live-sync fallback. Each iteration is an independent request, so a
@@ -458,7 +539,7 @@ public actor T3Client {
                     ]), as: AttachmentUploadURLResult.self
                 )
                 minted.append(result.attachmentId)
-                try await api.uploadAttachment(for: environment, relativeURL: result.relativeUrl, data: bytes, mimeType: attachment.mimeType)
+                try await api.uploadAttachment(for: routeSelector.current(), relativeURL: result.relativeUrl, data: bytes, mimeType: attachment.mimeType)
                 persisted.append(.object([
                     "type": .string(attachment.type.rawValue), "id": .string(result.attachmentId),
                     "name": .string(attachment.name), "mimeType": .string(attachment.mimeType),
@@ -1334,7 +1415,7 @@ public actor T3Client {
         let result = try await createAssetURL(resource: resource)
         guard let url = URL(
             string: result.relativeUrl,
-            relativeTo: environment.httpBaseURL
+            relativeTo: routeSelector.current().httpBaseURL
         )?.absoluteURL else {
             throw RPCError.protocolViolation("The server returned an invalid asset URL.")
         }
@@ -1997,7 +2078,7 @@ public actor EnvironmentRuntime {
             deviceType: identity.deviceType
         )
         try await environmentStore.setActiveEnvironment(id: environment.id)
-        return await client(for: environment)
+        return await clientAfterRouteEdit(environment)
     }
 
     @discardableResult
@@ -2018,7 +2099,106 @@ public actor EnvironmentRuntime {
             deviceType: identity.deviceType
         )
         try await environmentStore.setActiveEnvironment(id: environment.id)
-        return await client(for: environment)
+        return await clientAfterRouteEdit(environment)
+    }
+
+    /// Pairs another address of a saved environment and adds it as a route.
+    /// A link for a different machine is refused before any token exchange.
+    @discardableResult
+    public func addRoute(
+        to environmentID: String,
+        pairingURL: String,
+        client identity: PairingClientIdentity = PairingClientIdentity(label: nil)
+    ) async throws -> Environment {
+        let service = PairingService(
+            transport: httpTransport,
+            environmentStore: environmentStore,
+            credentialStore: credentialStore
+        )
+        let environment = try await service.pair(
+            url: pairingURL,
+            label: identity.label,
+            deviceType: identity.deviceType,
+            expectedEnvironmentID: environmentID
+        )
+        if environment.isEnabled {
+            _ = await clientAfterRouteEdit(environment)
+        }
+        return environment
+    }
+
+    /// Reorders a saved environment's routes; `routeIDs` lists every route,
+    /// preferred first. The connection moves to the new first route if it
+    /// answers.
+    public func reorderRoutes(environmentID: String, routeIDs: [String]) async throws {
+        guard let routes = try await environmentStore.reorderRoutes(
+            id: environmentID,
+            routeIDs: routeIDs
+        ) else {
+            throw RPCError.remote("The route order must list every saved route once.")
+        }
+        await clients[environmentID]?.adoptRoutes(routes, preferFirst: true)
+    }
+
+    /// Removes one route, the learned routes that borrow its credential, and
+    /// every credential no remaining route uses. The last route goes with the
+    /// environment, through `remove(id:)`.
+    public func removeRoute(environmentID: String, routeID: String) async throws {
+        guard let result = try await environmentStore.removeRoute(
+            id: environmentID,
+            routeID: routeID
+        ) else { return }
+        await clients[environmentID]?.adoptRoutes(result.remaining, preferFirst: true)
+        let stillUsed = Set(result.remaining.map(\.credentialID))
+        for credentialID in Set(result.removed.map(\.credentialID)) where !stillUsed.contains(credentialID) {
+            do {
+                try await credentialStore.removeCredential(for: credentialID)
+            } catch {
+                // The route is already gone; an orphaned Keychain item is
+                // unreachable and harmless.
+                ConnectionLog.logger.warning(
+                    "[conn] route-credential-removal-failed env=\(environmentID, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    /// Saves the addresses a connected server reports as learned routes. The
+    /// live client keeps its connection and just gains the routes.
+    public func learnRoutes(
+        environmentID: String,
+        activeRoute: EnvironmentRoute,
+        reported: [ServerDirectEndpoint]
+    ) async {
+        do {
+            guard let routes = try await environmentStore.learnRoutes(
+                id: environmentID,
+                activeRouteID: activeRoute.id,
+                reported: reported
+            ) else { return }
+            ConnectionLog.logger.info(
+                "[conn] routes-learned env=\(environmentID, privacy: .public) count=\(routes.count)"
+            )
+            await clients[environmentID]?.adoptRoutes(routes, preferFirst: false)
+        } catch {
+            ConnectionLog.logger.warning(
+                "[conn] routes-learn-failed env=\(environmentID, privacy: .public)"
+            )
+        }
+    }
+
+    /// The id of the route the environment's client is using, or nil before
+    /// it has a client.
+    public func routeInUse(environmentID: String) -> String? {
+        clients[environmentID]?.routeSelector.currentRouteID()
+    }
+
+    /// The cached client after a route edit, taking the new routes in place
+    /// and preferring the first.
+    private func clientAfterRouteEdit(_ environment: Environment) async -> T3Client {
+        let cached = await client(for: environment)
+        await cached.adoptRoutes(environment.routes, preferFirst: true)
+        return cached
     }
 
     public func descriptor(at httpBaseURL: URL) async throws -> EnvironmentDescriptor {
@@ -2027,8 +2207,9 @@ public actor EnvironmentRuntime {
     }
 
     /// Persists a fully validated managed environment. Both the environment
-    /// metadata and the tagged DPoP credential must agree before either can
-    /// replace an existing manual connection with the same server identity.
+    /// metadata and the tagged DPoP credential must agree before either is
+    /// saved. An environment already saved with another route gains T3 Connect
+    /// as one more route; its paired routes and their credentials stay.
     @discardableResult
     public func saveManagedEnvironment(
         _ environment: Environment,
@@ -2045,10 +2226,43 @@ public actor EnvironmentRuntime {
         let previousEnvironment = try await environmentStore.load()
             .first(where: { $0.id == environment.id })
         let previousActiveID = try await environmentStore.activeEnvironmentID()
-        let previousCredential = try await credentialStore.credential(for: environment.id)
-        try await credentialStore.setCredential(credential, for: environment.id)
+        // The relay credential keeps its account when T3 Connect was saved
+        // before; otherwise it takes the environment id unless a paired route
+        // already uses that account.
+        let credentialID: String
+        if let relay = previousEnvironment?.relayRoute {
+            credentialID = relay.credentialID
+        } else if previousEnvironment?.routes.contains(where: { $0.credentialID == environment.id }) == true {
+            credentialID = "\(environment.id)#\(EnvironmentRoute.relayID)"
+        } else {
+            credentialID = environment.id
+        }
+        let relayRoute = EnvironmentRoute(
+            id: EnvironmentRoute.relayID,
+            httpBaseURL: environment.httpBaseURL,
+            webSocketBaseURL: environment.webSocketBaseURL,
+            kind: .managedDPoP,
+            credentialID: credentialID
+        )
+        var merged: Environment
+        if let previousEnvironment {
+            merged = previousEnvironment
+            merged.label = environment.label
+            merged.descriptor = environment.descriptor
+            merged.isEnabled = true
+            merged.routes = EnvironmentRoutes.upserting(relayRoute, into: previousEnvironment.routes)
+        } else {
+            merged = Environment(
+                id: environment.id,
+                label: environment.label,
+                routes: [relayRoute],
+                descriptor: environment.descriptor
+            )
+        }
+        let previousCredential = try await credentialStore.credential(for: credentialID)
+        try await credentialStore.setCredential(credential, for: credentialID)
         do {
-            try await environmentStore.upsert(environment)
+            try await environmentStore.upsert(merged)
             try await environmentStore.setActiveEnvironment(id: environment.id)
         } catch {
             let operationError = error
@@ -2057,10 +2271,10 @@ public actor EnvironmentRuntime {
                 if let previousCredential {
                     try await credentialStore.setCredential(
                         previousCredential,
-                        for: environment.id
+                        for: credentialID
                     )
                 } else {
-                    try await credentialStore.removeCredential(for: environment.id)
+                    try await credentialStore.removeCredential(for: credentialID)
                 }
             } catch {
                 rollbackErrors.append("credential: \(error.localizedDescription)")
@@ -2093,7 +2307,7 @@ public actor EnvironmentRuntime {
             }
             throw operationError
         }
-        return await client(for: environment)
+        return await clientAfterRouteEdit(merged)
     }
 
     public func remove(id: String) async throws {
@@ -2103,8 +2317,12 @@ public actor EnvironmentRuntime {
         // Never leave a catalog entry pointing at a credential that was
         // already destroyed when the catalog write itself fails.
         try await environmentStore.remove(id: id)
+        // Every route's credential goes with the environment.
+        let credentialIDs = Set([id] + (previousEnvironment?.routes.map(\.credentialID) ?? []))
         do {
-            try await credentialStore.removeCredential(for: id)
+            for credentialID in credentialIDs.sorted() {
+                try await credentialStore.removeCredential(for: credentialID)
+            }
         } catch {
             let operationError = error
             var rollbackErrors: [String] = []
@@ -2140,6 +2358,12 @@ public actor EnvironmentRuntime {
             if existing.environment == environment {
                 return existing
             }
+            // Route edits and learned routes reach the live client in place, so
+            // a newly learned LAN address does not drop a working connection.
+            if existing.environment.sameExceptRoutes(as: environment) {
+                await existing.adoptRoutes(environment.routes, preferFirst: false)
+                return existing
+            }
             // Publish the replacement before disconnecting the stale client.
             // Actor methods are reentrant across that await; removing first
             // allowed a concurrent caller to construct a second replacement.
@@ -2161,24 +2385,12 @@ public actor EnvironmentRuntime {
                 changed=\(changed.joined(separator: ","), privacy: .public)
                 """
             )
-            let replacement = T3Client(
-                environment: environment,
-                credentialStore: credentialStore,
-                httpTransport: httpTransport,
-                webSocketConnector: webSocketConnector,
-                managedAuthorization: managedAuthorization
-            )
+            let replacement = makeClient(for: environment)
             clients[environment.id] = replacement
             Task { await existing.disconnect() }
             return replacement
         }
-        let client = T3Client(
-            environment: environment,
-            credentialStore: credentialStore,
-            httpTransport: httpTransport,
-            webSocketConnector: webSocketConnector,
-            managedAuthorization: managedAuthorization
-        )
+        let client = makeClient(for: environment)
         clients[environment.id] = client
         return client
     }
@@ -2187,12 +2399,23 @@ public actor EnvironmentRuntime {
     /// environment probes must not stop or mutate the shared client if that
     /// environment becomes active while the probe is in flight.
     public func ephemeralClient(for environment: Environment) -> T3Client {
+        makeClient(for: environment)
+    }
+
+    private func makeClient(for environment: Environment) -> T3Client {
         T3Client(
             environment: environment,
             credentialStore: credentialStore,
             httpTransport: httpTransport,
             webSocketConnector: webSocketConnector,
-            managedAuthorization: managedAuthorization
+            managedAuthorization: managedAuthorization,
+            routeLearner: { [weak self] environmentID, activeRoute, reported in
+                await self?.learnRoutes(
+                    environmentID: environmentID,
+                    activeRoute: activeRoute,
+                    reported: reported
+                )
+            }
         )
     }
 }
