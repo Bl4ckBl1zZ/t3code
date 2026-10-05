@@ -15,6 +15,9 @@ public struct ThreadDetailView: View {
     /// Leaves this thread once it no longer exists, such as after Delete. The
     /// system back button covers ordinary navigation.
     let onNavigateBack: () -> Void
+    /// Set when this thread was opened from another one: Back then returns to
+    /// that thread, named on the button, instead of to the list.
+    let backTitle: String?
     @State private var nativeToolIcons = NativeAppToolIconStore()
     @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
@@ -75,12 +78,14 @@ public struct ThreadDetailView: View {
         submitMessage: @escaping (FeatureMessageSubmission) async -> Bool,
         onNavigateBack: @escaping () -> Void = {},
         onOpenRelatedThread: @escaping (String, Bool) -> Void = { _, _ in },
+        backTitle: String? = nil,
         draftStore: FeatureComposerDraftStore = .shared
     ) {
         self.model = model
         self.thread = thread
         self.submitMessage = submitMessage
         self.onNavigateBack = onNavigateBack
+        self.backTitle = backTitle
         self.onOpenRelatedThread = onOpenRelatedThread
         self.draftStore = draftStore
     }
@@ -119,7 +124,22 @@ public struct ThreadDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .modifier(ThreadHeaderModifier(title: currentThread.title, subtitle: headerSubtitle))
         .t3NavigationChrome()
+        // A thread opened from another returns to it; the system button would
+        // leave for the list and skip the parent.
+        .navigationBarBackButtonHidden(backTitle != nil)
         .toolbar {
+            if let backTitle {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: onNavigateBack) {
+                        Label(backTitle, systemImage: "chevron.backward")
+                            .labelStyle(.titleAndIcon)
+                            .lineLimit(1)
+                            .frame(maxWidth: 180, alignment: .leading)
+                    }
+                    .accessibilityLabel("Back to \(backTitle)")
+                    .accessibilityIdentifier("thread-back-to-parent")
+                }
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     toolSurface = .details

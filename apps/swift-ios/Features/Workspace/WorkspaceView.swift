@@ -40,6 +40,8 @@ public struct WorkspaceView: View {
     /// to where that tab was left.
     @State private var selectedThreadIDs: [MobileWorkspace: String] = [:]
     @State private var compactColumns: [MobileWorkspace: NavigationSplitViewColumn] = [:]
+    /// Per tab, the threads Back returns to before the list.
+    @State private var threadBackStacks: [MobileWorkspace: ThreadBackStack] = [:]
     @State private var selectedProjectID: String?
     @State private var searchText = ""
     @State private var isSearchPresented = false
@@ -817,14 +819,15 @@ public struct WorkspaceView: View {
                 model: model,
                 thread: thread,
                 submitMessage: submitMessage,
-                onNavigateBack: { closeSelectedThread(in: tab) },
+                onNavigateBack: { navigateBack(in: tab) },
                 // Subagent cards, fork dividers and lineage rows all point at
                 // another thread; an archived target also needs the shelf open
                 // or it lands on a list that does not contain it.
                 onOpenRelatedThread: { threadID, isArchived in
                     if isArchived { isArchiveExpanded = true }
-                    openThread(threadID, in: tab)
-                }
+                    openRelatedThread(threadID, in: tab)
+                },
+                backTitle: backTitle(in: tab)
             )
             .id(id)
         } else {
@@ -1433,11 +1436,12 @@ public struct WorkspaceView: View {
         return filterableProjects.contains { $0.id == selectedProjectID }
     }
 
-    /// A thread deleted elsewhere closes in whichever tab had it open.
+    /// A thread deleted elsewhere closes in whichever tab had it open, back to
+    /// the thread that opened it when there is one.
     private func closeMissingThreads() {
         let known = Set(model.snapshot.threads.map(\.id))
         for (tab, id) in selectedThreadIDs where !known.contains(id) {
-            closeSelectedThread(in: tab)
+            navigateBack(in: tab)
         }
     }
 
@@ -1462,12 +1466,40 @@ public struct WorkspaceView: View {
         return true
     }
 
+    /// Opening from the list, a deep link or a new task starts a fresh trail.
     private func openThread(_ id: String, in tab: MobileWorkspace) {
+        threadBackStacks[tab] = nil
         selectedThreadIDs[tab] = id
         compactColumns[tab] = .detail
     }
 
+    /// Opening from inside a thread remembers it, so Back returns there.
+    private func openRelatedThread(_ id: String, in tab: MobileWorkspace) {
+        threadBackStacks[tab, default: ThreadBackStack()].open(id, from: selectedThreadIDs[tab])
+        selectedThreadIDs[tab] = id
+        compactColumns[tab] = .detail
+    }
+
+    /// Back to the thread this one was opened from, else to the list.
+    private func navigateBack(in tab: MobileWorkspace) {
+        let known = Set(model.snapshot.threads.map(\.id))
+        if let parentID = threadBackStacks[tab]?.pop(where: known.contains) {
+            selectedThreadIDs[tab] = parentID
+            compactColumns[tab] = .detail
+        } else {
+            closeSelectedThread(in: tab)
+        }
+    }
+
+    /// The parent's title for the thread's Back button; nil leaves the
+    /// system's Back to the list.
+    private func backTitle(in tab: MobileWorkspace) -> String? {
+        guard let parentID = threadBackStacks[tab]?.parentID else { return nil }
+        return model.snapshot.threads.first { $0.id == parentID }?.title ?? "Back"
+    }
+
     private func closeSelectedThread(in tab: MobileWorkspace) {
+        threadBackStacks[tab] = nil
         selectedThreadIDs[tab] = nil
         compactColumns[tab] = .sidebar
     }
