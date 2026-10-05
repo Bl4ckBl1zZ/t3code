@@ -466,15 +466,24 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await createProject(client: client, path: path)
     }
 
+    /// Scans `cwd` for the instance's skills and commands, retrying a scan whose
+    /// commands are pending after a cooldown. Cancel the calling task to stop.
     func refreshProviderWorkspace(projectID: String, instanceID: String, cwd: String?) async throws {
+        guard let cwd else { return }
         let route = try projectRoute(for: projectID)
         let config = try await route.client.serverConfig()
-        guard let provider = config.providers.first(where: { $0.instanceId == instanceID }),
-              provider.driver == "antigravity", provider.enabled,
-              provider.setup != nil else { return }
-        let root = cwd
-        guard let root else { return }
-        _ = try await route.client.refreshProviderSnapshots(instanceID: instanceID, cwd: root)
+        var provider = config.providers.first { $0.instanceId == instanceID }
+        guard ProviderWorkspaceScan.needsScan(provider, cwd: cwd) else { return }
+        provider = try await route.client.refreshProviderSnapshots(instanceID: instanceID, cwd: cwd)
+            .first { $0.instanceId == instanceID }
+        var retries = 0
+        while retries < ProviderWorkspaceScan.maxPendingRetries,
+              ProviderWorkspaceScan.shouldRetry(after: provider, cwd: cwd) {
+            retries += 1
+            try await Task.sleep(for: ProviderWorkspaceScan.retryCooldown)
+            provider = try await route.client.refreshProviderSnapshots(instanceID: instanceID, cwd: cwd)
+                .first { $0.instanceId == instanceID }
+        }
     }
 
     func refreshSetupProviders(environmentID: String, refreshModels: Bool) async throws -> [ServerProviderSnapshot] {
@@ -5669,7 +5678,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     FeatureProviderWorkspace(cwd: workspace.cwd,
                         slashCommands: workspace.slashCommands.map { .init(name: $0.name, description: $0.description, inputHint: $0.input?.hint) },
                         skills: workspace.skills.map { .init(name: $0.name, displayName: $0.displayName, description: $0.description,
-                            shortDescription: $0.shortDescription, path: $0.path, scope: $0.scope, isEnabled: $0.enabled) })
+                            shortDescription: $0.shortDescription, path: $0.path, scope: $0.scope, isEnabled: $0.enabled) },
+                        slashCommandsPending: workspace.slashCommandsPending)
                 }
                 return mapped
             })

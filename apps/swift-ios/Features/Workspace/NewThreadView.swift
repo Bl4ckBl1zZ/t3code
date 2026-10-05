@@ -131,9 +131,8 @@ public struct NewThreadView: View {
         .onChange(of: selectedBranch) { scheduleDraftSave() }
         .onChange(of: startFromOrigin) { scheduleDraftSave() }
         .onChange(of: routing) { scheduleDraftSave() }
-        .task(id: "\(executionProject?.id ?? ""):\(selection?.providerID ?? "")") {
-            guard let project = executionProject, let instanceID = selection?.providerID,
-                  creationProviders.first(where: { $0.id == instanceID })?.driver == "antigravity" else { return }
+        .task(id: workspaceScanKey) {
+            guard let project = executionProject, let instanceID = selection?.providerID else { return }
             try? await model.client.refreshProviderWorkspace(projectID: project.id, instanceID: instanceID, cwd: project.path)
         }
         .task(id: balancingRequest) { await balanceEnvironment() }
@@ -832,6 +831,16 @@ public struct NewThreadView: View {
                 in: model.snapshot
             )
         )
+    }
+
+    /// Re-scans the project's workspace when the provider, the project, the
+    /// provider's availability, or its stored scan of that path changes.
+    private var workspaceScanKey: String {
+        let instanceID = selection?.providerID ?? ""
+        let provider = creationProviders.first { $0.id == instanceID }
+        let path = executionProject?.path
+        let state = "\(provider?.isAvailable == true):\(provider?.hasCompleteWorkspace(path) == true)"
+        return "\(executionProject?.id ?? ""):\(instanceID):\(state)"
     }
 
     private var composerPowerFeatures: FeatureComposerPowerFeatures {

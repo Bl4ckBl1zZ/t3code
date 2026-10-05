@@ -158,6 +158,9 @@ public struct ServerProviderWorkspaceSnapshot: Codable, Equatable, Sendable {
     public let cwd: String
     public let checkedAt: String
     public let slashCommands: [ServerProviderSlashCommandSnapshot]
+    /// Skills are scanned, but command discovery failed and needs a retry; the
+    /// commands are the cwd's last known list. Absent on older servers.
+    public var slashCommandsPending: Bool? = nil
     public let skills: [ServerProviderSkillSnapshot]
 }
 
@@ -192,6 +195,34 @@ public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable
     public let models: [ServerProviderModelSnapshot]
     public let slashCommands: [ServerProviderSlashCommandSnapshot]?
     public let skills: [ServerProviderSkillSnapshot]?
+}
+
+/// When a composer asks the server to scan a workspace's skills and commands
+/// (`server.refreshProviders` with `instanceId` and `cwd`). The server stores one
+/// entry per cwd; the composer resolves that entry, else the machine lists.
+public enum ProviderWorkspaceScan {
+    /// Wait before asking again for a cwd whose commands are still pending.
+    public static let retryCooldown: Duration = .seconds(10)
+    /// Pending retries per composer visit, so a probe that keeps failing is not
+    /// re-run for as long as a thread stays open.
+    public static let maxPendingRetries = 6
+
+    /// Whether `cwd` should be scanned: the instance is enabled and installed
+    /// (the server scans nothing else), and the cwd has no entry yet or its
+    /// commands are pending.
+    public static func needsScan(_ provider: ServerProviderSnapshot?, cwd: String) -> Bool {
+        guard let provider, provider.enabled, provider.installed else { return false }
+        guard let workspace = provider.workspaceSnapshots?.first(where: { $0.cwd == cwd }) else { return true }
+        return workspace.slashCommandsPending == true
+    }
+
+    /// Whether a scan's result asks for another try after the cooldown. A scan
+    /// that stored nothing (a driver without workspace discovery, a failed scan,
+    /// or an older server) is not retried until the composer opens again.
+    public static func shouldRetry(after provider: ServerProviderSnapshot?, cwd: String) -> Bool {
+        guard let provider, provider.enabled, provider.installed else { return false }
+        return provider.workspaceSnapshots?.first(where: { $0.cwd == cwd })?.slashCommandsPending == true
+    }
 }
 
 public enum ServerThreadEnvironmentMode: String, Codable, Equatable, Sendable {

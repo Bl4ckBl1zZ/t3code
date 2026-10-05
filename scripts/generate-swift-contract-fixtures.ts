@@ -1272,6 +1272,65 @@ if (process.argv.includes("--check")) {
   }
 } else NodeFS.writeFileSync(providerContextReportingPath, providerContextReportingSerialized);
 
+// Per-workspace skills and commands: one complete scan and one whose command
+// probe failed, which keeps the last known commands and asks for a retry.
+const providerWorkspaceSnapshotsPath = NodePath.join(
+  NodePath.dirname(outputPath),
+  "providerWorkspaceSnapshots.json",
+);
+const providerWorkspaceSnapshotsSerialized = `${JSON.stringify(
+  Schema.encodeSync(ServerProvider)({
+    instanceId: ProviderInstanceId.make("claude-work"),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-10-05T00:00:00Z",
+    models: [],
+    slashCommands: [{ name: "compact", description: "Compact the conversation" }],
+    skills: [],
+    workspaceSnapshots: [
+      {
+        cwd: "/work/app",
+        checkedAt: "2026-10-05T00:01:00Z",
+        slashCommands: [{ name: "deploy", description: "Ship the app", input: { hint: "env" } }],
+        skills: [
+          {
+            name: "release",
+            description: "Cut a release",
+            path: "/work/app/.claude/skills/release/SKILL.md",
+            scope: "project",
+            enabled: true,
+          },
+        ],
+      },
+      {
+        cwd: "/work/app-feature",
+        checkedAt: "2026-10-05T00:02:00Z",
+        slashCommands: [{ name: "deploy", description: "Ship the app" }],
+        slashCommandsPending: true,
+        skills: [],
+      },
+    ],
+  }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(providerWorkspaceSnapshotsPath) ||
+    NodeFS.readFileSync(providerWorkspaceSnapshotsPath, "utf8") !==
+      providerWorkspaceSnapshotsSerialized
+  ) {
+    console.error(
+      "[swift-fixtures] providerWorkspaceSnapshots.json is stale; regenerate fixtures.",
+    );
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(providerWorkspaceSnapshotsPath, providerWorkspaceSnapshotsSerialized);
+
 const agentSessionFixturePath = NodePath.join(NodePath.dirname(outputPath), "agentSessions.json");
 const agentSessionFixture = `${JSON.stringify(
   {

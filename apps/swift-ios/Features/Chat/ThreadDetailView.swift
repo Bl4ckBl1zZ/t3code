@@ -147,9 +147,8 @@ public struct ThreadDetailView: View {
 
     private var threadContent: some View {
         threadChrome
-        .task(id: "\(currentThread.projectID):\(currentSelection?.providerID ?? ""):\(threadWorkspaceRoot ?? "")") {
-            guard let instanceID = currentSelection?.providerID,
-                  threadProviders.first(where: { $0.id == instanceID })?.driver == "antigravity" else { return }
+        .task(id: workspaceScanKey) {
+            guard let instanceID = currentSelection?.providerID else { return }
             try? await model.client.refreshProviderWorkspace(projectID: currentThread.projectID, instanceID: instanceID, cwd: threadWorkspaceRoot)
         }
         .task(id: draftKey) {
@@ -1148,6 +1147,15 @@ public struct ThreadDetailView: View {
     /// The root a work-log row resolves its file paths against.
     private var threadWorkspaceRoot: String? {
         currentThread.worktreePath ?? threadProject?.path
+    }
+
+    /// Re-scans the thread's workspace when the provider, the cwd, the
+    /// provider's availability, or its stored scan of that cwd changes.
+    private var workspaceScanKey: String {
+        let instanceID = currentSelection?.providerID ?? ""
+        let provider = threadProviders.first { $0.id == instanceID }
+        let state = "\(provider?.isAvailable == true):\(provider?.hasCompleteWorkspace(threadWorkspaceRoot) == true)"
+        return "\(currentThread.projectID):\(instanceID):\(threadWorkspaceRoot ?? ""):\(state)"
     }
 
     // MARK: - Lineage

@@ -1164,6 +1164,8 @@ public struct FeatureProviderWorkspace: Sendable, Equatable, Hashable, Codable {
     public let cwd: String
     public let slashCommands: [FeatureProviderSlashCommand]
     public let skills: [FeatureProviderSkill]
+    /// The scan kept the cwd's last known commands and wants a retry.
+    public var slashCommandsPending: Bool? = nil
 }
 
 public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Codable {
@@ -1187,6 +1189,13 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     public var workspaceSnapshots: [FeatureProviderWorkspace]? = nil
     public var slashCommands: [FeatureProviderSlashCommand]?
     public var skills: [FeatureProviderSkill]?
+
+    /// Whether the server holds a scan of `cwd` that needs no retry; a key for
+    /// re-running the scan when an instance installs or drops its entries.
+    public func hasCompleteWorkspace(_ cwd: String?) -> Bool {
+        guard let cwd, let workspace = workspaceSnapshots?.first(where: { $0.cwd == cwd }) else { return false }
+        return workspace.slashCommandsPending != true
+    }
 
     public func inWorkspace(_ cwd: String?) -> Self {
         guard let cwd, let workspace = workspaceSnapshots?.first(where: { $0.cwd == cwd }) else { return self }
