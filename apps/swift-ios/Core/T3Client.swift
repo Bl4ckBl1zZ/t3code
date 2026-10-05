@@ -214,6 +214,16 @@ public actor T3Client {
         )
     }
 
+    /// Finds or creates the environment's Scratch project, the folder behind
+    /// threads started with "No project", and returns its id.
+    public func ensureScratchProject() async throws -> String {
+        try await rpc.request(
+            RPCMethod.projectsEnsureScratch.rawValue,
+            payload: .object([:]),
+            as: ProjectEnsureScratchResult.self
+        ).projectId
+    }
+
     /// Samples whole-host CPU and available memory for new-task routing.
     public func hostResources() async throws -> HostResourcesSnapshot {
         try await rpc.request(RPCMethod.serverGetHostResources.rawValue, payload: .object([:]), as: HostResourcesSnapshot.self)
@@ -2188,6 +2198,7 @@ public enum RPCMethod: String, Sendable {
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"
     case projectsMutate = "projects.mutate"
+    case projectsEnsureScratch = "projects.ensureScratch"
     case projectsListEntries = "projects.listEntries"
     case projectsSearchEntries = "projects.searchEntries"
     case projectsReadFile = "projects.readFile"

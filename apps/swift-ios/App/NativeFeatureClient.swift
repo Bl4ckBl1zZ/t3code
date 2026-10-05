@@ -452,6 +452,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try await addProject(environmentID: environmentID, path: path)
     }
 
+    /// Finds or creates the machine's Scratch project and returns its scoped
+    /// id once this client's shell holds it.
+    func ensureScratchProject(environmentID: String) async throws -> String {
+        let client = try await environmentClient(id: environmentID)
+        let wireID = try await client.ensureScratchProject()
+        try? await refresh(client: client)
+        return FeatureScopedID.project(environmentID: environmentID, wireID: wireID)
+    }
+
     func addProject(environmentID: String, path: String) async throws {
         let client = try await projectCreationClient(environmentID: environmentID)
         try await createProject(client: client, path: path)
@@ -1304,11 +1313,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
         return ordered.compactMap { environmentID in
             guard let config = serverConfigsByEnvironmentID[environmentID] else { return nil }
-            return MobileWorkspaceEnvironmentConfig(
+            var mapped = MobileWorkspaceEnvironmentConfig(
                 environmentID: environmentID,
                 t3WorkDirectory: config.t3WorkDirectory,
                 providers: config.providers
             )
+            mapped.scratchWorkspaceRoot = config.scratchWorkspaceRoot
+            return mapped
         }
     }
 

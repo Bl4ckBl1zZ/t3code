@@ -14,6 +14,9 @@ sheets use the system glass material.
   On iOS 27 the **+** sits in its own circle beside the tabs. On iPad, use the compose button in
   the toolbar or `Cmd+N`.
 
+- **No project.** In a new task, the project menu ends with **No Project** for each connected
+  machine that keeps a folder for tasks outside any repository. Choosing it starts the task in
+  that folder.
 - **Settings.** The **T3** button at the top left opens Settings.
   - A red dot means an environment is unreachable, and an amber dot means one is reconnecting.
   - While a dot shows, the button opens **Settings → Servers**.

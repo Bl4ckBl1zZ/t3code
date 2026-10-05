@@ -14,6 +14,9 @@ public protocol FeatureClient: AnyObject {
     func disconnect() async
 
     func addProject(path: String) async throws
+    /// Finds or creates a machine's Scratch project, for a thread with no
+    /// project, and returns its id.
+    func ensureScratchProject(environmentID: String) async throws -> String
     func createThread(projectID: String, title: String?, selection: FeatureSelection?) async throws -> FeatureThread
     func createThreadAndSend(
         projectID: String,
@@ -273,6 +276,7 @@ public extension FeatureClient {
     func removeEnvironment(id: String) async throws {}
     func disconnect() async {}
     func addProject(path: String) async throws {}
+    func ensureScratchProject(environmentID: String) async throws -> String { throw FeatureCapabilityUnavailable("Threads without a project") }
     func releaseThread(id: String) {}
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws {
         guard attachments.isEmpty && !dismiss else { throw FeatureCapabilityUnavailable("Question actions") }

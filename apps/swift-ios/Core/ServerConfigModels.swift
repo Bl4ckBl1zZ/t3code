@@ -674,6 +674,9 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public let threadResumeCompletionMarker: Bool?
     /// Whether shell subscriptions can emit a catch-up completion marker.
     public let shellResumeCompletionMarker: Bool?
+    /// The folder behind this environment's Scratch project, for threads with
+    /// no project. Present only on servers that answer `projects.ensureScratch`.
+    public var scratchWorkspaceRoot: String? = nil
 
     public init(
         providers: [ServerProviderSnapshot],
@@ -700,6 +703,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case providers, settings, t3WorkDirectory, cwd, environment
         case threadSnapshotWindow, threadResumeCompletionMarker, shellResumeCompletionMarker
+        case scratchWorkspaceRoot
     }
 
     public init(from decoder: any Decoder) throws {
@@ -724,6 +728,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .shellResumeCompletionMarker
         )
+        scratchWorkspaceRoot = try container.decodeIfPresent(String.self, forKey: .scratchWorkspaceRoot)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -742,6 +747,7 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             shellResumeCompletionMarker,
             forKey: .shellResumeCompletionMarker
         )
+        try container.encodeIfPresent(scratchWorkspaceRoot, forKey: .scratchWorkspaceRoot)
     }
 }
 

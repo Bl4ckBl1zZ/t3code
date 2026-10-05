@@ -51,6 +51,9 @@ public struct NewThreadView: View {
     @State private var discardedDraft = false
     @State private var confirmsLeaving = false
     @State private var didFocusPrompt = false
+    /// The machine whose "No project" folder is being opened.
+    @State private var openingScratchEnvironmentID: String?
+    @State private var scratchFailure: String?
     @FocusState private var promptFocused: Bool
     private let voice = VoiceComposerCoordinator.shared
 
@@ -156,6 +159,14 @@ public struct NewThreadView: View {
                 },
                 onRefresh: { Task { await loadBranches(refresh: true) } }
             )
+        }
+        .alert("Couldn’t Start Without a Project", isPresented: Binding(
+            get: { scratchFailure != nil },
+            set: { if !$0 { scratchFailure = nil } }
+        )) {
+            Button("OK") {}
+        } message: {
+            Text(scratchFailure ?? "")
         }
         .alert("Couldn’t Start Task", isPresented: $submissionFailed) {
             Button("OK") {}
@@ -306,7 +317,7 @@ public struct NewThreadView: View {
 
     private var projectMenu: some View {
         Menu {
-            ForEach(creationProjects) { project in
+            ForEach(listedProjects) { project in
                 // A toggle rather than a picker: choosing the current project
                 // again still reaches `selectProject`, which reloads branches.
                 // Its on state draws the checkmark, leaving the row's image
@@ -328,11 +339,18 @@ public struct NewThreadView: View {
                     }
                 }
             }
+            scratchChoices
         } label: {
             // Primary text, not the accent role: most palettes define accent
             // as the message-bubble fill, which nearly vanishes on the sheet.
             HStack(spacing: 4) {
-                if let project = selectedProject {
+                if openingScratchEnvironmentID != nil {
+                    ProgressView()
+                        .padding(.trailing, 2)
+                } else if isScratchSelected {
+                    Image(systemName: "tray")
+                        .padding(.trailing, 2)
+                } else if let project = selectedProject {
                     ProjectFaviconBadge(
                         environmentID: project.environmentID,
                         workspaceRoot: project.path,
@@ -345,7 +363,7 @@ public struct NewThreadView: View {
                     }
                     .padding(.trailing, 2)
                 }
-                Text(selectedProject?.name ?? "a project")
+                Text(selectedProjectTitle)
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.semibold))
@@ -362,7 +380,82 @@ public struct NewThreadView: View {
             await menuIcons.decode(menuIcons.faviconURLs(creationProjects))
         }
         .accessibilityLabel("Project")
-        .accessibilityValue(selectedProject?.name ?? "None")
+        .accessibilityValue(isScratchSelected ? "No project" : selectedProject?.name ?? "None")
+    }
+
+    private var selectedProjectTitle: String {
+        isScratchSelected ? "No project" : selectedProject?.name ?? "a project"
+    }
+
+    /// The machines' Scratch projects are offered as "No project" below the
+    /// list rather than among it.
+    private var listedProjects: [FeatureProject] {
+        let configs = model.client.workspaceServerConfigs()
+        return creationProjects.filter { !DailyUXCreationContext.isScratchProject($0, serverConfigs: configs) }
+    }
+
+    private var scratchEnvironments: [FeatureEnvironment] {
+        DailyUXCreationContext.scratchEnvironments(
+            in: model.snapshot,
+            serverConfigs: model.client.workspaceServerConfigs()
+        )
+    }
+
+    private var isScratchSelected: Bool {
+        selectedProject.map {
+            DailyUXCreationContext.isScratchProject($0, serverConfigs: model.client.workspaceServerConfigs())
+        } ?? false
+    }
+
+    /// One "No project" per machine that has a Scratch folder; with a single
+    /// machine it needs no name.
+    @ViewBuilder
+    private var scratchChoices: some View {
+        let environments = scratchEnvironments
+        if !environments.isEmpty {
+            Section {
+                ForEach(environments) { environment in
+                    Toggle(isOn: Binding(
+                        get: { isScratchSelected && selectedProject?.environmentID == environment.id },
+                        set: { _ in openScratch(environmentID: environment.id) }
+                    )) {
+                        Label {
+                            Text(environments.count > 1 ? "No Project on \(environment.name)" : "No Project")
+                            Text("A folder for tasks outside any repository")
+                        } icon: {
+                            Image(systemName: "tray")
+                        }
+                    }
+                    .disabled(openingScratchEnvironmentID != nil)
+                }
+            }
+        }
+    }
+
+    /// Finds or creates the machine's Scratch project and starts the task
+    /// there. The draft follows, as it does for any project switch.
+    private func openScratch(environmentID: String) {
+        let configs = model.client.workspaceServerConfigs()
+        if let existing = creationProjects.first(where: {
+            $0.environmentID == environmentID && DailyUXCreationContext.isScratchProject($0, serverConfigs: configs)
+        }) {
+            selectProject(existing.id)
+            return
+        }
+        guard openingScratchEnvironmentID == nil else { return }
+        openingScratchEnvironmentID = environmentID
+        Task { @MainActor in
+            defer { openingScratchEnvironmentID = nil }
+            do {
+                let projectID = try await model.openScratchProject(environmentID: environmentID)
+                guard creationProjects.contains(where: { $0.id == projectID }) else { return }
+                selectProject(projectID)
+            } catch is CancellationError {
+                return
+            } catch {
+                scratchFailure = error.localizedDescription
+            }
+        }
     }
 
     @ViewBuilder
@@ -553,6 +646,12 @@ public struct NewThreadView: View {
                 }
             }
             .t3ProminentButtonStyle()
+            ForEach(scratchEnvironments) { environment in
+                Button(scratchEnvironments.count > 1 ? "Start Without a Project on \(environment.name)" : "Start Without a Project") {
+                    openScratch(environmentID: environment.id)
+                }
+                .disabled(openingScratchEnvironmentID != nil)
+            }
         }
     }
 

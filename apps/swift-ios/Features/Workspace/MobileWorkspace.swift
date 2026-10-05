@@ -36,6 +36,9 @@ public struct MobileWorkspaceEnvironmentConfig: Equatable, Sendable {
     /// `ServerConfigSnapshot` does not decode this field yet.
     public let t3WorkDirectory: String?
     public let providers: [ServerProviderSnapshot]
+    /// The folder behind the server's Scratch project ("No project"). Absent
+    /// on servers that cannot start a thread without one.
+    public var scratchWorkspaceRoot: String? = nil
 
     public init(
         environmentID: String,

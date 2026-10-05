@@ -121,6 +121,36 @@ enum DailyUXCreationContext {
         return (project.name, parts.isEmpty ? nil : parts.joined(separator: " · "))
     }
 
+    /// Machines that can start a task with no project: connected, and whose
+    /// server names a Scratch folder. Ports `availableScratchWorkspaceRoot`
+    /// from packages/client-runtime/src/operations/projects.ts.
+    static func scratchEnvironments(
+        in snapshot: FeatureSnapshot,
+        serverConfigs: [MobileWorkspaceEnvironmentConfig]
+    ) -> [FeatureEnvironment] {
+        let scratchIDs = Set(serverConfigs.filter { $0.scratchWorkspaceRoot != nil }.map(\.environmentID))
+        return snapshot.environments.filter { environment in
+            let state = environment.isActive ? snapshot.connection.state : environment.connectionState
+            return state == .connected && scratchIDs.contains(environment.id)
+        }
+    }
+
+    /// Whether a project is its machine's Scratch project, which the task sheet
+    /// names "No project" instead of listing it among the others.
+    static func isScratchProject(
+        _ project: FeatureProject,
+        serverConfigs: [MobileWorkspaceEnvironmentConfig]
+    ) -> Bool {
+        guard let root = serverConfigs.first(where: { $0.environmentID == project.environmentID })?
+            .scratchWorkspaceRoot else { return false }
+        func normalized(_ path: String) -> String {
+            var path = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+            return path
+        }
+        return normalized(project.path) == normalized(root)
+    }
+
     /// The projects a task can be started in.
     ///
     /// `serverConfigs` is required rather than defaulted because it is the only

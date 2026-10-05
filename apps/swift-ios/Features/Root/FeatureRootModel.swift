@@ -274,6 +274,20 @@ public final class FeatureRootModel {
         }
     }
 
+    /// Opens a machine's "No project" folder for a new task: finds or creates
+    /// its Scratch project and returns the id once the snapshot holds it, since
+    /// the task sheet selects from the snapshot.
+    /// Throws rather than raising the root alert, which a presented task
+    /// sheet would cover.
+    public func openScratchProject(environmentID: String) async throws -> String {
+        let projectID = try await client.ensureScratchProject(environmentID: environmentID)
+        install(try await client.initialSnapshot())
+        guard snapshot.projects.contains(where: { $0.id == projectID }) else {
+            throw ScratchProjectNotLoaded()
+        }
+        return projectID
+    }
+
     public func createThread(
         projectID: String,
         title: String?,
@@ -1589,5 +1603,12 @@ public final class FeatureRootModel {
 private extension FeatureDraftAttachment {
     var upload: FeatureUploadAttachment {
         FeatureUploadAttachment(data: data, name: filename, mimeType: mimeType)
+    }
+}
+
+/// The Scratch project was created, but this device has not received it yet.
+struct ScratchProjectNotLoaded: LocalizedError {
+    var errorDescription: String? {
+        "The folder for threads without a project has not reached this device yet. Try again."
     }
 }

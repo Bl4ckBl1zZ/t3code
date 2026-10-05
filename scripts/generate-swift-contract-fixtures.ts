@@ -92,6 +92,7 @@ import {
   CommandId,
   VcsStatusResult,
   ReviewDiffPreviewResult,
+  ProjectEnsureScratchResult,
   OrchestrationV2Run,
   OrchestrationV2ConversationMessage,
   OrchestrationV2Command,
@@ -2139,6 +2140,23 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
 } else NodeFS.writeFileSync(reviewChangesPath, reviewChangesFixture);
+
+// "No project": what projects.ensureScratch answers.
+const scratchProjectPath = NodePath.join(NodePath.dirname(outputPath), "scratchProject.json");
+const scratchProjectFixture = `${JSON.stringify(
+  Schema.encodeSync(ProjectEnsureScratchResult)({ projectId: ProjectId.make("project-scratch") }),
+  null,
+  2,
+)}\n`;
+if (process.argv.includes("--check")) {
+  if (
+    !NodeFS.existsSync(scratchProjectPath) ||
+    NodeFS.readFileSync(scratchProjectPath, "utf8") !== scratchProjectFixture
+  ) {
+    console.error("[swift-fixtures] scratchProject.json is stale; regenerate fixtures.");
+    process.exit(1);
+  }
+} else NodeFS.writeFileSync(scratchProjectPath, scratchProjectFixture);
 
 // The Swift client mirrors the protocol version by hand. Pin it here so a bump
 // in `packages/contracts` fails the Swift test instead of shipping a build the

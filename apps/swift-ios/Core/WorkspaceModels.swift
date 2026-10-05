@@ -587,6 +587,12 @@ public struct ReviewDiffSource: Codable, Identifiable, Equatable, Sendable {
     public let truncated: Bool
 }
 
+/// `projects.ensureScratch`: the environment's Scratch project, created on
+/// first request.
+public struct ProjectEnsureScratchResult: Codable, Equatable, Sendable {
+    public let projectId: String
+}
+
 public struct ReviewDiffPreview: Codable, Equatable, Sendable {
     public let cwd: String
     public let generatedAt: String
