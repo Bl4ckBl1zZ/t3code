@@ -140,6 +140,9 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     /// main actor from the current colour scheme, which this render task does
     /// not know and must not capture.
     case htmlEmbed(html: String, terminated: Bool)
+    /// Carried through unrendered, like the embed: the diagram document is
+    /// assembled on the main actor for the current colour scheme.
+    case mermaid(source: String, terminated: Bool, citationRange: NSRange? = nil)
     case artifactTemplate(CodexArtifactTemplate)
     case thematicBreak
 }
@@ -477,6 +480,9 @@ final class MarkdownRenderCache: @unchecked Sendable {
 
             case let .htmlEmbed(html, terminated):
                 rendered = .htmlEmbed(html: html, terminated: terminated)
+
+            case let .mermaid(source, terminated):
+                rendered = .mermaid(source: source, terminated: terminated)
 
             case let .artifactTemplate(template):
                 rendered = .artifactTemplate(template)

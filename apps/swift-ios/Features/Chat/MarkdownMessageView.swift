@@ -355,6 +355,15 @@ private struct MarkdownBlockView: View, Equatable {
         case let .htmlEmbed(html, terminated):
             HtmlEmbedView(html: html, terminated: terminated)
 
+        case let .mermaid(source, terminated, citationRange):
+            // A quoted range is highlighted in the source, so it shows as code.
+            MarkdownCodeBlockView(
+                language: MermaidDiagram.fenceLanguage,
+                code: source,
+                citationRange: citationRange,
+                diagramTerminated: citationRange == nil ? terminated : nil
+            )
+
         case let .artifactTemplate(template):
             NativeArtifactTemplateCard(template: template)
 
@@ -553,6 +562,31 @@ private struct MarkdownCodeBlockView: View {
     let language: String?
     let code: String
     let citationRange: NSRange?
+    /// Set for a ```mermaid fence: whether its fence has closed. A closed fence
+    /// renders as a diagram, with a toggle back to this source.
+    var diagramTerminated: Bool? = nil
+    @SwiftUI.Environment(\.markdownIsStreaming) private var isStreaming
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    @State private var showsCode = false
+    @State private var diagramFailure: String?
+    @State private var isDiagramExpanded = false
+
+    private var diagramTheme: HtmlEmbed.Theme { colorScheme == .dark ? .dark : .light }
+
+    /// Ready only once the fence closed. A diagram that failed before keeps
+    /// failing, so the remembered failure goes straight to the source.
+    private var diagramReady: Bool {
+        guard let diagramTerminated,
+              HtmlEmbed.phase(terminated: diagramTerminated, isStreaming: isStreaming) == .ready,
+              !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return renderFailure == nil
+    }
+
+    private var renderFailure: String? {
+        diagramFailure ?? MermaidDiagram.cachedFailure(source: code, theme: diagramTheme)
+    }
+
+    private var showsDiagram: Bool { diagramReady && !showsCode }
     private var codeText: Text {
         if let citationRange { return Text(MarkdownCitationHighlight.mark(AttributedString(code), range: citationRange)) }
         // Coloured on the render task; plain until then, never on this thread.
@@ -581,23 +615,8 @@ private struct MarkdownCodeBlockView: View {
                     .foregroundStyle(T3Colors.textTertiary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Button {
-                    wrapOverride = !wrapsLines
-                } label: {
-                    Label("Wrap Lines", systemImage: "arrow.turn.down.left")
-                        .labelStyle(.iconOnly)
-                        .font(T3Typography.control)
-                        .foregroundStyle(wrapsLines ? T3Colors.accent : T3Colors.textSecondary)
-                        .frame(width: 30, height: 30)
-                        .background {
-                            if wrapsLines { Circle().fill(T3Colors.accent.opacity(0.14)) }
-                        }
-                        .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Wrap lines")
-                .accessibilityValue(wrapsLines ? "On" : "Off")
+                if diagramReady { diagramToggle }
+                if showsDiagram { expandDiagramButton } else { wrapButton }
                 Button(action: copy) {
                     Label(showsCopied ? "Copied" : "Copy", systemImage: showsCopied ? "checkmark" : "doc.on.doc")
                         .labelStyle(.iconOnly)
@@ -615,32 +634,117 @@ private struct MarkdownCodeBlockView: View {
             .padding(.trailing, 2)
             .frame(minHeight: 36)
 
-            if wrapsLines {
-                codeText
-                    .font(T3Typography.code)
-                    .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 13)
-                    .padding(.top, 2)
-                    .padding(.bottom, 12)
-            } else {
-                ScrollView(.horizontal) {
-                    codeText
-                        .font(T3Typography.code)
-                        .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
-                        .lineSpacing(3)
-                        .fixedSize(horizontal: true, vertical: true)
-                        .padding(.horizontal, 13)
-                        .padding(.top, 2)
-                        .padding(.bottom, 12)
+            if showsDiagram {
+                MermaidDiagramView(source: code, theme: diagramTheme, isScrollEnabled: false) { failure in
+                    diagramFailure = failure
                 }
-                .scrollIndicators(.hidden)
+            } else {
+                if let renderFailure, diagramTerminated != nil {
+                    Text(verbatim: "Couldn’t render diagram: \(renderFailure)")
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 13)
+                        .padding(.bottom, 6)
+                }
+                codeBody
             }
         }
         .background(T3Colors.surfaceRaised, in: shape)
         .clipShape(shape)
+        .sheet(isPresented: $isDiagramExpanded) {
+            NavigationStack {
+                MermaidDiagramView(source: code, theme: diagramTheme, isScrollEnabled: true) { _ in }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(T3Colors.surface)
+                    .navigationTitle("Diagram")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .t3NavigationChrome()
+                    .t3SheetToolbar(.close)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var codeBody: some View {
+        if wrapsLines {
+            codeText
+                .font(T3Typography.code)
+                .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 13)
+                .padding(.top, 2)
+                .padding(.bottom, 12)
+        } else {
+            ScrollView(.horizontal) {
+                codeText
+                    .font(T3Typography.code)
+                    .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(.horizontal, 13)
+                    .padding(.top, 2)
+                    .padding(.bottom, 12)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    private var wrapButton: some View {
+        Button {
+            wrapOverride = !wrapsLines
+        } label: {
+            Label("Wrap Lines", systemImage: "arrow.turn.down.left")
+                .labelStyle(.iconOnly)
+                .font(T3Typography.control)
+                .foregroundStyle(wrapsLines ? T3Colors.accent : T3Colors.textSecondary)
+                .frame(width: 30, height: 30)
+                .background {
+                    if wrapsLines { Circle().fill(T3Colors.accent.opacity(0.14)) }
+                }
+                .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Wrap lines")
+        .accessibilityValue(wrapsLines ? "On" : "Off")
+    }
+
+    /// Swaps between the diagram and its source, like the web client.
+    private var diagramToggle: some View {
+        Button {
+            showsCode.toggle()
+        } label: {
+            Label(
+                showsCode ? "Show Diagram" : "Show Code",
+                systemImage: showsCode ? "point.3.connected.trianglepath.dotted" : "chevron.left.forwardslash.chevron.right"
+            )
+            .labelStyle(.iconOnly)
+            .font(T3Typography.control)
+            .foregroundStyle(T3Colors.textSecondary)
+            .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(showsCode ? "Show diagram" : "Show code")
+    }
+
+    private var expandDiagramButton: some View {
+        Button {
+            isDiagramExpanded = true
+        } label: {
+            Label("Expand Diagram", systemImage: "arrow.up.left.and.arrow.down.right")
+                .labelStyle(.iconOnly)
+                .font(T3Typography.control)
+                .foregroundStyle(T3Colors.textSecondary)
+                .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Expand diagram")
+        .accessibilityHint("Opens the diagram full screen")
     }
 
     /// The icon turns into a checkmark for a moment; no alert and no HUD,

@@ -40,6 +40,9 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     /// the closing fence has not arrived, which is what keeps half a document
     /// out of the web view.
     case htmlEmbed(html: String, terminated: Bool)
+    /// A ```mermaid fence. Renders as a diagram once `terminated`; until then,
+    /// and whenever rendering fails, it reads as the code block it is.
+    case mermaid(source: String, terminated: Bool)
     case artifactTemplate(CodexArtifactTemplate)
     case thematicBreak
 }
@@ -173,6 +176,9 @@ private struct MarkdownBlockParser {
         // labelling a fence with a language the renderer happens to know.
         if HtmlEmbed.isEmbedLanguage(opening.language) {
             return .htmlEmbed(html: code, terminated: terminated)
+        }
+        if MermaidDiagram.isMermaidLanguage(opening.language) {
+            return .mermaid(source: code, terminated: terminated)
         }
         return .codeBlock(language: opening.language, code: code)
     }

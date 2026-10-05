@@ -83,6 +83,8 @@ export default defineConfig({
       "apps/swift-ios/Tests/CoreTests/Fixtures/**",
       // Generated native Lucide vector catalogue; keep the bundled payload compact.
       "apps/swift-ios/Resources/ProjectIconPaths.json",
+      // Vendored minified Mermaid bundle for native diagrams; byte-for-byte upstream.
+      "apps/swift-ios/Resources/mermaid.min.js",
       "apps/web/public/mockServiceWorker.js",
       "apps/web/src/lib/vendor/qrcodegen.ts",
       "apps/mobile/uniwind-types.d.ts",
