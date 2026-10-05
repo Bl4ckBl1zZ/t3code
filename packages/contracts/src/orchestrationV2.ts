@@ -10,6 +10,7 @@ import { ToolActivitySurface, ToolActivityIcon, ToolActivitySource } from "./too
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 
 import {
@@ -939,6 +940,87 @@ export const OrchestrationV2ProviderSessionDetached = Schema.Struct({
 });
 export type OrchestrationV2ProviderSessionDetached =
   typeof OrchestrationV2ProviderSessionDetached.Type;
+
+/** The literal `kind` a union member is stored and sent with. */
+function encodedKind(member: Schema.Top): string {
+  const encoded = SchemaAST.toEncoded(member.ast);
+  const kind = SchemaAST.isObjects(encoded)
+    ? encoded.propertySignatures.find((property) => property.name === "kind")?.type
+    : undefined;
+  if (kind !== undefined && SchemaAST.isLiteral(kind) && typeof kind.literal === "string") {
+    return kind.literal;
+  }
+  throw new Error("Each member of a kind union needs a literal string `kind`.");
+}
+
+/**
+ * A union tagged by `kind` that tolerates kinds this build does not know.
+ * After the known members comes a decode-only arm: an object with an unknown
+ * `kind`, or none, decodes through `fallback` to a known member instead of
+ * failing, so a newer server can add kinds without breaking older clients.
+ * A known kind whose fields do not decode still fails. The arm never encodes;
+ * values always match a known member first.
+ */
+function kindUnionWithFallback<
+  const Members extends ReadonlyArray<Schema.Top & { readonly Encoded: { readonly kind: string } }>,
+  Unknown extends Schema.Top,
+>(
+  members: Members,
+  unknown: (kind: Schema.optional<Schema.String>) => Unknown,
+  fallback: (value: Unknown["Type"]) => Schema.Union<Members>["Encoded"],
+) {
+  const knownKinds: ReadonlySet<string> = new Set(members.map(encodedKind));
+  const unknownKind = unknown(
+    Schema.optional(
+      Schema.String.check(
+        Schema.makeFilter(
+          (kind: string) => !knownKinds.has(kind) || "A known kind must decode in full.",
+        ),
+      ),
+    ),
+  ).pipe(
+    Schema.decodeTo(Schema.Union(members), {
+      decode: SchemaGetter.transform(fallback),
+      encode: SchemaGetter.forbidden(() => "Unknown kinds are decode-only."),
+    }),
+  );
+  // Members are tried in order, so the fallback must come last.
+  return Schema.Union([...members, unknownKind]);
+}
+
+const PendingBackgroundTaskFields = {
+  taskId: TrimmedNonEmptyString,
+  /** The work's name: a subagent's title, a command's description, a monitor's. */
+  description: Schema.optional(TrimmedNonEmptyString),
+};
+
+/**
+ * Work a settled thread still runs in the background, as the thread shell
+ * lists it: a subagent, a background command (a dev server), a monitor that
+ * waits for something, or work the server cannot name (`background_task`).
+ * Derived from the thread's live turn items and subagents; never persisted.
+ * Unknown kinds from a newer server decode as `background_task`.
+ */
+export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(
+  [
+    Schema.Struct({
+      ...PendingBackgroundTaskFields,
+      kind: Schema.Literal("subagent"),
+      /** The subagent's own thread, when it has one. */
+      childThreadId: Schema.optional(ThreadId),
+    }),
+    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("command") }),
+    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("monitor") }),
+    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("background_task") }),
+  ],
+  (kind) => Schema.Struct({ ...PendingBackgroundTaskFields, kind }),
+  ({ taskId, description }) => ({
+    taskId,
+    ...(description === undefined ? {} : { description }),
+    kind: "background_task",
+  }),
+);
+export type OrchestrationV2PendingBackgroundTask = typeof OrchestrationV2PendingBackgroundTask.Type;
 
 /** Provider and adapter metadata that should not overwrite the app thread's title. */
 export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
@@ -2072,6 +2154,12 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
    * the process that owned it. Absent on servers that predate the field.
    */
   activeAgentCount: Schema.optional(NonNegativeInt),
+  /**
+   * What the thread still runs in the background once its latest run has
+   * settled, named and kinded (orchestrationV2PendingBackgroundWork). Empty
+   * while a run is in flight. Absent on servers that predate the field.
+   */
+  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)),
   // Distinct provider instances that have owned a root provider thread here,
   // in first-use order, so lists can show where a handed-off thread has been.
   // Omitted by servers that predate it; decodes to [].

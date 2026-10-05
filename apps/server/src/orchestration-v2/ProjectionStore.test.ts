@@ -5,6 +5,7 @@ import {
   MessageId,
   type ModelSelection,
   NodeId,
+  type OrchestrationV2PendingBackgroundTask,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -1578,6 +1579,67 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       );
       // getThreadShell feeds the live shell streams, so it must agree.
       assert.equal(threadShell?.backgroundProcessCount, 2);
+      // Nothing has run, so nothing is left running after a run either.
+      assert.deepStrictEqual(threadShell?.pendingBackgroundTasks, []);
+
+      const runId = RunId.make("run:projection-shell-background");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-background-run"),
+        type: "run.created",
+        threadId,
+        runId,
+        nodeId: NodeId.make("node:projection-shell-background"),
+        driver,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:projection-shell-background"),
+          rootNodeId: NodeId.make("node:projection-shell-background"),
+          activeAttemptId: null,
+          status: "completed",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+
+      // The settled run left the commands running. The monitor is its own entry:
+      // it wakes the agent, while the command it watches may not.
+      const expected: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+        {
+          taskId: "turn-item:bg-live-1",
+          description: "pnpm vitest run apps/web",
+          kind: "command",
+        },
+        { taskId: "turn-item:bg-monitor", kind: "monitor" },
+        {
+          taskId: "turn-item:bg-live-2",
+          description: "pnpm vitest run apps/web",
+          kind: "command",
+        },
+      ];
+      const settledSnapshot = yield* projectionStore.getShellSnapshot();
+      assert.deepStrictEqual(
+        settledSnapshot.threads.find((thread) => thread.id === threadId)?.pendingBackgroundTasks,
+        expected,
+      );
+      assert.deepStrictEqual(
+        (yield* projectionStore.getThreadShell(threadId))?.pendingBackgroundTasks,
+        expected,
+      );
+      // The full projection derives the same list as the shell query.
+      assert.deepStrictEqual(
+        threadShellFromProjection(yield* projectionStore.getThreadProjection(threadId))
+          .pendingBackgroundTasks,
+        expected,
+      );
     }),
   );
 
@@ -1670,6 +1732,42 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       // finished agent does not report at all.
       assert.equal(shell.threads.find((thread) => thread.id === threadId)?.activeAgentCount, 2);
       assert.equal(threadShell?.activeAgentCount, 2);
+
+      const runId = RunId.make("run:projection-shell-agents");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-shell-agents-run"),
+        type: "run.created",
+        threadId,
+        runId,
+        nodeId: NodeId.make("node:projection-shell-agents"),
+        driver,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:projection-shell-agents"),
+          rootNodeId: NodeId.make("node:projection-shell-agents"),
+          activeAttemptId: null,
+          status: "completed",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      // The same two agents, now listed as what the settled thread waits on.
+      assert.deepStrictEqual(
+        (yield* projectionStore.getThreadShell(threadId))?.pendingBackgroundTasks,
+        [
+          { taskId: "subagent:live-1", kind: "subagent" },
+          { taskId: "subagent:live-2", kind: "subagent" },
+        ],
+      );
     }),
   );
 

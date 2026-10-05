@@ -25,6 +25,7 @@ import {
   OrchestrationV2Command,
   OrchestrationV2LimitRecoveryUpdate,
   OrchestrationV2DomainEvent,
+  OrchestrationV2PendingBackgroundTask,
   OrchestrationV2RpcSchemas,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2Subagent,
@@ -933,4 +934,32 @@ it("preserves tool cancellation and denial metadata through persisted and wire s
     expect(wire.toolNonExecutionKind).toBe(kind);
     expect(decodeWire(wire)).toEqual(item);
   }
+});
+
+describe("OrchestrationV2PendingBackgroundTask", () => {
+  const decode = Schema.decodeUnknownSync(Schema.Array(OrchestrationV2PendingBackgroundTask));
+  const encode = Schema.encodeSync(Schema.Array(OrchestrationV2PendingBackgroundTask));
+
+  it("decodes kinds from a newer server as work it cannot name", () => {
+    const tasks = decode([
+      { taskId: "bg-1", description: "npm run dev", kind: "command" },
+      { taskId: "bg-2", kind: "monitor" },
+      { taskId: "bg-3", kind: "subagent", childThreadId: "thread-child" },
+      { taskId: "bg-4", description: "Nightly", kind: "workflow", schedule: "0 3 * * *" },
+      { taskId: "bg-5" },
+    ]);
+    expect(tasks).toEqual([
+      { taskId: "bg-1", description: "npm run dev", kind: "command" },
+      { taskId: "bg-2", kind: "monitor" },
+      { taskId: "bg-3", kind: "subagent", childThreadId: "thread-child" },
+      { taskId: "bg-4", description: "Nightly", kind: "background_task" },
+      { taskId: "bg-5", kind: "background_task" },
+    ]);
+    // The fallback is decode-only: what was decoded encodes as its known member.
+    expect(encode(tasks)).toEqual(tasks);
+  });
+
+  it("still rejects a known kind whose fields do not decode", () => {
+    expect(() => decode([{ taskId: "", kind: "command" }])).toThrow();
+  });
 });

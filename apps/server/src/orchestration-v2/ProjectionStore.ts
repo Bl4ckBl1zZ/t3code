@@ -52,6 +52,7 @@ import {
   isOrchestrationV2SupersededInterrupt,
   isOrchestrationV2TurnItemVisible,
 } from "@t3tools/shared/orchestrationV2Timeline";
+import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -657,6 +658,9 @@ type ShellThreadRow = {
  */
 const LiveBackgroundCommandRows = Schema.Array(
   Schema.Struct({
+    id: Schema.String,
+    title: Schema.NullOr(Schema.String),
+    input: Schema.NullOr(Schema.String),
     taskId: Schema.NullOr(Schema.String),
     waitKind: Schema.NullOr(Schema.String),
     waitingOnTaskId: Schema.NullOr(Schema.String),
@@ -695,31 +699,34 @@ function providerInstanceHistoryFromRow(
 }
 
 /**
- * Count live background commands from the shell row, using the same shared rule
- * the clients apply. The SQL side deliberately selects rows rather than a count:
- * whether a monitor folds into the command it watches is one rule, and it lives
- * in `orchestrationV2BackgroundProcessCount`.
+ * Live background commands from the shell row, shaped as turn items so the
+ * shared rules (`orchestrationV2BackgroundProcessCount`,
+ * `derivePendingBackgroundWork`) read them exactly as they read a full
+ * projection. The SQL side deliberately selects rows rather than a count:
+ * whether a monitor folds into the command it watches is one rule, and it
+ * lives in contracts.
  */
-function backgroundProcessCountFromRow(liveBackgroundCommandsJson: string | null): number {
+function liveBackgroundCommandsFromRow(liveBackgroundCommandsJson: string | null) {
   if (liveBackgroundCommandsJson === null) {
-    return 0;
+    return [];
   }
   // A malformed row costs a sidebar dot, not the whole shell read.
   const rows = Option.getOrElse(
     decodeLiveBackgroundCommandRows(liveBackgroundCommandsJson),
     () => [],
   );
-  return orchestrationV2BackgroundProcessCount(
-    rows.map((row) => ({
-      type: "command_execution" as const,
-      // The query already filtered to non-terminal rows.
-      status: "waiting" as const,
-      background: true,
-      ...(row.taskId === null ? {} : { taskId: row.taskId }),
-      ...(row.waitKind === "monitor" ? { waitKind: "monitor" as const } : {}),
-      ...(row.waitingOnTaskId === null ? {} : { waitingOnTaskId: row.waitingOnTaskId }),
-    })),
-  );
+  return rows.map((row) => ({
+    id: row.id,
+    type: "command_execution" as const,
+    // The query already filtered to non-terminal rows.
+    status: "waiting" as const,
+    title: row.title,
+    ...(row.input === null ? {} : { input: row.input }),
+    background: true,
+    ...(row.taskId === null ? {} : { taskId: row.taskId }),
+    ...(row.waitKind === "monitor" ? { waitKind: "monitor" as const } : {}),
+    ...(row.waitingOnTaskId === null ? {} : { waitingOnTaskId: row.waitingOnTaskId }),
+  }));
 }
 
 /**
@@ -728,6 +735,9 @@ function backgroundProcessCountFromRow(liveBackgroundCommandsJson: string | null
  */
 const LiveSubagentRows = Schema.Array(
   Schema.Struct({
+    id: Schema.String,
+    title: Schema.NullOr(Schema.String),
+    childThreadId: Schema.NullOr(Schema.String),
     taskType: Schema.NullOr(Schema.String),
     agentKind: Schema.NullOr(Schema.String),
   }),
@@ -735,26 +745,29 @@ const LiveSubagentRows = Schema.Array(
 const decodeLiveSubagentRows = Schema.decodeUnknownOption(Schema.fromJsonString(LiveSubagentRows));
 
 /**
- * Count live delegated agents from the shell row. Rows rather than a count for
- * the same reason as background commands: whether a task is an agent or a watch
+ * Live delegated agents from the shell row. Rows rather than a count for the
+ * same reason as background commands: whether a task is an agent or a watch
  * loop is one rule, and it lives in `orchestrationV2ActiveAgentCount`.
  */
-function activeAgentCountFromRow(liveSubagentsJson: string | null): number {
+function liveSubagentsFromRow(liveSubagentsJson: string | null) {
   if (liveSubagentsJson === null) {
-    return 0;
+    return [];
   }
   // A malformed row costs a sidebar label, not the whole shell read.
   const rows = Option.getOrElse(decodeLiveSubagentRows(liveSubagentsJson), () => []);
-  return orchestrationV2ActiveAgentCount(
-    rows.map((row) => ({
-      // The query already filtered to non-terminal rows.
-      status: "running" as const,
-      ...(row.taskType === null ? {} : { taskType: row.taskType }),
-      ...(row.agentKind === "agent" || row.agentKind === "background"
-        ? { agentKind: row.agentKind }
+  return rows.map((row) => ({
+    id: row.id,
+    // The query already filtered to non-terminal rows.
+    status: "running" as const,
+    title: row.title,
+    childThreadId: row.childThreadId === null ? null : ThreadId.make(row.childThreadId),
+    ...(row.taskType === null ? {} : { taskType: row.taskType }),
+    ...(row.agentKind === "agent"
+      ? { agentKind: "agent" as const }
+      : row.agentKind === "background"
+        ? { agentKind: "background" as const }
         : {}),
-    })),
-  );
+  }));
 }
 
 type ShellRunRow = {
@@ -1257,6 +1270,12 @@ export function threadShellFromProjection(
     ),
     backgroundProcessCount: orchestrationV2BackgroundProcessCount(projection.turnItems),
     activeAgentCount: orchestrationV2ActiveAgentCount(projection.subagents),
+    pendingBackgroundTasks: derivePendingBackgroundWork({
+      latestRunStatus: latestRun?.status ?? null,
+      hasActiveRun: activeRun !== null,
+      turnItems: projection.turnItems,
+      subagents: projection.subagents,
+    }),
     itemCount: activeLocalTurnItems(projection).length,
     visibleItemCount: projection.visibleTurnItems.length,
     createdAt: projection.thread.createdAt,
@@ -1329,6 +1348,7 @@ type ShellThreadState = {
   readonly hasActionableProposedPlan: boolean;
   readonly backgroundProcessCount: number;
   readonly activeAgentCount: number;
+  readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
   readonly itemCount: number;
   readonly runlessItemCount: number;
   readonly updatedAt: OrchestrationV2ThreadProjection["updatedAt"];
@@ -1488,6 +1508,7 @@ function shellFromState(input: {
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
     backgroundProcessCount: input.state.backgroundProcessCount,
     activeAgentCount: input.state.activeAgentCount,
+    pendingBackgroundTasks: input.state.pendingBackgroundTasks,
     itemCount: input.state.itemCount,
     visibleItemCount: input.visibleItemCount,
     createdAt: input.state.thread.createdAt,
@@ -3162,6 +3183,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               (
                 SELECT json_group_array(
                   json_object(
+                    'id', i.turn_item_id,
+                    'title', json_extract(i.payload_json, '$.title'),
+                    -- Only a name rides the shell; derivePendingBackgroundWork
+                    -- cuts the description to the same length.
+                    'input', substr(json_extract(i.payload_json, '$.input'), 1, 200),
                     'taskId', json_extract(i.payload_json, '$.taskId'),
                     'waitKind', json_extract(i.payload_json, '$.waitKind'),
                     'waitingOnTaskId', json_extract(i.payload_json, '$.waitingOnTaskId')
@@ -3179,6 +3205,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               (
                 SELECT json_group_array(
                   json_object(
+                    'id', s.subagent_id,
+                    'title', json_extract(s.payload_json, '$.title'),
+                    'childThreadId', s.child_thread_id,
                     'taskType', json_extract(s.payload_json, '$.taskType'),
                     'agentKind', json_extract(s.payload_json, '$.agentKind')
                   )
@@ -3336,6 +3365,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 : DateTime.makeUnsafe(row.blocking_run_completed_at);
           }
         }
+        const liveCommands = liveBackgroundCommandsFromRow(row.live_background_commands_json);
+        const liveSubagents = liveSubagentsFromRow(row.live_subagents_json);
         return {
           thread,
           latestRunId,
@@ -3371,8 +3402,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           // background command dies with the provider CLI process, and startup
           // reconciliation retires every item that outlived one before any client
           // reads this.
-          backgroundProcessCount: backgroundProcessCountFromRow(row.live_background_commands_json),
-          activeAgentCount: activeAgentCountFromRow(row.live_subagents_json),
+          backgroundProcessCount: orchestrationV2BackgroundProcessCount(liveCommands),
+          activeAgentCount: orchestrationV2ActiveAgentCount(liveSubagents),
+          pendingBackgroundTasks: derivePendingBackgroundWork({
+            latestRunStatus: latestRunId === null ? null : latestRunStatus,
+            hasActiveRun: row.active_run_id !== null,
+            turnItems: liveCommands,
+            subagents: liveSubagents,
+          }),
           itemCount: row.item_count,
           runlessItemCount: row.runless_item_count,
           updatedAt: thread.updatedAt,
