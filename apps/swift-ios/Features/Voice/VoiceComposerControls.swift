@@ -346,7 +346,7 @@ private struct VoiceWaveformView: View {
     }
 }
 
-private struct VoiceRecordingClock: View {
+struct VoiceRecordingClock: View {
     let startedAt: Date
 
     private static let countdownThreshold = 15

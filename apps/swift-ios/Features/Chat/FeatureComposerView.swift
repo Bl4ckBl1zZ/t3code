@@ -69,6 +69,8 @@ struct FeatureComposerView: View {
     /// stash. The caret tracker stays per-composer because it follows this
     /// view's own text input.
     private let voice = VoiceComposerCoordinator.shared
+    /// This composer's token in the coordinator's visibility bookkeeping.
+    @State private var voiceComposerToken = UUID()
     @State private var caret = VoiceComposerCaret()
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
     @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -224,7 +226,7 @@ struct FeatureComposerView: View {
             .onDisappear {
                 historyGeneration = UUID()
                 caret.stopTracking()
-                voice.detach(identity: powerFeatures.voiceComposerIdentity)
+                voice.detach(identity: powerFeatures.voiceComposerIdentity, composer: voiceComposerToken)
             }
             .onChange(of: providers) { materializeModelSelection() }
             .onChange(of: selection) { materializeModelSelection() }
@@ -387,7 +389,9 @@ struct FeatureComposerView: View {
     private func attachVoice() {
         voice.attach(
             identity: powerFeatures.voiceComposerIdentity,
+            composer: voiceComposerToken,
             destinationName: powerFeatures.resolvedVoiceScope?.destinationName ?? "its conversation",
+            threadID: powerFeatures.resolvedVoiceScope?.threadID,
             capability: powerFeatures.voice ?? FeatureVoiceCapability.current,
             readDraft: { text },
             writeDraft: { text = $0 },

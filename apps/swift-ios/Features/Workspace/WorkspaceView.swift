@@ -149,7 +149,23 @@ public struct WorkspaceView: View {
     }
 
     public var body: some View {
-        lifecycle(dialogs(sheets(homeTabs.background { keyboardShortcuts })))
+        lifecycle(dialogs(sheets(
+            homeTabs
+                .background { keyboardShortcuts }
+                .overlay(alignment: .bottomTrailing) { voiceEdgePill }
+        )))
+    }
+
+    /// A dictation whose composer left the screen keeps recording; this keeps
+    /// it visible and finishable. Docked to the trailing edge above the tab bar
+    /// and a collapsed thread composer.
+    private var voiceEdgePill: some View {
+        VoiceEdgePillHost(
+            voice: VoiceComposerCoordinator.shared,
+            threadExists: { id in model.snapshot.threads.contains { $0.id == id } },
+            onReturn: { revealThread($0) }
+        )
+        .padding(.bottom, 72)
     }
 
     /// Home-wide shortcuts for the iPad command overlay, matching web's
@@ -1566,17 +1582,7 @@ public struct WorkspaceView: View {
         guard let navigationRequest, !isAwaitingData else { return }
         switch navigationRequest.destination {
         case let .thread(id):
-            guard let thread = model.snapshot.threads.first(where: { $0.id == id }) else { return }
-            dismissTransientPresentations()
-            // The thread opens in the tab that lists it.
-            let tab = WorkspaceSwitcher.workspace(
-                of: thread,
-                providerDrivers: WorkspaceSwitcher.providerDrivers(in: model.snapshot),
-                fallbackEnvironmentID: WorkspaceSwitcher.fallbackEnvironmentID(in: model.snapshot)
-            )
-            showTab(tab)
-            if thread.isArchived { isArchiveExpanded = true }
-            openThread(id, in: tab)
+            guard revealThread(id) else { return }
         case let .project(id):
             guard model.snapshot.projects.contains(where: { $0.id == id }) else { return }
             dismissTransientPresentations()
@@ -1603,6 +1609,23 @@ public struct WorkspaceView: View {
             }
         }
         onNavigationRequestConsumed(navigationRequest.id)
+    }
+
+    /// Opens a thread from outside its list — a deep link, the dictation
+    /// pill — in the tab that lists it. False when the thread is unknown.
+    @discardableResult
+    private func revealThread(_ id: String) -> Bool {
+        guard let thread = model.snapshot.threads.first(where: { $0.id == id }) else { return false }
+        dismissTransientPresentations()
+        let tab = WorkspaceSwitcher.workspace(
+            of: thread,
+            providerDrivers: WorkspaceSwitcher.providerDrivers(in: model.snapshot),
+            fallbackEnvironmentID: WorkspaceSwitcher.fallbackEnvironmentID(in: model.snapshot)
+        )
+        showTab(tab)
+        if thread.isArchived { isArchiveExpanded = true }
+        openThread(id, in: tab)
+        return true
     }
 
     /// Switches tabs for a deep link, leaving search and selection behind.
