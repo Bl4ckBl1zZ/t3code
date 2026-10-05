@@ -12,7 +12,7 @@ import { CircleArrowUpIcon } from "lucide-react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { serverEnvironment } from "~/state/server";
+import { serverEnvironment, updateOutdatedServer } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { manualServerUpdateCommand } from "~/versionSkew";
 import { Button } from "./ui/button";
@@ -218,6 +218,59 @@ export function ServerUpdateAction({
   return (
     <Button size="xs" variant={manualCommand === null ? "default" : "outline"} onClick={onClick}>
       {actionLabel}
+    </Button>
+  );
+}
+
+/**
+ * Updates a host too old for this client to connect to. Its version comes
+ * from the host descriptor because the host never delivers a server config.
+ */
+export function OutdatedServerUpdateAction({
+  environmentId,
+  serverLabel,
+  fromVersion,
+  targetVersion,
+  label = "Update",
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly serverLabel: string;
+  readonly fromVersion: string | undefined;
+  readonly targetVersion: string;
+  readonly label?: string;
+}) {
+  const update = useAtomCommand(updateOutdatedServer, { reportFailure: false });
+  const handleUpdate = async () => {
+    if (pendingUpdateEnvironmentIds.has(environmentId)) return;
+    pendingUpdateEnvironmentIds.add(environmentId);
+    try {
+      const result = await update({
+        environmentId,
+        input: { targetVersion },
+        ...(fromVersion === undefined ? {} : { fromVersion }),
+      });
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) return;
+        throw squashAtomCommandFailure(result);
+      }
+      toastManager.add({
+        type: "success",
+        title: `${serverLabel} updated`,
+        description: `Reconnected on t3@${result.value.targetVersion}.`,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Server update failed",
+        description: updateFailureMessage(error),
+      });
+    } finally {
+      pendingUpdateEnvironmentIds.delete(environmentId);
+    }
+  };
+  return (
+    <Button size="xs" variant="outline" onClick={() => void handleUpdate()}>
+      {label}
     </Button>
   );
 }

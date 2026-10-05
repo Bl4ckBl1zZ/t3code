@@ -84,9 +84,14 @@ const resolvePairingTarget = Effect.fn("clientRuntime.connection.onboarding.reso
   },
 );
 
-export const preparePairingRegistration = Effect.fn(
-  "clientRuntime.connection.onboarding.preparePairingRegistration",
-)(function* (input: PairingConnectionInput) {
+/**
+ * Pairs and builds the registration. An outdated server that can update
+ * itself is still paired, and its compatibility error comes back with the
+ * registration so it can be saved switched off with the update path.
+ */
+const preparePairing = Effect.fn("clientRuntime.connection.onboarding.preparePairing")(function* (
+  input: PairingConnectionInput,
+) {
   const target = yield* resolvePairingTarget(input);
   const presentation = yield* ClientCapabilities.ClientPresentation;
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({
@@ -94,7 +99,10 @@ export const preparePairingRegistration = Effect.fn(
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   // Say so before minting a session against a server we cannot talk to.
   const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
-  if (compatibilityError !== null) return yield* compatibilityError;
+  // An outdated server is still saved so it can be updated from this client.
+  if (compatibilityError !== null && compatibilityError.serverUpdateRequired !== true) {
+    return yield* compatibilityError;
+  }
   const access = yield* bootstrapRemoteBearerSession({
     httpBaseUrl: target.httpBaseUrl,
     credential: target.credential,
@@ -103,7 +111,7 @@ export const preparePairingRegistration = Effect.fn(
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   const connectionId = `bearer:${descriptor.environmentId}`;
 
-  return new BearerConnectionRegistration({
+  const registration = new BearerConnectionRegistration({
     target: new BearerConnectionTarget({
       environmentId: descriptor.environmentId,
       label: descriptor.label,
@@ -120,14 +128,27 @@ export const preparePairingRegistration = Effect.fn(
       token: access.access_token,
     }),
   });
+  return { registration, compatibilityError };
+});
+
+export const preparePairingRegistration = Effect.fn(
+  "clientRuntime.connection.onboarding.preparePairingRegistration",
+)(function* (input: PairingConnectionInput) {
+  return (yield* preparePairing(input)).registration;
 });
 
 export const registerPairingConnection = Effect.fn(
   "clientRuntime.connection.onboarding.registerPairingConnection",
 )(function* (input: PairingConnectionInput) {
-  const registration = yield* preparePairingRegistration(input);
+  const { registration, compatibilityError } = yield* preparePairing(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
+  // Normal connects learn of an outdated server only from a refused socket,
+  // which reads as a network failure. Record what pairing already knows so
+  // the machine is saved switched off with its Update action.
+  if (compatibilityError !== null) {
+    yield* registry.setCompatibility(registration.target.environmentId, compatibilityError);
+  }
   return registration.target.environmentId;
 });
 

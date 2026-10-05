@@ -67,6 +67,15 @@ the warning always works.
 See [Running T3 Code in the Background](./background-service.md) for install, status, and removal
 commands.
 
+### A server too old to connect
+
+When a server speaks an older conversation protocol than this client, T3 Code cannot open a
+session with it, so it appears switched off in **Settings → Connections** with the reason. If that
+server can update itself, the row offers **Update** anyway: T3 Code reaches the server only to run
+the update, waits for it to come back on a compatible version, and then switches it back on and
+connects. This works for a machine you just paired and for one T3 Connect reports as outdated. A
+server that cannot update itself is not saved when you pair it; update it on its own machine first.
+
 ## After the Update
 
 Keep the web or desktop app open while the server restarts. The update completes only after the

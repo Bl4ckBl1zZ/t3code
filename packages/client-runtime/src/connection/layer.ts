@@ -83,6 +83,8 @@ const connectionServicesLayer = Layer.mergeAll(
   registryLayer,
   RelayEnvironmentDiscovery.layer,
   onboardingLayer,
+  // Exposed for updating hosts too old to connect through the driver.
+  ConnectionResolver.layer,
 );
 
 const connectionStartupLayer = Layer.effectDiscard(

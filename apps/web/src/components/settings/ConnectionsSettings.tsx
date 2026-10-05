@@ -150,12 +150,18 @@ import {
   type EnvironmentPresentation,
   useEnvironments,
   usePrimaryEnvironment,
+  useRelayEnvironmentDiscovery,
 } from "~/state/environments";
+import { APP_VERSION } from "~/branding";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
-import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
+import {
+  OutdatedServerUpdateAction,
+  ServerUpdateAction,
+  ServerUpdateProgress,
+} from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import {
@@ -1442,6 +1448,12 @@ function SavedBackendListRow({
   );
   const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
   const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
+  // An outdated host never delivers a server config, so its current version
+  // comes from T3 Connect discovery when the machine is linked there.
+  const relayDiscovery = useRelayEnvironmentDiscovery();
+  const discoveredDescriptor = Option.getOrNull(
+    relayDiscovery.environments.get(environmentId)?.status ?? Option.none(),
+  )?.descriptor;
   const resumingServerUpdate =
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const sshTarget =
@@ -1545,6 +1557,17 @@ function SavedBackendListRow({
           ) : null}
         </div>
         <div className="flex w-full shrink-0 items-center gap-1 sm:w-auto sm:justify-end">
+          {unsupported &&
+          environment.entry.serverUpdateRequired === true &&
+          serverUpdateState.status !== "running" ? (
+            <OutdatedServerUpdateAction
+              environmentId={environmentId}
+              serverLabel={`${environment.label} server`}
+              fromVersion={discoveredDescriptor?.serverVersion}
+              targetVersion={APP_VERSION}
+              label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
+            />
+          ) : null}
           {showUpdateAction ? (
             <ServerUpdateAction
               environmentId={environmentId}

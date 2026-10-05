@@ -1,7 +1,11 @@
-import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
+import type {
+  AuthClientPresentationMetadata,
+  ExecutionEnvironmentDescriptor,
+} from "@t3tools/contracts";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -17,7 +21,13 @@ import {
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import { appendOrchestrationProtocol } from "./compatibility.ts";
-import { credentialMissingError, environmentMismatchError, profileMissingError } from "./errors.ts";
+import {
+  credentialMissingError,
+  environmentMismatchError,
+  mapRemoteEnvironmentError,
+  profileMissingError,
+} from "./errors.ts";
+import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import type {
   BearerConnectionTarget,
   ConnectionTarget,
@@ -35,6 +45,17 @@ export class ConnectionResolver extends Context.Service<
     readonly prepare: (
       entry: ConnectionCatalogEntry,
     ) => Effect.Effect<PreparedConnection, ConnectionAttemptError>;
+    /**
+     * Authorizes a socket without the orchestration protocol gate, for hosts
+     * too old to connect normally. Only update RPCs may run over it.
+     */
+    readonly prepareForUpdate: (entry: ConnectionCatalogEntry) => Effect.Effect<
+      {
+        readonly prepared: PreparedConnection;
+        readonly descriptor: ExecutionEnvironmentDescriptor;
+      },
+      ConnectionAttemptError
+    >;
   }
 >()("@t3tools/client-runtime/connection/resolver/ConnectionResolver") {}
 
@@ -224,8 +245,9 @@ export const make = Effect.gen(function* () {
   const bearer = yield* makeBearerBroker();
   const relay = yield* makeRelayBroker();
   const ssh = yield* makeSshBroker();
+  const httpClient = yield* HttpClient.HttpClient;
 
-  const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
+  const authorize = Effect.fn("clientRuntime.connection.broker.authorize")(function* (
     entry: ConnectionCatalogEntry,
   ) {
     const target: ConnectionTarget = entry.target;
@@ -245,12 +267,40 @@ export const make = Effect.gen(function* () {
           return ssh({ ...entry, target });
       }
     })();
-    // Announced on every socket, whatever the transport, so a server that
-    // cannot speak this protocol refuses the upgrade instead of mis-decoding.
+    return prepared;
+  });
+
+  // Normal connects skip a descriptor round trip: the socket announces this
+  // client's protocol and an incompatible server refuses the upgrade.
+  const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
+    entry: ConnectionCatalogEntry,
+  ) {
+    const prepared = yield* authorize(entry);
     return { ...prepared, socketUrl: appendOrchestrationProtocol(prepared.socketUrl) };
   });
 
-  return ConnectionResolver.of({ prepare });
+  // An update socket names no protocol, which every server accepts, so the
+  // descriptor is read here to confirm the machine and its update path.
+  const prepareForUpdate = Effect.fn("clientRuntime.connection.broker.prepareForUpdate")(function* (
+    entry: ConnectionCatalogEntry,
+  ) {
+    const prepared = yield* authorize(entry);
+    const descriptor = yield* fetchRemoteEnvironmentDescriptor({
+      httpBaseUrl: prepared.httpBaseUrl,
+    }).pipe(
+      Effect.mapError(mapRemoteEnvironmentError),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    );
+    if (descriptor.environmentId !== entry.target.environmentId) {
+      return yield* environmentMismatchError({
+        expected: entry.target.environmentId,
+        actual: descriptor.environmentId,
+      });
+    }
+    return { prepared, descriptor };
+  });
+
+  return ConnectionResolver.of({ prepare, prepareForUpdate });
 });
 
 export const layer = Layer.effect(ConnectionResolver, make);
