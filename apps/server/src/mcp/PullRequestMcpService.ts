@@ -6,11 +6,14 @@ import {
   PullRequestTargetIncompleteError,
   PullRequestHostRequiredError,
   PullRequestThreadNotFoundError,
+  PullRequestThreadAboveLimitsError,
   PullRequestLinkFailedError,
   PullRequestUnlinkFailedError,
   PullRequestListFailedError,
   PullRequestNotOpenError,
   PullRequestWatchFailedError,
+  type ListThreadPullRequestsInput,
+  PullRequestWatchFromSubagentError,
   type Project,
   type PullRequestTargetInput,
   type PullRequestToolError,
@@ -21,6 +24,7 @@ import {
   type WatchPullRequestResult,
   type OrchestrationV2ThreadShell,
   type SourceControlProviderKind,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { changeRequestUrlFor, parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { allThreadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
@@ -38,6 +42,7 @@ import * as Option from "effect/Option";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectService } from "../project/ProjectService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { assertTargetWithinLimits, isLiveCaller } from "./threadAccess.ts";
 
 export class PullRequestMcpService extends Context.Service<
   PullRequestMcpService,
@@ -52,6 +57,7 @@ export class PullRequestMcpService extends Context.Service<
     ) => Effect.Effect<UnlinkPullRequestResult, PullRequestToolError>;
     readonly list: (
       scope: McpInvocationScope,
+      input: ListThreadPullRequestsInput,
     ) => Effect.Effect<ListThreadPullRequestsResult, PullRequestToolError>;
     /** Starts or stops the server watching a pull request, linking an unlinked one first. */
     readonly setWatching: (
@@ -134,21 +140,43 @@ export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService;
   const projects = yield* ProjectService;
   const crypto = yield* Crypto.Crypto;
+  /** The target thread, anywhere in the environment; an omitted id means the calling thread. */
   const requireThread = Effect.fn("PullRequestMcpService.requireThread")(function* (
     scope: McpInvocationScope,
+    requested: ThreadId | undefined,
   ) {
     if (!scope.capabilities.has("pull-requests"))
       return yield* new McpPullRequestCapabilityUnavailableError({});
+    const threadId = requested ?? scope.threadId;
     const thread = yield* threads
-      .getThreadShell(scope.threadId)
+      .getThreadShell(threadId)
       .pipe(Effect.mapError((cause) => new PullRequestListFailedError({ cause })));
     if (!thread || thread.deletedAt !== null)
-      return yield* new PullRequestThreadNotFoundError({ threadId: scope.threadId });
+      return yield* new PullRequestThreadNotFoundError({ threadId });
+    return thread;
+  });
+  /**
+   * A thread whose pull requests the caller may change: its own, or one that
+   * runs within the caller's modes while the caller's run is live.
+   */
+  const requireWritableThread = Effect.fn("PullRequestMcpService.requireWritableThread")(function* (
+    scope: McpInvocationScope,
+    requested: ThreadId | undefined,
+  ) {
+    const thread = yield* requireThread(scope, requested);
+    if (thread.id === scope.threadId) return thread;
+    const caller = yield* requireThread(scope, scope.threadId);
+    if (!isLiveCaller(caller, scope)) {
+      return yield* new PullRequestThreadAboveLimitsError({ threadId: thread.id });
+    }
+    yield* assertTargetWithinLimits(caller, thread).pipe(
+      Effect.mapError(() => new PullRequestThreadAboveLimitsError({ threadId: thread.id })),
+    );
     return thread;
   });
   const mutate = (scope: McpInvocationScope, input: PullRequestTargetInput, unlink: boolean) =>
     Effect.gen(function* () {
-      const thread = yield* requireThread(scope);
+      const thread = yield* requireWritableThread(scope, input.threadId);
       const project = yield* projects.getById(thread.projectId).pipe(
         Effect.map(Option.getOrUndefined),
         Effect.mapError((cause) => new PullRequestListFailedError({ cause })),
@@ -170,7 +198,7 @@ export const make = Effect.gen(function* () {
           .dispatch({
             type: "thread.metadata.update",
             commandId: CommandId.make(`mcp:pr:${uuid}`),
-            threadId: scope.threadId,
+            threadId: thread.id,
             ...(unlink
               ? { unlinkPullRequest: reference }
               : { linkPullRequest: reference, linkPullRequestSource: "agent" as const }),
@@ -194,7 +222,7 @@ export const make = Effect.gen(function* () {
     input: PullRequestTargetInput,
     watching: boolean,
   ) {
-    const thread = yield* requireThread(scope);
+    const thread = yield* requireWritableThread(scope, input.threadId);
     const project = yield* projects.getById(thread.projectId).pipe(
       Effect.map(Option.getOrUndefined),
       Effect.mapError((cause) => new PullRequestWatchFailedError({ cause })),
@@ -204,17 +232,21 @@ export const make = Effect.gen(function* () {
       visibleThreadPullRequests(allThreadPullRequestsOf(shell)).find((link) =>
         threadPullRequestKeysEqual(link, target),
       );
+    if (watching && thread.lineage.relationshipToParent === "subagent") {
+      return yield* new PullRequestWatchFromSubagentError();
+    }
     const before = watchedLink(thread);
-    const state = before?.snapshot?.state;
-    if (watching && state !== undefined && state !== "open") {
-      return yield* new PullRequestNotOpenError({ state });
+    // A merged pull request cannot reopen. A closed one can, and its saved state may be stale,
+    // so the watch starts and its first read ends it if the host still says closed.
+    if (watching && before?.snapshot?.state === "merged") {
+      return yield* new PullRequestNotOpenError({ state: "merged" });
     }
     const uuid = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
     yield* threads
       .dispatch({
         type: "thread.pull-request.watch",
         commandId: CommandId.make(`mcp:pr-watch:${uuid}`),
-        threadId: scope.threadId,
+        threadId: thread.id,
         host: target.host,
         repository: target.repository,
         number: target.number,
@@ -222,7 +254,7 @@ export const make = Effect.gen(function* () {
         ...(watching ? { link: { url: target.url, source: "agent" as const } } : {}),
       })
       .pipe(Effect.mapError((cause) => new PullRequestWatchFailedError({ cause })));
-    const after = yield* requireThread(scope);
+    const after = yield* requireThread(scope, thread.id);
     return {
       host: target.host,
       repository: target.repository,
@@ -246,7 +278,8 @@ export const make = Effect.gen(function* () {
           wasLinked,
         })),
       ),
-    list: (scope) => requireThread(scope).pipe(Effect.map(listV2ThreadPullRequests)),
+    list: (scope, input) =>
+      requireThread(scope, input.threadId).pipe(Effect.map(listV2ThreadPullRequests)),
     setWatching,
   });
 });

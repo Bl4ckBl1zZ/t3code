@@ -53,6 +53,20 @@ export function resolveProjectPullRequestMergeMethod(
   );
 }
 
+/** Whether a GitHub merge in this project drops agent credits from its message. */
+export function resolveProjectRemoveAgentCreditsOnMerge(
+  settings: Pick<
+    ServerSettings,
+    "removeAgentCreditsOnMerge" | "projectRemoveAgentCreditsOnMergeOverrides"
+  >,
+  projectId: ProjectId,
+): boolean {
+  return (
+    settings.projectRemoveAgentCreditsOnMergeOverrides[projectId] ??
+    settings.removeAgentCreditsOnMerge
+  );
+}
+
 const ServerSettingsJson = fromLenientJson(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
 
@@ -175,6 +189,7 @@ export function applyServerSettingsPatch(
     projectAutoPullOverrides: autoPullPatch,
     projectAgentBrowserAccessOverrides: browserAccessPatch,
     projectPullRequestMergeMethodOverrides: mergeMethodPatch,
+    projectRemoveAgentCreditsOnMergeOverrides: agentCreditsPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -245,6 +260,13 @@ export function applyServerSettingsPatch(
     if (method === null) delete projectPullRequestMergeMethodOverrides[projectId as ProjectId];
     else projectPullRequestMergeMethodOverrides[projectId as ProjectId] = method;
   }
+  const projectRemoveAgentCreditsOnMergeOverrides = {
+    ...current.projectRemoveAgentCreditsOnMergeOverrides,
+  };
+  for (const [projectId, enabled] of Object.entries(agentCreditsPatch ?? {})) {
+    if (enabled === null) delete projectRemoveAgentCreditsOnMergeOverrides[projectId as ProjectId];
+    else projectRemoveAgentCreditsOnMergeOverrides[projectId as ProjectId] = enabled;
+  }
   const nextWithReplacementsBase = {
     ...next,
     usagePriceOverrides,
@@ -255,6 +277,7 @@ export function applyServerSettingsPatch(
     projectAutoPullOverrides,
     projectAgentBrowserAccessOverrides,
     projectPullRequestMergeMethodOverrides,
+    projectRemoveAgentCreditsOnMergeOverrides,
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {
@@ -270,6 +293,22 @@ export function applyServerSettingsPatch(
       : {}),
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
+      : {}),
+    // Remember custom worktree locations the server moved away from, so the
+    // worktrees left there stay managed.
+    ...(patch.worktreesDirectory !== undefined &&
+    patch.worktreesDirectory !== current.worktreesDirectory
+      ? {
+          previousWorktreesDirectories: [
+            ...current.previousWorktreesDirectories.filter(
+              (directory) => directory !== patch.worktreesDirectory,
+            ),
+            ...(current.worktreesDirectory !== "" &&
+            !current.previousWorktreesDirectories.includes(current.worktreesDirectory)
+              ? [current.worktreesDirectory]
+              : []),
+          ],
+        }
       : {}),
     // Whole-map replacement, like `providerInstances`. A deep merge would keep
     // instance keys the settings editor deleted (it drops an entry once both

@@ -79,6 +79,13 @@ transaction, so a failed insertion preserves the previous credential. This also
 removes stale local desktop entries from earlier launches. Browser-cookie sessions
 and sessions issued through pairing links are not replaced.
 
+The desktop app does not hand its renderer one long-lived bootstrap token. It
+launches every backend with a shared secret (`desktopBootstrapSecret`) that never
+reaches the renderer, and both sides derive the token for each 12-hour window
+from it (`@t3tools/shared/desktopBootstrapToken`). A backend accepts the
+previous, current and next window's token. A backend launched without the secret
+falls back to the fixed `desktopBootstrapToken` seed.
+
 Requested scopes must be a subset of the one-time bootstrap credential grant.
 An ordinary paired client therefore cannot exchange its grant for
 `access:read`, `access:write`, or `relay:write`.

@@ -62,9 +62,18 @@ function readFieldBooleanDefault(
   return Option.isSome(decoded) && typeof decoded.value === "boolean" ? decoded.value : undefined;
 }
 
+/** A local ACP command only needs its executable; registry identity and sign-in do not apply. */
+export function isLocalAcpConfig(definition: ProviderSettingsDefinition, config: unknown): boolean {
+  return (
+    definition.value === "acpRegistry" && readProviderConfigString(config, "source") === "local"
+  );
+}
+
 export function deriveProviderSettingsFields(
   definition: ProviderSettingsDefinition,
+  value?: unknown,
 ): ReadonlyArray<ProviderSettingsFieldModel> {
+  const isLocalAcp = isLocalAcpConfig(definition, value);
   const schemaAnnotation = readProviderSettingsFormSchemaAnnotation(definition);
   const orderedKeys = new Map(
     (schemaAnnotation.order ?? []).map((key, index) => [key, index] as const),
@@ -83,6 +92,8 @@ export function deriveProviderSettingsFields(
       const fieldSchema = definition.settingsSchema.fields[key]!;
       const formAnnotation = readProviderSettingsFormAnnotation(fieldSchema);
       if (formAnnotation.hidden) return [];
+      if (isLocalAcp && key !== "source" && key !== "commandPath") return [];
+      const isLocalExecutable = isLocalAcp && key === "commandPath";
 
       const annotatedTitle = readFieldAnnotationString(fieldSchema, "title");
       const annotatedDescription = readFieldAnnotationString(fieldSchema, "description");
@@ -90,11 +101,17 @@ export function deriveProviderSettingsFields(
         {
           key,
           control: formAnnotation.control ?? "text",
-          label: annotatedTitle ?? titleizeFieldKey(key),
-          ...(annotatedDescription !== undefined ? { description: annotatedDescription } : {}),
-          ...(formAnnotation.placeholder !== undefined
-            ? { placeholder: formAnnotation.placeholder }
-            : {}),
+          label: isLocalExecutable ? "Executable" : (annotatedTitle ?? titleizeFieldKey(key)),
+          ...(isLocalExecutable
+            ? { description: "Executable name or path on this environment." }
+            : annotatedDescription !== undefined
+              ? { description: annotatedDescription }
+              : {}),
+          ...(isLocalExecutable
+            ? { placeholder: "e.g. dsh" }
+            : formAnnotation.placeholder !== undefined
+              ? { placeholder: formAnnotation.placeholder }
+              : {}),
           ...(formAnnotation.options ? { options: formAnnotation.options } : {}),
           clearWhenEmpty: formAnnotation.clearWhenEmpty ?? "omit",
           ...(formAnnotation.control === "switch"

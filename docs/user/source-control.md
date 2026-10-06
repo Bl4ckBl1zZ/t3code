@@ -190,14 +190,29 @@ your system's reduced-motion preference.
 ## Watching a pull request
 
 Ask the agent to watch, monitor, or babysit a pull request and it calls `watch_pull_request`. While
-the thread is active, the server checks the pull request every minute and wakes the agent when a check
-fails, the checks pass, someone else comments or reviews, or the branch starts to conflict. Comments
-from your own account do not wake it. Watching ends when the pull request merges or closes, after 10
-wakes in a row that bring only comments, or when the server cannot read the pull request for 15
-minutes. To start or stop it yourself, use the row menu in the **Linked pull requests** panel; a
-watched pull request shows an eye icon there.
+the thread is active, the server checks the pull request every two minutes and wakes the agent when a
+check fails, the checks pass, someone else comments or reviews, or the branch starts to conflict.
+Threads in a project that watch the same pull request share one check. On GitHub, a check first
+asks whether anything changed and reads the pull request only when it did; on other hosts, a pull
+request with nothing in progress is checked again when something changes or every 10 minutes. This
+keeps watching inside the host's rate limit. Comments from your own account do not wake it. Watching ends
+when the pull request merges or closes, after 10 wakes in a row that bring only comments, or after 8
+failed reads in a row. A rate limit only pauses watching. Pressing Stop on the thread, settling it,
+or archiving it also ends all its watches. Unsettle the thread before starting a new watch. Subagents cannot watch pull
+requests; the thread that delegated to them does. To start or stop it yourself, use the row menu in
+the **Linked pull requests** panel; a watched pull request shows an eye icon there. On web and
+desktop, the thread details card also shows an eye on a watched branch pull request; click it to
+stop watching.
+
+A watched thread counts as working between wakes, so it stays in the **Working** section and does
+not auto-settle. Agents stop watching when they hand the work back to you, and the thread then
+returns to your inbox. On web and desktop, the Stop shortcut ends a thread's watches when it has
+nothing else running.
 
 ## Completing and reversing a review
+
+To keep agent co-author and generated-by lines out of GitHub merge and squash messages, turn on
+**Remove agent credits when merging** (see project settings).
 
 When checks are still pending, the web review header offers auto-merge where your host supports it. Once armed, it shows the saved merge strategy. You can disable auto-merge or choose to merge immediately from the actions menu.
 

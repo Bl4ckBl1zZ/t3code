@@ -77,10 +77,18 @@ describe("ProviderSettingsForm helpers", () => {
     expect(acpRegistry).toBeDefined();
     expect(acpRegistry?.hasDefaultInstance).toBe(false);
     expect(deriveProviderSettingsFields(acpRegistry!).map((field) => field.key)).toEqual([
+      "source",
       "agentId",
       "commandPath",
       "authMethodId",
     ]);
+  });
+
+  it("shows the local executable without registry identity or authentication fields", () => {
+    const acpRegistry = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("acpRegistry")];
+    const fields = deriveProviderSettingsFields(acpRegistry!, { source: "local" });
+    expect(fields.map((field) => field.key)).toEqual(["source", "commandPath"]);
+    expect(fields[1]?.label).toBe("Executable");
   });
 
   it("does not offer the removed Hermes in Code driver", () => {

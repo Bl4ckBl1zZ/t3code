@@ -3,6 +3,7 @@ import type {
   MessageId,
   OrchestrationProjectShell,
   OrchestrationV2PendingBackgroundTask,
+  OrchestrationV2ProviderGoal,
   OrchestrationV2RunStatus,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ProviderFailureClass,
@@ -143,6 +144,8 @@ export interface EnvironmentThreadShell {
   readonly pendingBackgroundTasks?: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   /** Provider instances that have owned the root conversation, oldest first. */
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
+  /** Native `/goal` on the active provider thread. */
+  readonly goal: OrchestrationV2ProviderGoal | null;
   readonly itemCount: number;
   readonly visibleItemCount: number;
   readonly createdAt: string;
@@ -319,6 +322,7 @@ export function presentThreadShell(
       ? {}
       : { pendingBackgroundTasks: thread.pendingBackgroundTasks }),
     providerInstanceHistory: thread.providerInstanceHistory ?? [],
+    goal: thread.goal ?? null,
     itemCount: thread.itemCount,
     visibleItemCount: thread.visibleItemCount,
     createdAt: iso(thread.createdAt),

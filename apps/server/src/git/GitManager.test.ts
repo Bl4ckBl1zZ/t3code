@@ -1112,6 +1112,49 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("a branch tracking origin reads origin's URL once per remote resolution", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/origin-once"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/origin-once"]);
+
+      const { manager, gitCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // Fake gh returns raw JSON stdout, matching the CLI boundary under test.
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 217,
+                title: "Origin once PR",
+                url: "https://github.com/pingdotgg/t3code/pull/217",
+                baseRefName: "main",
+                headRefName: "feature/origin-once",
+                state: "OPEN",
+                updatedAt: "2026-04-03T15:00:00Z",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const pullRequest = yield* manager.branchPullRequest({
+        cwd: repoDir,
+        branch: "feature/origin-once",
+      });
+
+      expect(pullRequest?.number).toBe(217);
+      // The lookup key and the head context each resolve the remotes once; reading the head
+      // remote and origin separately would double both.
+      expect(
+        gitCalls.filter((call) => call.endsWith("config --get remote.origin.url")),
+      ).toHaveLength(2);
+    }),
+  );
+
   it.effect("branch PR lookup re-reads a remembered answer after invalidation or refresh", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -2157,7 +2200,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         providerOperation: "listChangeRequests",
         providerCommand: "gh",
         errorDetail:
-          "GitHub API rate limit exceeded. Run `gh api rate_limit` to inspect the quota and reset time.",
+          "GitHub API rate limit exceeded. For the GraphQL quota and reset time, run `gh api graphql -f query='{rateLimit{remaining resetAt}}'`; `gh api rate_limit` reports REST.",
       });
       const loggedText = [
         warning?.message ?? "",

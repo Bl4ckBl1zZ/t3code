@@ -5,7 +5,7 @@ import {
   ThreadId,
   type Project,
   type OrchestrationV2ThreadShell,
-  type OrchestrationV2Command,
+  type OrchestrationV2ServerCommand,
   type GitRunStackedActionResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -95,7 +95,7 @@ for (const change of [
         deletedAt: null,
         pullRequests: [],
       } as unknown as OrchestrationV2ThreadShell;
-      const commands: OrchestrationV2Command[] = [];
+      const commands: OrchestrationV2ServerCommand[] = [];
       const layer = Layer.mergeAll(
         Layer.mock(ThreadManagementService)({
           getThreadShell: () => Effect.succeed(change === "missing" ? null : thread),

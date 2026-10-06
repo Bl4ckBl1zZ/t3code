@@ -11,6 +11,14 @@
       "types": "./src/htmlEmbedFence.ts",
       "default": "./src/htmlEmbedFence.ts"
     },
+    "./secret-request": {
+      "types": "./src/secretRequest.ts",
+      "default": "./src/secretRequest.ts"
+    },
+    "./scheduled-task-webhook": {
+      "types": "./src/scheduledTaskWebhook.ts",
+      "default": "./src/scheduledTaskWebhook.ts"
+    },
     "./connection": {
       "types": "./src/connection/index.ts",
       "default": "./src/connection/index.ts"
@@ -86,6 +94,10 @@
     "./state/attachments": {
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"
+    },
+    "./webhook-address": {
+      "types": "./src/webhookAddress.ts",
+      "default": "./src/webhookAddress.ts"
     },
     "./state/connections": {
       "types": "./src/state/connections.ts",

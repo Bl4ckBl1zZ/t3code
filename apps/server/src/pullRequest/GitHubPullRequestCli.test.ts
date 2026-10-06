@@ -1,6 +1,7 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -9,6 +10,7 @@ import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { BASE_COMPARISON_GRAPHQL_QUERY } from "./gitHubPullRequestJson.ts";
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const mockedExecute = vi.fn<GitHubCli.GitHubCli["Service"]["execute"]>();
 
 const layer = it.layer(
@@ -497,6 +499,50 @@ layer("GitHubPullRequestCli.layer", (it) => {
       const document = callAt(0).args.at(-1) ?? "";
       expect(document).toContain('s0: repository(owner: "acme", name: "web")');
       expect(document).toContain("pullRequest(number: 25)");
+    }),
+  );
+
+  it.effect("fingerprints a watched pull request in one aliased read", () =>
+    Effect.gen(function* () {
+      const node = (comments: number) => ({
+        state: "OPEN",
+        mergeable: "MERGEABLE",
+        headRefOid: "abc123",
+        comments: { totalCount: comments, nodes: [] },
+        reviews: { totalCount: 0, nodes: [] },
+        reviewThreads: { totalCount: 0 },
+        commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+      });
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(output(encodeJson({ data: { w0: { pullRequest: node(1) } } }))),
+        )
+        .mockReturnValueOnce(Effect.succeed(output(encodeJson({ data: { w0: null } }))));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const read = (number: number) =>
+        cli.getPullRequestWatchFingerprint({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number,
+        });
+
+      expect((yield* read(7))?.remarks.startsWith("1 ")).toBe(true);
+      expect(callAt(0).args.at(-1) ?? "").toContain(
+        'w0: repository(owner: "acme", name: "web") { pullRequest(number: 7)',
+      );
+      // GitHub had no answer for #8, so its watch reads it in full.
+      expect(yield* read(8)).toBeNull();
+      // A selector GitHub cannot address is never sent.
+      expect(
+        yield* cli.getPullRequestWatchFingerprint({
+          cwd: "/w",
+          repository: 'acme/web") { x } #',
+          host: "github.com",
+          number: 9,
+        }),
+      ).toBeNull();
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
     }),
   );
 
@@ -1086,6 +1132,170 @@ layer("GitHubPullRequestCli.layer", (it) => {
         "github.com/acme/web",
         "--squash",
       ]);
+    }),
+  );
+
+  it.effect.each(["merge", "enable-auto-merge"] as const)(
+    "removes agent credits from the proposed message for %s",
+    (action) =>
+      Effect.gen(function* () {
+        mockedExecute
+          .mockReturnValueOnce(
+            Effect.succeed(
+              output(
+                encodeJson({
+                  data: {
+                    repository: {
+                      pullRequest: {
+                        isMergeQueueEnabled: false,
+                        headRefOid: "abc123",
+                        viewerMergeBodyText:
+                          "Details\n\nCo-authored-by: Alice <alice@example.com>\nCo-authored-by: Claude <noreply@anthropic.com>",
+                      },
+                    },
+                  },
+                }),
+              ),
+            ),
+          )
+          .mockReturnValueOnce(Effect.succeed(output("")));
+        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+        yield* cli.runPullRequestAction({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          action,
+          mergeMethod: "squash",
+          removeAgentCreditsOnMerge: true,
+        });
+        expect(callAt(0).args).toContain("method=SQUASH");
+        expect(callAt(1).args.slice(-2)).toEqual(["--body-file", "-"]);
+        expect(callAt(1).args).toContain("--match-head-commit");
+        expect(callAt(1).args).toContain("abc123");
+        expect(callAt(1).stdin).toBe("Details\n\nCo-authored-by: Alice <alice@example.com>");
+        expect(callAt(1).args.join(" ")).not.toContain("alice@example.com");
+      }),
+  );
+
+  it.effect.each([
+    {
+      description: "an unchanged message",
+      body: "Details\n\nCo-authored-by: Alice <alice@example.com>",
+      queued: false,
+    },
+    {
+      description: "a merge queue",
+      body: "Co-authored-by: Claude <noreply@anthropic.com>",
+      queued: true,
+    },
+  ] as const)("keeps GitHub's default message for $description", ({ body, queued }) =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              encodeJson({
+                data: {
+                  repository: {
+                    pullRequest: {
+                      isMergeQueueEnabled: queued,
+                      headRefOid: "abc123",
+                      viewerMergeBodyText: body,
+                    },
+                  },
+                },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "merge",
+        removeAgentCreditsOnMerge: true,
+      });
+      expect(callAt(0).args).toContain("method=MERGE");
+      expect(callAt(1).args).not.toContain("--body-file");
+      expect(callAt(1).stdin).toBeUndefined();
+    }),
+  );
+
+  it.effect("passes an explicitly empty body when the proposed message only credits an agent", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              encodeJson({
+                data: {
+                  repository: {
+                    pullRequest: {
+                      isMergeQueueEnabled: false,
+                      headRefOid: "abc123",
+                      viewerMergeBodyText: "Co-authored-by: Claude <noreply@anthropic.com>",
+                    },
+                  },
+                },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "merge",
+        removeAgentCreditsOnMerge: true,
+      });
+      expect(callAt(1).stdin).toBe("");
+      expect(callAt(1).args).toContain("--body-file");
+    }),
+  );
+
+  it.effect("does not fetch a message for rebase merges", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "merge",
+        mergeMethod: "rebase",
+        removeAgentCreditsOnMerge: true,
+      });
+      expect(mockedExecute).toHaveBeenCalledTimes(1);
+      expect(callAt(0).args).toContain("--rebase");
+    }),
+  );
+
+  it.effect("refuses to merge when the proposed message cannot be read", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(
+        Effect.succeed(output('{"data":{"repository":{"pullRequest":null}}}')),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const result = yield* Effect.result(
+        cli.runPullRequestAction({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          action: "merge",
+          removeAgentCreditsOnMerge: true,
+        }),
+      );
+      expect(result._tag).toBe("Failure");
+      expect(mockedExecute).toHaveBeenCalledTimes(1);
     }),
   );
 

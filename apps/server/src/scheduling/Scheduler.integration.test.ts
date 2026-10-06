@@ -7,7 +7,7 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
-  type OrchestrationV2Command,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -24,6 +24,7 @@ import { ThreadManagementService } from "../orchestration-v2/ThreadManagementSer
 import { workerLive as recoveryWorker } from "../orchestration-v2/UsageLimitRecoveryWorker.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as Scheduler from "./Scheduler.ts";
 
@@ -83,7 +84,7 @@ it.effect.each(["on time", "after restart"])(
         yield* TestClock.adjust("65 seconds");
       }
       const current = yield* Ref.make(thread);
-      const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2Command>>([]);
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
       const receipts = yield* Queue.unbounded<"task" | "retry">();
       const dependencies = Layer.mergeAll(
         NodeCrypto.layer,
@@ -110,6 +111,7 @@ it.effect.each(["on time", "after restart"])(
             ),
         }),
         Layer.mock(ServerSettingsService)({ getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS) }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
       );
       const workers = Layer.mergeAll(ScheduledTasks.layer, recoveryWorker).pipe(
         Layer.provide(dependencies),

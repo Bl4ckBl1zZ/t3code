@@ -12,6 +12,8 @@ import {
   ProjectSearchEntriesInput,
   ProjectWriteFileError,
 } from "./project.ts";
+import { OrchestrationProjectShell } from "./orchestrationProject.ts";
+import { ReceivedProjectIcon } from "./projectIcon.ts";
 
 const decodeProjectCreatePayload = Schema.decodeUnknownSync(ProjectCreatePayload);
 const decodeProjectUpdatePayload = Schema.decodeUnknownSync(ProjectUpdatePayload);
@@ -147,5 +149,47 @@ describe("shared project payloads", () => {
     expect(
       decodeProjectMutation({ type: "project.update", ...envelope, title: undefined }),
     ).toHaveProperty("title", undefined);
+  });
+});
+
+describe("received project icons", () => {
+  const decodeReceivedIcon = Schema.decodeUnknownSync(ReceivedProjectIcon);
+  const encodeReceivedIcon = Schema.encodeSync(ReceivedProjectIcon);
+  const shellCodec = Schema.toCodecJson(OrchestrationProjectShell);
+  const shell = (projectIcon: unknown) => ({
+    id: "project-1",
+    title: "Project",
+    workspaceRoot: "/tmp/project",
+    defaultModelSelection: null,
+    scripts: [],
+    projectIcon,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  it("sends and reads icons in their plain shape", () => {
+    for (const icon of [
+      { kind: "lucide", name: "alarm-clock", color: "blue" },
+      { kind: "emoji", emoji: "\u{1F680}" },
+    ] as const) {
+      expect(encodeReceivedIcon(icon)).toEqual(icon);
+      expect(decodeReceivedIcon(icon)).toEqual(icon);
+    }
+  });
+
+  it("shows the default icon for a kind from a newer server", () => {
+    const image = { kind: "image", url: "https://example.com/a.png" };
+    expect(decodeReceivedIcon(image)).toBeNull();
+    expect(Schema.decodeUnknownSync(shellCodec)(shell(image)).projectIcon).toBeNull();
+  });
+
+  it("still fails a known kind whose payload is broken", () => {
+    expect(() => decodeReceivedIcon({ kind: "emoji" })).toThrow();
+  });
+
+  it("round-trips a cleared icon inside a project shell", () => {
+    const decoded = Schema.decodeUnknownSync(shellCodec)(shell(null));
+    expect(decoded.projectIcon).toBeNull();
+    expect(Schema.encodeSync(shellCodec)(decoded)).toMatchObject({ projectIcon: null });
   });
 });

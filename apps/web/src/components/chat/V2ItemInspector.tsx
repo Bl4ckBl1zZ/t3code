@@ -15,6 +15,7 @@ import {
   formatToolValue,
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
+  turnItemOutputImages,
   turnItemOutputText,
 } from "@t3tools/client-runtime/work-log/item-detail";
 import * as DateTime from "effect/DateTime";
@@ -32,6 +33,8 @@ import { Button } from "../ui/button";
 import ChatMarkdown from "../ChatMarkdown";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
+import { ResourceMedia } from "./MarkdownMedia";
+import { ShellCommandBlock } from "./ShellCommandBlock";
 
 interface V2ItemInspectorProps {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -159,6 +162,8 @@ function StructuredValue({
 
 interface FetchedOutput {
   readonly text: string | null;
+  /** Images a tool returned inline; the detail read leaves their bytes to the asset route. */
+  readonly images: ReturnType<typeof turnItemOutputImages>;
   readonly pending: boolean;
   readonly error: string | null;
 }
@@ -187,6 +192,7 @@ function useFetchedTurnItem(
   const item = fetchedItem?.type === wireItem.type ? fetchedItem : wireItem;
   const output: FetchedOutput = {
     text: turnItemOutputText(item),
+    images: turnItemOutputImages(item),
     pending: item === wireItem && detail.isPending,
     error:
       item !== wireItem
@@ -221,7 +227,7 @@ function CommandTranscript({
     <div className="space-y-1">
       <pre className={TERMINAL_BLOCK_CLASS_NAME}>
         <span className="select-none text-muted-foreground/60">$ </span>
-        <span className="text-foreground/85">{item.input}</span>
+        <ShellCommandBlock command={item.input} />
         {output ? (
           `\n${output}`
         ) : fetchedOutput.pending || fetchedOutput.error ? (
@@ -366,16 +372,25 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
               <StructuredValue value={formatToolValue(item.input)} highlightJson />
             </div>
           ) : null}
-          {output.text || output.pending || output.error ? (
+          {output.text || output.images.length > 0 || output.pending || output.error ? (
             <div>
               <p className="mb-1 text-[10px] font-medium tracking-wide uppercase text-muted-foreground">
                 Output
               </p>
+              {output.images.map((resource) => (
+                <ResourceMedia
+                  key={`${resource.itemId}:${resource.index}`}
+                  environmentId={props.environmentId}
+                  resource={resource}
+                  name={`Tool output image ${resource.index + 1}`}
+                  isVideo={false}
+                />
+              ))}
               {output.text ? (
                 <StructuredValue value={output.text} />
-              ) : (
+              ) : output.images.length === 0 ? (
                 <OutputPlaceholder output={output} />
-              )}
+              ) : null}
             </div>
           ) : null}
         </div>

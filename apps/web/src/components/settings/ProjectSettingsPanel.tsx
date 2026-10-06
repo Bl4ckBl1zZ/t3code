@@ -4,7 +4,11 @@ import {
 } from "@t3tools/shared/projectScripts";
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { useProjectScriptSettings } from "./useProjectScriptSettings";
-import { ProjectAutoPullSettings, ProjectBrowserAccessSettings } from "./ProjectBooleanSettings";
+import {
+  ProjectAgentCreditsSettings,
+  ProjectAutoPullSettings,
+  ProjectBrowserAccessSettings,
+} from "./ProjectBooleanSettings";
 import { PullRequestMergeMethodSettings } from "./PullRequestMergeMethodSettings";
 import type { ProjectIconOverride } from "@t3tools/contracts";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -886,6 +890,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           <ProjectAutoPullSettings projects={group.memberProjects} />
           <ProjectBrowserAccessSettings projects={group.memberProjects} />
           <PullRequestMergeMethodSettings projects={group.memberProjects} />
+          <ProjectAgentCreditsSettings projects={group.memberProjects} />
           <SettingsRow
             title="Workspace"
             description="Where new threads in this project start. Overrides t3.json and the global default; applies to every checkout in this group."

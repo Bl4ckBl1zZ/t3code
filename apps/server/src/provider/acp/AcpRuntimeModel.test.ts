@@ -194,6 +194,49 @@ describe("AcpRuntimeModel", () => {
     expect(response._meta).toMatchObject({ t3SessionLoadReady: "replay_idle" });
   });
 
+  it("keeps initialize mode state whose modes have null descriptions", () => {
+    const response = syntheticLoadSessionResponseFromInitialize({
+      protocolVersion: 1,
+      _meta: {
+        modeState: {
+          currentModeId: "code",
+          availableModes: [
+            { id: "ask", name: "Ask", description: null },
+            { id: "code", name: "Code", description: "Edit files", _meta: null },
+          ],
+          _meta: null,
+        },
+      },
+    } satisfies EffectAcpSchema.InitializeResponse);
+
+    expect(parseSessionModeState(response)).toEqual({
+      currentModeId: "code",
+      availableModes: [
+        { id: "ask", name: "Ask" },
+        { id: "code", name: "Code", description: "Edit files" },
+      ],
+    });
+  });
+
+  it("ignores malformed initialize model state", () => {
+    const modelState = {
+      currentModelId: "grok-4.7",
+      availableModels: [{ modelId: "grok-4.7", name: "Grok 4.7", description: null }],
+    };
+    expect(
+      syntheticLoadSessionResponseFromInitialize({
+        protocolVersion: 1,
+        _meta: { modelState: { currentModelId: "grok-4.7", availableModels: [{ modelId: "x" }] } },
+      }).models,
+    ).toBeUndefined();
+    expect(
+      syntheticLoadSessionResponseFromInitialize({
+        protocolVersion: 1,
+        _meta: { modelState: { ...modelState, _meta: "not an object" } },
+      }).models,
+    ).toBeUndefined();
+  });
+
   it("accepts initialize model descriptions with null", () => {
     const response = syntheticLoadSessionResponseFromInitialize({
       protocolVersion: 1,

@@ -74,6 +74,7 @@ import {
   formatModelSelectionEffort,
   deriveLatestThreadRun,
   deriveThreadRuntime,
+  presentProviderGoal,
 } from "@t3tools/client-runtime/state/thread-execution";
 import {
   resolveThreadProviderSession,
@@ -102,6 +103,8 @@ import {
 } from "@t3tools/shared/model";
 import { liveBackgroundProcessesFromTimeline } from "@t3tools/shared/backgroundProcess";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
+import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequestChains";
+import { allThreadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import {
@@ -253,6 +256,7 @@ import {
   ChevronDownIcon,
   GitBranchIcon,
   PaperclipIcon,
+  TargetIcon,
   TriangleAlertIcon,
   WifiOffIcon,
 } from "lucide-react";
@@ -659,11 +663,16 @@ function eventPathContainsSelector(event: Event, selector: string): boolean {
   return path.some((target) => target instanceof Element && target.closest(selector));
 }
 
+const SECRET_REQUEST_SELECTOR = '[data-v2-item-type="secret_request"]';
+
 function shouldTypeToFocusComposer(event: KeyboardEvent): boolean {
   if (event.defaultPrevented || event.isComposing) return false;
   if (event.metaKey || event.ctrlKey || event.altKey) return false;
   if (event.key.length !== 1) return false;
 
+  // Near a pending secret request, input is meant for its private field: it
+  // must never land in the composer draft, which is persisted and sent.
+  if (eventPathContainsSelector(event, SECRET_REQUEST_SELECTOR)) return false;
   if (eventPathContainsSelector(event, TYPE_TO_FOCUS_EDITABLE_SELECTOR)) return false;
   if (eventPathContainsSelector(event, TYPE_TO_FOCUS_INTERACTIVE_SELECTOR)) return false;
   if (document.querySelector(TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR)) return false;
@@ -2965,6 +2974,16 @@ function ChatViewContent(props: ChatViewProps) {
       orchestrationV2BackgroundWorkStopRunId(serverProjection) !== null,
     [isWorking, serverProjection],
   );
+  // With nothing else to stop, the Stop keybinding ends the thread's pull request watches.
+  const canStopPullRequestWatches = useMemo(
+    () =>
+      !isWorking &&
+      serverProjection != null &&
+      visibleThreadPullRequests(allThreadPullRequestsOf(serverProjection.thread)).some(
+        (link) => link.watch !== undefined,
+      ),
+    [isWorking, serverProjection],
+  );
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(
       activeActivityRun,
@@ -3836,12 +3855,14 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread,
     canInterruptRunningThread,
     canStopBackgroundWork,
+    canStopPullRequestWatches,
     setThreadError,
   });
   interruptContextRef.current = {
     activeThread,
     canInterruptRunningThread,
     canStopBackgroundWork,
+    canStopPullRequestWatches,
     setThreadError,
   };
   const onInterrupt = useCallback(async () => {
@@ -6266,15 +6287,141 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activeThreadShell, environmentId, serverRuntime, updateThreadMetadata],
   );
+  // Commands such as /goal clear run as their own turn. The draft and its
+  // attachments stay local.
+  const sendStandaloneCommand = useCallback(
+    async (text: string, failureMessage: string) => {
+      if (!activeThread || !isServerThread || sendInFlightRef.current) return;
+      const context = composerRef.current?.getSendContext();
+      if (!context?.providerAvailable) return;
+
+      const threadId = activeThread.id;
+      const messageId = newMessageId();
+      const createdAt = new Date().toISOString();
+      sendInFlightRef.current = true;
+      beginLocalDispatch({ preparingWorktree: false });
+      setThreadError(threadId, null);
+      setOptimisticUserMessages((messages) => [
+        ...messages,
+        {
+          id: messageId,
+          role: "user",
+          text,
+          runId: null,
+          createdAt,
+          updatedAt: createdAt,
+          streaming: false,
+        },
+      ]);
+      try {
+        const settingsResult = await persistThreadSettingsForNextTurn({
+          threadId,
+          createdAt,
+          modelSelection: context.selectedModelSelection,
+          ...(localCheckoutBranchMismatch
+            ? { branch: localCheckoutBranchMismatch.currentBranch }
+            : {}),
+          runtimeMode,
+          interactionMode,
+        });
+        const result =
+          settingsResult._tag === "Failure"
+            ? settingsResult
+            : await startThreadTurn({
+                environmentId,
+                input: {
+                  threadId,
+                  message: { messageId, role: "user", text, attachments: [] },
+                  modelSelection: context.selectedModelSelection,
+                  runtimeMode,
+                  interactionMode,
+                  createdAt,
+                },
+              });
+        if (result._tag === "Failure") {
+          setOptimisticUserMessages((messages) =>
+            messages.filter((message) => message.id !== messageId),
+          );
+          resetLocalDispatch();
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            setThreadError(threadId, error instanceof Error ? error.message : failureMessage);
+          }
+        }
+      } finally {
+        sendInFlightRef.current = false;
+      }
+    },
+    [
+      activeThread,
+      beginLocalDispatch,
+      composerRef,
+      environmentId,
+      interactionMode,
+      isServerThread,
+      localCheckoutBranchMismatch,
+      persistThreadSettingsForNextTurn,
+      resetLocalDispatch,
+      runtimeMode,
+      setThreadError,
+      startThreadTurn,
+    ],
+  );
+  // A native /goal keeps the agent working across turns. Stop pauses a Codex
+  // goal; once the thread is idle the row offers the native follow-ups.
+  const activeGoal = activeThreadShell?.goal ?? null;
+  const goalBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!activeThread || activeGoal === null) return null;
+    const presentation = presentProviderGoal(activeGoal, isWorking);
+    return {
+      id: `goal:${activeThread.id}`,
+      variant: "default",
+      priority: "activity",
+      icon: <TargetIcon />,
+      // Usage stays in the title so a long objective cannot clip it.
+      title:
+        presentation.usage === null
+          ? presentation.title
+          : `${presentation.title} · ${presentation.usage}`,
+      description: presentation.objective,
+      actions: isWorking ? undefined : (
+        <>
+          {presentation.canResume ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => void sendStandaloneCommand("/goal resume", "Failed to resume goal.")}
+            >
+              Resume
+            </Button>
+          ) : null}
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => void sendStandaloneCommand("/goal clear", "Failed to clear goal.")}
+          >
+            Clear
+          </Button>
+        </>
+      ),
+    };
+  }, [activeGoal, activeThread, isWorking, sendStandaloneCommand]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const goalItems = goalBannerItem === null ? [] : [goalBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [...limitRecoveryItems, ...systemComposerBannerItems, ...parkedThreadItems];
+      return [
+        ...limitRecoveryItems,
+        ...systemComposerBannerItems,
+        ...goalItems,
+        ...parkedThreadItems,
+      ];
     }
     return [
       ...limitRecoveryItems,
       ...systemComposerBannerItems,
+      ...goalItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
         variant: "info",
@@ -6318,6 +6465,7 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
+    goalBannerItem,
     limitRecoveryBanner,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
@@ -6600,7 +6748,8 @@ function ChatViewContent(props: ChatViewProps) {
         if (
           !interruptContextRef.current.activeThread ||
           (!interruptContextRef.current.canInterruptRunningThread &&
-            !interruptContextRef.current.canStopBackgroundWork)
+            !interruptContextRef.current.canStopBackgroundWork &&
+            !interruptContextRef.current.canStopPullRequestWatches)
         )
           return;
         event.preventDefault();

@@ -78,3 +78,4 @@ export * from "./hermesWorkArtifacts.ts";
 export * from "./hermesWorkSetup.ts";
 
 export * from "./hermesWorkModelAuth.ts";
+export * from "./secretRequest.ts";

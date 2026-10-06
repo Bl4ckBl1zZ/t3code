@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import { ThreadPullRequestLinkSource } from "./threadPullRequestLinks.ts";
 
@@ -18,6 +18,9 @@ export class McpPullRequestCapabilityUnavailableError extends Schema.TaggedError
  * the host CLI handed back.
  */
 export const PullRequestTargetInput = Schema.Struct({
+  threadId: Schema.optional(
+    ThreadId.annotate({ description: "Thread to act on. Omit for this thread." }),
+  ),
   url: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description:
@@ -43,6 +46,13 @@ export const PullRequestTargetInput = Schema.Struct({
   ),
 });
 export type PullRequestTargetInput = typeof PullRequestTargetInput.Type;
+
+export const ListThreadPullRequestsInput = Schema.Struct({
+  threadId: Schema.optional(
+    ThreadId.annotate({ description: "Thread to list. Omit for this thread." }),
+  ),
+});
+export type ListThreadPullRequestsInput = typeof ListThreadPullRequestsInput.Type;
 
 export class PullRequestUrlInvalidError extends Schema.TaggedErrorClass<PullRequestUrlInvalidError>()(
   "PullRequestUrlInvalidError",
@@ -77,6 +87,15 @@ export class PullRequestThreadNotFoundError extends Schema.TaggedErrorClass<Pull
 ) {
   override get message(): string {
     return `Thread ${this.threadId} was not found.`;
+  }
+}
+
+export class PullRequestThreadAboveLimitsError extends Schema.TaggedErrorClass<PullRequestThreadAboveLimitsError>()(
+  "PullRequestThreadAboveLimitsError",
+  { threadId: Schema.String },
+) {
+  override get message(): string {
+    return `Thread ${this.threadId} cannot be changed from here: it runs with broader permissions than this caller, or the calling thread has no active run.`;
   }
 }
 
@@ -125,17 +144,28 @@ export class PullRequestNotOpenError extends Schema.TaggedErrorClass<PullRequest
   }
 }
 
+export class PullRequestWatchFromSubagentError extends Schema.TaggedErrorClass<PullRequestWatchFromSubagentError>()(
+  "PullRequestWatchFromSubagentError",
+  {},
+) {
+  override get message(): string {
+    return "This thread is a subagent, so it cannot watch pull requests. Its parent thread owns the pull request: finish your task and report back instead.";
+  }
+}
+
 export const PullRequestToolError = Schema.Union([
   McpPullRequestCapabilityUnavailableError,
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
   PullRequestHostRequiredError,
   PullRequestThreadNotFoundError,
+  PullRequestThreadAboveLimitsError,
   PullRequestLinkFailedError,
   PullRequestUnlinkFailedError,
   PullRequestListFailedError,
   PullRequestWatchFailedError,
   PullRequestNotOpenError,
+  PullRequestWatchFromSubagentError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 

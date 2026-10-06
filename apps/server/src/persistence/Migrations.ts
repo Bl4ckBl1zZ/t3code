@@ -78,6 +78,8 @@ import Migration0060 from "./Migrations/060_AgentSessionImports.ts";
 import Migration0061 from "./Migrations/061_HermesWorkRuns.ts";
 import Migration0062 from "./Migrations/062_HermesWorkRunResultAttempts.ts";
 import Migration0063 from "./Migrations/063_ProjectionTurnItemsLiveCommandIndex.ts";
+import Migration0064 from "./Migrations/064_ScheduledTaskWebhooks.ts";
+import Migration0065 from "./Migrations/065_WebhookRelayDeliveries.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -153,6 +155,8 @@ export const migrationEntries = [
   [61, "HermesWorkRuns", Migration0061],
   [62, "HermesWorkRunResultAttempts", Migration0062],
   [63, "ProjectionTurnItemsLiveCommandIndex", Migration0063],
+  [64, "ScheduledTaskWebhooks", Migration0064],
+  [65, "WebhookRelayDeliveries", Migration0065],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -245,6 +249,8 @@ export const forkMigrationMarkers: ReadonlyArray<readonly [number, SchemaMarker]
   [61, { kind: "table", table: "hermes_work_runs" }],
   [62, { kind: "column", table: "hermes_work_runs", column: "result_attempted_at" }],
   [63, { kind: "index", index: "orchestration_v2_projection_turn_items_live_command_idx" }],
+  [64, { kind: "table", table: "scheduled_task_webhook_deliveries" }],
+  [65, { kind: "table", table: "scheduled_task_webhook_relay_deliveries" }],
 ];
 
 const markerExists = Effect.fn("markerExists")(function* (marker: SchemaMarker) {

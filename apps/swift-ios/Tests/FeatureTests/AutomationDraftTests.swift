@@ -54,6 +54,17 @@ final class AutomationDraftTests: XCTestCase {
 
     // MARK: - Loading an existing automation
 
+    func testEditingAWebhookAutomationKeepsItsTrigger() {
+        let webhook = ScheduledTaskSchedule.other(
+            type: "webhook",
+            raw: .object(["type": .string("webhook")])
+        )
+        var draft = AutomationDraft(task: task(schedule: webhook))
+        draft.prompt = "Summarise the release."
+        XCTAssertEqual(draft.preservedSchedule, webhook)
+        XCTAssertEqual(draft.schedule, webhook)
+    }
+
     func testEditingAnAutomationLoadsEveryFieldTheFormOwns() {
         let draft = AutomationDraft(task: task(enabled: false))
         XCTAssertEqual(draft.title, "Nightly triage")

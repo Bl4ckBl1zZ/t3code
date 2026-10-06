@@ -9,7 +9,7 @@ agent can use this endpoint to:
 - wait for or poll the sub-agent's durable result;
 - cancel an active delegated task; and
 - create one or more ordinary top-level T3 threads;
-- list and incrementally read project threads;
+- list a project's threads and incrementally read any thread;
 - send or steer follow-up messages; and
 - wait for or interrupt ordinary thread runs.
 
@@ -19,7 +19,7 @@ only the supplied task prompt, plus an optional role instruction supplied in
 the same tool call. Parent conversation history is not copied into the child.
 
 `ThreadManagementService` is the shared server application boundary for V2
-WebSocket commands and MCP. It owns project-scoped lookup, listing, send-mode
+WebSocket commands and MCP. It owns thread lookup, listing, send-mode
 selection, durable send postconditions, wait polling, and interrupt selection;
 `OrchestratorV2` remains the lower-level command/event processor. Transport
 adapters only authenticate, resolve transport-specific inputs, and shape
@@ -227,7 +227,8 @@ provider session. The request becomes the V2 command
 `delegated_task.request`.
 
 `mode: "async"` returns the current durable state immediately.
-`mode: "wait"` polls the same durable state until it becomes terminal or the
+`mode: "wait"` re-reads the same durable state whenever the parent's task record
+or the child's runs or nested tasks change, until it becomes terminal or the
 timeout expires. A wait timeout does not cancel the child; the result sets
 `waitTimedOut: true`, and the caller can continue with `task_status`.
 
@@ -254,12 +255,13 @@ summary and the durable `subagent_result` context transfer ID when available.
 
 ### `task_cancel`
 
-Interrupts the active child run through the normal V2 `run.interrupt` command
-and disposes automatic parent delivery. For a terminal task, it returns the
-existing status and disposes delivery without interrupting later child-thread runs,
-even when `task_status` reports `hasPendingChildRuns: true`. Published task results
-remain available. It accepts an optional cancellation reason. Use
-`t3_thread_interrupt` to stop a later active run.
+Stops the child thread with the server-only `thread.stop` command, then stops every
+task the child delegated, and disposes automatic parent delivery. Like a user Stop,
+`thread.stop` interrupts the running turn and ends pull request watches; it also
+holds queued turns. A nonterminal task with neither an interruptible run nor
+delegates of its own is rejected. A terminal task returns its existing status, and
+its child thread still stops, including later runs and watch wakes. Published task
+results remain available. It accepts an optional cancellation reason.
 
 ### `create_threads`
 
@@ -308,18 +310,19 @@ Use `create_threads` instead for a batch that shares the caller's checkout.
 
 ### `t3_thread_list`
 
-Lists durable thread shells in the calling thread's project, newest first.
-Callers can filter by title, run status, settled state (`settled: true` lists
-threads the user or auto-settlement moved out of the active list), and whether
-app-owned sub-agent threads are included. Results are bounded and
-offset-paginated. Deleted threads and threads from other projects are never
-exposed. Each listed thread, and `t3_thread_read`'s thread detail, reports
-`settled` and `settledAt`.
+Lists durable thread shells in one project, newest first: `projectId` when
+given, else the calling thread's project. Callers can filter by title, run
+status, settled state (`settled: true` lists threads the user or
+auto-settlement moved out of the active list), and whether app-owned sub-agent
+threads are included. Results are bounded and offset-paginated. Deleted threads
+are never listed. Each listed thread, and `t3_thread_read`'s thread detail,
+reports `settled` and `settledAt`.
 
 ### `t3_thread_read`
 
-Reads a project-scoped thread's durable state, recent runs, and visible
-timeline. The default `messages` view returns user messages, assistant
+Reads the durable state, recent runs, and visible timeline of any thread in
+the environment by thread ID. A deleted thread returns `thread_not_found`. The
+default `messages` view returns user messages, assistant
 messages, and proposed plans. The `activity` view also returns summarized tool,
 reasoning, checkpoint, handoff, and runtime-request items. Large item text is
 bounded and reports whether it was truncated. `afterPosition` and
@@ -333,7 +336,7 @@ distinguishable from human-authored messages.
 
 ### `t3_thread_update`
 
-Updates metadata for the calling thread or another thread in the same project.
+Updates metadata for the calling thread or any other thread in the environment.
 The typed actions are `rename`, `regenerate_title`, `link_pull_request`, and
 `unlink_pull_request`. A link input supplies the repository, number, and URL;
 the server records the target thread's project ID. Branch and workspace changes
@@ -346,7 +349,7 @@ receipt.
 
 ### `t3_thread_send`
 
-Sends a message to an ordinary or delegated thread in the calling project:
+Sends a message to any ordinary or delegated thread in the environment:
 
 - `auto` starts an idle thread, steers a fully active turn, or queues behind a
   turn that is not yet steerable;
@@ -376,11 +379,11 @@ returned unchanged, and a thread with no active provider turn returns
 ## Thread Toolkit
 
 A second toolkit covers what a caller does to a thread that already exists.
-Every tool resolves the caller's credential first and then the thread, so a
-`threadId` argument can only ever name a thread in the caller's own project;
-omitting it means the calling thread. Writes additionally require a live
-full-access caller whose runtime and interaction modes are at least as broad as
-the target's, which is the same escalation rule delegation uses.
+Every tool resolves the caller's credential first and then the thread. A
+`threadId` argument may name a thread in any project; omitting it means the
+calling thread. Writes additionally require the caller's live run and runtime
+and interaction modes at least as broad as the target's, which is the same
+escalation rule delegation uses.
 
 - **Organizing.** `t3_thread_organize` pins, snoozes, settles, archives or marks
   a thread unread through the ordinary lifecycle commands. `snooze` requires
@@ -395,17 +398,19 @@ the target's, which is the same escalation rule delegation uses.
   answers one. Approval requests are deliberately absent: an agent cannot
   approve its own permission prompt.
 - **Configuration.** `t3_thread_configuration` reads a thread's model selection
-  and modes; `t3_thread_configure` sets the calling thread's selection only.
-  Permission modes are not settable here.
+  and modes; `t3_thread_configure` sets a thread's selection (the calling
+  thread unless `threadId` is given). Permission modes are not settable here.
 - **Lineage.** `t3_thread_fork` and `t3_thread_merge_back` run the existing fork
-  and merge-back commands, and `t3_thread_transfers` reads transfer status.
+  and merge-back commands (`threadId` / `sourceThreadId` default to the calling
+  thread), and `t3_thread_transfers` reads transfer status.
   Acceptance means the command committed, not that a provider turn finished.
 - **Search.** `t3_thread_search` runs the app's bounded thread search and then
-  drops matches outside the calling project, so it may return fewer results than
-  `limit`. It is not paginated and is not exhaustive.
-- **Scheduling.** `run_scheduled_task_now` triggers a scheduled task in the
-  calling project immediately. It requires a full-access/default caller, and
-  each call is a new manual run.
+  keeps matches in one project (`projectId`, else the calling thread's), so it
+  may return fewer results than `limit`. It is not paginated and is not
+  exhaustive.
+- **Scheduling.** `run_scheduled_task_now` triggers any scheduled task
+  immediately. It requires a live full-access/default caller, and each call is
+  a new manual run.
 
 ## Workspace, Environment And Preview Toolkits
 
@@ -414,8 +419,8 @@ Three smaller toolkits sit beside the thread one.
 The workspace toolkit moves a thread between checkouts and reports where it is.
 `t3_worktree_handoff` creates a worktree and re-points the thread at it,
 `t3_worktree_status` reports the current binding, and `t3_worktree_list` pages
-the branch refs in the thread's workspace with the checkout path each one is
-bound to, using the app's own ref inventory. A detached worktree with no branch
+the branch refs in a thread's workspace (the calling thread unless `threadId`
+is given) with the checkout path each one is bound to, using the app's own ref inventory. A detached worktree with no branch
 is left out, since there is no ref to name it by. All three need the `worktree`
 capability.
 
@@ -473,9 +478,15 @@ falls back to a terminal-status message when no assistant text exists.
   mode. It may not escalate privileges.
 - A child interaction mode may stay equal to or narrow from `default` to
   `plan`. It may not escalate from `plan` to `default`.
-- General thread management is limited to the calling thread's project. Send
-  additionally enforces the same runtime and interaction privilege ceiling as
-  child creation.
+- Thread tools take any thread in the environment as a target. List and
+  search cover one project: the calling thread's unless `projectId` is given.
+- A tool that changes another thread needs the calling thread's live run, and
+  the target's runtime and interaction modes may not be broader than the
+  caller's. This is the same privilege ceiling as child creation.
+- Scheduled tasks take a `projectId` target too. Changing or deleting a task
+  requires its modes to be within the caller's, and work in another project
+  needs the caller's live run. A task in another project launches a fresh
+  thread per run; it cannot bind to the calling thread.
 - Provider instances must be enabled, installed, available, authenticated, and
   backed by a V2 adapter.
 - A requested model must be advertised by the selected provider when the
@@ -534,7 +545,7 @@ Coverage includes:
 - async status polling;
 - cancellation;
 - batch ordinary-thread creation;
-- project-scoped thread listing and timeline reads;
+- thread listing and timeline reads, including another project's threads;
 - ordinary-thread send, wait, steering, and interruption;
 - inheritance and per-thread provider overrides; and
 - idempotent retries.

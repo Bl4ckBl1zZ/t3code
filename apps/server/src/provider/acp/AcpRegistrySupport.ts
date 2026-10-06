@@ -2,7 +2,12 @@ import {
   type AcpRegistryDistributionPreference,
   type AcpRegistrySettings,
 } from "@t3tools/contracts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  HostProcessArchitecture,
+  HostProcessEnvironment,
+  HostProcessPlatform,
+} from "@t3tools/shared/hostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -63,6 +68,7 @@ export const AcpRegistryErrorReason = Schema.Literals([
   "download_failed",
   "install_failed",
   "registry_unavailable",
+  "runner_unavailable",
   "unsupported_distribution",
   "unsupported_platform",
 ]);
@@ -157,8 +163,8 @@ export function resolveAcpRegistryDistribution(input: {
 }
 
 export interface ResolvedAcpRegistryAgent {
-  readonly agent: AcpRegistryAgent;
-  readonly distribution: AcpRegistryDistributionKind;
+  readonly agent?: AcpRegistryAgent;
+  readonly distribution: AcpRegistryDistributionKind | "local";
   readonly spawn: AcpSpawnInput;
 }
 
@@ -241,6 +247,8 @@ export const makeAcpRegistryResolver = Effect.fn("AcpRegistryResolver.make")(fun
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const platform = yield* HostProcessPlatform;
   const architecture = yield* HostProcessArchitecture;
+  const hostEnvironment = yield* HostProcessEnvironment;
+  const resolveExecutable = yield* SpawnExecutableResolution;
   const platformTarget = resolveAcpRegistryPlatformTarget(platform, architecture);
   const registryUrl = input.registryUrl ?? ACP_REGISTRY_URL;
   const registryDirectory = path.join(input.cacheDir, "acp-registry");
@@ -565,8 +573,40 @@ export const makeAcpRegistryResolver = Effect.fn("AcpRegistryResolver.make")(fun
     );
   });
 
+  const resolveLocal = (settings: AcpRegistrySettings, cwd: string, env: NodeJS.ProcessEnv) =>
+    Effect.gen(function* () {
+      const executable = settings.commandPath.trim();
+      if (executable.length === 0) {
+        return yield* new AcpRegistryError({
+          reason: "agent_not_configured",
+          detail: "Local ACP provider requires an executable.",
+        });
+      }
+      const command = resolveExecutable(executable, platform, env);
+      if (command === undefined) {
+        return yield* new AcpRegistryError({
+          reason: "runner_unavailable",
+          detail: "Local ACP executable is not available on this environment's PATH.",
+        });
+      }
+      if (platform === "win32" && /\.(?:cmd|bat)$/iu.test(command)) {
+        return yield* new AcpRegistryError({
+          reason: "runner_unavailable",
+          detail:
+            "Local ACP commands launch without a shell. For a Windows batch wrapper, configure the underlying executable (for example node.exe) and pass the script path as an argument.",
+        });
+      }
+      return {
+        distribution: "local",
+        spawn: { command, args: settings.commandArgs, cwd, env, shell: false },
+      } satisfies ResolvedAcpRegistryAgent;
+    });
+
   const resolve: AcpRegistryResolverShape["resolve"] = (settings, cwd, environment) =>
     Effect.gen(function* () {
+      if (settings.source === "local") {
+        return yield* resolveLocal(settings, cwd, environment ?? hostEnvironment);
+      }
       const agentId = settings.agentId.trim();
       if (agentId.length === 0) {
         return yield* new AcpRegistryError({

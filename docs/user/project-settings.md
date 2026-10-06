@@ -35,7 +35,7 @@ pull. Enabled projects are also refreshed once when the server starts. The defau
 
 In **Settings → Source Control → Worktree branch naming**, choose a static prefix,
 a model-selected semantic prefix such as `feat/` or `fix/`, or custom instructions
-for the complete name. The static prefix defaults to `t3code/`; a trailing slash is
+for the complete name. The static prefix defaults to `t3/`; a trailing slash is
 optional, and an empty prefix adds nothing. Invalid characters in a static prefix
 are replaced with hyphens. Custom instructions are appended to
 the naming prompt and can specify issue IDs, namespaces, and casing.
@@ -68,6 +68,16 @@ repository does not allow the chosen method, the merge uses one it does.
 Agents with full access can read and change these defaults through the environment preferences
 tool.
 
+## Removing agent credits when merging
+
+**Remove agent credits when merging** removes recognized agent co-author and generated-by lines
+from GitHub merge and squash commit messages. Human co-authors stay credited. It is off by
+default. Web and desktop expose the machine default in **Settings → General** and a per-project
+choice in project settings, where **Machine default** removes the override. It also applies to
+auto-merge, but not to merge queues or stack merges. The original commits keep their messages, so a
+merge commit or rebase can still carry agent credits in those commits. Agents with full access can
+read and change it through the environment preferences tool.
+
 ## Defaults for new threads
 
 On web and desktop, open **Settings → Projects**. Select **Project defaults**
@@ -82,6 +92,14 @@ New worktrees initialize git submodules recursively. If that step is slow becaus
 declares many nested submodules, set `"worktreeSubmodules"` in `t3.json` to `"top-level"` to stop
 at the ones the repository declares itself, or `"none"` to leave them for a setup action. The
 value is read from the `t3.json` of the branch being checked out.
+
+## Worktree location
+
+New worktrees go in the `worktrees` folder of the T3 home directory. To put them somewhere else,
+such as another drive, set **Settings → General → Worktree location** to an absolute path like
+`D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
+are, and review diffs keep working for worktrees in the default folder and in every custom folder
+used before.
 
 ## Shared actions
 
@@ -128,3 +146,31 @@ For an action marked **Single run**, its row changes to **Stop** while running. 
 to interrupt that action with Ctrl-C. Other terminal sessions keep running. Once the
 action exits, the same row can start it again. Repeatable actions remain available to
 start additional runs.
+
+## Webhook automations
+
+In **Settings → Schedule Tasks**, choose **On webhook** as a task's schedule to run it whenever another
+service calls its URL, such as GitHub on a new pull request or a CI job that failed. After you save
+the task, copy its URL from the editor. If the environment uses a [T3 Connect](remote-access.md)
+managed tunnel, the URL is public; otherwise it works anywhere the environment itself is reachable.
+**Rotate** replaces the URL and the old one stops working.
+
+The prompt decides what the agent sees. Placeholders pull values out of the request:
+`{{body.path}}` for a JSON or form field, `{{headers.name}}`, `{{query.name}}`, `{{body}}` for the
+raw body, and `{{request}}` for everything. For example,
+`Review this PR: {{body.pull_request.html_url}}` sends only the pull request link. A placeholder
+with no value is left empty.
+
+For GitHub, turn on **Require signature**, keep the header `x-hub-signature-256`, hex encoding and
+the `sha256=` prefix, and enter the same secret in the repository's webhook settings with content
+type `application/json`. Requests without a valid signature are rejected.
+
+Use a webhook task's **Deliveries** button to see recent requests and the prompt each one produced.
+If the environment is offline, the sender gets an error and nothing runs; redeliver from the
+sender, such as GitHub's **Recent Deliveries**, once it is back.
+
+To have T3 Connect keep requests instead, turn on **Hold webhooks while offline** in
+**Settings → Connections**. T3 Connect then stores requests to a T3 Connect URL for up to 24 hours
+and delivers them when the environment returns. Leave it off if you don't want request bodies
+stored outside your machine. To skip requests that waited too long, set **Skip requests older
+than** on the task.

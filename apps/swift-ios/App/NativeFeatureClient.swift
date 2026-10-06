@@ -7039,6 +7039,8 @@ extension NativeFeatureClient: FeatureScheduledTaskManaging {
                 // the distinction is preserved rather than normalized here.
                 weekdays: weekdays.map { $0.compactMap(ScheduledTaskWeekday.init(rawValue:)) }
             )
+        case let .other(type, raw):
+            .other(type: type, raw: raw)
         }
     }
 
@@ -7050,6 +7052,8 @@ extension NativeFeatureClient: FeatureScheduledTaskManaging {
             .interval(everyMs: everyMs)
         case let .fixedTime(timeOfDay, weekdays):
             .fixedTime(timeOfDay: timeOfDay, weekdays: weekdays?.map(\.rawValue))
+        case let .other(type, raw):
+            .other(type: type, raw: raw)
         }
     }
 }

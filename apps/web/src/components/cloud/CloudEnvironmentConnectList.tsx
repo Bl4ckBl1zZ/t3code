@@ -5,6 +5,7 @@ import {
   RelayConnectionTarget,
   orchestrationProtocolCompatibilityError,
 } from "@t3tools/client-runtime/connection";
+import { relayOfflineReasonMessage } from "@t3tools/client-runtime/relay";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -207,6 +208,13 @@ export function CloudEnvironmentConnectRows({
   return visibleEnvironments.map(({ environment, availability, error, status }) => {
     const savedEnvironment = savedById.get(environment.environmentId);
     const compatibilityError = discoveredCompatibilityError(status);
+    // Why the relay reports this environment offline, when it knows more than
+    // "no answer". Shown for saved and unsaved rows alike.
+    const relayStatus = status === undefined ? null : Option.getOrNull(status);
+    const offlineReason =
+      availability === "offline" && relayStatus !== null
+        ? relayOfflineReasonMessage(relayStatus)
+        : null;
     const unsupported =
       compatibilityError !== null || savedEnvironment?.connection.phase === "unsupported";
     const savedConnection = unsupported
@@ -236,15 +244,18 @@ export function CloudEnvironmentConnectRows({
     const available = savedWithoutRelay.has(environment.environmentId)
       ? "Saved without T3 Connect"
       : "Available";
-    const statusText = savedConnection
-      ? savedConnection.statusText
-      : availability === "online"
-        ? `${available} · Relay online`
-        : availability === "offline"
-          ? `${available} · Relay offline`
-          : availability === "checking"
-            ? `${available} · Checking relay status…`
-            : (Option.getOrNull(error)?.message ?? `${available} · Relay status unavailable`);
+    const statusText =
+      offlineReason !== null
+        ? offlineReason
+        : savedConnection
+          ? savedConnection.statusText
+          : availability === "online"
+            ? `${available} · Relay online`
+            : availability === "offline"
+              ? `${available} · Relay offline`
+              : availability === "checking"
+                ? `${available} · Checking relay status…`
+                : (Option.getOrNull(error)?.message ?? `${available} · Relay status unavailable`);
     return (
       <div key={environment.environmentId} className={ITEM_ROW_CLASSNAME}>
         <div className={ITEM_ROW_INNER_CLASSNAME}>
@@ -259,15 +270,17 @@ export function CloudEnvironmentConnectRows({
                     : null
                 }
                 tooltipText={
-                  savedConnection
-                    ? savedConnection.statusText
-                    : availability === "online"
-                      ? "Relay online"
-                      : availability === "offline"
-                        ? "Relay offline"
-                        : availability === "checking"
-                          ? "Checking relay status"
-                          : (Option.getOrNull(error)?.message ?? "Relay status unavailable")
+                  offlineReason !== null
+                    ? offlineReason
+                    : savedConnection
+                      ? savedConnection.statusText
+                      : availability === "online"
+                        ? "Relay online"
+                        : availability === "offline"
+                          ? "Relay offline"
+                          : availability === "checking"
+                            ? "Checking relay status"
+                            : (Option.getOrNull(error)?.message ?? "Relay status unavailable")
                 }
               />
               <p className="truncate text-sm font-medium">{environment.label}</p>

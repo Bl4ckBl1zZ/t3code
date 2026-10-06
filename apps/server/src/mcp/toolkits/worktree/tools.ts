@@ -6,6 +6,7 @@ import {
   WorktreeMcpHandoffInput,
   WorktreeMcpHandoffResult,
   WorktreeMcpStatusResult,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -54,8 +55,9 @@ export const WorktreeStatusTool = Tool.make("t3_worktree_status", {
 
 const WorktreeListTool = Tool.make("t3_worktree_list", {
   description:
-    "List branch refs and their associated checkout paths for this thread's workspace using the app's ref inventory. Detached worktrees without a branch are not included. Use t3_worktree_status for the thread binding and t3_worktree_handoff to create a new worktree.",
+    "List branch refs and their associated checkout paths for a thread's workspace (omit threadId for this thread) using the app's ref inventory. Detached worktrees without a branch are not included. Use t3_worktree_status for the thread binding and t3_worktree_handoff to create a new worktree.",
   parameters: Schema.Struct({
+    threadId: Schema.optional(ThreadId),
     query: VcsListRefsInput.fields.query,
     cursor: VcsListRefsInput.fields.cursor,
     limit: VcsListRefsInput.fields.limit,

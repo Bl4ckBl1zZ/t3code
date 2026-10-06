@@ -814,10 +814,10 @@ describe("ClientSettings chat width", () => {
 });
 
 describe("branch naming settings", () => {
-  it("defaults existing settings to the t3code static prefix", () => {
+  it("defaults existing settings to the t3 static prefix", () => {
     expect(decodeServerSettings({})).toMatchObject({
       branchNamingMode: "static",
-      branchNamePrefix: "t3code",
+      branchNamePrefix: "t3",
       branchNameInstructions: "",
     });
   });
@@ -829,6 +829,23 @@ describe("branch naming settings", () => {
     };
     expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
     expect(decodeServerSettingsPatch(input)).toEqual(input);
+  });
+});
+
+describe("ServerSettings.removeAgentCreditsOnMerge", () => {
+  it("keeps agent credits by default and accepts opt-in patches and project resets", () => {
+    const settings = decodeServerSettings({});
+    expect(settings.removeAgentCreditsOnMerge).toBe(false);
+    expect(settings.projectRemoveAgentCreditsOnMergeOverrides).toEqual({});
+    expect(
+      decodeServerSettingsPatch({
+        removeAgentCreditsOnMerge: true,
+        projectRemoveAgentCreditsOnMergeOverrides: { project: false, other: null },
+      }),
+    ).toEqual({
+      removeAgentCreditsOnMerge: true,
+      projectRemoveAgentCreditsOnMergeOverrides: { project: false, other: null },
+    });
   });
 });
 

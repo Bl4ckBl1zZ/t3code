@@ -1,7 +1,10 @@
 import {
   WS_METHODS,
+  type PullRequestActionInput,
   type PullRequestDetail,
   type PullRequestDiffInput,
+  type PullRequestMergeMethod,
+  PullRequestOperationError,
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import * as Data from "effect/Data";
@@ -12,6 +15,7 @@ import { Atom } from "effect/unstable/reactivity";
 
 import {
   createAtomCommandScheduler,
+  createEnvironmentCommand,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentQueryAtomFamily,
@@ -19,6 +23,7 @@ import {
 import { PullRequestDiffLoader } from "./pullRequestDiffHttp.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import { request } from "../rpc/client.ts";
 
 export {
   type PullRequestDiffLoadError,
@@ -30,6 +35,25 @@ export {
 export class EnvironmentHttpConnectionNotReadyError extends Data.TaggedError(
   "EnvironmentHttpConnectionNotReadyError",
 )<{ readonly message: string }> {}
+
+/**
+ * A merge pressed from a surface that knows too little to merge with — whether this viewer may,
+ * which methods the repository allows, whether the pull request sits in a stack. The host's
+ * current answer settles it inside the action's lane.
+ */
+export interface PullRequestMergePreparation {
+  /** The environment reads GitHub stacks, so a pull request inside one is refused here. */
+  readonly stackActions: boolean;
+  /** Throwing refuses the merge with that error's sentence. */
+  readonly resolveMergeMethod: (detail: PullRequestDetail) => PullRequestMergeMethod;
+}
+
+export type PullRequestRunActionInput = PullRequestActionInput & {
+  readonly prepareMerge?: PullRequestMergePreparation;
+};
+
+const refuseMerge = (detail: string) =>
+  new PullRequestOperationError({ operation: "runAction", detail });
 
 /** Refresh a linked PR while its thread is visible so merges update the sidebar. */
 export function createLinkedPullRequestDetailAtomFamily<R, E>(
@@ -171,9 +195,51 @@ export function createPullRequestEnvironmentAtoms<R, E>(
           ]),
       },
     }),
-    runAction: createEnvironmentRpcCommand(runtime, {
+    runAction: createEnvironmentCommand(runtime, {
       label: "environment-data:pull-requests:run-action",
-      tag: WS_METHODS.pullRequestsRunAction,
+      // Preparation belongs to the write's lane: preparing outside it could let a later click
+      // overtake this one.
+      execute: (input: PullRequestRunActionInput) =>
+        Effect.gen(function* () {
+          const { prepareMerge, ...actionInput } = input;
+          if (
+            actionInput.action !== "merge" ||
+            actionInput.mergeMethod !== undefined ||
+            prepareMerge === undefined
+          ) {
+            return yield* request(WS_METHODS.pullRequestsRunAction, actionInput);
+          }
+          const { projectId, host, repository, number } = actionInput;
+          const reference = {
+            projectId,
+            ...(host === undefined ? {} : { host }),
+            repository,
+            number,
+          };
+          const detail = yield* request(WS_METHODS.pullRequestsDetail, reference);
+          if (
+            detail.state !== "open" ||
+            detail.isDraft ||
+            !detail.capabilities.actions.includes("merge") ||
+            !detail.viewerPermissions.actions.includes("merge")
+          ) {
+            return yield* refuseMerge("This pull request cannot be merged.");
+          }
+          if (detail.provider === "github" && prepareMerge.stackActions) {
+            const stack = yield* request(WS_METHODS.pullRequestsStack, reference);
+            if (stack !== null) {
+              return yield* refuseMerge("Open this pull request to merge its stack.");
+            }
+          }
+          const mergeMethod = yield* Effect.try({
+            try: () => prepareMerge.resolveMergeMethod(detail),
+            catch: (cause) =>
+              refuseMerge(
+                cause instanceof Error ? cause.message : "Could not choose a merge method.",
+              ),
+          });
+          return yield* request(WS_METHODS.pullRequestsRunAction, { ...actionInput, mergeMethod });
+        }),
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),

@@ -42,9 +42,11 @@ import {
   orchestrationV2ActiveAgentCount,
   orchestrationV2BackgroundProcessCount,
   orchestrationV2RunWorkStartedAt,
+  OrchestrationV2ProviderGoal,
   PlanId,
   ProviderInstanceId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -634,6 +636,7 @@ type ShellThreadRow = {
   readonly active_run_id: string | null;
   readonly activity_run_started_at: string | null;
   readonly provider_instance_history_json: string | null;
+  readonly active_provider_goal_json: string | null;
   readonly last_error: string | null;
   readonly terminal_failure_payload_json: string | null;
   readonly blocking_run_id: string | null;
@@ -643,6 +646,7 @@ type ShellThreadRow = {
   readonly blocking_failure_payload_json: string | null;
   readonly pending_request_payload_json: string | null;
   readonly latest_message_summary_json: string | null;
+  readonly pending_secret_request_payload_json: string | null;
   readonly latest_user_message_at: string | null;
   readonly latest_user_authored_message_at: string | null;
   readonly has_actionable_proposed_plan: number;
@@ -696,6 +700,16 @@ function providerInstanceHistoryFromRow(
         (left.firstProviderThreadId ?? "").localeCompare(right.firstProviderThreadId ?? ""),
     )
     .map((row) => row.instanceId);
+}
+
+const decodeProviderGoal = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ProviderGoal),
+);
+
+/** The active provider thread's native goal. A malformed row hides the goal, not the read. */
+function providerGoalFromRow(json: string | null): OrchestrationV2ThreadShell["goal"] {
+  if (json === null) return null;
+  return Option.getOrNull(decodeProviderGoal(json));
 }
 
 /**
@@ -1136,6 +1150,29 @@ function buildVisibleTurnItems(input: {
 }
 
 /**
+ * An agent waiting on a secret is waiting on the user just like a question,
+ * so the shell reports it as pending user input. Secret requests have no
+ * runtime request of their own; this stands one in for the shell summary
+ * only, keyed by the card's turn item.
+ */
+function secretRequestAsPendingInput(
+  item: OrchestrationV2TurnItem | null,
+): OrchestrationV2ThreadProjection["runtimeRequests"][number] | null {
+  if (item?.type !== "secret_request" || item.nodeId === null) return null;
+  return {
+    id: RuntimeRequestId.make(item.id),
+    nodeId: item.nodeId,
+    providerTurnId: item.providerTurnId,
+    nativeRequestRef: null,
+    kind: "user_input",
+    status: "pending",
+    responseCapability: { type: "message" },
+    createdAt: item.startedAt ?? item.updatedAt,
+    resolvedAt: null,
+  };
+}
+
+/**
  * Shell rows carry a preview, not a transcript. `resolveThreadPreview` collapses
  * whitespace and renders at most 160 characters, so anything past this cap is
  * payload the clients cannot show — and an agent's multi-megabyte final answer
@@ -1176,6 +1213,11 @@ export function threadShellFromProjection(
     projection.runs
       .filter((run) => isInterruptibleRunForShell(run) || run.status === "waiting")
       .toSorted((left, right) => right.ordinal - left.ordinal)[0] ?? null;
+  const liveRunIds = new Set(
+    projection.runs
+      .filter((run) => isInterruptibleRunForShell(run) || run.status === "waiting")
+      .map((run) => run.id),
+  );
   const pendingRuntimeRequest =
     projection.runtimeRequests
       .filter((request) => request.status === "pending")
@@ -1183,7 +1225,21 @@ export function threadShellFromProjection(
         (left, right) =>
           Number(left.responseMode === "message") - Number(right.responseMode === "message") ||
           DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
-      )[0] ?? null;
+      )[0] ??
+    secretRequestAsPendingInput(
+      projection.turnItems
+        .filter(
+          (item) =>
+            item.type === "secret_request" &&
+            item.status === "waiting" &&
+            item.runId !== null &&
+            liveRunIds.has(item.runId),
+        )
+        .toSorted(
+          (left, right) =>
+            DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+        )[0] ?? null,
+    );
   const latestVisibleMessage =
     projection.messages.toSorted(
       (left, right) =>
@@ -1275,7 +1331,12 @@ export function threadShellFromProjection(
       hasActiveRun: activeRun !== null,
       turnItems: projection.turnItems,
       subagents: projection.subagents,
+      pullRequests: projection.thread.pullRequests,
     }),
+    goal: activeProviderGoalForShell(
+      projection.providerThreads,
+      projection.thread.activeProviderThreadId,
+    ),
     itemCount: activeLocalTurnItems(projection).length,
     visibleItemCount: projection.visibleTurnItems.length,
     createdAt: projection.thread.createdAt,
@@ -1324,6 +1385,14 @@ function providerInstanceHistoryForShell(input: {
   return history;
 }
 
+/** The native goal lives on the provider thread that currently owns the conversation. */
+function activeProviderGoalForShell(
+  providerThreads: ReadonlyArray<OrchestrationV2ThreadProjection["providerThreads"][number]>,
+  activeProviderThreadId: OrchestrationV2ThreadProjection["thread"]["activeProviderThreadId"],
+): OrchestrationV2ThreadShell["goal"] {
+  return providerThreads.find((thread) => thread.id === activeProviderThreadId)?.goal ?? null;
+}
+
 function isInterruptibleRunForShell(run: OrchestrationV2ThreadProjection["runs"][number]): boolean {
   return run.status === "preparing" || run.status === "starting" || run.status === "running";
 }
@@ -1349,6 +1418,7 @@ type ShellThreadState = {
   readonly backgroundProcessCount: number;
   readonly activeAgentCount: number;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
+  readonly goal: OrchestrationV2ThreadShell["goal"];
   readonly itemCount: number;
   readonly runlessItemCount: number;
   readonly updatedAt: OrchestrationV2ThreadProjection["updatedAt"];
@@ -1393,6 +1463,25 @@ function itemCountThroughRun(input: {
     }
   }
   return count;
+}
+
+/**
+ * Threads that some shell row forks from at a run. Only these need run
+ * ordinals and per-run item counts, to count the inherited prefix, so a thread
+ * nobody forked from never pays for a scan of its run history.
+ */
+function shellForkSourceIds(
+  rows: ReadonlyArray<{ readonly forked_from_run_source_thread_id: string | null }>,
+): ReadonlyArray<ThreadId> {
+  return [
+    ...new Set(
+      rows.flatMap((row) =>
+        row.forked_from_run_source_thread_id === null
+          ? []
+          : [ThreadId.make(row.forked_from_run_source_thread_id)],
+      ),
+    ),
+  ];
 }
 
 function visibleItemCountForShell(input: {
@@ -1509,6 +1598,7 @@ function shellFromState(input: {
     backgroundProcessCount: input.state.backgroundProcessCount,
     activeAgentCount: input.state.activeAgentCount,
     pendingBackgroundTasks: input.state.pendingBackgroundTasks,
+    goal: input.state.goal,
     itemCount: input.state.itemCount,
     visibleItemCount: input.visibleItemCount,
     createdAt: input.state.thread.createdAt,
@@ -3069,6 +3159,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   GROUP BY provider_instance_id
                 ) pt
               ) AS provider_instance_history_json,
+              -- The native goal lives on the provider thread that owns the conversation.
+              (
+                SELECT json_extract(pt.payload_json, '$.goal')
+                FROM orchestration_v2_projection_provider_threads pt
+                WHERE pt.provider_thread_id = json_extract(t.payload_json, '$.activeProviderThreadId')
+              ) AS active_provider_goal_json,
               -- CROSS JOIN pins the join order: start from this thread's few
               -- bindings. Left to itself the planner starts from every session
               -- of the provider instance instead, once per thread (~1s for the
@@ -3137,6 +3233,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 LIMIT 1
               ) AS latest_message_summary_json,
               (
+                SELECT secret.payload_json
+                FROM orchestration_v2_projection_turn_items secret
+                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
+                INNER JOIN orchestration_v2_projection_runs r ON r.run_id = secret.run_id
+                WHERE secret.thread_id = t.thread_id
+                  AND secret.type = 'secret_request' AND secret.status = 'waiting'
+                  AND r.status IN ('preparing', 'starting', 'running', 'waiting')
+                ORDER BY secret.updated_at DESC, secret.turn_item_id DESC
+                LIMIT 1
+              ) AS pending_secret_request_payload_json,
+              (
                 SELECT message.updated_at
                 FROM orchestration_v2_projection_messages message
                 WHERE message.thread_id = t.thread_id
@@ -3160,13 +3267,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND plan.kind = 'proposed_plan'
                   AND plan.status = 'active'
               ) AS has_actionable_proposed_plan,
+              -- Count per run on the covering (thread_id, run_id) index, then
+              -- look up each run once, instead of one run lookup per item.
               (
-                SELECT COUNT(*)
-                FROM orchestration_v2_projection_turn_items i
+                SELECT COALESCE(SUM(per_run.item_count), 0)
+                FROM (
+                  SELECT i.run_id, COUNT(*) AS item_count
+                  FROM orchestration_v2_projection_turn_items i
+                  WHERE i.thread_id = t.thread_id
+                  GROUP BY i.run_id
+                ) per_run
                 LEFT JOIN orchestration_v2_projection_runs r
-                  ON r.run_id = i.run_id
-                WHERE i.thread_id = t.thread_id
-                  AND (i.run_id IS NULL OR r.status <> 'rolled_back')
+                  ON r.run_id = per_run.run_id
+                WHERE per_run.run_id IS NULL OR r.status <> 'rolled_back'
               ) AS item_count,
               (
                 SELECT COUNT(*)
@@ -3313,9 +3426,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         const { row, runOrdinalsByThreadId, itemCountsByThreadId } = input;
         const thread = yield* decodeThreadPayload(row.payload_json);
         const pendingRuntimeRequest =
-          row.pending_request_payload_json === null
-            ? null
-            : yield* decodeRuntimeRequestPayload(row.pending_request_payload_json);
+          row.pending_request_payload_json !== null
+            ? yield* decodeRuntimeRequestPayload(row.pending_request_payload_json)
+            : row.pending_secret_request_payload_json !== null
+              ? secretRequestAsPendingInput(
+                  yield* decodeTurnItemPayload(row.pending_secret_request_payload_json),
+                )
+              : null;
         const latestVisibleMessage =
           row.latest_message_summary_json === null
             ? null
@@ -3409,7 +3526,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             hasActiveRun: row.active_run_id !== null,
             turnItems: liveCommands,
             subagents: liveSubagents,
+            pullRequests: thread.pullRequests,
           }),
+          goal: providerGoalFromRow(row.active_provider_goal_json),
           itemCount: row.item_count,
           runlessItemCount: row.runless_item_count,
           updatedAt: thread.updatedAt,
@@ -3449,14 +3568,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               }
             }
             const threadRows = [...rowsByThreadId.values()];
-            const threadIds = [...rowsByThreadId.keys()];
+            const forkSourceIds = shellForkSourceIds(threadRows);
             const readForThreadIds = <A>(
               read: (ids: ReadonlyArray<ThreadId>) => Effect.Effect<ReadonlyArray<A>, unknown>,
-            ) =>
-              threadIds.length === 0 ? Effect.succeed([] as ReadonlyArray<A>) : read(threadIds);
+              ids: ReadonlyArray<ThreadId>,
+            ) => (ids.length === 0 ? Effect.succeed([] as ReadonlyArray<A>) : read(ids));
             const [runRows, itemCountRows, sequenceRows] = yield* Effect.all([
-              readForThreadIds(selectShellRunRows),
-              readForThreadIds(selectShellRunItemCounts),
+              readForThreadIds(selectShellRunRows, forkSourceIds),
+              readForThreadIds(selectShellRunItemCounts, forkSourceIds),
               sql<{ readonly snapshot_sequence: number | null }>`
             SELECT MAX(sequence) AS snapshot_sequence
             FROM orchestration_events
@@ -3533,10 +3652,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               return null;
             }
 
-            const threadIds = [...rowsByThreadId.keys()];
+            const forkSourceIds = shellForkSourceIds([...rowsByThreadId.values()]);
             const [runRows, itemCountRows] = yield* Effect.all([
-              selectShellRunRows(threadIds),
-              selectShellRunItemCounts(threadIds),
+              forkSourceIds.length === 0
+                ? Effect.succeed([] as ReadonlyArray<ShellRunRow>)
+                : selectShellRunRows(forkSourceIds),
+              forkSourceIds.length === 0
+                ? Effect.succeed([] as ReadonlyArray<ShellRunItemCountRow>)
+                : selectShellRunItemCounts(forkSourceIds),
             ]);
             const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
               runRows,

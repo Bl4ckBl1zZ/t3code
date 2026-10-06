@@ -1,9 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   EventId,
   CommandId,
   MessageId,
   type ModelSelection,
+  type OrchestrationV2ProviderThread,
   NodeId,
   type OrchestrationV2PendingBackgroundTask,
   ProjectId,
@@ -16,7 +18,9 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
+import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -283,6 +287,87 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       assert.deepEqual(yield* store.getTurnStartHistory(threadId, [RunId.make("run:other")]), []);
     }),
   );
+  it.effect("shows the native goal of the active provider thread on the shell", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:provider-goal");
+      yield* projectionStore.apply({
+        id: EventId.make("event:provider-goal:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("project:provider-goal"),
+          title: "Provider goal",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      const applyProviderThread = (
+        suffix: string,
+        goal: OrchestrationV2ProviderThread["goal"],
+        seconds: number,
+      ) =>
+        projectionStore.apply({
+          id: EventId.make(`event:provider-goal:${suffix}:${seconds}`),
+          type: "provider-thread.updated",
+          threadId,
+          driver,
+          occurredAt: DateTime.add(now, { seconds }),
+          payload: {
+            id: ProviderThreadId.make(`provider-thread:provider-goal:${suffix}`),
+            driver,
+            providerInstanceId,
+            providerSessionId: null,
+            appThreadId: threadId,
+            ownerNodeId: null,
+            nativeThreadRef: null,
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: null,
+            lastRunOrdinal: null,
+            handoffIds: [],
+            forkedFrom: null,
+            goal,
+            createdAt: now,
+            updatedAt: DateTime.add(now, { seconds }),
+          },
+        });
+      const shellGoals = Effect.gen(function* () {
+        const snapshot = yield* projectionStore.getShellSnapshot();
+        const projection = yield* projectionStore.getThreadProjection(threadId);
+        return [
+          snapshot.threads.find((thread) => thread.id === threadId)?.goal,
+          threadShellFromProjection(projection).goal,
+        ];
+      });
+      const goal = { objective: "Ship it", status: "active" as const, tokensUsed: 10 };
+
+      yield* applyProviderThread("first", goal, 0);
+      assert.deepEqual(yield* shellGoals, [goal, goal]);
+      // A handoff moves the conversation; the previous provider's goal stays behind.
+      yield* applyProviderThread("second", null, 1);
+      assert.deepEqual(yield* shellGoals, [null, null]);
+    }),
+  );
   it.effect("does not treat visited or marked-unread state as thread activity", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
@@ -375,6 +460,132 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       const markedUnread = yield* projectionStore.getThreadProjection(threadId);
       assert.isNull(markedUnread.thread.lastVisitedAt);
       assert.deepEqual(markedUnread.thread.updatedAt, createdAt);
+    }),
+  );
+
+  it.effect("a pull request watch keeps a finished thread working until it ends", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const threadId = ThreadId.make("thread:watched-pull-request");
+      const runId = RunId.make("run:watched-pull-request");
+      const at = DateTime.makeUnsafe("2026-10-05T12:00:00.000Z");
+      const thread = {
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+        id: threadId,
+        projectId: ProjectId.make("project:watched-pull-request"),
+        title: "Babysit the PR",
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: at,
+        updatedAt: at,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      };
+      yield* store.apply({
+        id: EventId.make("event:watched-pull-request:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: at,
+        payload: thread,
+      });
+      yield* store.apply({
+        id: EventId.make("event:watched-pull-request:run"),
+        type: "run.created",
+        threadId,
+        runId,
+        nodeId: NodeId.make("node:watched-pull-request"),
+        driver,
+        providerInstanceId,
+        occurredAt: at,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:watched-pull-request"),
+          rootNodeId: null,
+          activeAttemptId: null,
+          status: "completed",
+          requestedAt: at,
+          startedAt: at,
+          completedAt: at,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      const link = {
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 7,
+        url: "https://github.com/pingdotgg/t3code/pull/7",
+        source: "agent" as const,
+        linkedAt: DateTime.formatIso(at),
+        snapshot: null,
+        stack: null,
+      };
+      const syncPullRequests = (id: string, pullRequests: ReadonlyArray<ThreadPullRequestLink>) =>
+        store.apply({
+          id: EventId.make(`event:watched-pull-request:${id}`),
+          type: "thread.metadata-updated",
+          threadId,
+          occurredAt: at,
+          payload: { ...thread, pullRequests },
+        });
+      const environmentId = EnvironmentId.make("environment:watched-pull-request");
+      const phase = Effect.gen(function* () {
+        const shell = yield* store.getThreadShell(threadId);
+        const listed = (yield* store.getShellSnapshot()).threads.find(
+          (candidate) => candidate.id === threadId,
+        );
+        assert.deepEqual(listed?.pendingBackgroundTasks, shell?.pendingBackgroundTasks);
+        return (
+          shell &&
+          projectThreadAwarenessV2({ environmentId, project: { title: "Project" }, thread: shell })
+            ?.phase
+        );
+      });
+
+      yield* syncPullRequests("watched", [
+        {
+          ...link,
+          watch: {
+            startedAt: DateTime.formatIso(at),
+            headSha: null,
+            failedChecks: [],
+            passed: false,
+            passedChecks: [],
+            remarksThrough: DateTime.formatIso(at),
+            remarkIds: [],
+            conflicting: false,
+            wakes: 0,
+          },
+        },
+      ]);
+      assert.deepEqual((yield* store.getThreadShell(threadId))?.pendingBackgroundTasks, [
+        {
+          taskId: "pull-request-watch:github.com/pingdotgg/t3code#7",
+          description: "Watching pull request #7",
+          kind: "monitor",
+        },
+      ]);
+      assert.equal(yield* phase, "running");
+
+      yield* syncPullRequests("unwatched", [link]);
+      assert.deepEqual((yield* store.getThreadShell(threadId))?.pendingBackgroundTasks, []);
+      assert.equal(yield* phase, "completed");
     }),
   );
 
@@ -2517,6 +2728,21 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       });
 
       const targetAfterRollback = yield* projectionStore.getThreadProjection(targetThreadId);
+      // Both shell reads drop the rolled-back run from the source count, while
+      // the fork keeps the prefix it inherited.
+      const shellSnapshot = yield* projectionStore.getShellSnapshot();
+      for (const shell of [
+        yield* projectionStore.getThreadShell(sourceThreadId),
+        shellSnapshot.threads.find((thread) => thread.id === sourceThreadId),
+      ]) {
+        assert.equal(shell?.itemCount, 2);
+      }
+      for (const shell of [
+        yield* projectionStore.getThreadShell(targetThreadId),
+        shellSnapshot.threads.find((thread) => thread.id === targetThreadId),
+      ]) {
+        assert.equal(shell?.visibleItemCount, targetAfterRollback.visibleTurnItems.length);
+      }
       assert.deepEqual(
         targetAfterRollback.visibleTurnItems.map((row) => [
           row.visibility,

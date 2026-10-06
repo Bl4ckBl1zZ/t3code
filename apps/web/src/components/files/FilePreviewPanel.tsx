@@ -230,9 +230,8 @@ function BrowserDocumentFrame(props: {
   readonly pdf: boolean;
 }) {
   const className = "min-h-0 flex-1 border-0 bg-white";
-  // The built-in PDF viewer needs an unsandboxed frame; a PDF runs no scripts.
   return props.pdf ? (
-    // oxlint-disable-next-line react/iframe-missing-sandbox
+    // oxlint-disable-next-line react/iframe-missing-sandbox -- the built-in PDF viewer needs an unsandboxed frame; a PDF runs no scripts.
     <iframe key={props.src} src={props.src} title={props.title} className={className} />
   ) : (
     <iframe

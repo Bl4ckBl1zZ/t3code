@@ -1,9 +1,11 @@
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 ("use client");
 
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { PlusIcon, XIcon } from "lucide-react";
 
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
@@ -12,12 +14,14 @@ import type { ProviderClientDefinition } from "./providerDriverMeta";
 
 export {
   deriveProviderSettingsFields,
+  isLocalAcpConfig,
   readProviderConfigString,
   readProviderConfigBoolean,
   nextProviderConfigWithFieldValue,
 } from "./providerSettingsFields";
 import {
   deriveProviderSettingsFields,
+  isLocalAcpConfig,
   readProviderConfigString,
   readProviderConfigBoolean,
   nextProviderConfigWithFieldValue,
@@ -205,6 +209,126 @@ function ProviderSettingsFieldRow({
   );
 }
 
+let commandArgumentDraftId = 0;
+const makeCommandArgumentDraftRow = (value: string) => ({
+  id: `provider-argument-${commandArgumentDraftId++}`,
+  value,
+});
+
+function commandArgumentsEqual(left: ReadonlyArray<string>, right: ReadonlyArray<string>) {
+  return left.length === right.length && left.every((argument, index) => argument === right[index]);
+}
+
+/** Literal launch arguments for a local ACP command, one per row and never shell-expanded. */
+function ProviderCommandArguments({
+  value,
+  idPrefix,
+  variant,
+  onChange,
+}: Omit<ProviderSettingsFormProps, "definition">) {
+  const args = useMemo(() => {
+    const configured =
+      value !== null && typeof value === "object"
+        ? (value as Record<string, unknown>).commandArgs
+        : undefined;
+    return Array.isArray(configured)
+      ? configured.filter((argument): argument is string => typeof argument === "string")
+      : [];
+  }, [value]);
+  const [rows, setRows] = useState(() => args.map(makeCommandArgumentDraftRow));
+  const rowsRef = useRef(rows);
+  const previousArgsRef = useRef(args);
+  const lastPublishedArgsRef = useRef<ReadonlyArray<string> | undefined>(undefined);
+
+  // Rebuild rows only when the arguments change from outside this editor.
+  useEffect(() => {
+    const previousArgs = previousArgsRef.current;
+    const lastPublishedArgs = lastPublishedArgsRef.current;
+    previousArgsRef.current = args;
+    lastPublishedArgsRef.current = undefined;
+    if (
+      commandArgumentsEqual(previousArgs, args) ||
+      (lastPublishedArgs !== undefined && commandArgumentsEqual(lastPublishedArgs, args))
+    ) {
+      return;
+    }
+    const nextRows = args.map(makeCommandArgumentDraftRow);
+    rowsRef.current = nextRows;
+    setRows(nextRows);
+  }, [args]);
+
+  const updateArguments = (nextRows: typeof rows) => {
+    rowsRef.current = nextRows;
+    setRows(nextRows);
+    const next = nextRows.map((row) => row.value);
+    lastPublishedArgsRef.current = next;
+    const config =
+      value !== null && typeof value === "object" ? { ...(value as Record<string, unknown>) } : {};
+    onChange({ ...config, commandArgs: next });
+  };
+
+  return (
+    <FieldFrame variant={variant}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <span className="text-xs font-medium text-foreground">Arguments</span>
+          <span
+            className={
+              variant === "card"
+                ? "mt-1 block text-xs text-muted-foreground"
+                : "block text-2xs text-muted-foreground"
+            }
+          >
+            One literal argument per row, in launch order.
+          </span>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 gap-1.5 px-2 text-xs"
+          onClick={() => updateArguments([...rowsRef.current, makeCommandArgumentDraftRow("")])}
+        >
+          <PlusIcon className="size-3" />
+          Add
+        </Button>
+      </div>
+      {rows.length > 0 ? (
+        <div className="mt-2 grid min-w-0 gap-1.5">
+          {rows.map((argument, index) => (
+            <div key={argument.id} className="flex min-w-0 items-center gap-1.5">
+              <DraftInput
+                id={`${idPrefix}-commandArgs-${index}`}
+                value={argument.value}
+                onCommit={(next) =>
+                  updateArguments(
+                    rowsRef.current.map((current) =>
+                      current.id === argument.id ? { ...current, value: next } : current,
+                    ),
+                  )
+                }
+                aria-label={`Argument ${index + 1}`}
+                spellCheck={false}
+              />
+              <Button
+                type="button"
+                size="icon-micro"
+                variant="ghost-destructive"
+                onClick={() =>
+                  updateArguments(rowsRef.current.filter((current) => current.id !== argument.id))
+                }
+                aria-label={`Remove argument ${index + 1}`}
+              >
+                <XIcon />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </FieldFrame>
+  );
+}
+
 export function ProviderSettingsForm({
   definition,
   value,
@@ -212,7 +336,11 @@ export function ProviderSettingsForm({
   variant,
   onChange,
 }: ProviderSettingsFormProps) {
-  const fields = useMemo(() => deriveProviderSettingsFields(definition), [definition]);
+  const fields = useMemo(
+    () => deriveProviderSettingsFields(definition, value),
+    [definition, value],
+  );
+  const isLocalAcp = isLocalAcpConfig(definition, value);
 
   if (fields.length === 0) {
     return null;
@@ -230,6 +358,14 @@ export function ProviderSettingsForm({
           onChange={onChange}
         />
       ))}
+      {isLocalAcp ? (
+        <ProviderCommandArguments
+          value={value}
+          idPrefix={idPrefix}
+          variant={variant}
+          onChange={onChange}
+        />
+      ) : null}
     </>
   );
 }

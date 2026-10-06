@@ -2,7 +2,7 @@ import { OrchestratorMcpFailure, type ServerSettings } from "@t3tools/contracts"
 import * as Effect from "effect/Effect";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as Settings from "../../../serverSettings.ts";
-import { readCaller, readMutationCaller, unavailable } from "../../threadAccess.ts";
+import { readCaller, readFullAccessCaller, unavailable } from "../../threadAccess.ts";
 import { EnvironmentToolkit } from "./tools.ts";
 
 export function preferences(settings: ServerSettings) {
@@ -12,6 +12,8 @@ export function preferences(settings: ServerSettings) {
     enableProviderUpdateChecks,
     pullRequestMergeMethod,
     projectPullRequestMergeMethodOverrides,
+    removeAgentCreditsOnMerge,
+    projectRemoveAgentCreditsOnMergeOverrides,
     backgroundActivity,
     sourceControlWritingStyle,
   } = settings;
@@ -22,6 +24,8 @@ export function preferences(settings: ServerSettings) {
     enableProviderUpdateChecks,
     pullRequestMergeMethod,
     projectPullRequestMergeMethodOverrides,
+    removeAgentCreditsOnMerge,
+    projectRemoveAgentCreditsOnMergeOverrides,
     backgroundActivity: { profile: backgroundActivity.profile },
     sourceControlWritingStyle: {
       ...sourceControlWritingStyle,
@@ -32,7 +36,9 @@ export function preferences(settings: ServerSettings) {
 }
 const access = (writable = false) =>
   Effect.gen(function* () {
-    const context = yield* writable ? readMutationCaller() : readCaller();
+    const context = yield* writable
+      ? readFullAccessCaller("Preference updates require a live full-access/default thread.")
+      : readCaller();
     const environment = yield* Environment.ServerEnvironment;
     const descriptor = yield* environment.getDescriptor;
     if (descriptor.environmentId !== context.scope.environmentId)
@@ -62,16 +68,7 @@ export const EnvironmentHandlersLive = EnvironmentToolkit.toLayer({
   // matters here.
   t3_environment_preferences_update: (patch) =>
     Effect.gen(function* () {
-      const { caller, settings } = yield* access(true);
-      if (
-        caller.archivedAt !== null ||
-        caller.runtimeMode !== "full-access" ||
-        caller.interactionMode !== "default"
-      )
-        return yield* new OrchestratorMcpFailure({
-          code: "capability_denied",
-          message: "Preference updates require a live full-access/default thread.",
-        });
+      const { settings } = yield* access(true);
       return preferences(yield* settings.updateSettings(patch).pipe(Effect.mapError(unavailable)));
     }),
 });

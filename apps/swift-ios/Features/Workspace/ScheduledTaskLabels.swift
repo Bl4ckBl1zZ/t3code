@@ -39,6 +39,9 @@ public enum ScheduledTaskSchedule: Equatable, Sendable {
     /// so it is echoed verbatim rather than reformatted against a device locale.
     /// `nil` weekdays means every day.
     case fixedTime(timeOfDay: String, weekdays: [ScheduledTaskWeekday]? = nil)
+    /// A schedule this build cannot edit, such as a webhook trigger, held as
+    /// the server sent it.
+    case other(type: String, raw: JSONValue)
 }
 
 public enum ScheduledTaskRunStatus: String, Equatable, Sendable {
@@ -94,6 +97,8 @@ public enum ScheduledTaskLabels {
             return "Every \(everyMs / millisecondsPerMinute) min"
         case let .fixedTime(timeOfDay, weekdays):
             return "\(dayLabel(weekdays ?? [])) at \(timeOfDay)"
+        case let .other(type, _):
+            return type == "webhook" ? "On webhook" : "Custom schedule"
         }
     }
 

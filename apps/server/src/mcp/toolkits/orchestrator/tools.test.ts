@@ -23,7 +23,7 @@ describe("orchestrator MCP tool guidance", () => {
     );
     assert.include(
       TaskCancelTool.description ?? "",
-      "without interrupting later child-thread runs",
+      "This includes later child-thread runs, even after the task is terminal",
     );
   });
 

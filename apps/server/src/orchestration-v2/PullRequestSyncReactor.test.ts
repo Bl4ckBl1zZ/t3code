@@ -2,22 +2,27 @@ import { expect, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProjectId,
+  PullRequestOperationError,
   ThreadId,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ThreadShellSnapshot,
-  type OrchestrationV2Command,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2DomainEvent,
   type PullRequestRef,
   type PullRequestSummary,
   type PullRequestStack,
 } from "@t3tools/contracts";
 import { updateLinkedPullRequests } from "@t3tools/shared/threadPullRequests";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
+import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
 import {
   type PullRequestMergeEvent,
   PullRequestService,
@@ -76,12 +81,16 @@ function harness(
     readonly invalidate?: (input: {
       readonly reference?: PullRequestRef | undefined;
     }) => Effect.Effect<void>;
+    readonly summary?: (
+      input: PullRequestRef,
+    ) => Effect.Effect<PullRequestSummary, PullRequestOperationError>;
+    readonly stack?: () => Effect.Effect<PullRequestStack | null, PullRequestOperationError>;
   } = {},
 ) {
   let shells = initial;
-  const summary = vi.fn(() => read);
-  const stackRead = vi.fn(() => Effect.succeed(nativeStack));
-  const dispatch = vi.fn((command: OrchestrationV2Command) =>
+  const summary = vi.fn((input: PullRequestRef) => extra.summary?.(input) ?? read);
+  const stackRead = vi.fn(() => extra.stack?.() ?? Effect.succeed(nativeStack));
+  const dispatch = vi.fn((command: OrchestrationV2ServerCommand) =>
     Effect.sync(() => {
       if (command.type !== "thread.metadata.update")
         throw new Error("Expected V2 metadata command");
@@ -317,5 +326,116 @@ it.effect("re-reads open links fresh only when a run that ran a merge command en
     yield* Deferred.await(agentInvalidated);
     yield* reactor.drain;
     expect(invalidated).toEqual([1]);
+  }).pipe(Effect.scoped),
+);
+
+const rateLimited = (operation: string, retryAt: number) =>
+  new PullRequestOperationError({
+    operation,
+    detail: "paused",
+    cause: new PullRequestProviderError({
+      provider: "github",
+      operation,
+      reason: "rate-limited",
+      detail: "paused",
+      retryAt,
+    }),
+  });
+
+const linkedShell = (id: string, number: number, url: string) =>
+  ({
+    ...shell(id),
+    ...updateLinkedPullRequests({}, { linkPullRequest: { ...ref, number, url } }, at),
+  }) as OrchestrationV2ThreadShell;
+
+it.effect("leaves a rate limited host unread until its pause ends", () =>
+  Effect.gen(function* () {
+    const skips: Array<ReadonlyArray<unknown>> = [];
+    const logger = Logger.make(({ logLevel, message }) => {
+      const parts = Array.isArray(message) ? message : [message];
+      if (logLevel === "Warn" && parts[0] === "pull request sync skipped") skips.push(parts);
+    });
+    yield* TestClock.setTime(Date.parse(at));
+    const retryAt = Date.parse(at) + 3 * 60_000;
+    const h = harness(
+      [
+        linkedShell("first", 1, "https://github.com/org/repo/pull/1"),
+        linkedShell("second", 2, "https://github.com/org/repo/pull/2"),
+        linkedShell("third", 3, "https://gitlab.com/org/repo/-/merge_requests/3"),
+      ],
+      Effect.succeed(overview),
+      null,
+      Stream.empty,
+      {
+        summary: (input) =>
+          Effect.gen(function* () {
+            if (input.host === "github.com" && (yield* Clock.currentTimeMillis) < retryAt) {
+              return yield* rateLimited("getChangeRequestSummary", retryAt);
+            }
+            return { ...overview, number: input.number };
+          }),
+      },
+    );
+    const reads = (host: string) =>
+      h.summary.mock.calls
+        .map(([input]) => input)
+        .filter((input) => input.host === host)
+        .map((input) => input.number);
+    const gitlabKey = { host: "gitlab.com", repository: ref.repository, number: 3 };
+    // The reactor forks its worker as it is made, so the logger must reach it there.
+    const reactor = yield* make.pipe(
+      Effect.provide(Layer.merge(h.layer, Logger.layer([logger], { mergeWithExisting: false }))),
+    );
+
+    // The first refused read pauses the host, so the sweep does not try the other.
+    yield* reactor.requestSync(gitlabKey);
+    yield* reactor.drain;
+    expect(reads("github.com")).toEqual([1]);
+    expect(reads("gitlab.com")).toEqual([3]);
+    expect(skips).toHaveLength(1);
+    expect(skips[0]?.[1]).toMatchObject({ count: 1 });
+
+    // A requested refresh waits for the pause like the sweep does; other hosts still read.
+    yield* reactor.requestSync(key);
+    yield* reactor.drain;
+    expect(reads("github.com")).toEqual([1]);
+    expect(reads("gitlab.com")).toEqual([3, 3]);
+    expect(skips).toHaveLength(1);
+
+    yield* TestClock.setTime(retryAt);
+    yield* reactor.requestSync(gitlabKey);
+    yield* reactor.drain;
+    expect(reads("github.com").slice(1).toSorted()).toEqual([1, 2]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("pauses the host when only its stack read is rate limited", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse(at));
+    const retryAt = Date.parse(at) + 3 * 60_000;
+    const h = harness([shell("one")], Effect.succeed(overview), null, Stream.empty, {
+      stack: () =>
+        Effect.gen(function* () {
+          if ((yield* Clock.currentTimeMillis) >= retryAt) return null;
+          return yield* rateLimited("getChangeRequestStack", retryAt);
+        }),
+    });
+    const reads = () => [h.summary.mock.calls.length, h.stackRead.mock.calls.length];
+    const reactor = yield* make.pipe(Effect.provide(h.layer));
+
+    yield* reactor.requestSync(key);
+    yield* reactor.drain;
+    expect(reads()).toEqual([1, 1]);
+    yield* reactor.requestSync(key);
+    yield* reactor.drain;
+    expect(reads()).toEqual([1, 1]);
+    expect(h.dispatch).not.toHaveBeenCalled();
+
+    // Once the pause ends the pull request is read again, stack included.
+    yield* TestClock.setTime(retryAt);
+    yield* reactor.requestSync(key);
+    yield* reactor.drain;
+    expect(reads()).toEqual([2, 2]);
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
   }).pipe(Effect.scoped),
 );

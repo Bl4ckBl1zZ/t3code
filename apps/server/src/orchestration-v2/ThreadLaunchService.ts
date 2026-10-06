@@ -22,7 +22,12 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import { buildTemporaryWorktreeBranchName, isTemporaryWorktreeBranch } from "@t3tools/shared/git";
+import {
+  buildTemporaryWorktreeBranchName,
+  flattenTemporaryWorktreeBranchName,
+  isTemporaryWorktreeBranch,
+  WORKTREE_BRANCH_PREFIX,
+} from "@t3tools/shared/git";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -315,7 +320,7 @@ export const make = Effect.gen(function* () {
       });
 
     // The server owns worktree naming: without an explicit branch, provision
-    // under a temporary `t3code/<hash>` name so the worktree never waits on
+    // under a temporary `t3/<hash>` name so the worktree never waits on
     // name generation, then rename in the background below.
     const requestedBranch = input.workspaceStrategy.branch;
     let branch: string | null;
@@ -369,6 +374,18 @@ export const make = Effect.gen(function* () {
             Effect.map((resolved) => resolved.commitSha),
             Effect.mapError(mapError(input, "provision-worktree", threadId)),
           );
+      }
+      if (
+        branch !== null &&
+        isTemporaryWorktreeBranch(branch) &&
+        (yield* git
+          .hasCommit({
+            cwd: project.workspaceRoot,
+            refName: `refs/heads/${WORKTREE_BRANCH_PREFIX}`,
+          })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId))))
+      ) {
+        branch = flattenTemporaryWorktreeBranchName(branch);
       }
       const worktree = yield* git
         .createWorktree({

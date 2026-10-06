@@ -202,6 +202,19 @@ spills the whole accumulated text as one delta. The buffer also flushes at inter
 when a request opens (approval) or user input is requested, via
 `flushBufferedAssistantMessagesForTurn`.
 
+## Native goals
+
+Native `/goal` state belongs to the provider and is mirrored on the provider thread. Codex starts
+the next goal turn on its own milliseconds after the last one completes, so the
+[adapter](../../apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts) keeps the run open
+and adds that turn to it. One run can therefore own several native turns. `/goal` commands that
+start no Codex turn settle on a provider turn without a native ref, which native rollback must
+not count. Claude's SDK mode emits no goal events; its [adapter][claudeadapter] reads goal state
+from the synthetic command output and Stop hook feedback in the transcript. The command menu shows
+`/goal` only where the provider lists it: the Codex provider adds it, and Claude reports it itself.
+No other adapter mirrors a goal. Hermes lists its own `/goal`, which runs as an ordinary Hermes
+command with no goal row.
+
 ## Commands that outlive their turn
 
 Providers expose complementary halves of this problem, and the UI is built from whichever half is

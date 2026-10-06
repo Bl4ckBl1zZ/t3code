@@ -17,6 +17,7 @@ import * as ServerConfig from "../config.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ScheduledTaskService, layer as scheduledTaskLayer } from "./ScheduledTaskService.ts";
 
@@ -65,6 +66,7 @@ const makeTestLayer = (input: {
       }),
     ),
     Layer.provide(Layer.mock(ThreadLaunchService)({})),
+    Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
     Layer.provide(Scheduler.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "scheduled-task-test-" })),
@@ -87,6 +89,7 @@ const makeDispatchCapturingLayer = (
       }),
     ),
     Layer.provide(Layer.mock(ThreadLaunchService)({})),
+    Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
     Layer.provide(Scheduler.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "scheduled-task-run-test-" })),
@@ -179,6 +182,7 @@ it.effect("sweeps automations whose thread was deleted while the server was down
             }),
           ),
           Layer.provide(Layer.mock(ThreadLaunchService)({})),
+          Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
           Layer.provide(Scheduler.layer),
           Layer.provide(sharedDatabase),
         );

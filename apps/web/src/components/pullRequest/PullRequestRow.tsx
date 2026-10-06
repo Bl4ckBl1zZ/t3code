@@ -76,6 +76,9 @@ function PullRequestRowImpl({
   statsRef,
   onSelect,
   onActed,
+  closing = false,
+  sweeping = false,
+  onCloseSweepStart,
 }: {
   entry: EnvironmentPullRequestEntry;
   selected: boolean;
@@ -95,12 +98,19 @@ function PullRequestRowImpl({
   onSelect: (entry: EnvironmentPullRequestEntry) => void;
   /** A quick action's phases, held with Shift; the list shows the buttons, not the row. */
   onActed: (result: PullRequestSpeedActionResult) => void;
+  /** Closing as part of a swept batch. */
+  closing?: boolean;
+  /** Inside a close sweep that is still being dragged. */
+  sweeping?: boolean;
+  /** Pressing Close starts a sweep; dragging across rows adds them to the batch. */
+  onCloseSweepStart?: (entry: EnvironmentPullRequestEntry, event: PointerEvent) => void;
 }) {
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
     <div
       ref={statsRef}
       data-pull-request-stats-key={statsKey}
+      data-pull-request-key={statsKey}
       className={cn(
         // The quick actions sit inside the same skipped row, but outside its selection button.
         "flex items-center rounded-lg transition-colors",
@@ -221,7 +231,13 @@ function PullRequestRowImpl({
         </span>
       </button>
       {pullRequestSpeedActions(entry).length > 0 ? (
-        <PullRequestSpeedActions entry={entry} onActed={onActed} />
+        <PullRequestSpeedActions
+          entry={entry}
+          onActed={onActed}
+          closing={closing}
+          sweeping={sweeping}
+          {...(onCloseSweepStart ? { onCloseSweepStart } : {})}
+        />
       ) : null}
     </div>
   );

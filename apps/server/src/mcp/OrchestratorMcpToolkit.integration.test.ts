@@ -35,9 +35,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
@@ -45,6 +47,7 @@ import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/Claud
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { OrchestratorV2, type OrchestratorV2Shape } from "../orchestration-v2/Orchestrator.ts";
 import { layer as threadManagementServiceLayer } from "../orchestration-v2/ThreadManagementService.ts";
+import { threadShellFromProjection } from "../orchestration-v2/ProjectionStore.ts";
 import {
   type ProviderAdapterV2Event,
   ProviderAdapterProtocolError,
@@ -58,14 +61,18 @@ import {
 } from "../orchestration-v2/ProviderContinuationRequests.ts";
 import { checkpointWorkspace } from "../orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import { ProjectService } from "../project/ProjectService.ts";
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 const parentThreadId = ThreadId.make("thread:mcp-orchestrator-parent");
 const projectId = ProjectId.make("project:mcp-orchestrator");
+const foreignProjectId = ProjectId.make("project:mcp-foreign");
 const codexInstanceId = ProviderInstanceId.make("codex");
 const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
 const codexModel = "gpt-5.4";
@@ -368,7 +375,20 @@ function scheduledTaskFromUpsert(input: ScheduledTaskUpsertInput): ScheduledTask
     title: input.title,
     prompt: input.prompt,
     enabled: input.enabled,
-    schedule: input.schedule,
+    schedule:
+      input.schedule.type === "webhook"
+        ? {
+            type: "webhook",
+            signature:
+              input.schedule.signature == null
+                ? null
+                : {
+                    header: input.schedule.signature.header,
+                    encoding: input.schedule.signature.encoding,
+                    prefix: input.schedule.signature.prefix,
+                  },
+          }
+        : input.schedule,
     projectId: input.projectId,
     threadId: input.threadId ?? null,
     workspaceStrategy: input.workspaceStrategy,
@@ -386,6 +406,25 @@ function scheduledTaskFromUpsert(input: ScheduledTaskUpsertInput): ScheduledTask
     runCount: 0,
   };
 }
+
+/** In-memory server secret store for tests that exercise secret requests. */
+const memorySecretStoreLayer = Layer.sync(ServerSecretStore.ServerSecretStore, () => {
+  const stored = new Map<string, Uint8Array>();
+  return ServerSecretStore.ServerSecretStore.of({
+    get: (name) => Effect.succeed(Option.fromNullishOr(stored.get(name))),
+    set: (name, value) => Effect.sync(() => void stored.set(name, value)),
+    create: (name, value) => Effect.sync(() => void stored.set(name, value)),
+    getOrCreateRandom: (name, bytes) =>
+      Effect.sync(() => {
+        const existing = stored.get(name);
+        if (existing) return existing;
+        const value = new Uint8Array(bytes).fill(7);
+        stored.set(name, value);
+        return value;
+      }),
+    remove: (name) => Effect.sync(() => void stored.delete(name)),
+  });
+});
 
 describe("orchestrator MCP toolkit", () => {
   it.live(
@@ -508,6 +547,10 @@ describe("orchestrator MCP toolkit", () => {
                   all.filter((candidate) => candidate.id !== input.id),
                 ).pipe(Effect.as({ id: input.id })),
               runNow: () => Effect.die("ScheduledTaskService.runNow is unused in this test"),
+              rotateWebhookToken: () => Effect.die("unused in this test"),
+              listWebhookDeliveries: () => Effect.die("unused in this test"),
+              getWebhookDelivery: () => Effect.die("unused in this test"),
+              triggerWebhook: () => Effect.die("unused in this test"),
             }),
           );
           const testLayer = McpHttpServer.OrchestratorToolkitRegistrationLive.pipe(
@@ -515,9 +558,25 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provideMerge(orchestrationLayer),
             Layer.provide(providerRegistryLayer),
             Layer.provide(scheduledTaskStubLayer),
+            Layer.provide(
+              Layer.mock(ProjectService)({
+                getById: (id) =>
+                  Effect.succeed(
+                    id === projectId || id === foreignProjectId
+                      ? Option.some({ id } as never)
+                      : Option.none(),
+                  ),
+              }),
+            ),
             // t3_thread_launch provisions real workspaces; this test covers the
             // tools that share this thread's checkout instead.
             Layer.provide(Layer.mock(ThreadLaunchService)({})),
+            Layer.provideMerge(
+              SecretRequests.layer.pipe(
+                Layer.provide(memorySecretStoreLayer),
+                Layer.provide(orchestrationLayer),
+              ),
+            ),
             Layer.provide(NodeServices.layer),
           );
 
@@ -719,6 +778,114 @@ describe("orchestrator MCP toolkit", () => {
             });
             expect(yield* Ref.get(scheduledStore)).toHaveLength(0);
 
+            // The agent asks for a secret; the tool waits for the user and
+            // returns a one-use ref, never the value, which a signed webhook
+            // task then consumes.
+            const secretRequests = yield* SecretRequests.SecretRequests;
+            const secretFiber = yield* invoke("request_secret", {
+              label: "GitHub webhook secret",
+              reason: "Signs release webhooks. Enter the same value in GitHub's webhook settings.",
+              placeholder: "Paste the webhook secret",
+              clientRequestId: "release-webhook-secret",
+            }).pipe(Effect.forkChild);
+            // Polled without the helper's short budget: under load the tool's
+            // own reads come first.
+            const asked = yield* Effect.gen(function* () {
+              while (true) {
+                const projection = yield* orchestrator.getThreadProjection(parentThreadId);
+                if (
+                  projection.turnItems.some(
+                    (item) => item.type === "secret_request" && item.secretStatus === "pending",
+                  )
+                ) {
+                  return projection;
+                }
+                yield* Effect.sleep("5 millis");
+              }
+            });
+            const card = asked.turnItems.find((item) => item.type === "secret_request");
+            if (card?.type !== "secret_request") {
+              return yield* Effect.die(new Error("Secret request card missing."));
+            }
+            expect(card).toMatchObject({
+              label: "GitHub webhook secret",
+              placeholder: "Paste the webhook secret",
+            });
+            // Asking again with the same id leaves the open card exactly as it was.
+            yield* orchestrator.dispatch({
+              type: "secret_request.record",
+              commandId: CommandId.make("command:test:secret-request-replay"),
+              threadId: parentThreadId,
+              runId: card.runId!,
+              nodeId: card.nodeId!,
+              turnItemId: card.id,
+              label: "Something else",
+              reason: "A different reason.",
+              secretStatus: "pending",
+            });
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).turnItems.find(
+                (item) => item.id === card.id,
+              ),
+            ).toMatchObject({ label: "GitHub webhook secret", runId: card.runId });
+            // The agent is blocked on the user, so the thread asks for input
+            // like a question does, in both shell paths.
+            expect(
+              (yield* orchestrator.getThreadShell(parentThreadId))?.pendingRuntimeRequest,
+            ).toMatchObject({ kind: "user_input" });
+            expect(threadShellFromProjection(asked).pendingRuntimeRequest).toMatchObject({
+              kind: "user_input",
+            });
+            // What the card's Save sends (secrets.answerRequest).
+            yield* secretRequests.answer({
+              threadId: parentThreadId,
+              turnItemId: card.id,
+              answer: { type: "save", secret: "github-webhook-secret" },
+            });
+            const secretCall = yield* Fiber.join(secretFiber);
+            expect(secretCall.isError).toBe(false);
+            const secretResult = secretCall.structuredContent as {
+              status: string;
+              secretRef?: string;
+            };
+            expect(secretResult.status).toBe("saved");
+            expect(
+              (yield* orchestrator.getThreadShell(parentThreadId))?.pendingRuntimeRequest ?? null,
+            ).toBeNull();
+            expect(secretResult.secretRef).toMatch(/^secret-ref:[0-9a-f]{32}$/);
+            // The value appears nowhere in what the agent received.
+            const received = [
+              ...secretCall.content.map((part) => ("text" in part ? part.text : "")),
+              ...Object.values(secretResult),
+            ];
+            expect(received.some((value) => value.includes("github-webhook-secret"))).toBe(false);
+
+            // A retry that lost the first result gets the same answer, with no
+            // second card for the user.
+            const retried = yield* invoke("request_secret", {
+              label: "GitHub webhook secret",
+              reason: "Signs release webhooks. Enter the same value in GitHub's webhook settings.",
+              clientRequestId: "release-webhook-secret",
+            });
+            expect(retried.structuredContent).toEqual(secretResult);
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).turnItems.filter(
+                (item) => item.type === "secret_request",
+              ),
+            ).toHaveLength(1);
+
+            // The ref is the secret for exactly one consumer.
+            expect(
+              yield* secretRequests.consume({
+                ref: secretResult.secretRef as never,
+                projectId,
+              }),
+            ).toBe("github-webhook-secret");
+            const reused = yield* secretRequests
+              .consume({ ref: secretResult.secretRef as never, projectId })
+              .pipe(Effect.flip);
+            expect(reused.message).toContain("already used");
+
             const delegatedCall = yield* invoke("delegate_task", {
               task: delegatedPrompt,
               target: {
@@ -870,7 +1037,7 @@ describe("orchestrator MCP toolkit", () => {
             );
             const completedTaskCancelCall = yield* invoke("task_cancel", {
               taskId: delegated.taskId,
-              reason: "Must not interrupt a later unrelated child run.",
+              reason: "Stop the child's later work too.",
               clientRequestId: "cancel-completed-delegated-task-1",
             });
             const completedTaskCancel = yield* decodeTaskCancelResult(
@@ -888,24 +1055,7 @@ describe("orchestrator MCP toolkit", () => {
               result: delegatedResult,
               completionDelivery: { state: "disposed" },
             });
-            expect(
-              (yield* orchestrator.getThreadProjection(delegated.childThreadId)).runs.find(
-                (run) => run.id === activeChildFollowup.runId,
-              )?.status,
-            ).toBe("running");
-            const activeChildCleanupCall = yield* invoke("t3_thread_interrupt", {
-              threadId: delegated.childThreadId,
-              runId: activeChildFollowup.runId,
-              reason: "Clean up the active follow-up after verifying task cancellation isolation.",
-              clientRequestId: "interrupt-delegated-child-followup-1",
-            });
-            const activeChildCleanup = yield* decodeThreadInterruptResult(
-              activeChildCleanupCall.structuredContent,
-            ).pipe(Effect.orDie);
-            expect(activeChildCleanup).toMatchObject({
-              runId: activeChildFollowup.runId,
-              status: "interrupt_requested",
-            });
+            // Cancelling a finished task still stops the child thread's later work.
             yield* waitForProjection(orchestrator, delegated.childThreadId, (projection) =>
               projection.runs.some(
                 (run) => run.id === activeChildFollowup.runId && run.status === "interrupted",
@@ -1382,7 +1532,7 @@ describe("orchestrator MCP toolkit", () => {
               creationSource: "web",
               commandId: CommandId.make("command:mcp-foreign-project:create"),
               threadId: foreignThreadId,
-              projectId: ProjectId.make("project:mcp-foreign"),
+              projectId: foreignProjectId,
               title: "Foreign project thread",
               modelSelection: codexSelection,
               runtimeMode: "full-access",
@@ -1393,9 +1543,64 @@ describe("orchestrator MCP toolkit", () => {
             const foreignReadCall = yield* invoke("t3_thread_read", {
               threadId: foreignThreadId,
             });
+            // Targets reach the whole environment; the caller's modes still cap writes.
             expect(foreignReadCall.structuredContent).toMatchObject({
+              thread: { threadId: foreignThreadId, projectId: foreignProjectId },
+            });
+            const foreignUpdateCall = yield* invoke("t3_thread_update", {
+              threadId: foreignThreadId,
+              action: "rename",
+              title: "Renamed from another project",
+            });
+            expect(foreignUpdateCall.structuredContent).toMatchObject({
+              threadId: foreignThreadId,
+              title: "Renamed from another project",
+            });
+            const foreignListCall = yield* invoke("t3_thread_list", {
+              projectId: foreignProjectId,
+            });
+            const foreignListed = yield* decodeThreadListResult(
+              foreignListCall.structuredContent,
+            ).pipe(Effect.orDie);
+            expect(foreignListed.projectId).toBe(foreignProjectId);
+            expect(foreignListed.threads.map((thread) => thread.threadId)).toEqual([
+              foreignThreadId,
+            ]);
+            // Scheduled work in another project launches fresh threads there; it
+            // cannot bind to the calling thread, which lives elsewhere.
+            const foreignScheduleCall = yield* invoke("schedule_task", {
+              projectId: foreignProjectId,
+              prompt: "check the foreign project",
+              schedule: { type: "interval", everyMs: 60_000 },
+            });
+            expect(foreignScheduleCall.structuredContent).toMatchObject({
+              projectId: foreignProjectId,
+              boundThreadId: null,
+            });
+            const foreignScheduledListCall = yield* invoke("list_scheduled_tasks", {
+              projectId: foreignProjectId,
+            });
+            expect(foreignScheduledListCall.structuredContent).toMatchObject({
+              tasks: [{ projectId: foreignProjectId, boundThreadId: null }],
+            });
+            const boundForeignScheduleCall = yield* invoke("schedule_task", {
+              projectId: foreignProjectId,
+              prompt: "check the foreign project from here",
+              schedule: { type: "interval", everyMs: 60_000 },
+              bindToCurrentThread: true,
+            });
+            expect(boundForeignScheduleCall.structuredContent).toMatchObject({
               _tag: "OrchestratorMcpFailure",
-              code: "thread_not_found",
+              code: "invalid_request",
+            });
+            const missingProjectScheduleCall = yield* invoke("schedule_task", {
+              projectId: "project:mcp-missing",
+              prompt: "check a project that does not exist",
+              schedule: { type: "interval", everyMs: 60_000 },
+            });
+            expect(missingProjectScheduleCall.structuredContent).toMatchObject({
+              _tag: "OrchestratorMcpFailure",
+              code: "invalid_request",
             });
             const listCall = yield* invoke("t3_thread_list", {
               includeSubagents: false,

@@ -403,6 +403,9 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "fork":
     case "thread_created":
       return "zap";
+    // The fork's mobile client has no secret card; the request shows as a plain row.
+    case "secret_request":
+      return "message";
   }
 }
 
@@ -467,6 +470,8 @@ function itemSummary(
       return "Thread forked";
     case "thread_created":
       return "Thread created";
+    case "secret_request":
+      return item.label;
     case "subagent":
       return "Subagent";
     case "dynamic_tool": {
@@ -538,6 +543,8 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
     case "fork":
     case "thread_created":
       return item.targetThreadId;
+    case "secret_request":
+      return item.reason || null;
     case "subagent":
       return item.result ?? item.progress ?? item.prompt;
     case "dynamic_tool":

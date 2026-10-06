@@ -24,6 +24,8 @@ import {
   type ThreadLinkedPullRequest,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
+import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequestChains";
+import { allThreadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
@@ -752,7 +754,24 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     // A settled turn whose background work still runs: Stop ends that work.
     orchestrationV2BackgroundWorkStopRunId(projection) ??
     undefined;
-  if (runId === undefined) return { sequence: 0 };
+  if (runId === undefined) {
+    // With no run to stop, Stop ends the thread's pull request watches, the only background
+    // work that has no run.
+    let result = { sequence: 0 };
+    for (const link of visibleThreadPullRequests(allThreadPullRequestsOf(projection.thread))) {
+      if (link.watch === undefined) continue;
+      result = yield* dispatch({
+        type: "thread.pull-request.watch",
+        commandId: yield* allocateCommandId(result.sequence === 0 ? input : {}),
+        threadId: input.threadId,
+        host: link.host,
+        repository: link.repository,
+        number: link.number,
+        watching: false,
+      });
+    }
+    return result;
+  }
   return yield* dispatch({
     type: "run.interrupt",
     commandId: yield* allocateCommandId(input),

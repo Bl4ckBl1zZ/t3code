@@ -15,9 +15,7 @@ import {
   isClaudeUltrathinkPrompt,
 } from "@t3tools/shared/model";
 import { memo, useCallback, useState } from "react";
-import { ZapIcon } from "lucide-react";
 import type { ButtonVariant } from "../ui/button";
-import { UltrafastIcon } from "../Icons";
 import {
   Menu,
   MenuGroup,
@@ -32,7 +30,7 @@ import { getProviderModelCapabilities } from "../../providerModels";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { StepSlider } from "../ui/slider";
-import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
+import { ComposerControl, ComposerControlChevron } from "./ComposerControl";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
 
@@ -407,23 +405,21 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   );
 });
 
-/**
- * Fast mode uses one bolt; Codex Ultrafast uses two. Keep a text label when
- * speed is the only trait so the trigger remains readable.
- */
+/** Pair speed with reasoning while keeping other traits separated. */
 export function buildTraitsTriggerDisplay(input: {
   provider: ProviderDriverKind;
   descriptors: ReadonlyArray<ProviderOptionDescriptor>;
   primarySelectDescriptorId: string | null;
   ultrathinkPromptControlled: boolean;
-}): { label: string; speedIcon: "fast" | "ultrafast" | null } {
+}): { label: string } {
   let fastModeFallbackLabel: string | null = null;
-  let speedIcon: "fast" | "ultrafast" | null = null;
+  let speedLabel: string | null = null;
+  let reasoningLabelIndex = -1;
   const labels: Array<string> = [];
   for (const descriptor of input.descriptors) {
     if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
-      speedIcon = descriptor.currentValue === true ? "fast" : null;
-      fastModeFallbackLabel = speedIcon ? "Fast" : "Normal";
+      speedLabel = descriptor.currentValue === true ? "Fast" : null;
+      fastModeFallbackLabel = speedLabel ?? "Normal";
       continue;
     }
     if (
@@ -439,11 +435,11 @@ export function buildTraitsTriggerDisplay(input: {
         (fastTier && currentValue === fastTier.id) ||
         (ultrafastTier && currentValue === ultrafastTier.id)
       ) {
-        speedIcon =
+        speedLabel =
           ultrafastTier && currentValue === ultrafastTier.id
-            ? "ultrafast"
+            ? "Ultrafast"
             : fastTier && currentValue === fastTier.id
-              ? "fast"
+              ? "Fast"
               : null;
         fastModeFallbackLabel =
           descriptor.options.find(({ id }) => id === currentValue)?.label ?? "Normal";
@@ -457,6 +453,14 @@ export function buildTraitsTriggerDisplay(input: {
           ? `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`
           : getProviderOptionCurrentLabel(descriptor);
     if (typeof label === "string" && label.length > 0) {
+      // Custom models retain descriptor order, so the primary select can be context.
+      if (
+        reasoningLabelIndex === -1 &&
+        descriptor.type === "select" &&
+        ["reasoningEffort", "reasoning", "effort", "variant", "thinking"].includes(descriptor.id)
+      ) {
+        reasoningLabelIndex = labels.length;
+      }
       labels.push(label);
     }
   }
@@ -465,9 +469,16 @@ export function buildTraitsTriggerDisplay(input: {
   // off an empty label list alone would also catch descriptors that resolved to
   // no label at all, printing a bogus "Normal" for a model without fast mode.
   if (labels.length === 0 && fastModeFallbackLabel !== null) {
-    return { label: fastModeFallbackLabel, speedIcon: null };
+    return { label: fastModeFallbackLabel };
   }
-  return { label: labels.join(" · "), speedIcon };
+  if (speedLabel) {
+    if (reasoningLabelIndex >= 0) {
+      labels[reasoningLabelIndex] = `${labels[reasoningLabelIndex]} ${speedLabel}`;
+    } else {
+      labels.push(speedLabel);
+    }
+  }
+  return { label: labels.join(" · ") };
 }
 
 export const TraitsPicker = memo(function TraitsPicker({
@@ -509,26 +520,12 @@ export const TraitsPicker = memo(function TraitsPicker({
     return null;
   }
 
-  const { label: triggerLabel, speedIcon } = buildTraitsTriggerDisplay({
+  const { label: triggerLabel } = buildTraitsTriggerDisplay({
     provider,
     descriptors,
     primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
     ultrathinkPromptControlled,
   });
-  const speedLabel = speedIcon === "ultrafast" ? "Ultrafast mode on" : "Fast mode on";
-  const fastModeIcon = speedIcon ? (
-    <>
-      <ComposerControlIcon
-        icon={speedIcon === "ultrafast" ? UltrafastIcon : ZapIcon}
-        className={cn(
-          "fill-current opacity-80",
-          provider === "claudeAgent" ? "text-[#d97757]" : "text-foreground",
-        )}
-      />
-      <span className="sr-only">{speedLabel}</span>
-    </>
-  ) : null;
-
   const isCodexStyle = provider === "codex";
 
   return (
@@ -553,13 +550,11 @@ export const TraitsPicker = memo(function TraitsPicker({
       >
         {isCodexStyle ? (
           <span className="flex min-w-0 w-full items-center gap-1.5 overflow-hidden">
-            {fastModeIcon}
             <span className="min-w-0 truncate">{triggerLabel}</span>
             <ComposerControlChevron />
           </span>
         ) : (
           <>
-            {fastModeIcon}
             <span>{triggerLabel}</span>
             <ComposerControlChevron />
           </>

@@ -25,7 +25,9 @@ import {
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type ApplicationStoredEvent,
+  AuthOrchestrationOperateScope,
   AuthSessionId,
+  type ScheduledTaskListResult,
   ProviderSetupError,
   type ProviderInstanceId,
   ClientConnectionMethod,
@@ -109,6 +111,7 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import { HermesDashboardClient } from "./hermes/HermesDashboardClient.ts";
 import { HermesWorkService } from "./hermes/HermesWorkService.ts";
 import { HermesWorkGroupsService } from "./hermes/HermesWorkGroupsService.ts";
+import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -120,6 +123,7 @@ import {
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
   shellStreamItemsFromResumeSnapshot,
+  skipUnchangedThreadShells,
 } from "./orchestration-v2/ShellStream.ts";
 import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
 import {
@@ -674,6 +678,14 @@ const makeWsRpcLayer = (
       );
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      // A webhook URL starts agent runs, so only sessions that may operate
+      // see it; read-only sessions still see the task itself.
+      const withVisibleWebhookUrls = (result: ScheduledTaskListResult): ScheduledTaskListResult =>
+        currentSession.scopes.includes(AuthOrchestrationOperateScope)
+          ? result
+          : {
+              tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task),
+            };
       const hermesSetup = yield* HermesWorkSetupService;
       const hermesModelAuth = yield* HermesWorkModelAuth;
       const hermesDashboard = yield* HermesDashboardClient;
@@ -683,6 +695,7 @@ const makeWsRpcLayer = (
       const agentSessionImporter = yield* AgentSessionImporter;
       const projectService = yield* ProjectService.ProjectService;
       const textGeneration = yield* TextGeneration.TextGeneration;
+      const secretRequests = yield* SecretRequests.SecretRequests;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
@@ -1070,6 +1083,7 @@ const makeWsRpcLayer = (
               Stream.groupedWithin(512, Duration.millis(50)),
               Stream.mapEffect((events) => projectShellItems(Array.from(events))),
               Stream.flatMap(Stream.fromIterable),
+              skipUnchangedThreadShells,
             );
 
           const liveFrom = (afterSequence: number) =>
@@ -1700,13 +1714,17 @@ const makeWsRpcLayer = (
             },
           ),
         [WS_METHODS.scheduledTasksList]: (_input) =>
-          observeRpcEffect(WS_METHODS.scheduledTasksList, scheduledTasks.list(), {
-            "rpc.aggregate": "scheduledTasks",
-          }),
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksList,
+            scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
-          observeRpcStream(WS_METHODS.scheduledTasksSubscribe, scheduledTasks.subscribeList(), {
-            "rpc.aggregate": "scheduledTasks",
-          }),
+          observeRpcStream(
+            WS_METHODS.scheduledTasksSubscribe,
+            scheduledTasks.subscribeList().pipe(Stream.map(withVisibleWebhookUrls)),
+            { "rpc.aggregate": "scheduledTasks" },
+          ),
         [WS_METHODS.scheduledTasksUpsert]: (input) =>
           observeRpcEffect(WS_METHODS.scheduledTasksUpsert, scheduledTasks.upsert(input), {
             "rpc.aggregate": "scheduledTasks",
@@ -1726,6 +1744,29 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "scheduledTasks",
             "scheduled_task.id": input.id,
           }),
+        [WS_METHODS.scheduledTasksRotateWebhookToken]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksRotateWebhookToken,
+            scheduledTasks.rotateWebhookToken(input),
+            { "rpc.aggregate": "scheduledTasks", "scheduled_task.id": input.id },
+          ),
+        [WS_METHODS.secretsAnswerRequest]: (input) =>
+          observeRpcEffect(WS_METHODS.secretsAnswerRequest, secretRequests.answer(input), {
+            "rpc.aggregate": "secrets",
+            "orchestration_v2.thread_id": input.threadId,
+          }),
+        [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksListWebhookDeliveries,
+            scheduledTasks.listWebhookDeliveries(input),
+            { "rpc.aggregate": "scheduledTasks", "scheduled_task.id": input.id },
+          ),
+        [WS_METHODS.scheduledTasksGetWebhookDelivery]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksGetWebhookDelivery,
+            scheduledTasks.getWebhookDelivery(input),
+            { "rpc.aggregate": "scheduledTasks", "scheduled_task.id": input.id },
+          ),
         [WS_METHODS.hermesWorkSetupStart]: (input) =>
           observeRpcEffect(WS_METHODS.hermesWorkSetupStart, hermesSetup.start(input), {
             "rpc.aggregate": "hermesWork",

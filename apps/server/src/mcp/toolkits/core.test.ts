@@ -12,7 +12,12 @@ import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/unstable/ai";
 
 import { OrchestratorProjectionError } from "../../orchestration-v2/Orchestrator.ts";
+import { ThreadLaunchService } from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
+import { ProjectService } from "../../project/ProjectService.ts";
+import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import { ScheduledTaskService } from "../../scheduledTasks/ScheduledTaskService.ts";
+import * as SecretRequests from "../../secrets/SecretRequests.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import { McpInvocationContext, type McpInvocationScope } from "../McpInvocationContext.ts";
 import * as EnvironmentHandlers from "./environment/handlers.ts";
@@ -170,7 +175,206 @@ it("reports pull request merge defaults through MCP preferences", () => {
     ...DEFAULT_SERVER_SETTINGS,
     pullRequestMergeMethod: "squash",
     projectPullRequestMergeMethodOverrides: { [ProjectId.make("project")]: "rebase" },
+    removeAgentCreditsOnMerge: true,
+    projectRemoveAgentCreditsOnMergeOverrides: { [ProjectId.make("project")]: false },
   });
   expect(result.pullRequestMergeMethod).toBe("squash");
   expect(result.projectPullRequestMergeMethodOverrides).toEqual({ project: "rebase" });
+  expect(result.removeAgentCreditsOnMerge).toBe(true);
+  expect(result.projectRemoveAgentCreditsOnMergeOverrides).toEqual({ project: false });
 });
+
+const callerThreadShell = (runtimeMode: "auto" | "full-access") =>
+  ({
+    id: threadId,
+    projectId: ProjectId.make("project-a"),
+    runtimeMode,
+    interactionMode: "default",
+    activeRunId: "run-live",
+    archivedAt: null,
+    providerInstanceId: "codex",
+    deletedAt: null,
+  }) as never;
+
+const callTool = (name: string, args: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    return yield* server
+      .callTool({ name, arguments: args })
+      .pipe(
+        Effect.provideService(McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+  });
+
+it.effect("targets a thread in another project within the caller's modes", () =>
+  Effect.gen(function* () {
+    const pinned = yield* callTool("t3_thread_organize", {
+      action: "pin",
+      threadId: "other-project-thread",
+    });
+    expect(pinned.isError).toBe(false);
+    expect(pinned.structuredContent).toMatchObject({ sequence: 7 });
+
+    const aboveModes = yield* callTool("t3_thread_organize", {
+      action: "pin",
+      threadId: "full-access-thread",
+    });
+    expect(aboveModes.structuredContent).toMatchObject({
+      code: "runtime_mode_escalation_denied",
+    });
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.ThreadToolkitRegistrationLive.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) =>
+              Effect.succeed(
+                id === threadId
+                  ? callerThreadShell("auto")
+                  : ({ id, projectId: "other-project", deletedAt: null } as never),
+              ),
+            getProjectThreadRecords: (input) =>
+              Effect.succeed({
+                thread: {
+                  id: input.threadId,
+                  projectId: input.projectId,
+                  runtimeMode: input.threadId === "full-access-thread" ? "full-access" : "auto",
+                  interactionMode: "default",
+                  deletedAt: null,
+                },
+              } as never),
+            dispatch: () => Effect.succeed({ sequence: 7 } as never),
+          }),
+        ),
+      ),
+    ),
+  ),
+);
+
+const callerProjection = {
+  thread: {
+    id: threadId,
+    projectId: ProjectId.make("project-a"),
+    runtimeMode: "auto",
+    interactionMode: "default",
+    archivedAt: null,
+  },
+  runs: [{ id: "run-live", ordinal: 1, status: "running", providerInstanceId: "codex" }],
+} as never;
+
+function scheduledTask(id: string, runtimeMode: "auto" | "full-access"): never {
+  return {
+    id,
+    title: id,
+    prompt: "Check the build",
+    enabled: true,
+    projectId: "project-a",
+    threadId: null,
+    schedule: { type: "interval", everyMs: 3_600_000 },
+    workspaceStrategy: { type: "worktree", baseRef: "main", startFromOrigin: true },
+    modelSelection: { instanceId: "codex", model: "gpt-5" },
+    runtimeMode,
+    interactionMode: "default",
+    createdBy: "user",
+    creationSource: "web",
+    nextRunAt: null,
+    lastRunStatus: "never",
+    lastRunAt: null,
+    lastRunError: null,
+    runCount: 0,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+  } as never;
+}
+
+it.effect("a caller cannot rewrite a scheduled task that runs above its own modes", () =>
+  Effect.gen(function* () {
+    const update = yield* callTool("update_scheduled_task", {
+      scheduledTaskId: "task-full-access",
+      prompt: "Run something else",
+    });
+    expect(update.structuredContent).toMatchObject({ code: "runtime_mode_escalation_denied" });
+    const remove = yield* callTool("delete_scheduled_task", {
+      scheduledTaskId: "task-full-access",
+    });
+    expect(remove.structuredContent).toMatchObject({ code: "runtime_mode_escalation_denied" });
+    const allowed = yield* callTool("update_scheduled_task", {
+      scheduledTaskId: "task-auto",
+      enabled: false,
+    });
+    expect(allowed.isError).toBe(false);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.OrchestratorToolkitRegistrationLive.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadProjection: () => Effect.succeed(callerProjection),
+          }),
+        ),
+        Layer.provide(Layer.mock(ThreadLaunchService)({})),
+        Layer.provide(Layer.mock(ProviderRegistry)({})),
+        Layer.provide(
+          Layer.mock(ScheduledTaskService)({
+            list: () =>
+              Effect.succeed({
+                tasks: [
+                  scheduledTask("task-full-access", "full-access"),
+                  scheduledTask("task-auto", "auto"),
+                ],
+              }),
+            upsert: (input) =>
+              Effect.succeed({
+                task: { ...(scheduledTask(input.id ?? "task-auto", "auto") as object), ...input },
+              } as never),
+          }),
+        ),
+        Layer.provide(Layer.mock(ProjectService)({})),
+        Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+      ),
+    ),
+  ),
+);
+
+it.effect("a caller cannot interrupt a thread that runs above its own modes", () =>
+  Effect.gen(function* () {
+    const result = yield* callTool("t3_thread_interrupt", { threadId: "full-access-thread" });
+    expect(result.structuredContent).toMatchObject({ code: "runtime_mode_escalation_denied" });
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.OrchestratorToolkitRegistrationLive.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadProjection: () => Effect.succeed(callerProjection),
+            getThreadShell: () =>
+              Effect.succeed({ projectId: "project-b", deletedAt: null } as never),
+            getProjectThread: () =>
+              Effect.succeed({
+                thread: {
+                  id: ThreadId.make("full-access-thread"),
+                  projectId: "project-b",
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  deletedAt: null,
+                },
+                runs: [],
+              } as never),
+            interruptThread: () =>
+              Effect.die("interrupt must not dispatch above the caller's modes"),
+          }),
+        ),
+        Layer.provide(Layer.mock(ThreadLaunchService)({})),
+        Layer.provide(Layer.mock(ProviderRegistry)({})),
+        Layer.provide(Layer.mock(ScheduledTaskService)({})),
+        Layer.provide(Layer.mock(ProjectService)({})),
+        Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+      ),
+    ),
+  ),
+);

@@ -14,6 +14,38 @@ export function ProjectAutoPullSettings({ projects }: { projects?: ProjectTarget
 export function ProjectBrowserAccessSettings({ projects }: { projects: ProjectTargets }) {
   return <ProjectBooleanSettings kind="browser" projects={projects} />;
 }
+export function ProjectAgentCreditsSettings({ projects }: { projects?: ProjectTargets }) {
+  return <ProjectBooleanSettings kind="credits" projects={projects} />;
+}
+
+const KINDS = {
+  pull: {
+    title: "Automatically pull",
+    description: "Keeps clean default branches current when there are no local commits.",
+    id: "automatic-project-pull",
+    overrideKey: "projectAutoPullOverrides",
+    defaultKey: "defaultAutoPull",
+    capability: "projectAutoPull",
+  },
+  browser: {
+    title: "Agent browser access",
+    description:
+      "Allow agents to use the shared browser. Applies when their next session is prepared.",
+    id: undefined,
+    overrideKey: "projectAgentBrowserAccessOverrides",
+    defaultKey: "enableAgentBrowserAccess",
+    capability: "projectBrowserAccess",
+  },
+  credits: {
+    title: "Remove agent credits when merging",
+    description:
+      "Removes recognized agent co-author and generated-by lines from GitHub merge and squash messages, keeping human co-authors. Includes auto-merge; not merge queues, stack merges, or existing commits.",
+    id: "remove-agent-credits-on-merge",
+    overrideKey: "projectRemoveAgentCreditsOnMergeOverrides",
+    defaultKey: "removeAgentCreditsOnMerge",
+    capability: "pullRequestAgentCreditRemoval",
+  },
+} as const;
 
 /** Sparse project patches preserve other checkouts, including concurrent changes on another device. */
 function ProjectBooleanSettings({
@@ -21,14 +53,10 @@ function ProjectBooleanSettings({
   kind,
 }: {
   projects?: ProjectTargets | undefined;
-  kind: "pull" | "browser";
+  kind: keyof typeof KINDS;
 }) {
   const { environments } = useEnvironments();
-  const title = kind === "pull" ? "Automatically pull" : "Agent browser access";
-  const overrideKey =
-    kind === "pull" ? "projectAutoPullOverrides" : "projectAgentBrowserAccessOverrides";
-  const defaultKey = kind === "pull" ? "defaultAutoPull" : "enableAgentBrowserAccess";
-  const capability = kind === "pull" ? "projectAutoPull" : "projectBrowserAccess";
+  const { title, overrideKey, defaultKey, capability } = KINDS[kind];
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
@@ -103,9 +131,9 @@ function ProjectBooleanSettings({
   }
   return (
     <SettingsRow
-      id={projects ? undefined : "automatic-project-pull"}
+      id={projects ? undefined : KINDS[kind].id}
       title={title}
-      description={`${kind === "pull" ? "Keeps clean default branches current when there are no local commits." : "Allow agents to use the shared browser. Applies when their next session is prepared."} ${projects ? "Applies to every checkout in this group." : "Default for projects on connected machines."}${writable.length < targets.length ? " Offline or older machines keep their settings." : ""}`}
+      description={`${KINDS[kind].description} ${projects ? "Applies to every checkout in this group." : "Default for projects on connected machines."}${writable.length < targets.length ? " Offline or older machines keep their settings." : ""}`}
       status={mixed ? "Differs by machine or checkout" : undefined}
       control={
         <Select

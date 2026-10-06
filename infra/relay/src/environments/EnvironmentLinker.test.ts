@@ -128,6 +128,8 @@ function testLayer(input?: {
           listPublicKeysForEnvironment: () => Effect.succeed([]),
           listForUser: () => Effect.succeed([]),
           getForUser: () => Effect.succeed(null),
+          findActiveManagedForEnvironment: () => Effect.succeed([]),
+          setHoldWebhooksWhileOffline: () => Effect.void,
           revokeForUser: () => Effect.succeed(false),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {

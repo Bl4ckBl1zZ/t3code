@@ -187,23 +187,26 @@ export function ThreadAutomationsPanel(props: {
               />
               <TooltipPopup>Edit automation</TooltipPopup>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
-                    aria-label={`Run ${task.title} now`}
-                    disabled={busyTaskId !== null || task.lastRunStatus === "running"}
-                    onClick={() => void runNow(task)}
-                  >
-                    <PlayIcon className="size-3.5" />
-                  </Button>
-                }
-              />
-              <TooltipPopup>Run now</TooltipPopup>
-            </Tooltip>
+            {/* A webhook task runs from its URL; there is no request to run it with. */}
+            {task.schedule.type === "webhook" ? null : (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
+                      aria-label={`Run ${task.title} now`}
+                      disabled={busyTaskId !== null || task.lastRunStatus === "running"}
+                      onClick={() => void runNow(task)}
+                    >
+                      <PlayIcon className="size-3.5" />
+                    </Button>
+                  }
+                />
+                <TooltipPopup>Run now</TooltipPopup>
+              </Tooltip>
+            )}
             <Switch
               checked={task.enabled}
               disabled={busyTaskId !== null}

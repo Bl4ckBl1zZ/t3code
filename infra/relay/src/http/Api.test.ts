@@ -41,6 +41,7 @@ import {
 import * as RelayConfiguration from "../Config.ts";
 import * as RelayDb from "../db.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
+import * as HookInbox from "../hooks/HookInbox.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllocations.ts";
 import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvider.ts";
@@ -202,8 +203,12 @@ function relayUnlinkTestLayer(input?: {
   readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
   readonly reconcileOrigin?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["reconcileOrigin"];
   readonly release?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["release"];
+  readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
 }) {
   return Layer.mergeAll(
+    Layer.mock(HookInbox.HookInbox, {
+      clear: input?.clearInbox ?? (() => Effect.void),
+    }),
     Layer.succeed(
       RelayDb.RelayTransactions,
       RelayDb.RelayTransactions.of({
@@ -219,6 +224,8 @@ function relayUnlinkTestLayer(input?: {
         listPublicKeysForEnvironment: () => Effect.die("unused listPublicKeysForEnvironment"),
         listForUser: () => Effect.die("unused listForUser"),
         getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
+        findActiveManagedForEnvironment: () => Effect.die("unused findActiveManagedForEnvironment"),
+        setHoldWebhooksWhileOffline: () => Effect.die("unused setHoldWebhooksWhileOffline"),
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
       }),
     ),
@@ -705,6 +712,7 @@ describe("relay managed tunnel recovery", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "replacement-generation",
       generation: 3,
+      tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
     return Effect.gen(function* () {
@@ -785,6 +793,54 @@ describe("relay environment unlink", () => {
     );
   });
 
+  it.effect("drops the unlinked endpoint's held webhooks, even if clearing fails", () => {
+    const cleared: Array<string> = [];
+    const endpointKey = "0123456789abcdef";
+    const unlink = (clearFails: boolean) =>
+      unlinkEnvironmentRecord({
+        userId: "user-1",
+        environmentId: "environment-1",
+        managedEndpointNamespace: "dev",
+      }).pipe(
+        Effect.provide(
+          relayUnlinkTestLayer({
+            getForUser: () => Effect.succeed(linkedEnvironmentRecord),
+            revokeForUser: () => Effect.succeed(true),
+            prepareDeprovision: () =>
+              Effect.succeed({
+                userId: "user-1",
+                environmentId: "environment-1",
+                hostname: "dev-0123456789abcdef.example.test",
+                tunnelId: "tunnel-1",
+                tunnelName: `t3coderelay-managedendpoint-dev-${endpointKey}`,
+                dnsRecordId: "dns-1",
+                readyAt: "2026-07-28T00:00:00.000Z",
+                origin: null,
+                updatedAt: "2026-07-28T00:00:00.000Z",
+                generation: 1,
+                tunnelReleasedAt: null,
+              }),
+            clearInbox: (input) =>
+              clearFails
+                ? Effect.fail(
+                    new HookInbox.HookInboxError({
+                      operation: "clear",
+                      endpointKey: input.endpointKey,
+                      cause: new Error("unavailable"),
+                    }),
+                  )
+                : Effect.sync(() => void cleared.push(input.endpointKey)),
+          }),
+        ),
+      );
+    return Effect.gen(function* () {
+      expect(yield* unlink(false)).toBe(true);
+      expect(cleared).toEqual([endpointKey]);
+      // The link is already revoked; a failed clear must not fail the unlink.
+      expect(yield* unlink(true)).toBe(true);
+    });
+  });
+
   it.effect("commits database revocation before deprovisioning the managed endpoint", () => {
     const calls: Array<string> = [];
     const deprovisionTarget = {
@@ -798,6 +854,7 @@ describe("relay environment unlink", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "generation-before-unlink",
       generation: 1,
+      tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
     return Effect.gen(function* () {
@@ -916,6 +973,7 @@ describe("relay environment unlink", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "original-generation",
       generation: 1,
+      tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
     return Effect.gen(function* () {

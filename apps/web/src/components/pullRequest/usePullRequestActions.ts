@@ -4,6 +4,7 @@
  * these hooks are where that behavior lives, and the panels are only where it is rendered.
  */
 import { useAtomValue } from "@effect/atom-react";
+import type { PullRequestMergePreparation } from "@t3tools/client-runtime/state/pull-requests";
 import type {
   EnvironmentId,
   ProjectId,
@@ -12,7 +13,7 @@ import type {
   PullRequestRef,
 } from "@t3tools/contracts";
 import { resolveProjectPullRequestMergeMethod } from "@t3tools/shared/serverSettings";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -28,6 +29,7 @@ import {
   sendPullRequestAction,
 } from "./pullRequestActions.logic";
 import { readableFailure } from "./pullRequestDetail.logic";
+import { pullRequestEntryKey, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 
 /**
  * The project's merge method, then the machine's. Null when neither is set, where the method
@@ -59,16 +61,16 @@ export function usePullRequestActionRunner({
   environmentId,
   reference,
   onActed,
-  resolveMergeMethod,
+  prepareMerge,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef | null;
   onActed?: (action: PullRequestAction, phase: PullRequestActionPhase) => void;
   /**
-   * Small surfaces settle the merge method on the click rather than for every row on screen.
-   * Throwing refuses the merge with that error's sentence.
+   * Small surfaces settle the merge method from the host's answer when the merge runs, rather
+   * than for every row on screen.
    */
-  resolveMergeMethod?: () => Promise<PullRequestMergeMethod>;
+  prepareMerge?: PullRequestMergePreparation;
 }) {
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const [pendingAction, setPendingAction] = useState<PullRequestAction | null>(null);
@@ -87,7 +89,7 @@ export function usePullRequestActionRunner({
       const outcome = await sendPullRequestAction({
         action,
         options,
-        resolveMergeMethod,
+        prepareMerge,
         run: (request) => runAction({ environmentId, input: { ...reference, action, ...request } }),
         onActed: (acted, phase) => {
           // The toast goes first, so whatever the caller re-reads lands under the answer.
@@ -116,4 +118,71 @@ export function usePullRequestActionRunner({
   };
 
   return { pendingAction, actionPending: pendingAction !== null, perform };
+}
+
+/**
+ * Closes a swept batch through the same per-environment lanes as single actions, in sweep order.
+ * Each row reports its own phases, so a refused close goes back on the list to retry.
+ */
+export function usePullRequestCloseBatch(
+  onActed: (entry: EnvironmentPullRequestEntry, phase: PullRequestActionPhase) => void,
+) {
+  const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
+  const pending = useRef(new Set<string>());
+  const [closingKeys, setClosingKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const close = useCallback(
+    async (entries: readonly EnvironmentPullRequestEntry[]) => {
+      const batch = entries.filter((entry) => {
+        const key = pullRequestEntryKey(entry);
+        if (entry.state !== "open" || entry.provider !== "github" || pending.current.has(key))
+          return false;
+        pending.current.add(key);
+        return true;
+      });
+      if (batch.length === 0) return;
+      setClosingKeys(new Set(pending.current));
+      let closed = 0;
+      const failures: string[] = [];
+      await Promise.all(
+        batch.map(async (entry) => {
+          try {
+            const outcome = await sendPullRequestAction({
+              action: "close",
+              options: {},
+              run: (request) =>
+                runAction({
+                  environmentId: entry.environmentId,
+                  input: {
+                    projectId: entry.projectId,
+                    ...(entry.host === undefined ? {} : { host: entry.host }),
+                    repository: entry.repository,
+                    number: entry.number,
+                    action: "close",
+                    ...request,
+                  },
+                }),
+              onActed: (_action, phase) => onActed(entry, phase),
+            });
+            if (outcome._tag === "done") closed++;
+            if (outcome._tag === "failed") {
+              failures.push(`#${entry.number}: ${readableFailure(outcome.failure, outcome.hint)}`);
+            }
+          } finally {
+            pending.current.delete(pullRequestEntryKey(entry));
+            setClosingKeys(new Set(pending.current));
+          }
+        }),
+      );
+      toastManager.add({
+        type: failures.length > 0 ? "error" : "success",
+        title:
+          failures.length > 0
+            ? `Closed ${closed} of ${batch.length} pull requests`
+            : `Closed ${closed} pull request${closed === 1 ? "" : "s"}`,
+        ...(failures.length > 0 ? { description: failures.slice(0, 3).join("\n") } : {}),
+      });
+    },
+    [onActed, runAction],
+  );
+  return { close, closingKeys };
 }

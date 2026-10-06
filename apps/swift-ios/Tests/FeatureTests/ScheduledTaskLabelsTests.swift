@@ -29,6 +29,13 @@ final class ScheduledTaskLabelsTests: XCTestCase {
 
     // MARK: - scheduleLabel
 
+    func testScheduleLabelNamesAWebhookTrigger() {
+        XCTAssertEqual(
+            ScheduledTaskLabels.scheduleLabel(.other(type: "webhook", raw: .object([:]))),
+            "On webhook"
+        )
+    }
+
     func testWholeMinuteIntervalsAreLabelledInMinutes() {
         XCTAssertEqual(
             ScheduledTaskLabels.scheduleLabel(.interval(everyMs: 30 * 60_000)),

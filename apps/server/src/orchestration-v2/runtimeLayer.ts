@@ -21,9 +21,13 @@ import { layer as checkpointRollbackServiceLayer } from "./CheckpointRollbackSer
 import { layer as commandPolicyLayer } from "./CommandPolicy.ts";
 import { layerFromApplicationReceipts as commandReceiptStoreLayer } from "./CommandReceiptStore.ts";
 import { layer as contextHandoffServiceLayer } from "./ContextHandoffService.ts";
-import { layer as effectOutboxLayer } from "./EffectOutbox.ts";
+import {
+  layer as effectOutboxLayer,
+  pruneWorkerLive as effectOutboxPruneWorkerLive,
+} from "./EffectOutbox.ts";
 import {
   backgroundWorkSettleLayer,
+  delegatedTasksStopLayer,
   executorLayer as effectExecutorLayer,
   layer as effectWorkerLayer,
 } from "./EffectWorker.ts";
@@ -59,6 +63,7 @@ import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts"
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
 import { layer as attachmentMaterializationLayer } from "../attachments/AttachmentMaterialization.ts";
 import { layer as workspacePathsLayer } from "../workspace/WorkspacePaths.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 
 export const ProjectServiceLayerLive = projectServiceLayer.pipe(
   Layer.provide(Layer.merge(ProjectionProjectRepositoryLive, OrchestrationLayerLive)),
@@ -229,6 +234,9 @@ const orchestratorProvided = orchestratorLayer.pipe(
   ),
 );
 
+const threadManagementProvided = threadManagementServiceLayer.pipe(
+  Layer.provide(Layer.merge(orchestratorProvided, legacyV1ThreadImporterProvided)),
+);
 const effectExecutorProvided = effectExecutorLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -240,6 +248,7 @@ const effectExecutorProvided = effectExecutorLayer.pipe(
       runtimeRequestServiceProvided,
       // The settle that follows a Stop goes back through the orchestrator.
       backgroundWorkSettleLayer.pipe(Layer.provide(orchestratorProvided)),
+      delegatedTasksStopLayer.pipe(Layer.provide(threadManagementProvided)),
     ),
   ),
 );
@@ -258,9 +267,6 @@ const providerRuntimeRecoveryProvided = providerRuntimeRecoveryLayer.pipe(
   ),
 );
 
-const threadManagementProvided = threadManagementServiceLayer.pipe(
-  Layer.provide(Layer.merge(orchestratorProvided, legacyV1ThreadImporterProvided)),
-);
 export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.pipe(
   Layer.provide(ProjectServiceLayerLive),
 );
@@ -278,8 +284,11 @@ const threadLaunchProvided = threadLaunchServiceLayer.pipe(
 const threadLifecycleProvided = threadLifecycleServiceLayer.pipe(
   Layer.provide(threadManagementProvided),
 );
+const secretRequestsProvided = SecretRequests.layer.pipe(Layer.provide(threadManagementProvided));
 const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
-  Layer.provide(Layer.mergeAll(threadLaunchProvided, threadManagementProvided)),
+  Layer.provide(
+    Layer.mergeAll(threadLaunchProvided, threadManagementProvided, secretRequestsProvided),
+  ),
 );
 const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
   Layer.provide(
@@ -320,8 +329,10 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLaunchProvided,
   threadLifecycleProvided,
   scheduledTaskProvided,
+  secretRequestsProvided,
   UsageLimitRecoveryWorker.workerLive.pipe(
     Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),
   ),
   providerContinuationWorkerProvided,
+  effectOutboxPruneWorkerLive.pipe(Layer.provide(effectOutboxLayer)),
 ).pipe(Layer.provide(Scheduler.layer));

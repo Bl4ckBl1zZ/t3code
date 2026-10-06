@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ThreadId,
-  type OrchestrationV2Command,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
@@ -14,7 +14,7 @@ import { OrchestratorDispatchError } from "./Orchestrator.ts";
 import { make } from "./RestartContinuationService.ts";
 
 function harness(enabled: boolean, failSecond = false, completed = false) {
-  const commands: OrchestrationV2Command[] = [];
+  const commands: OrchestrationV2ServerCommand[] = [];
   let reads = 0;
   const shells = ["one", "two"].map((id) => ({
     id: ThreadId.make(id),

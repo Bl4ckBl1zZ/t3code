@@ -57,6 +57,7 @@ describe("V2 linked pull requests", () => {
       headSha: null,
       failedChecks: [],
       passed: false,
+      passedChecks: [],
       remarksThrough: "2026-10-01T00:00:00.000Z",
       remarkIds: [],
       conflicting: false,

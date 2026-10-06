@@ -185,6 +185,19 @@ start it in the background. T3 Code opens another new thread and shows an **Open
 thread that started. The new thread keeps the selected workspace mode and base branch. If **New
 worktree** is selected, each background thread creates its own worktree.
 
+## Goals
+
+With Codex and Claude, send `/goal` followed by what "done" means, for example
+`/goal all tests in packages/api pass`. The agent keeps working across turns
+until it judges the goal met. The thread shows **Goal** while it works, and a
+row above the composer shows the goal and its progress.
+
+- `/goal` alone shows the current goal. `/goal clear` removes it.
+- Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal
+  pauses it.
+- Stopping Claude ends the current turn, but the goal stays set. Claude checks it
+  again at the end of your next message.
+
 ## Drafts and prompt history on native iOS
 
 Use the composer’s **+** menu to stash an unsent draft (**Stash Draft**), restore one (**Stashed
@@ -205,7 +218,8 @@ Long-press an image or video to **Save** it to Photos or **Share original**. The
 original file. Photos permission is requested only when saving; sharing uses the system share sheet.
 
 Fast mode choices are remembered when you start another chat with the same provider. An explicit
-choice to turn Fast mode off is remembered too.
+choice to turn Fast mode off is remembered too. On web and desktop, the composer's reasoning control
+names the speed beside the effort, such as **High Fast** or **High Ultrafast**.
 
 In web and desktop Settings, a provider's Models section has **Enable all** / **Disable all** controls
 for its built-in models. These leave custom models unchanged, and individual model toggles remain

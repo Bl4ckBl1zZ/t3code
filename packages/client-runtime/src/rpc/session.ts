@@ -5,6 +5,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -87,15 +88,25 @@ export const make = Effect.gen(function* () {
 
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    // Set when the socket closes because pongs stopped, so the failure says so
+    // instead of looking like the server closed the connection.
+    const pingTimedOut = yield* Ref.make(false);
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-      onDisconnect: Deferred.isDone(connected).pipe(
-        Effect.flatMap((wasConnected) =>
+      onPingTimeout: Ref.set(pingTimedOut, true),
+      onDisconnect: Effect.all([Deferred.isDone(connected), Ref.get(pingTimedOut)]).pipe(
+        Effect.flatMap(([wasConnected, timedOut]) =>
           Deferred.fail(
             disconnected,
             new ConnectionTransientErrorClass({
               reason: "transport",
-              detail: `${wasConnected ? `${connection.label} disconnected.` : `${connection.label} could not establish a WebSocket connection.`}${networkHint}`,
+              detail: `${
+                !wasConnected
+                  ? `${connection.label} could not establish a WebSocket connection.`
+                  : timedOut
+                    ? `${connection.label} stopped responding.`
+                    : `${connection.label} disconnected.`
+              }${networkHint}`,
             }),
           ),
         ),

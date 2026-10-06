@@ -2,7 +2,7 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
 import { ProviderAccountSetup } from "./ProviderAccountSetup";
-import { ProjectAutoPullSettings } from "./ProjectBooleanSettings";
+import { ProjectAgentCreditsSettings, ProjectAutoPullSettings } from "./ProjectBooleanSettings";
 import { PullRequestMergeMethodSettings } from "./PullRequestMergeMethodSettings";
 import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 import { type EnvironmentId } from "@t3tools/contracts";
@@ -820,6 +820,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
         ? ["Add project base directory"]
         : []),
+      ...(settings.worktreesDirectory !== DEFAULT_UNIFIED_SETTINGS.worktreesDirectory
+        ? ["Worktree location"]
+        : []),
       ...(settings.confirmThreadUnpin !== DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin
         ? ["Unpin confirmation"]
         : []),
@@ -866,6 +869,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.confirmThreadUnpin,
       settings.addProjectBaseDirectory,
+      settings.worktreesDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
       settings.diffFilesCollapsed,
@@ -1005,6 +1009,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+      worktreesDirectory: DEFAULT_UNIFIED_SETTINGS.worktreesDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
@@ -2382,6 +2387,8 @@ export function GeneralSettingsPanel() {
   const primaryEnvironment = usePrimaryEnvironment();
   const supportsRestartContinuation =
     primaryEnvironment?.serverConfig?.environment.capabilities.threadRestartContinuation === true;
+  const supportsWorktreesDirectory =
+    primaryEnvironment?.serverConfig?.environment.capabilities.worktreesDirectory === true;
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
@@ -3202,6 +3209,8 @@ export function GeneralSettingsPanel() {
 
         <PullRequestMergeMethodSettings />
 
+        <ProjectAgentCreditsSettings />
+
         <SettingsRow
           serverScoped
           {...searchableSetting("new-threads")}
@@ -3306,6 +3315,37 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        {supportsWorktreesDirectory ? (
+          <SettingsRow
+            serverScoped
+            {...searchableSetting("worktree-location")}
+            description="Folder where new worktrees are created, on any drive, such as D:\worktrees or ~/worktrees. Existing worktrees stay where they are. Leave empty to use the T3 home folder."
+            resetAction={
+              settings.worktreesDirectory !== DEFAULT_UNIFIED_SETTINGS.worktreesDirectory ? (
+                <SettingResetButton
+                  label="worktree location"
+                  onClick={() =>
+                    updateSettings({
+                      worktreesDirectory: DEFAULT_UNIFIED_SETTINGS.worktreesDirectory,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <DraftInput
+                className="w-full sm:w-72"
+                value={settings.worktreesDirectory}
+                onCommit={(next) => updateSettings({ worktreesDirectory: next.trim() })}
+                placeholder="Default"
+                autoCapitalize="none"
+                spellCheck={false}
+                aria-label="Worktree location"
+              />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           {...searchableSetting("unpin-confirmation")}

@@ -1,6 +1,17 @@
-import type { EnvironmentMachineKind, EnvironmentId, VcsRef, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentMachineKind,
+  EnvironmentId,
+  VcsRef,
+  ProjectId,
+  ThreadPullRequestLink,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { sanitizeNewRefName } from "@t3tools/shared/git";
+import {
+  threadPullRequestKeysEqual,
+  visibleThreadPullRequests,
+} from "@t3tools/shared/threadPullRequestChains";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
   dedupeRemoteBranchesWithLocalMatches,
@@ -298,5 +309,19 @@ export function shouldIncludeBranchPickerItem(input: {
     sanitizedQuery.length > 0 &&
     sanitizedQuery !== normalizedQuery &&
     lowerItemValue.includes(sanitizedQuery)
+  );
+}
+
+/** The thread's watched link for the branch's pull request, which the details card can stop. */
+export function resolveWatchedBranchPullRequest(
+  links: ReadonlyArray<ThreadPullRequestLink>,
+  url: string,
+): ThreadPullRequestLink | null {
+  const key = parseChangeRequestUrl(url);
+  if (key === null) return null;
+  return (
+    visibleThreadPullRequests(links).find(
+      (link) => link.watch !== undefined && threadPullRequestKeysEqual(link, key),
+    ) ?? null
   );
 }
