@@ -5,6 +5,7 @@ import {
   buildLabelRequestJson,
 } from "./gitHubPullRequestJson.ts";
 import { runGitHubStackAction, type GitHubStackActionError } from "./githubStackActions.ts";
+import { removeAgentCredits } from "./mergeMessage.ts";
 import {
   decodePullRequestStacksJson,
   type GitHubPullRequestStack,
@@ -51,6 +52,7 @@ import {
   decodePullRequestNodeIdJson,
   decodePullRequestSearchJson,
   decodePullRequestStatsJson,
+  decodePullRequestWatchFingerprintsJson,
   decodeReactionSubjectScopeJson,
   decodeRepositoryAccessJson,
   decodeReviewerCandidatesJson,
@@ -58,6 +60,8 @@ import {
   decodeReviewThreadCommentsJson,
   decodeReviewThreadsJson,
   buildPullRequestStatsGraphQlQuery,
+  buildPullRequestWatchFingerprintsGraphQlQuery,
+  type GitHubPullRequestWatchFingerprint,
   encodeGraphQlRequestJson,
   pullRequestSearchGraphQlQuery,
   PULL_REQUEST_SEARCH_MAX_ROWS,
@@ -579,6 +583,16 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       readonly includeDetails?: boolean;
     }) => Effect.Effect<GitHubPullRequestStack | null, GitHubPullRequestCliError>;
+    /**
+     * What a watch compares between passes, for one point. Null when GitHub gave no answer for
+     * this pull request or its selector is unsafe, so the watch reads it in full instead.
+     */
+    readonly getPullRequestWatchFingerprint: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    }) => Effect.Effect<GitHubPullRequestWatchFingerprint | null, GitHubPullRequestCliError>;
     /** The repository's labels, and which of them this pull request already wears. */
     readonly listLabelCandidates: (input: {
       readonly cwd: string;
@@ -605,6 +619,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly action: PullRequestAction;
       readonly stackNumber?: number;
       readonly expectedStackHeads?: ReadonlyArray<PullRequestStackHead>;
+      readonly removeAgentCreditsOnMerge?: boolean;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
@@ -922,6 +937,35 @@ function searchQuery(input: {
 function cursorVariable(cursor: string | null): readonly [string, string] {
   return cursor === null ? ["-F", "cursor=null"] : ["-f", `cursor=${cursor}`];
 }
+
+const MERGE_MESSAGE_GRAPHQL_QUERY = `
+query PullRequestMergeMessage($owner: String!, $name: String!, $number: Int!, $method: PullRequestMergeMethod!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      isMergeQueueEnabled
+      headRefOid
+      viewerMergeBodyText(mergeType: $method)
+    }
+  }
+}`;
+
+const decodeMergeMessageResponse = Schema.decodeUnknownResult(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        repository: Schema.Struct({
+          pullRequest: Schema.Struct({
+            isMergeQueueEnabled: Schema.Boolean,
+            headRefOid: Schema.String,
+            viewerMergeBodyText: Schema.String,
+          }),
+        }),
+      }),
+    }),
+  ),
+);
+const decodeMergeMessage = (raw: string) =>
+  Result.map(decodeMergeMessageResponse(raw), (response) => response.data.repository.pullRequest);
 
 function actionArgs(
   action: PullRequestAction,
@@ -1609,6 +1653,19 @@ export const make = Effect.gen(function* () {
     getPullRequestDetail,
     listWorkflowRunsRequiringApproval,
 
+    getPullRequestWatchFingerprint: (input) => {
+      const query = buildPullRequestWatchFingerprintsGraphQlQuery([input]);
+      return query === null
+        ? Effect.succeed(null)
+        : graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "getPullRequestWatchFingerprint",
+            query,
+            decode: decodePullRequestWatchFingerprintsJson,
+          }).pipe(Effect.map((fingerprints) => fingerprints.get(0) ?? null));
+    },
+
     getPullRequestBaseComparison: (input) => {
       const { owner, name } = parseRepositorySelector(input.repository);
       return graphqlRead({
@@ -1771,6 +1828,7 @@ export const make = Effect.gen(function* () {
         let reviewers: ReadonlyArray<PullRequestActor> = [];
         let reactions: GitHubReviewThreadPage["reactions"] = [];
         const reactionsById = new Map<string, ReadonlyArray<PullRequestReaction>>();
+        const editedAtById = new Map<string, string>();
         let commits: GitHubReviewThreadPage["commits"] = [];
         let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: false };
         const dismissalsByReviewId = new Map<string, string>();
@@ -1789,6 +1847,7 @@ export const make = Effect.gen(function* () {
             reviewers = read.reviewers;
             reactions = read.reactions;
             for (const [id, entry] of read.reactionsById) reactionsById.set(id, entry);
+            for (const [id, editedAt] of read.editedAtById) editedAtById.set(id, editedAt);
             commits = read.commits;
             viewer = read.viewer;
             for (const [id, message] of read.dismissalsByReviewId)
@@ -1845,6 +1904,7 @@ export const make = Effect.gen(function* () {
           reviewThreadsTruncated: cursor !== null,
           reactions,
           reactionsById,
+          editedAtById,
           reviewers,
           avatarsByLogin,
           botLogins,
@@ -2176,12 +2236,53 @@ export const make = Effect.gen(function* () {
         input.mergeMethod,
         input.updateMethod,
       );
-      return github
-        .execute({
+      return Effect.gen(function* () {
+        let body: string | undefined;
+        let expectedHead: string | undefined;
+        if (
+          input.removeAgentCreditsOnMerge === true &&
+          (input.action === "merge" || input.action === "enable-auto-merge") &&
+          input.mergeMethod !== "rebase"
+        ) {
+          const { owner, name } = parseRepositorySelector(input.repository);
+          const message = yield* graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "runPullRequestAction",
+            allowReserve: true,
+            query: MERGE_MESSAGE_GRAPHQL_QUERY,
+            variables: [
+              ["-f", `owner=${owner}`],
+              ["-f", `name=${name}`],
+              ["-F", `number=${input.number}`],
+              ["-f", `method=${input.mergeMethod === "squash" ? "SQUASH" : "MERGE"}`],
+            ],
+            decode: decodeMergeMessage,
+          });
+          // GitHub's merge queue chooses its own message and ignores custom text.
+          if (!message.isMergeQueueEnabled) {
+            const cleaned = removeAgentCredits(message.viewerMergeBodyText);
+            if (cleaned !== message.viewerMergeBodyText) {
+              body = cleaned;
+              expectedHead = message.headRefOid;
+            }
+          }
+        }
+        yield* github.execute({
           cwd: input.cwd,
-          args: ["pr", subcommand!, String(input.number), ...repositoryArgs(input), ...flags],
-        })
-        .pipe(Effect.asVoid);
+          args: [
+            "pr",
+            subcommand!,
+            String(input.number),
+            ...repositoryArgs(input),
+            ...flags,
+            // The cleaned message was read for this head; a push since then refuses the merge.
+            ...(expectedHead === undefined ? [] : ["--match-head-commit", expectedHead]),
+            ...(body === undefined ? [] : ["--body-file", "-"]),
+          ],
+          ...(body === undefined ? {} : { stdin: body }),
+        });
+      });
     },
 
     commentOnPullRequest: (input) =>

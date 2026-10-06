@@ -19,6 +19,7 @@ import {
   ThreadManagementService,
 } from "../orchestration-v2/ThreadManagementService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { assertTargetWithinLimits, isLiveCaller } from "./threadAccess.ts";
 
 export class ThreadMetadataMcpService extends Context.Service<
   ThreadMetadataMcpService,
@@ -143,36 +144,40 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const parentShell = yield* threadManagement
-      .getThreadShell(scope.threadId)
-      .pipe(
-        Effect.mapError((error) =>
-          failure(
-            "orchestration_error",
-            `Unable to locate calling thread ${scope.threadId}: ${errorMessage(error)}`,
+    const readShell = (threadId: ThreadId) =>
+      threadManagement
+        .getThreadShell(threadId)
+        .pipe(
+          Effect.mapError((error) =>
+            failure(
+              "orchestration_error",
+              `Unable to locate thread ${threadId}: ${errorMessage(error)}`,
+            ),
           ),
-        ),
-      );
-    if (parentShell === null) {
+        );
+    const caller = yield* readShell(scope.threadId);
+    if (caller === null || caller.deletedAt !== null) {
       return yield* failure("thread_not_found", `Calling thread ${scope.threadId} was not found.`);
     }
-    const parent = yield* threadManagement
-      .getThreadRecords(scope.threadId, [])
-      .pipe(
-        Effect.mapError((error) =>
-          failure(
-            "orchestration_error",
-            `Unable to read calling thread ${scope.threadId}: ${errorMessage(error)}`,
-          ),
-        ),
-      );
     const threadId = input.threadId ?? scope.threadId;
-    const target =
-      threadId === scope.threadId
-        ? parent
-        : yield* threadManagement
-            .getProjectThreadRecords({ projectId: parent.thread.projectId, threadId }, [])
-            .pipe(Effect.mapError(threadLookupFailure));
+    const shell = threadId === scope.threadId ? caller : yield* readShell(threadId);
+    if (shell === null || shell.deletedAt !== null) {
+      return yield* failure("thread_not_found", `Thread ${threadId} was not found.`);
+    }
+    // Another thread, in any project, may only be changed while the caller's
+    // run is live and if it runs within the caller's own modes.
+    if (threadId !== scope.threadId) {
+      if (!isLiveCaller(caller, scope)) {
+        return yield* failure(
+          "parent_not_active",
+          "The calling provider no longer owns an active thread run.",
+        );
+      }
+      yield* assertTargetWithinLimits(caller, shell);
+    }
+    const target = yield* threadManagement
+      .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
+      .pipe(Effect.mapError(threadLookupFailure));
     const requestKey =
       input.clientRequestId === undefined
         ? yield* crypto.randomUUIDv4.pipe(Effect.orDie)

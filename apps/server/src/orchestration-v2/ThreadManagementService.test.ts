@@ -4,6 +4,9 @@ import {
   MessageId,
   NodeId,
   type OrchestrationV2Command,
+  type OrchestrationV2Run,
+  type OrchestrationV2StoredEvent,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadProjection,
   ProjectId,
   ProviderDriverKind,
@@ -14,8 +17,12 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 
 import { OrchestratorProjectionError, OrchestratorV2 } from "./Orchestrator.ts";
 import {
@@ -348,7 +355,7 @@ it.effect("interrupts a settled run whose background work still runs", () => {
       ],
     }) as unknown as OrchestrationV2ThreadProjection;
   let background = true;
-  const dispatched: Array<OrchestrationV2Command> = [];
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
   const testLayer = layer.pipe(
     Layer.provide(
       Layer.mock(OrchestratorV2)({
@@ -389,3 +396,53 @@ it.effect("interrupts a settled run whose background work still runs", () => {
     expect(dispatched).toHaveLength(1);
   }).pipe(Effect.provide(testLayer));
 });
+
+it.effect("waitForThread reads the run again only when the run updates", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-event");
+    const threadId = ThreadId.make("thread:thread-management:wait-event");
+    const runId = RunId.make("run:thread-management:wait-event");
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    let status: OrchestrationV2Run["status"] = "running";
+    let reads = 0;
+    const stored = (sequence: number, event: object) =>
+      ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
+    const testLayer = layer.pipe(
+      Layer.provide(
+        Layer.mock(OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          // Only the run.updated stream carries events in this test.
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "run.updated"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(() => {
+              reads += 1;
+              return {
+                thread: { id: threadId, projectId, deletedAt: null },
+                runs: [{ id: runId, status }],
+              } as unknown as OrchestrationV2ThreadProjection;
+            }),
+        }),
+      ),
+    );
+    const service = yield* ThreadManagementService.pipe(Effect.provide(testLayer));
+    const fiber = yield* service
+      .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    status = "completed";
+    yield* Queue.offer(events, stored(1, { type: "run.updated", payload: { id: "other-run" } }));
+    yield* Queue.offer(events, stored(2, { type: "run.updated", payload: { id: runId, status } }));
+    const result = yield* Fiber.join(fiber);
+
+    expect(result).toMatchObject({ timedOut: false, run: { id: runId, status: "completed" } });
+    // The first read plus one for this run's update. The other run caused none.
+    expect(reads).toBe(2);
+  }),
+);

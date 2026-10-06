@@ -92,6 +92,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly cached?: OrchestrationV2ThreadProjection;
   readonly httpSnapshot?: Option.Option<OrchestrationV2ThreadDetailSnapshot>;
   readonly completionMarker?: boolean;
+  readonly loadCached?: ReturnType<Persistence.EnvironmentCacheStore["Service"]["loadThread"]>;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
@@ -157,6 +158,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     loadShell: () => Effect.succeed(Option.none()),
     saveShell: () => Effect.void,
     loadThread: (_environmentId, threadId) =>
+      options?.loadCached ??
       Effect.succeed(
         threadId === THREAD_ID && options?.cached !== undefined
           ? Option.some({
@@ -256,6 +258,25 @@ const deleted = (sequence = 3): OrchestrationV2ThreadStreamItem => {
 };
 
 describe("EnvironmentThreads", () => {
+  it.effect("loads the server thread when its local cache read fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        loadCached: Effect.fail(
+          new Persistence.ConnectionPersistenceError({
+            operation: "load-thread",
+            message: "The database connection is closing.",
+          }),
+        ),
+        httpSnapshot: Option.some({ snapshotSequence: 1, projection: BASE_PROJECTION }),
+      });
+
+      const state = yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      expect(Option.getOrThrow(state.data)).toEqual(BASE_PROJECTION);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+    }),
+  );
+
   it.effect("publishes cached data immediately from a warm cache", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_PROJECTION });

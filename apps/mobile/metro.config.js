@@ -35,7 +35,7 @@ config.resolver = {
     new RegExp(`${escapedWorkspaceRoot}[/\\\\]\\.t3[/\\\\].*`),
   ],
   extraNodeModules: {
-    // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread
+    // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread -- Metro may hand us an undefined resolver map.
     ...(config.resolver?.extraNodeModules ?? {}),
     shiki: mobileShikiRoot,
     "@shikijs/core": resolveShikiDependencyRoot("@shikijs/core"),

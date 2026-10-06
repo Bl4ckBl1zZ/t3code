@@ -2706,6 +2706,9 @@ public struct ScheduledTaskRecord: Decodable, Equatable, Sendable, Identifiable 
         /// A wall-clock "HH:MM" the server resolves in its own zone. Absent
         /// weekdays mean every day.
         case fixedTime(timeOfDay: String, weekdays: [Int]?)
+        /// A kind this build cannot edit, such as `webhook`. Kept verbatim so
+        /// the list still loads and a save sends it back unchanged.
+        case other(type: String, raw: JSONValue)
 
         private enum CodingKeys: String, CodingKey {
             case type, everyMs, timeOfDay, weekdays
@@ -2722,11 +2725,7 @@ public struct ScheduledTaskRecord: Decodable, Equatable, Sendable, Identifiable 
                     weekdays: try container.decodeIfPresent([Int].self, forKey: .weekdays)
                 )
             case let type:
-                throw DecodingError.dataCorruptedError(
-                    forKey: .type,
-                    in: container,
-                    debugDescription: "Unknown scheduled task schedule type \(type)"
-                )
+                self = .other(type: type, raw: try JSONValue(from: decoder))
             }
         }
 
@@ -2750,6 +2749,8 @@ public struct ScheduledTaskRecord: Decodable, Equatable, Sendable, Identifiable 
                         "timeOfDay": .string(timeOfDay),
                     ])
                 }
+            case let .other(_, raw):
+                raw
             }
         }
     }

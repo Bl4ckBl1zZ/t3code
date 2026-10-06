@@ -2,6 +2,10 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import { useShortcutModifierState } from "~/shortcutModifierState";
 import type { PullRequestSpeedActionResult } from "~/components/pullRequest/PullRequestSpeedActions";
+import type { PullRequestActionPhase } from "~/components/pullRequest/pullRequestActions.logic";
+import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullRequestActions";
+import { SidebarPointerSensor } from "~/components/Sidebar.pointer";
+import { resolveSidebarSweepKeys } from "~/components/Sidebar.logic";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import {
   pullRequestListPreferences,
@@ -785,6 +789,13 @@ function PullRequestsRouteView() {
     ],
   );
   const baselineQuery = usePullRequestList(baselineTargets);
+  // A whole list that answered empty also empties the priority groups, whose held snapshot would
+  // otherwise bring back the last rows once the partition reads stop.
+  const baselineEmpty =
+    baselineQuery.data?.entries.length === 0 &&
+    baselineQuery.data.errors.length === 0 &&
+    !baselineQuery.isPending &&
+    baselineQuery.error === null;
   const facetTargets = useMemo(() => {
     if (!filtersOpen) return NO_LIST_TARGETS;
     return environmentQueries.map(({ environmentId, projectIds }) => ({
@@ -1012,13 +1023,15 @@ function PullRequestsRouteView() {
       // stay — hydrated or previously answered — rather than being dropped for a feed that
       // merely settled first.
       const partitions =
-        partitionsWanted && authoredQuery.data !== null && reviewingQuery.data !== null
-          ? { authored: authoredQuery.data.entries, reviewing: reviewingQuery.data.entries }
-          : current !== null &&
-              current.environmentKey === environmentKey &&
-              current.scope === scopeKey
-            ? current.partitions
-            : undefined;
+        partitionsWanted && baselineEmpty
+          ? { authored: [], reviewing: [] }
+          : partitionsWanted && authoredQuery.data !== null && reviewingQuery.data !== null
+            ? { authored: authoredQuery.data.entries, reviewing: reviewingQuery.data.entries }
+            : current !== null &&
+                current.environmentKey === environmentKey &&
+                current.scope === scopeKey
+              ? current.partitions
+              : undefined;
       // A search's answer is the search's, not the workspace's, so only unsearched lists
       // persist. Written here where the held partitions are in reach, so a feed settling
       // ahead of them cannot overwrite a stored snapshot that already had both groups.
@@ -1059,6 +1072,7 @@ function PullRequestsRouteView() {
     sentQuery,
     listQuery.data,
     listQuery.isPending,
+    baselineEmpty,
     partitionsWanted,
     authoredQuery.data,
     reviewingQuery.data,
@@ -1345,6 +1359,7 @@ function PullRequestsRouteView() {
    */
   const groups = useMemo(() => {
     if (search.involvement !== "all") return [{ key: "others" as const, label: "", entries }];
+    if (baselineEmpty) return groupPullRequestsByInvolvement(entries, viewers);
     // Until both partitions have answered, the snapshot's stand in — they are yesterday's
     // groups, but whole ones, where grouping the feed's first page locally loses every
     // authored row older than it. Once the live reads land they take over; with neither,
@@ -1374,6 +1389,7 @@ function PullRequestsRouteView() {
     return partitionPullRequestsWithPriority(entries, authored, reviewing);
   }, [
     hasLocalFilters,
+    baselineEmpty,
     localFilters,
     authoredQuery.data?.entries,
     entries,
@@ -1737,6 +1753,105 @@ function PullRequestsRouteView() {
   const onSpeedAction = useCallback((result: PullRequestSpeedActionResult) => {
     speedActionRef.current(result);
   }, []);
+  const onBatchClose = useCallback(
+    (entry: EnvironmentPullRequestEntry, phase: PullRequestActionPhase) =>
+      speedActionRef.current({ entry, action: "close", phase }),
+    [],
+  );
+  const { close: closeBatch, closingKeys } = usePullRequestCloseBatch(onBatchClose);
+  // Pressing a row's Close and dragging sweeps a batch: every open GitHub row in the same group
+  // between the press and the pointer closes on release. Escape cancels before release.
+  const [closeSweepKeys, setCloseSweepKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const closeSensorRef = useRef<SidebarPointerSensor | null>(null);
+  const closeSweepRows = useMemo(
+    () =>
+      new Map(
+        displayGroups.flatMap((group) =>
+          group.entries.map(
+            (entry) => [pullRequestEntryKey(entry), { entry, groupKey: group.key }] as const,
+          ),
+        ),
+      ),
+    [displayGroups],
+  );
+  const closeSweepRef = useRef({ displayGroups, closeSweepRows, closingKeys, closeBatch });
+  closeSweepRef.current = { displayGroups, closeSweepRows, closingKeys, closeBatch };
+  useEffect(() => () => closeSensorRef.current?.cancel(), [filterKey, search.q, sort]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || closeSensorRef.current === null) return;
+      event.preventDefault();
+      closeSensorRef.current.cancel();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+  const startCloseSweep = useCallback((entry: EnvironmentPullRequestEntry, event: PointerEvent) => {
+    closeSensorRef.current?.cancel();
+    const originKey = pullRequestEntryKey(entry);
+    const group = closeSweepRef.current.displayGroups.find((candidate) =>
+      candidate.entries.some((row) => pullRequestEntryKey(row) === originKey),
+    );
+    if (!group || closeSweepRef.current.closingKeys.has(originKey)) return;
+    const orderedKeys = closeSweepRef.current.displayGroups.flatMap((candidate) =>
+      candidate.entries.map(pullRequestEntryKey),
+    );
+    const canClose = (key: string) => {
+      const row = closeSweepRef.current.closeSweepRows.get(key);
+      return (
+        row?.groupKey === group.key &&
+        row.entry.state === "open" &&
+        row.entry.provider === "github" &&
+        !closeSweepRef.current.closingKeys.has(key) &&
+        !scrollRef.current?.querySelector(
+          `[data-pull-request-key="${CSS.escape(key)}"] [data-pull-request-action-pending="true"]`,
+        )
+      );
+    };
+    let sweptKeys: string[] = [];
+    let targetKey: string | null = null;
+    const sweepTo = (key: string) => {
+      if (key === targetKey) return;
+      targetKey = key;
+      sweptKeys = resolveSidebarSweepKeys(orderedKeys, originKey, key, canClose);
+      setCloseSweepKeys(new Set(sweptKeys));
+    };
+    closeSensorRef.current = new SidebarPointerSensor({
+      active: originKey,
+      event,
+      options: {
+        distance: 6,
+        onAttach: () => {},
+        onFinish: () => {
+          closeSensorRef.current = null;
+          setCloseSweepKeys(new Set());
+        },
+      },
+      onPending: () => {},
+      onStart: () => sweepTo(originKey),
+      onMove: ({ y }) => {
+        const viewport = scrollRef.current;
+        if (!viewport) return;
+        const bounds = viewport.getBoundingClientRect();
+        const visibleY = Math.min(Math.max(y, bounds.top), bounds.bottom - 1);
+        let key: string | null = null;
+        for (const row of viewport.querySelectorAll<HTMLElement>("[data-pull-request-key]")) {
+          if (key !== null && row.getBoundingClientRect().top > visibleY) break;
+          key = row.dataset.pullRequestKey ?? null;
+        }
+        if (key !== null) sweepTo(key);
+      },
+      onEnd: () => {
+        const batch = sweptKeys.filter(canClose).flatMap((key) => {
+          const row = closeSweepRef.current.closeSweepRows.get(key);
+          return row ? [row.entry] : [];
+        });
+        void closeSweepRef.current.closeBatch(batch);
+      },
+      onCancel: () => {},
+      onAbort: () => {},
+    });
+  }, []);
 
   const searchInput = (
     <PullRequestSearchInput
@@ -1824,7 +1939,13 @@ function PullRequestsRouteView() {
       ) : (
         // Holding Shift shows every row's quick actions through this attribute rather than a
         // prop, so the memoized rows do not re-render for it.
-        <div className="group/pr-list space-y-3" data-speed-actions={speedMode ? "" : undefined}>
+        <div
+          className={cn(
+            "group/pr-list space-y-3",
+            closeSweepKeys.size > 0 && "**:pointer-events-none",
+          )}
+          data-speed-actions={speedMode ? "" : undefined}
+        >
           {displayGroups.map((group) => (
             <div key={group.key} className="space-y-0.5">
               {group.label ? (
@@ -1859,6 +1980,9 @@ function PullRequestsRouteView() {
                     }
                     onSelect={selectEntry}
                     onActed={onSpeedAction}
+                    closing={closingKeys.has(entryKey)}
+                    sweeping={closeSweepKeys.has(entryKey)}
+                    onCloseSweepStart={startCloseSweep}
                   />
                 );
               })}

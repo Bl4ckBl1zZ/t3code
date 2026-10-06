@@ -6,12 +6,15 @@ import type {
   OrchestrationV2Subagent,
   OrchestrationV2TurnItem,
   ThreadId,
+  ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import {
   classifyV2AgentKind,
   isOrchestrationV2WorkActive,
   orchestrationV2CommandExecutionIsLiveInBackground,
 } from "@t3tools/contracts";
+
+import { threadPullRequestKeyOf } from "./threadPullRequestChains.ts";
 
 export type PendingBackgroundWorkTask = OrchestrationV2PendingBackgroundTask;
 
@@ -137,6 +140,12 @@ function named(taskId: string, description: string | undefined) {
   return { taskId, ...(description === undefined ? {} : { description }) };
 }
 
+/** A thread's pull request link as the list reads it. */
+export type PendingBackgroundWorkPullRequest = Pick<
+  ThreadPullRequestLink,
+  "host" | "repository" | "number" | "source" | "watch"
+>;
+
 /**
  * What a settled thread still runs in the background, named and kinded, for
  * the thread shell and every client that reads it.
@@ -145,7 +154,9 @@ function named(taskId: string, description: string | undefined) {
  * counts agree: live background commands (a monitor is its own `monitor`
  * entry, since it wakes the agent while the command it watches may not) and
  * delegated agents (`subagent`; watch-loop tasks already appear as their
- * command). Empty while a run is in flight or when the latest run was rolled
+ * command). Pull request watches are monitors too: a watch wakes the agent,
+ * so the thread stays working between wakes instead of returning to the
+ * inbox. Empty while a run is in flight or when the latest run was rolled
  * back, since then the run itself, not leftover work, is what the thread shows.
  */
 export function derivePendingBackgroundWork(input: {
@@ -153,13 +164,14 @@ export function derivePendingBackgroundWork(input: {
   readonly hasActiveRun: boolean;
   readonly turnItems: ReadonlyArray<PendingBackgroundWorkCommand>;
   readonly subagents: ReadonlyArray<PendingBackgroundWorkSubagent>;
+  readonly pullRequests?: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined;
 }): ReadonlyArray<PendingBackgroundWorkTask> {
   if (input.hasActiveRun) return [];
-  if (
-    input.latestRunStatus === null ||
-    input.latestRunStatus === undefined ||
-    !SETTLED_FOR_BACKGROUND_WAIT_RUN_STATUSES.has(input.latestRunStatus)
-  ) {
+  // A thread that never ran waits on nothing else, but a watch started on it still wakes it.
+  if (input.latestRunStatus === null || input.latestRunStatus === undefined) {
+    return pullRequestWatchTasks(input.pullRequests);
+  }
+  if (!SETTLED_FOR_BACKGROUND_WAIT_RUN_STATUSES.has(input.latestRunStatus)) {
     return [];
   }
   const tasks: Array<PendingBackgroundWorkTask> = [];
@@ -185,5 +197,22 @@ export function derivePendingBackgroundWork(input: {
       ...(subagent.childThreadId === null ? {} : { childThreadId: subagent.childThreadId }),
     });
   }
+  tasks.push(...pullRequestWatchTasks(input.pullRequests));
   return tasks;
+}
+
+function pullRequestWatchTasks(
+  pullRequests: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined,
+): Array<PendingBackgroundWorkTask> {
+  return (pullRequests ?? []).flatMap((link) =>
+    link.watch === undefined || link.source === "stack-dismissed"
+      ? []
+      : [
+          {
+            taskId: `pull-request-watch:${threadPullRequestKeyOf(link)}`,
+            description: `Watching pull request #${link.number}`,
+            kind: "monitor" as const,
+          },
+        ],
+  );
 }

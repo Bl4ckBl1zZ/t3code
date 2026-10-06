@@ -1158,7 +1158,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const topStatus =
     status === "working"
       ? {
-          label: "Working",
+          // A native /goal keeps the agent going across turns until it is met.
+          label: thread.goal?.status === "active" ? "Goal" : "Working",
           icon: "working" as const,
           className:
             "animate-sidebar-working-text text-sky-600 motion-reduce:animate-none dark:text-sky-400",
@@ -1570,7 +1571,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         #{pr.number}
       </a>
     ) : null;
-  // A t3-generated branch ("t3code/ffeef775") tells you nothing the row does
+  // A t3-generated branch ("t3/ffeef775") tells you nothing the row does
   // not already say. Once the work has a change request, that is the thing
   // worth naming, so it takes the branch's slot and absorbs the badge.
   // Only the number opens the change request. The title is a label, not a

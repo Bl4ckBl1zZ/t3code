@@ -9,7 +9,7 @@ import {
 import { assetEnvironment } from "../../state/assets";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { AssetResource, ScopedThreadRef } from "@t3tools/contracts";
+import type { AssetResource, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { mediaKindFromPath } from "@t3tools/shared/filePreview";
 import { memo, useState, type CSSProperties } from "react";
 import { markdownImageGallery, markdownImageItems } from "./markdownImageGallery";
@@ -218,26 +218,27 @@ function ResolvedMedia({
   );
 }
 
-function ResourceMedia({
-  threadRef,
+/** Media the server serves as a signed asset, such as an image a tool returned. */
+export function ResourceMedia({
+  environmentId,
   resource,
   name,
   isVideo,
   authoredStyle,
 }: {
-  threadRef: ScopedThreadRef;
+  environmentId: EnvironmentId;
   resource: AssetResource;
   name: string;
   isVideo: boolean;
   authoredStyle?: CSSProperties | undefined;
 }) {
-  const assetUrl = useAssetUrlState(threadRef.environmentId, resource);
+  const assetUrl = useAssetUrlState(environmentId, resource);
   const refresh = useAtomQueryRunner(assetEnvironment.createUrl, {
     refresh: true,
     reportFailure: false,
   });
   const retry = async () => {
-    const result = await refresh({ environmentId: threadRef.environmentId, input: { resource } });
+    const result = await refresh({ environmentId, input: { resource } });
     if (result._tag === "Failure") throw squashAtomCommandFailure(result);
   };
   if (isVideo) {
@@ -259,7 +260,7 @@ function ResourceMedia({
           name,
           src,
           ...(reference ? { reference } : {}),
-          asset: { environmentId: threadRef.environmentId, resource },
+          asset: { environmentId, resource },
         }}
       />
     );
@@ -282,7 +283,7 @@ function ResourceMedia({
       name={name}
       isVideo={isVideo}
       {...(assetUrl.sourcePath ? { reference: mediaFileReference(assetUrl.sourcePath) } : {})}
-      asset={{ environmentId: threadRef.environmentId, resource }}
+      asset={{ environmentId, resource }}
       onRetry={retry}
     />
   );
@@ -328,7 +329,7 @@ export const MarkdownMedia = memo(function MarkdownMedia({
     />
   ) : (
     <ResourceMedia
-      threadRef={threadRef}
+      environmentId={threadRef.environmentId}
       resource={resolved.resource}
       authoredStyle={authoredStyle}
       name={name}

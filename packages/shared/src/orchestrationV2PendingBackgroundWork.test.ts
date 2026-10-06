@@ -125,3 +125,57 @@ describe("derivePendingBackgroundWork", () => {
     expect(task?.description).toHaveLength(200);
   });
 });
+
+describe("derivePendingBackgroundWork pull request watches", () => {
+  const watch = {
+    startedAt: "2026-10-05T00:00:00.000Z",
+    headSha: null,
+    failedChecks: [],
+    passed: false,
+    passedChecks: [],
+    remarksThrough: "2026-10-05T00:00:00.000Z",
+    remarkIds: [],
+    conflicting: false,
+    wakes: 0,
+  };
+  const link = (
+    number: number,
+    extra: { source?: "agent" | "stack-dismissed"; watched?: boolean } = {},
+  ) => ({
+    host: "github.com",
+    repository: "acme/app",
+    number,
+    source: extra.source ?? "agent",
+    ...(extra.watched === false ? {} : { watch }),
+  });
+  const pullRequests = [
+    link(1),
+    link(2, { watched: false }),
+    link(3, { source: "stack-dismissed" }),
+  ];
+  const base = { hasActiveRun: false, turnItems: [], subagents: [], pullRequests };
+
+  it("keeps a settled run waiting on each visible watch, as a monitor", () => {
+    const tasks = derivePendingBackgroundWork({ ...base, latestRunStatus: "completed" });
+    expect(tasks).toEqual([
+      {
+        taskId: "pull-request-watch:github.com/acme/app#1",
+        description: "Watching pull request #1",
+        kind: "monitor",
+      },
+    ]);
+    expect(backgroundWorkHoldsCompletion(tasks)).toBe(true);
+  });
+
+  it("keeps a thread that never ran waiting on its watch", () => {
+    expect(
+      derivePendingBackgroundWork({ ...base, latestRunStatus: null }).map((task) => task.taskId),
+    ).toEqual(["pull-request-watch:github.com/acme/app#1"]);
+  });
+
+  it("lists no watch while a run is active", () => {
+    expect(
+      derivePendingBackgroundWork({ ...base, latestRunStatus: "running", hasActiveRun: true }),
+    ).toEqual([]);
+  });
+});

@@ -14,10 +14,10 @@ export const PullRequestsToolkitHandlersLive = PullRequestsToolkit.toLayer({
       const service = yield* PullRequestMcpService;
       return yield* service.unlink(yield* McpInvocationContext, input);
     }),
-  list_thread_pull_requests: () =>
+  list_thread_pull_requests: (input) =>
     Effect.gen(function* () {
       const service = yield* PullRequestMcpService;
-      return yield* service.list(yield* McpInvocationContext);
+      return yield* service.list(yield* McpInvocationContext, input);
     }),
   watch_pull_request: (input) =>
     Effect.gen(function* () {

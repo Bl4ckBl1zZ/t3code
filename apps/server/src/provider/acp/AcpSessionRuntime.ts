@@ -87,6 +87,8 @@ export interface AcpSpawnInput {
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly extendEnv?: boolean;
+  /** Set when the command is already resolved and must launch without a shell. */
+  readonly shell?: false;
 }
 
 export interface AcpSessionRuntimeOptions {
@@ -1412,13 +1414,16 @@ export const make = (
         ),
       );
 
-    const spawnCommand = yield* resolveSpawnCommand(
-      options.spawn.command,
-      options.spawn.args,
-      options.spawn.env
-        ? { env: options.spawn.env, extendEnv: options.spawn.extendEnv ?? true }
-        : {},
-    );
+    const spawnCommand =
+      options.spawn.shell === false
+        ? { command: options.spawn.command, args: [...options.spawn.args], shell: false }
+        : yield* resolveSpawnCommand(
+            options.spawn.command,
+            options.spawn.args,
+            options.spawn.env
+              ? { env: options.spawn.env, extendEnv: options.spawn.extendEnv ?? true }
+              : {},
+          );
     const linuxCgroupLease =
       options.ownDescendantProcessGroups === true && options.processGroupPlatform === "linux"
         ? yield* Effect.sync(() => {

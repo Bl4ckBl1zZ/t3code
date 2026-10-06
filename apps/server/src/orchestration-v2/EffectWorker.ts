@@ -30,6 +30,10 @@ import { ProviderTurnControlServiceV2 } from "./ProviderTurnControlService.ts";
 import { ProviderTurnStartServiceV2 } from "./ProviderTurnStartService.ts";
 import { RuntimeRequestServiceV2 } from "./RuntimeRequestService.ts";
 import { OrchestratorV2, type OrchestratorV2Error } from "./Orchestrator.ts";
+import {
+  ThreadManagementService,
+  type ThreadManagementServiceShape,
+} from "./ThreadManagementService.ts";
 
 /**
  * Dispatches the settle that follows a Stop's provider interrupt
@@ -51,6 +55,24 @@ export const backgroundWorkSettleLayer = Layer.effect(
   Effect.gen(function* () {
     const orchestrator = yield* OrchestratorV2;
     return { settle: (command) => orchestrator.dispatch(command).pipe(Effect.asVoid) };
+  }),
+);
+
+/**
+ * Stops the delegated tasks under a stopped thread (`delegated-tasks.stop`).
+ * Bound like `BackgroundWorkSettleDispatch`, to `ThreadManagementService`.
+ */
+export class DelegatedTasksStopDispatch extends Context.Reference<{
+  readonly stop: ThreadManagementServiceShape["stopDelegatedTasks"];
+}>("t3/orchestration-v2/DelegatedTasksStopDispatch", {
+  defaultValue: () => ({ stop: () => Effect.void }),
+}) {}
+
+export const delegatedTasksStopLayer = Layer.effect(
+  DelegatedTasksStopDispatch,
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagementService;
+    return { stop: threads.stopDelegatedTasks };
   }),
 );
 
@@ -142,6 +164,7 @@ export const executorLayer: Layer.Layer<
     const providerTurnStart = yield* ProviderTurnStartServiceV2;
     const runtimeRequests = yield* RuntimeRequestServiceV2;
     const backgroundWorkSettle = yield* BackgroundWorkSettleDispatch;
+    const delegatedTasksStop = yield* DelegatedTasksStopDispatch;
     return OrchestrationEffectExecutorV2.of({
       execute: (effect) => {
         switch (effect.request.type) {
@@ -346,6 +369,23 @@ export const executorLayer: Layer.Layer<
             );
           case "terminal.close-idle":
             return resourceCleanup.closeIdleTerminals(effect.threadId);
+          case "delegated-tasks.stop":
+            return delegatedTasksStop
+              .stop({
+                threadId: effect.threadId,
+                commandId: effect.commandId,
+                reason: effect.request.reason,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
           case "attachment.cleanup":
             return resourceCleanup
               .cleanupAttachments({

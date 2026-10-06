@@ -470,6 +470,43 @@ final class TransportReliabilityTests: XCTestCase {
         XCTAssertEqual(tasks[1].runCount, 4)
     }
 
+    /// A newer server's schedule kind must not fail the whole list, and a save
+    /// must send it back as it came.
+    func testScheduledTaskRecordKeepsAScheduleKindItCannotEdit() throws {
+        let json = """
+        {
+          "tasks": [
+            {
+              "id": "task-hook",
+              "title": "On release",
+              "prompt": "Summarise {{body.release.tag_name}}",
+              "enabled": true,
+              "schedule": {"type": "webhook", "signature": {"header": "x-hub-signature-256", "encoding": "hex"}},
+              "projectId": "project-1",
+              "threadId": null,
+              "modelSelection": {"instanceId": "codex", "model": "gpt-5.4"},
+              "nextRunAt": null,
+              "lastRunAt": null,
+              "lastRunStatus": "never",
+              "lastRunError": null,
+              "runCount": 0
+            }
+          ]
+        }
+        """
+        struct Payload: Decodable { let tasks: [ScheduledTaskRecord] }
+        let tasks = try JSONDecoder.t3.decode(Payload.self, from: Data(json.utf8)).tasks
+
+        XCTAssertEqual(tasks.count, 1)
+        guard case let .other(type, _) = tasks[0].schedule else {
+            return XCTFail("Expected the webhook schedule to be kept verbatim")
+        }
+        XCTAssertEqual(type, "webhook")
+        let sent = tasks[0].schedule.jsonValue
+        XCTAssertEqual(sent["type"]?.stringValue, "webhook")
+        XCTAssertEqual(sent["signature"]?["header"]?.stringValue, "x-hub-signature-256")
+    }
+
     /// Set `T3_SWIFT_WS_DEFLATE_ECHO_URL` to a WebSocket endpoint that rejects
     /// non-deflate handshakes and echoes binary frames. This is intentionally
     /// opt-in because XCTest does not own a Node process. A successful round

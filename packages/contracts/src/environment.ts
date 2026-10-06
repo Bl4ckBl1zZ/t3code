@@ -100,6 +100,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   projectAutoPull: Schema.optionalKey(Schema.Boolean),
   /** Server stores `pullRequestMergeMethod` and per-project merge-method overrides. */
   pullRequestMergeMethodDefaults: Schema.optionalKey(Schema.Boolean),
+  /** Server stores `removeAgentCreditsOnMerge` and its per-project overrides. */
+  pullRequestAgentCreditRemoval: Schema.optionalKey(Schema.Boolean),
   fileDocumentPreviews: Schema.optionalKey(Schema.Boolean),
   /** Bounded CLI transcript discovery and V2 history import. */
   agentSessionImport: Schema.optionalKey(Schema.Boolean),
@@ -126,6 +128,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server evaluates inactivity and PR settlement without an open client. */
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Server honors the `worktreesDirectory` setting. */
+  worktreesDirectory: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */
   threadSnooze: Schema.optionalKey(Schema.Boolean),

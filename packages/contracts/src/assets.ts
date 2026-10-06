@@ -1,7 +1,7 @@
 import { ToolActivityNativeAppReference } from "./toolActivity.ts";
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -31,6 +31,13 @@ export const AssetResource = Schema.Union([
     fileName: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
     mimeType: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
     disposition: Schema.optionalKey(Schema.Literals(["inline", "attachment"])),
+  }),
+  // An image a tool returned inline, such as a preview screenshot, by its
+  // order in the stored output. The timeline never carries these bytes.
+  Schema.TaggedStruct("tool-output-image", {
+    threadId: ThreadId,
+    itemId: TurnItemId,
+    index: NonNegativeInt,
   }),
   /** A file in the server's browser-artifacts directory (screenshots/recordings). */
   Schema.TaggedStruct("browser-artifact", {
@@ -194,7 +201,9 @@ export class AssetWorkspaceAssetNotFoundError extends Schema.TaggedErrorClass<As
   },
 ) {
   override get message(): string {
-    return "Workspace asset was not found.";
+    return this.resource._tag === "tool-output-image"
+      ? "Tool output image was not found."
+      : "Workspace asset was not found.";
   }
 }
 

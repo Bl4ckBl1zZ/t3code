@@ -60,41 +60,34 @@ describe("sendPullRequestAction", () => {
     expect(outcome.hint).toMatch(/rebase stops/i);
   });
 
-  it("settles the merge method on the click, and says nothing when it refuses", async () => {
+  it("queues merge preparation with the action only when no method was chosen", async () => {
+    const prepareMerge = { stackActions: true, resolveMergeMethod: () => "squash" as const };
     const record = recorder();
     await sendPullRequestAction({
       action: "merge",
       options: {},
-      resolveMergeMethod: async () => "squash",
+      prepareMerge,
       run: record.succeed,
       onActed: record.onActed,
     });
-    expect(record.requests).toEqual([{ mergeMethod: "squash" }]);
+    expect(record.requests).toEqual([{ prepareMerge }]);
+    expect(record.phases).toEqual([
+      ["merge", "sent"],
+      ["merge", "done"],
+    ]);
 
-    const refused = recorder();
-    const outcome = await sendPullRequestAction({
-      action: "merge",
-      options: {},
-      resolveMergeMethod: async () => {
-        throw new Error("Open this pull request to merge its stack.");
-      },
-      run: refused.succeed,
-      onActed: refused.onActed,
-    });
-    expect(outcome._tag).toBe("failed");
-    expect(refused.phases).toEqual([]);
-    expect(refused.requests).toEqual([]);
-  });
-
-  it("keeps an explicit merge method over the click-time default", async () => {
-    const record = recorder();
+    const chosen = recorder();
     await sendPullRequestAction({
       action: "merge",
       options: { mergeMethod: "rebase" },
-      resolveMergeMethod: async () => "squash",
-      run: record.succeed,
+      prepareMerge,
+      run: chosen.succeed,
     });
-    expect(record.requests).toEqual([{ mergeMethod: "rebase" }]);
+    expect(chosen.requests).toEqual([{ mergeMethod: "rebase" }]);
+
+    const close = recorder();
+    await sendPullRequestAction({ action: "close", options: {}, prepareMerge, run: close.succeed });
+    expect(close.requests).toEqual([{}]);
   });
 
   it("stops before sending when the work ahead of it fails", async () => {

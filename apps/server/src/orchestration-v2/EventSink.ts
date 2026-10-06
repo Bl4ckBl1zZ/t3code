@@ -149,6 +149,8 @@ export interface EventSinkV2Shape {
   readonly stream: (input?: {
     readonly threadId?: ThreadId;
     readonly afterSequence?: number;
+    /** Keep only this event type. */
+    readonly eventType?: OrchestrationV2DomainEvent["type"];
   }) => Stream.Stream<OrchestrationV2StoredEvent, EventSinkV2Error>;
   readonly latestSequence: (input?: {
     readonly threadId?: ThreadId;
@@ -628,8 +630,11 @@ const baseLayer: Layer.Layer<
       return loop(input.afterSequence);
     };
 
-    const stream = (input?: { readonly threadId?: ThreadId; readonly afterSequence?: number }) =>
-      Stream.unwrap(
+    const stream = (input?: Parameters<EventSinkV2Shape["stream"]>[0]) => {
+      const matches = (stored: OrchestrationV2StoredEvent) =>
+        (input?.threadId === undefined || stored.event.threadId === input.threadId) &&
+        (input?.eventType === undefined || stored.event.type === input.eventType);
+      return Stream.unwrap(
         Effect.gen(function* () {
           // Subscribe first, then capture the database high-water mark. Events
           // committed between those operations are buffered by the subscription.
@@ -640,16 +645,15 @@ const baseLayer: Layer.Layer<
             afterSequence,
             throughSequence: highWater,
             ...(input?.threadId === undefined ? {} : { threadId: input.threadId }),
-          });
+          }).pipe(Stream.filter(matches));
           const live = Stream.fromSubscription(subscription).pipe(
             Stream.filter((stored) => stored.sequence > Math.max(highWater, afterSequence)),
-            Stream.filter(
-              (stored) => input?.threadId === undefined || stored.event.threadId === input.threadId,
-            ),
+            Stream.filter(matches),
           );
           return Stream.concat(replay, live);
         }),
       );
+    };
 
     return EventSinkV2.of({
       // `writeEffect` already fails with `EventSinkWriteError`: the batch that

@@ -8,6 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as Etag from "effect/unstable/http/Etag";
@@ -64,6 +65,10 @@ import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider
 import * as ManagedEndpointReaper from "./environments/ManagedEndpointReaper.ts";
 import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
+import * as HookForwarder from "./hooks/HookForwarder.ts";
+import * as HeldHooks from "./hooks/HeldHooks.ts";
+import * as HookInbox from "./hooks/HookInbox.ts";
+import * as HookInboxObject from "./hooks/HookInboxObject.ts";
 
 const webcryptoLayer = Layer.succeed(
   Crypto.Crypto,
@@ -198,6 +203,28 @@ export const ApiLive = Api.make(
       Effect.succeed(managedEndpointZoneId),
     );
     const managedEndpointCleanupMode = yield* RelayConfiguration.managedEndpointCleanupModeConfig;
+    const legacyManagedEndpointCleanupMode =
+      yield* RelayConfiguration.legacyManagedEndpointCleanupModeConfig;
+    const legacyTunnelGraceMinutes = Option.getOrUndefined(
+      yield* RelayConfiguration.legacyTunnelGraceMinutesConfig,
+    );
+    // Keys are endpoint keys or hashes over them, which already differ per
+    // stage, so stages sharing an account cannot collide in these namespaces.
+    const hookRateLimit = yield* Cloudflare.RateLimit("HOOK_RATE_LIMIT", {
+      namespaceId: 1001,
+      simple: {
+        limit: HookForwarder.RELAY_HOOK_RATE_LIMIT.limit,
+        period: HookForwarder.RELAY_HOOK_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const hookEndpointRateLimit = yield* Cloudflare.RateLimit("HOOK_ENDPOINT_RATE_LIMIT", {
+      namespaceId: 1002,
+      simple: {
+        limit: HookForwarder.RELAY_HOOK_ENDPOINT_RATE_LIMIT.limit,
+        period: HookForwarder.RELAY_HOOK_ENDPOINT_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const hookInboxes = yield* HookInboxObject.HookInboxObject;
 
     //
     // 3. Runtime layers and app construction
@@ -224,7 +251,34 @@ export const ApiLive = Api.make(
         managedEndpointBaseDomain: yield* managedEndpointZoneName,
         managedEndpointNamespace: stage,
         managedEndpointCleanupMode,
+        legacyManagedEndpointCleanupMode,
+        ...(legacyTunnelGraceMinutes === undefined ? {} : { legacyTunnelGraceMinutes }),
       });
+    });
+
+    // Each managed endpoint's held webhook requests live in its own Durable Object.
+    const inboxCall =
+      <A>(operation: HookInbox.HookInboxError["operation"], endpointKey: string) =>
+      (effect: Effect.Effect<A, never, Alchemy.RuntimeContext>) =>
+        effect.pipe(
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+          Effect.catchCause((cause) =>
+            Effect.fail(
+              new HookInbox.HookInboxError({
+                operation,
+                endpointKey,
+                cause: Cause.squash(cause),
+              }),
+            ),
+          ),
+        );
+    const hookInboxLayer = Layer.succeed(HookInbox.HookInbox, {
+      hold: ({ endpointKey, baseUrl, hook }) =>
+        hookInboxes.getByName(endpointKey).hold(hook, baseUrl).pipe(inboxCall("hold", endpointKey)),
+      wake: ({ endpointKey, baseUrl }) =>
+        hookInboxes.getByName(endpointKey).wake(baseUrl).pipe(inboxCall("wake", endpointKey)),
+      clear: ({ endpointKey }) =>
+        hookInboxes.getByName(endpointKey).clear().pipe(inboxCall("clear", endpointKey)),
     });
 
     const runtimeBaseLayer = Layer.empty.pipe(
@@ -233,7 +287,11 @@ export const ApiLive = Api.make(
       Layer.provideMerge(EnvironmentConnector.layer),
       Layer.provideMerge(EnvironmentLinker.layer),
       Layer.provideMerge(
-        Layer.merge(EnvironmentPublishSignatures.layer, ManagedEndpointReaper.layer),
+        Layer.mergeAll(
+          EnvironmentPublishSignatures.layer,
+          ManagedEndpointReaper.layer,
+          HeldHooks.layer,
+        ),
       ),
       Layer.provideMerge(
         ManagedEndpointProvider.layerCloudflareBindings(
@@ -249,7 +307,7 @@ export const ApiLive = Api.make(
         ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
       ),
       Layer.provideMerge(AgentActivityRows.layer),
-      Layer.provideMerge(Devices.layer),
+      Layer.provideMerge(Layer.merge(Devices.layer, hookInboxLayer)),
       Layer.provideMerge(EnvironmentCredentials.layer),
       Layer.provideMerge(
         Layer.mergeAll(
@@ -274,7 +332,35 @@ export const ApiLive = Api.make(
       VoiceInput.layer.pipe(Layer.provide(runtimeBaseLayer)),
     );
 
-    const appLayer = relayApiLayer.pipe(
+    // Fails open: a limiter outage must not drop webhooks the environment would accept.
+    const allowWith =
+      (limiter: typeof hookRateLimit) =>
+      (key: string): Effect.Effect<boolean> =>
+        limiter.limit({ key }).pipe(
+          Effect.map((result) => result.success),
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+          Effect.catch((error) =>
+            Effect.logWarning("Hook rate limiter unavailable", { error: error.message }).pipe(
+              // Visible on the forward span, so an outage that disables limits shows up.
+              Effect.andThen(
+                Effect.annotateCurrentSpan({ "relay.hook.rate_limiter_failed_open": true }),
+              ),
+              Effect.as(true),
+            ),
+          ),
+        );
+    const hookRateLimiterLayer = Layer.succeed(HookForwarder.HookRateLimiter, {
+      allowHook: allowWith(hookRateLimit),
+      allowEndpoint: allowWith(hookEndpointRateLimit),
+    });
+
+    const appLayer = Layer.merge(
+      relayApiLayer,
+      HookForwarder.hooksApi.pipe(
+        Layer.provide(HookForwarder.layer),
+        Layer.provide(hookRateLimiterLayer),
+      ),
+    ).pipe(
       Layer.provideMerge(relayClientAuthLayer),
       Layer.provideMerge(relayDpopClientAuthLayer),
       Layer.provideMerge(relayEnvironmentAuthLayer),
@@ -371,6 +457,8 @@ export const ApiLive = Api.make(
         Layer.provideMerge(Cloudflare.Workers.CronEventSourceLive),
         Layer.provideMerge(Cloudflare.Queues.WriteQueueBinding),
         Layer.provideMerge(Cloudflare.Queues.EventSourceLive),
+        Layer.provideMerge(Cloudflare.Workers.RateLimitBinding),
+        Layer.provideMerge(HookInboxObject.layer),
       ),
     ),
   ),

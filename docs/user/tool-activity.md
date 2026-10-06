@@ -28,6 +28,9 @@ finished command keeps: the text it printed is not carried into the conversation
 actions show the request number when available and use a pull-request icon; preview-browser actions
 use a browser icon. Completed history summaries keep those actions distinct from other tools.
 
+On web and desktop, an opened command shows its text syntax highlighted. A script inside it, such
+as the script of a `bash -lc` wrapper or a Python heredoc, is colored in its own language.
+
 When a supported provider identifies the browser or app behind a tool call, activity shows
 its icon when available. Grouped history names the apps used, such as “Used Chrome
 integration,” while pull-request actions stay separately identified. App icons come from

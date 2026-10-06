@@ -80,7 +80,10 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
           Effect.mapError(
             (cause) =>
               new EffectAcpErrors.AcpSpawnError({
-                command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
+                command:
+                  (options.settings.source === "local"
+                    ? options.settings.commandPath
+                    : options.settings.agentId) || ACP_REGISTRY_PROVIDER,
                 cause,
               }),
           ),

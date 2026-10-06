@@ -28,6 +28,7 @@ import { layer as contextHandoffServiceLayer } from "../ContextHandoffService.ts
 import { layer as effectOutboxLayer } from "../EffectOutbox.ts";
 import {
   backgroundWorkSettleLayer,
+  delegatedTasksStopLayer,
   executorLayer as effectExecutorLayer,
   layer as effectWorkerLayer,
   runDaemon as runEffectWorkerDaemon,
@@ -38,6 +39,7 @@ import { layer as eventStoreLayer } from "../EventStore.ts";
 import { layer as idAllocatorLayer } from "../IdAllocator.ts";
 import { layer as orchestratorLayer } from "../Orchestrator.ts";
 import { layer as projectionStoreLayer } from "../ProjectionStore.ts";
+import { layer as threadManagementServiceLayer } from "../ThreadManagementService.ts";
 import { OrchestratorV2, type OrchestratorV2Error } from "../Orchestrator.ts";
 import { ProviderAdapterRegistryV2 } from "../ProviderAdapterRegistry.ts";
 import { layer as providerEventIngestorLayer } from "../ProviderEventIngestor.ts";
@@ -404,6 +406,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         providerTurnStartServiceProvided,
         runtimeRequestServiceProvided,
         backgroundWorkSettleLayer.pipe(Layer.provide(orchestratorProvided)),
+        delegatedTasksStopLayer.pipe(
+          Layer.provide(threadManagementServiceLayer.pipe(Layer.provide(orchestratorProvided))),
+        ),
       ),
     ),
   );

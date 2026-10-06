@@ -1,7 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { AcpRegistrySettings } from "@t3tools/contracts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  HostProcessArchitecture,
+  HostProcessEnvironment,
+  HostProcessPlatform,
+} from "@t3tools/shared/hostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -100,6 +105,118 @@ describe("AcpRegistrySupport", () => {
       }),
     ).toBeUndefined();
   });
+
+  it.effect("resolves a local command on the selected environment without the registry", () => {
+    const requests: Array<string> = [];
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-local-" });
+      const commandPath = `${cacheDir}/dsh`;
+      yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+      yield* fileSystem.chmod(commandPath, 0o755);
+      const hostEnvironment = { PATH: "/missing-host-bin", INHERITED: "host", OVERRIDE: "host" };
+      const environment = { ...hostEnvironment, PATH: cacheDir, OVERRIDE: "provider" };
+      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl }).pipe(
+        Effect.provideService(HostProcessEnvironment, hostEnvironment),
+      );
+      const args = ["--profile", "acp", "", " spaced ", "$(touch injected); $VALUE"];
+      const resolved = yield* resolver.resolve(
+        decodeAcpRegistrySettings({ source: "local", commandPath: "dsh", commandArgs: args }),
+        "/workspace",
+        environment,
+      );
+
+      expect(resolved).toEqual({
+        distribution: "local",
+        spawn: { command: commandPath, args, cwd: "/workspace", env: environment, shell: false },
+      });
+      expect(requests).toEqual([]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer((request) => {
+          requests.push(request.url);
+          return Effect.die("unexpected registry request for a local provider");
+        }),
+      ),
+    );
+  });
+
+  it.effect("resolves a local executable path and inherits the host environment", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-local-path-" });
+      const commandPath = `${cacheDir}/dsh wrapper`;
+      yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+      yield* fileSystem.chmod(commandPath, 0o755);
+      const environment = { PATH: "/unused", INHERITED: "host" };
+      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl }).pipe(
+        Effect.provideService(HostProcessEnvironment, environment),
+      );
+      const resolved = yield* resolver.resolve(
+        decodeAcpRegistrySettings({ source: "local", commandPath }),
+        "/workspace",
+      );
+
+      expect(resolved.spawn).toEqual({
+        command: commandPath,
+        args: [],
+        cwd: "/workspace",
+        env: environment,
+        shell: false,
+      });
+      expect(resolved.agent).toBeUndefined();
+
+      for (const extension of [".cmd", ".BAT"]) {
+        const windowsResolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl }).pipe(
+          Effect.provideService(HostProcessPlatform, "win32"),
+          Effect.provideService(SpawnExecutableResolution, () => `C:\\bin\\dsh${extension}`),
+        );
+        const failure = yield* windowsResolver
+          .resolve(decodeAcpRegistrySettings({ source: "local", commandPath: "dsh" }), "/workspace")
+          .pipe(Effect.flip);
+        expect(failure).toMatchObject({
+          reason: "runner_unavailable",
+          detail: expect.stringContaining("node.exe"),
+        });
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(resolverLayer(() => Effect.die("unexpected registry request"))),
+    ),
+  );
+
+  it.effect("reports missing or non-executable local commands without registry fallback", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-local-missing-",
+      });
+      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const environment = { PATH: cacheDir };
+      expect(
+        yield* resolver
+          .resolve(decodeAcpRegistrySettings({ source: "local" }), "/workspace", environment)
+          .pipe(Effect.flip),
+      ).toMatchObject({ reason: "agent_not_configured" });
+
+      const nonExecutable = `${cacheDir}/non-executable`;
+      yield* fileSystem.writeFileString(nonExecutable, "#!/bin/sh\n");
+      yield* fileSystem.chmod(nonExecutable, 0o644);
+      for (const commandPath of ["dsh", `${cacheDir}/missing`, cacheDir, nonExecutable]) {
+        const localSettings = decodeAcpRegistrySettings({ source: "local", commandPath });
+        expect(
+          yield* resolver.resolve(localSettings, "/workspace", environment).pipe(Effect.flip),
+        ).toMatchObject({
+          reason: "runner_unavailable",
+          detail: "Local ACP executable is not available on this environment's PATH.",
+        });
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(resolverLayer(() => Effect.die("unexpected registry request"))),
+    ),
+  );
 
   it.effect("resolves command overrides while preserving registry args and environment", () => {
     const agent = makeAgent({

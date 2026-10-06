@@ -111,6 +111,49 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
   });
 });
 
+it("keeps a subagent child's pull-request links independent of its parent", () => {
+  const linked = {
+    projectId: ProjectId.make("project:subagent-snooze"),
+    repository: "pingdotgg/t3code",
+    number: 123,
+    url: "https://github.com/pingdotgg/t3code/pull/123",
+  };
+  const childThread = makeSubagentChildThread({
+    parentThread: {
+      ...makeParentThread(),
+      linkedPullRequest: linked,
+      linkedPullRequests: [linked],
+      pullRequests: [
+        {
+          host: "github.com",
+          repository: "pingdotgg/t3code",
+          number: 123,
+          projectId: linked.projectId,
+          url: linked.url,
+          source: "manual",
+          linkedAt: "2026-07-24T09:00:00.000Z",
+          snapshot: null,
+          stack: null,
+        },
+      ],
+    },
+    childThreadId,
+    parentNodeId: NodeId.make("node:subagent-parent"),
+    activeProviderThreadId: null,
+    providerInstanceId: childProviderInstanceId,
+    modelSelection: childModelSelection,
+    title: "Reviewer",
+    now: childCreatedAt,
+    createdBy: "agent",
+    creationSource: "provider",
+  });
+
+  assert.isNull(childThread.linkedPullRequest);
+  assert.deepEqual(childThread.linkedPullRequests, []);
+  assert.deepEqual(childThread.pullRequests, []);
+  assert.equal(childThread.branch, "feature/source");
+});
+
 it("attributes native subagent prompts to their parent thread", () => {
   for (const role of ["user", "assistant"] as const) {
     const artifacts = makeSubagentConversationArtifacts({

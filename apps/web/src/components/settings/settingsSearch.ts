@@ -153,6 +153,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["squash", "rebase", "merge", "default", "project", "pr"],
   },
   {
+    id: "remove-agent-credits-on-merge",
+    title: "Remove agent credits when merging",
+    to: "/settings/general",
+    searchTerms: ["pull request github squash co-authored-by attribution claude codex generated"],
+  },
+  {
     id: "diff-color-scheme",
     title: "Diff colors",
     to: "/settings/appearance",
@@ -368,6 +374,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "add-project-starts-in",
     title: "Add project starts in",
     to: "/settings/general",
+  },
+  {
+    id: "worktree-location",
+    title: "Worktree location",
+    to: "/settings/general",
+    searchTerms: ["worktree location folder directory path drive external disk"],
   },
   {
     id: "unpin-confirmation",

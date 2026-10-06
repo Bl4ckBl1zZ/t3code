@@ -52,7 +52,11 @@ On web and desktop, hold **Shift** over the pull-request list to show quick acti
 while you type in a field. **Merge** uses the project's merge method, then the machine's, then the
 one you last picked, falling back to a method the repository allows. A request that belongs to a
 stack, or that you may not merge, says so instead; open it to merge from the stack controls. The
-row updates the same way it does when you act from the request itself.
+row updates the same way it does when you act from the request itself. Actions you press in quick
+succession run in the order you pressed them.
+
+To close several, press **Close**, drag across the rows in the same group, and release. Press
+**Escape** before releasing to cancel. Failed closes stay in the list so you can retry them.
 
 On iOS, choose **⋯ → Pull Requests** on Home to browse across your connected environments. Tap
 the filter button to choose an environment, project, host,

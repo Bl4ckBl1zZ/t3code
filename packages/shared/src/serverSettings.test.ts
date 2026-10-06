@@ -13,6 +13,7 @@ import {
   applyServerSettingsPatch,
   resolveProjectAutoPull,
   resolveProjectPullRequestMergeMethod,
+  resolveProjectRemoveAgentCreditsOnMerge,
   resolveProjectAgentBrowserAccess,
   extractPersistedServerObservabilitySettings,
   isModelSelectionProviderEnabled,
@@ -616,6 +617,24 @@ describe("project automatic pull preferences", () => {
   });
 });
 
+describe("agent credit removal on merge", () => {
+  it("prefers the project, then the machine, and resets sparsely", () => {
+    const a = ProjectId.make("a"),
+      b = ProjectId.make("b");
+    expect(resolveProjectRemoveAgentCreditsOnMerge(DEFAULT_SERVER_SETTINGS, a)).toBe(false);
+    const machine = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      removeAgentCreditsOnMerge: true,
+      projectRemoveAgentCreditsOnMergeOverrides: { [a]: false, [b]: true },
+    });
+    expect(resolveProjectRemoveAgentCreditsOnMerge(machine, a)).toBe(false);
+    const reset = applyServerSettingsPatch(machine, {
+      projectRemoveAgentCreditsOnMergeOverrides: { [a]: null },
+    });
+    expect(resolveProjectRemoveAgentCreditsOnMerge(reset, a)).toBe(true);
+    expect(reset.projectRemoveAgentCreditsOnMergeOverrides).toEqual({ [b]: true });
+  });
+});
+
 describe("pull request merge method defaults", () => {
   it("prefers the project, then the machine, then the client's last choice", () => {
     const a = ProjectId.make("a"),
@@ -685,4 +704,17 @@ it("replaces a machine model selection without retaining previous model options 
   expect(
     applyServerSettingsPatch(current, { defaultAutoPull: true }).defaultModelSelection,
   ).toEqual(current.defaultModelSelection);
+});
+
+describe("worktreesDirectory", () => {
+  it("remembers previous custom locations so their worktrees stay managed", () => {
+    const first = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { worktreesDirectory: "/a" });
+    expect(first.previousWorktreesDirectories).toEqual([]);
+    const second = applyServerSettingsPatch(first, { worktreesDirectory: "/b" });
+    expect(second.previousWorktreesDirectories).toEqual(["/a"]);
+    const reset = applyServerSettingsPatch(second, { worktreesDirectory: "" });
+    expect(reset.previousWorktreesDirectories).toEqual(["/a", "/b"]);
+    const back = applyServerSettingsPatch(reset, { worktreesDirectory: "/a" });
+    expect(back.previousWorktreesDirectories).toEqual(["/b"]);
+  });
 });

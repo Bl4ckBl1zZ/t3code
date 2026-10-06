@@ -162,7 +162,22 @@ public struct AutomationEditSheet: View {
 
     // MARK: - Schedule
 
+    @ViewBuilder
     private var scheduleSection: some View {
+        if let preserved = draft.preservedSchedule {
+            Section {
+                LabeledContent("Schedule", value: ScheduledTaskLabels.scheduleLabel(preserved))
+            } header: {
+                Text("Schedule")
+            } footer: {
+                Text("Change this trigger on web or desktop.")
+            }
+        } else {
+            timerScheduleSection
+        }
+    }
+
+    private var timerScheduleSection: some View {
         Section {
             Picker("Schedule", selection: $draft.scheduleMode) {
                 Text("Time of Day").tag(AutomationDraft.ScheduleMode.fixed)

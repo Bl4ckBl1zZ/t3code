@@ -4,7 +4,7 @@ import {
   ProjectId,
   ThreadId,
   type OrchestrationV2ThreadShell,
-  type OrchestrationV2Command,
+  type OrchestrationV2ServerCommand,
   type Project,
   type PullRequestSummary,
 } from "@t3tools/contracts";
@@ -51,7 +51,7 @@ const fixture = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
 function harness(thread: OrchestrationV2ThreadShell, enabled = true) {
   const summary = vi.fn(() => Effect.die("Unexpected host read"));
   const branch = vi.fn(() => Effect.die("Unexpected git read"));
-  const dispatch = vi.fn((command: OrchestrationV2Command) =>
+  const dispatch = vi.fn((command: OrchestrationV2ServerCommand) =>
     Effect.sync(() => {
       expect(command.type).toBe("thread.settle");
       return { sequence: 8, storedEvents: [] };
@@ -320,7 +320,7 @@ const settled = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
 
 function deleteHarness(thread: OrchestrationV2ThreadShell, others: OrchestrationV2ThreadShell[]) {
   const calls: string[] = [];
-  const dispatch = vi.fn((command: OrchestrationV2Command) =>
+  const dispatch = vi.fn((command: OrchestrationV2ServerCommand) =>
     Effect.sync(() => {
       calls.push(command.type);
       return { sequence: 8, storedEvents: [] };

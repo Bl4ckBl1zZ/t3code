@@ -1,5 +1,5 @@
 import type {
-  OrchestrationV2Command,
+  OrchestrationV2ServerCommand,
   OrchestrationV2DomainEvent,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2Run,
@@ -25,7 +25,7 @@ import { OrchestratorV2, type OrchestratorV2Error } from "../Orchestrator.ts";
 export type OrchestratorV2ScenarioStep =
   | {
       readonly type: "dispatch";
-      readonly command: OrchestrationV2Command;
+      readonly command: OrchestrationV2ServerCommand;
       readonly await?: boolean;
       readonly key?: string;
     }
@@ -73,7 +73,7 @@ export type OrchestratorV2ScenarioStep =
 
 export interface OrchestratorV2Scenario {
   readonly name: string;
-  readonly commands: ReadonlyArray<OrchestrationV2Command>;
+  readonly commands: ReadonlyArray<OrchestrationV2ServerCommand>;
   readonly steps?: ReadonlyArray<OrchestratorV2ScenarioStep>;
   readonly projectionThreadIds?: ReadonlyArray<ThreadId>;
 }
@@ -99,7 +99,7 @@ export class OrchestratorV2ScenarioStepError extends Schema.TaggedErrorClass<Orc
   }
 }
 
-function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<ThreadId> {
+function commandThreadIds(command: OrchestrationV2ServerCommand): ReadonlyArray<ThreadId> {
   switch (command.type) {
     case "thread.create":
     case "thread.archive":
@@ -127,6 +127,8 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "run.restart-continuation.clear":
     case "run.interrupt":
     case "thread.background-work.settle":
+    case "thread.stop":
+    case "secret_request.record":
     case "queue.resume":
     case "queued-message.promote-to-steer":
     case "queued-run.reorder":
@@ -161,7 +163,9 @@ function scenarioSteps(
   );
 }
 
-function scenarioCommands(scenario: OrchestratorV2Scenario): ReadonlyArray<OrchestrationV2Command> {
+function scenarioCommands(
+  scenario: OrchestratorV2Scenario,
+): ReadonlyArray<OrchestrationV2ServerCommand> {
   return scenarioSteps(scenario).flatMap((step) =>
     step.type === "dispatch" ? [step.command] : [],
   );

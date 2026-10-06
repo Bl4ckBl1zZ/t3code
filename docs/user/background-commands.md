@@ -76,6 +76,9 @@ ends; the next message starts a fresh one that picks up the conversation.
 
 Other providers cannot end work after its turn has finished. There, ask the agent to stop it.
 
+Stop, on a running turn or on background work, also stops the subagent tasks the thread delegated
+and ends its pull request watches.
+
 ## What each provider can show
 
 Providers expose different things, and the display follows what is actually knowable:

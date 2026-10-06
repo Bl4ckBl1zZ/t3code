@@ -251,6 +251,17 @@ If the provider does not support interruption:
 - best case: stop provider session and mark run interrupted or cancelled by policy.
 - worst case: mark interrupt unsupported and leave run active until provider exits.
 
+Stop is `run.interrupt`. Besides the run, it ends the thread's pull request
+watches, cancels pending restart continuations, and drops the wakes its
+delegated tasks still owe, so nothing automatic restarts the thread. It does not
+hold the user's queue. It then stops every delegated task under the thread: a
+`delegated-tasks.stop` effect sends the server-only `thread.stop` command to each
+child thread, depth first. This runs after commit, not inside the parent's
+command, because a command holds only its own thread's lock. `thread.stop` also
+holds the child's queue, and `task_cancel` sends the same `thread.stop` to its
+child. A late `delegate_task` or `watch_pull_request` call from a run Stop
+reached is rejected.
+
 ## Resumption
 
 Resumption has three related meanings:

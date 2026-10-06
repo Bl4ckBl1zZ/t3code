@@ -3,7 +3,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as Schema from "effect/Schema";
+import * as EffectAcpSchema from "effect-acp/schema";
 import {
   deriveToolActivityPresentation,
   mergeToolActivityData,
@@ -14,39 +15,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isSessionModelState(value: unknown): value is EffectAcpSchema.SessionModelState {
-  if (!isRecord(value) || typeof value.currentModelId !== "string") {
-    return false;
-  }
-  if (!Array.isArray(value.availableModels)) {
-    return false;
-  }
-  return value.availableModels.every(
-    (model) =>
-      isRecord(model) &&
-      typeof model.modelId === "string" &&
-      typeof model.name === "string" &&
-      (model.description === undefined ||
-        model.description === null ||
-        typeof model.description === "string"),
-  );
-}
-
-function isSessionModeState(value: unknown): value is EffectAcpSchema.SessionModeState {
-  if (!isRecord(value) || typeof value.currentModeId !== "string") {
-    return false;
-  }
-  if (!Array.isArray(value.availableModes)) {
-    return false;
-  }
-  return value.availableModes.every(
-    (mode) =>
-      isRecord(mode) &&
-      typeof mode.id === "string" &&
-      typeof mode.name === "string" &&
-      (mode.description === undefined || typeof mode.description === "string"),
-  );
-}
+// Guards for the untyped `initialize._meta` states some agents (Grok) advertise.
+// The ACP wire schema is the source of truth, so null descriptions stay valid.
+const isSessionModelState = Schema.is(EffectAcpSchema.SessionModelState);
+const isSessionModeState = Schema.is(EffectAcpSchema.SessionModeState);
 
 export interface AcpSessionMode {
   readonly id: string;

@@ -203,6 +203,7 @@ import { AgentElapsed } from "./AgentElapsed";
 import { AgentOrb } from "./AgentOrb";
 import { subagentOrbSeed, type SubagentTurnItem } from "./SubagentsStatusBadge.logic";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { SecretRequestCard } from "./SecretRequestCard";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 import {
@@ -2202,7 +2203,7 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
             {statusSummary}
           </span>
         </span>
-        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/80">
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
           <AgentElapsed agent={subagentGroupTiming(subagents)} />
         </span>
         <ChevronDownIcon
@@ -2241,6 +2242,15 @@ const V2_EVENT_TONE_ICON_CLASS: Record<V2EventTone, string> = {
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
   const { item, visibility, sourceThreadId } = row.projectedItem;
+  if (item.type === "secret_request") {
+    return (
+      <SecretRequestCard
+        environmentId={ctx.activeThreadEnvironmentId}
+        item={item}
+        visibility={visibility}
+      />
+    );
+  }
   if (isV2LifecycleItem(item)) {
     return (
       <V2LifecycleRow

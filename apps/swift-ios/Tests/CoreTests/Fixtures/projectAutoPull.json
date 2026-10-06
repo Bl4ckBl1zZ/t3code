@@ -27,6 +27,8 @@
     },
     "pullRequestMergeMethod": null,
     "projectPullRequestMergeMethodOverrides": {},
+    "removeAgentCreditsOnMerge": false,
+    "projectRemoveAgentCreditsOnMergeOverrides": {},
     "backgroundActivity": {
       "schemaVersion": 1,
       "profile": "balanced",
@@ -43,6 +45,8 @@
     "defaultThreadEnvMode": "local",
     "newWorktreesStartFromOrigin": true,
     "addProjectBaseDirectory": "",
+    "worktreesDirectory": "",
+    "previousWorktreesDirectories": [],
     "textGenerationModelSelection": {
       "instanceId": "codex",
       "model": "gpt-6-luna",
@@ -54,7 +58,7 @@
       ]
     },
     "branchNamingMode": "static",
-    "branchNamePrefix": "t3code",
+    "branchNamePrefix": "t3",
     "branchNameInstructions": "",
     "sourceControlWritingStyle": {
       "mode": "repo_conventions",

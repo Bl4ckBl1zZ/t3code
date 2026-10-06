@@ -1,5 +1,11 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import * as SchemaTransformation from "effect/SchemaTransformation";
+import {
+  ForwardCompatibleUnion,
+  isUnknownUnionMember,
+  TrimmedNonEmptyString,
+  type UnknownUnionMember,
+} from "./baseSchemas.ts";
 
 export const ProjectIconColor = Schema.Literals([
   "gray",
@@ -42,3 +48,22 @@ export const ProjectIconOverride = Schema.Union([
   }),
 ]);
 export type ProjectIconOverride = typeof ProjectIconOverride.Type;
+
+/**
+ * An icon as clients receive it. A kind from a newer server decodes as no
+ * override, so the client shows the project's default icon. A known kind
+ * whose payload does not decode still fails. Commands and stored events keep
+ * the strict {@link ProjectIconOverride}.
+ */
+export const ReceivedProjectIcon = ForwardCompatibleUnion(ProjectIconOverride.members, "kind").pipe(
+  Schema.decodeTo(
+    Schema.NullOr(Schema.toType(ProjectIconOverride)),
+    SchemaTransformation.transform<
+      ProjectIconOverride | null,
+      ProjectIconOverride | UnknownUnionMember<"kind">
+    >({
+      decode: (icon) => (isUnknownUnionMember(icon) ? null : icon),
+      encode: (icon) => icon as ProjectIconOverride,
+    }),
+  ),
+);

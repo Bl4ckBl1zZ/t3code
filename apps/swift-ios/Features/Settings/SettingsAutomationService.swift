@@ -242,6 +242,9 @@ public struct AutomationDraft: Equatable, Sendable {
     public var threadID: String?
     /// `nil` on a new automation until the catalog resolves a default.
     public var modelSelection: ModelSelection?
+    /// A schedule this editor cannot change, such as a webhook trigger. A save
+    /// sends it back as it came rather than turning it into a timer.
+    public var preservedSchedule: ScheduledTaskSchedule?
 
     public init() {}
 
@@ -269,12 +272,15 @@ public struct AutomationDraft: Equatable, Sendable {
             } else {
                 weekdays = Set(ScheduledTaskWeekday.allCases)
             }
+        case .other:
+            preservedSchedule = task.schedule
         }
     }
 
     /// `nil` when the entered schedule is not something the server would accept,
     /// which is also what disables Save.
     public var schedule: ScheduledTaskSchedule? {
+        if let preservedSchedule { return preservedSchedule }
         switch scheduleMode {
         case .interval:
             guard let minutes = ScheduledTaskLabels.parseIntervalMinutes(intervalMinutes) else {

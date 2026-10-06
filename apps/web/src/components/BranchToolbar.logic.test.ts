@@ -1,6 +1,7 @@
-import { EnvironmentId, type VcsRef } from "@t3tools/contracts";
+import { EnvironmentId, type ThreadPullRequestLink, type VcsRef } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  resolveWatchedBranchPullRequest,
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
   resolveEnvironmentOptionLabel,
@@ -855,5 +856,49 @@ describe("sanitizeNewRefName", () => {
   it("does not collapse dashes the user typed", () => {
     expect(sanitizeNewRefName("new - branch")).toBe("new---branch");
     expect(sanitizeNewRefName("foo--bar")).toBe("foo--bar");
+  });
+});
+
+describe("resolveWatchedBranchPullRequest", () => {
+  const watch = {
+    startedAt: "2026-10-05T00:00:00.000Z",
+    headSha: null,
+    failedChecks: [],
+    passed: false,
+    passedChecks: [],
+    remarksThrough: "2026-10-05T00:00:00.000Z",
+    remarkIds: [],
+    conflicting: false,
+    wakes: 0,
+  };
+  const link = (number: number, extra: Partial<ThreadPullRequestLink> = {}) =>
+    ({
+      host: "github.com",
+      repository: "pingdotgg/t3code",
+      number,
+      url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+      source: "agent",
+      linkedAt: "2026-10-05T00:00:00.000Z",
+      snapshot: null,
+      stack: null,
+      ...extra,
+    }) satisfies ThreadPullRequestLink;
+
+  it("finds the branch pull request's watched link", () => {
+    const links = [link(7, { watch }), link(8)];
+    expect(
+      resolveWatchedBranchPullRequest(links, "https://github.com/pingdotgg/t3code/pull/7")?.number,
+    ).toBe(7);
+  });
+
+  it("ignores unwatched, dismissed, and unparseable links", () => {
+    const links = [link(7, { watch, source: "stack-dismissed" }), link(8)];
+    for (const url of [
+      "https://github.com/pingdotgg/t3code/pull/7",
+      "https://github.com/pingdotgg/t3code/pull/8",
+      "not a url",
+    ]) {
+      expect(resolveWatchedBranchPullRequest(links, url)).toBeNull();
+    }
   });
 });

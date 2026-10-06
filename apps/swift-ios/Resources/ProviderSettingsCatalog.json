@@ -255,6 +255,22 @@
     "environmentFields": [],
     "fields": [
       {
+        "key": "source",
+        "control": "select",
+        "label": "ACP source",
+        "options": [
+          {
+            "value": "registry",
+            "label": "ACP Registry"
+          },
+          {
+            "value": "local",
+            "label": "Local command"
+          }
+        ],
+        "clearWhenEmpty": "omit"
+      },
+      {
         "key": "agentId",
         "control": "text",
         "label": "Registry agent ID",
@@ -266,7 +282,7 @@
         "key": "commandPath",
         "control": "text",
         "label": "Executable override",
-        "description": "Optional local executable to use instead of installing the registry distribution. Registry arguments and environment are still applied.",
+        "description": "Executable on this environment. For registry agents, this overrides the distribution executable while keeping its arguments and environment.",
         "placeholder": "devin",
         "clearWhenEmpty": "omit"
       },

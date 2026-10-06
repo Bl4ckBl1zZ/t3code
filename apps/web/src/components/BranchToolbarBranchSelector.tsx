@@ -6,7 +6,8 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { ContextMenuItem, EnvironmentId, VcsRef, ThreadId } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { ChevronDownIcon, GitBranchIcon, SearchIcon } from "lucide-react";
+import { allThreadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
+import { ChevronDownIcon, EyeIcon, EyeOffIcon, GitBranchIcon, SearchIcon } from "lucide-react";
 import {
   useCallback,
   useDeferredValue,
@@ -36,6 +37,9 @@ import { cn } from "../lib/utils";
 import {
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
   THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
+  THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS,
+  THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS,
   THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
   THREAD_DETAILS_PANEL_ROW_CLASS,
 } from "./chat/threadDetailsPanelStyles";
@@ -49,6 +53,7 @@ import {
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  resolveWatchedBranchPullRequest,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
 } from "./BranchToolbar.logic";
@@ -646,6 +651,27 @@ export function BranchToolbarBranchSelector({
   const panelPrLabel = branchPr
     ? `#${branchPr.number}${branchPr.title.trim() ? `: ${branchPr.title}` : ""}`
     : "";
+  // The server ends a watch when the pull request closes, so only an open one shows the eye.
+  const watchedBranchPr =
+    displayMode === "panel" && serverThread && branchPr?.state === "open" && branchPrStatus
+      ? resolveWatchedBranchPullRequest(allThreadPullRequestsOf(serverThread), branchPrStatus.url)
+      : null;
+  const watchPullRequest = useAtomCommand(threadEnvironment.watchPullRequest, {
+    reportFailure: true,
+  });
+  const stopWatchingBranchPr = () => {
+    if (!watchedBranchPr) return;
+    void watchPullRequest({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        host: watchedBranchPr.host,
+        repository: watchedBranchPr.repository,
+        number: watchedBranchPr.number,
+        watching: false,
+      },
+    });
+  };
 
   function selectPickerItem(itemValue: string) {
     highlightedBranchValueRef.current = null;
@@ -827,28 +853,59 @@ export function BranchToolbarBranchSelector({
           </ComboboxTrigger>
         </span>
         {displayMode === "panel" && branchPr && branchPrStatus ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={THREAD_DETAILS_PANEL_ROW_CLASS}
-                  aria-label={branchPrTooltip}
-                  onClick={(event) => openPrLink(event, branchPrStatus.url)}
+          <div
+            className={watchedBranchPr ? THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS : "contents"}
+          >
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={
+                      watchedBranchPr
+                        ? THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS
+                        : THREAD_DETAILS_PANEL_ROW_CLASS
+                    }
+                    aria-label={branchPrTooltip}
+                    onClick={(event) => openPrLink(event, branchPrStatus.url)}
+                  />
+                }
+              >
+                <ChangeRequestStatusIcon
+                  state={branchPr.state}
+                  isDraft={branchPr.isDraft}
+                  className={cn(THREAD_DETAILS_PANEL_ICON_CLASS, branchPrStatus.colorClass)}
                 />
-              }
-            >
-              <ChangeRequestStatusIcon
-                state={branchPr.state}
-                isDraft={branchPr.isDraft}
-                className={cn(THREAD_DETAILS_PANEL_ICON_CLASS, branchPrStatus.colorClass)}
-              />
-              <span className="min-w-0 flex-1 truncate text-left">{panelPrLabel}</span>
-            </TooltipTrigger>
-            <TooltipPopup side="top">{branchPrStatus.tooltip}</TooltipPopup>
-          </Tooltip>
+                <span className="min-w-0 flex-1 truncate text-left">{panelPrLabel}</span>
+              </TooltipTrigger>
+              <TooltipPopup side="top">{branchPrStatus.tooltip}</TooltipPopup>
+            </Tooltip>
+            {watchedBranchPr ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={cn(THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS, "group/watch")}
+                      aria-label={`Stop watching #${watchedBranchPr.number}`}
+                      onClick={stopWatchingBranchPr}
+                    />
+                  }
+                >
+                  <EyeIcon aria-hidden className="size-4 group-hover/watch:hidden" />
+                  <EyeOffIcon aria-hidden className="hidden size-4 group-hover/watch:block" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">
+                  Watching: the agent wakes when checks finish, someone comments, or the branch
+                  conflicts. Click to stop.
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <ComboboxPopup

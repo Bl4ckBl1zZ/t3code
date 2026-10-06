@@ -339,6 +339,11 @@ offline for several minutes. The environment stays linked and keeps the same add
 starts again or wakes, T3 Connect creates a replacement tunnel on its own. You do not need to pair
 again. Cleanup usually runs five to ten minutes after the tunnel goes down.
 
+T3 Connect also removes the tunnel of an environment running an older version of T3 Code once it
+has been offline for seven days. On web and desktop, that environment's T3 Connect row shows a
+message asking you to update. Start T3 Code on that computer and update it to the latest version;
+it reconnects at the same address without pairing again.
+
 ## Security Notes
 
 - Treat pairing URLs and pairing tokens like passwords.

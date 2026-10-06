@@ -288,14 +288,17 @@ A candidate is a same-stage tunnel that Cloudflare reports down for at least
 five minutes, or one that never connected and is at least an hour old. The
 longer grace for never-connected tunnels covers a pairing still in progress.
 
-Cleanup deletes only tunnels whose host has registered recovery. Allocations
-without recovery registration belong to hosts that cannot replace a deleted
-tunnel and are left alone. Allocations with no recorded tunnel ID, or a
+Cleanup deletes tunnels whose host has registered recovery. Allocations
+without recovery registration belong to legacy hosts that cannot replace a
+deleted tunnel on their own build; a separate `RELAY_LEGACY_TUNNEL_CLEANUP_MODE`
+deletes those only after Cloudflare has reported them down, or never connected,
+for seven days. Allocations with no recorded tunnel ID, or a
 different tunnel ID, are skipped because a provision may own them. A tunnel with
 no allocation row at all is counted as `skippedOrphan` and never deleted: there
 is no row to lock, so a relink that adopts it by name could race the delete.
-Clear those by hand. Each sweep is bounded: at most ten list requests, 100 deletions, a
-two-minute deadline, and an early stop on a Cloudflare rate limit. Each sweep
+Clear those by hand. Each sweep is bounded: at most ten list requests, 100 deletions run four
+at a time, no new deletion after 90 seconds, a two-minute deadline, and an early stop on a
+Cloudflare rate limit. Each sweep
 starts one budget further along the candidate list, so a block of deletes that
 keep failing cannot starve the tunnels listed after them. See the
 [reaper](../../infra/relay/src/environments/ManagedEndpointReaper.ts).
@@ -317,3 +320,28 @@ provisions under the same allocation, so the hostname and DNS record survive
 and clients keep their bindings. Every mutation on an allocation bumps its
 `generation`, and deletion locks the row at the generation it claimed, so a
 host that reconnects mid-sweep wins.
+
+## Automation webhooks
+
+After bootstrap, clients send application traffic through the environment's tunnel hostname; the
+relay Worker does not proxy their HTTP or WebSocket sessions. The one exception is automation
+webhooks: the relay forwards `/v1/hooks/:endpointKey/:hookId/:token` to the environment's tunnel
+so senders get a stable URL. The endpoint key is the last segment of the environment's managed
+tunnel name. The relay keeps bodies and tokens out of its traces and leaves token and signature
+verification to the environment ([forwarder](../../infra/relay/src/hooks/HookForwarder.ts)).
+
+By default the forwarder stores nothing. An environment can opt in to having the relay hold
+requests while it is offline (`hold_webhooks_while_offline` on its link). Only then does the relay
+store the raw request, including the hook token in the path, in a Durable Object for that managed
+endpoint, with SQLite storage. The object pushes held requests back through the tunnel from its
+alarm, oldest first, and backs off while the environment stays away. When the tunnel reconnects,
+the environment asks the relay to deliver right away. Requests are deleted once the environment
+answers, after 24 hours, or when no user has the environment linked. The relay still never checks
+the token; delivery goes through the same environment route. Every forward carries
+`x-t3-relay-delivery-id`, vouched for by a relay-signed `x-t3-relay-delivery` proof, so a request
+that reached the environment before a timeout and is delivered again later runs once
+([inbox object](../../infra/relay/src/hooks/HookInboxObject.ts)).
+
+A Durable Object, not Postgres or Queues, because held requests are write-once, read-once bodies of
+up to 1 MiB that need per-environment order, caps, and retry timing. Queues cap messages at 128 KB
+and cannot hold one environment's requests back while it is away.

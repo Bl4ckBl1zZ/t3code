@@ -1,7 +1,3 @@
-import {
-  type AtomCommandResult,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
 import type { PullRequestAction } from "@t3tools/contracts";
 import {
   GitMergeIcon,
@@ -12,9 +8,7 @@ import {
 
 import { cn } from "~/lib/utils";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { pullRequestEnvironment } from "~/state/pullRequests";
 import { serverEnvironment } from "~/state/server";
-import { useAtomCommand } from "~/state/use-atom-command";
 import { useUiStateStore } from "~/uiStateStore";
 
 import { Button } from "../ui/button";
@@ -41,12 +35,6 @@ const ACTIONS = {
   reopen: { label: "Reopen", Icon: GitPullRequestArrowIcon },
 } as const;
 
-async function settle<A>(result: Promise<AtomCommandResult<A, unknown>>): Promise<A> {
-  const settled = await result;
-  if (settled._tag === "Failure") throw squashAtomCommandFailure(settled);
-  return settled.value;
-}
-
 /**
  * The buttons a row shows while Shift is held. Shown by the list's own attribute rather than a
  * prop, so holding Shift re-renders no row; nothing is read from the host until one is pressed.
@@ -54,12 +42,18 @@ async function settle<A>(result: Promise<AtomCommandResult<A, unknown>>): Promis
 export function PullRequestSpeedActions({
   entry,
   onActed,
+  closing = false,
+  sweeping = false,
+  onCloseSweepStart,
 }: {
   entry: EnvironmentPullRequestEntry;
   onActed: (result: PullRequestSpeedActionResult) => void;
+  /** Closing as part of a swept batch. */
+  closing?: boolean;
+  /** Inside a close sweep that is still being dragged. */
+  sweeping?: boolean;
+  onCloseSweepStart?: (entry: EnvironmentPullRequestEntry, event: PointerEvent) => void;
 }) {
-  const readDetail = useAtomCommand(pullRequestEnvironment.readDetail, { reportFailure: false });
-  const readStack = useAtomCommand(pullRequestEnvironment.readStack, { reportFailure: false });
   const reference = {
     projectId: entry.projectId,
     ...(entry.host === undefined ? {} : { host: entry.host }),
@@ -71,47 +65,38 @@ export function PullRequestSpeedActions({
     reference,
     onActed: (action, phase) => onActed({ entry, action, phase }),
     // The row knows too little to merge with: whether this viewer may, which methods the
-    // repository allows, and whether the pull request sits in a stack all come from the host.
-    resolveMergeMethod: async () => {
-      const target = { environmentId: entry.environmentId, input: reference };
-      const detail = await settle(readDetail(target));
-      if (
-        detail.state !== "open" ||
-        detail.isDraft ||
-        !detail.capabilities.actions.includes("merge") ||
-        !detail.viewerPermissions.actions.includes("merge")
-      ) {
-        throw new Error("This pull request cannot be merged.");
-      }
-      const capabilities = appAtomRegistry.get(
-        serverEnvironment.configValueAtom(entry.environmentId),
-      )?.environment.capabilities;
-      if (detail.provider === "github" && capabilities?.pullRequestStackActions === true) {
-        const stack = await settle(readStack(target));
-        if (stack !== null) throw new Error("Open this pull request to merge its stack.");
-      }
-      const allowed = detail.capabilities.mergeMethods.filter(
-        (method) => detail.mergeCapabilities[method],
-      );
-      if (allowed.length === 0) {
-        throw new Error("No merge method is available for this repository.");
-      }
-      return resolvePullRequestMergeMethod(
-        allowed,
-        null,
-        readPullRequestDefaultMergeMethod(entry.environmentId, entry.projectId),
-        useUiStateStore.getState().pullRequestMergeMethod,
-      );
+    // repository allows, and whether the pull request sits in a stack all come from the host,
+    // read when the merge's turn in the environment's queue comes.
+    prepareMerge: {
+      stackActions:
+        appAtomRegistry.get(serverEnvironment.configValueAtom(entry.environmentId))?.environment
+          .capabilities.pullRequestStackActions === true,
+      resolveMergeMethod: (detail) => {
+        const allowed = detail.capabilities.mergeMethods.filter(
+          (method) => detail.mergeCapabilities[method],
+        );
+        if (allowed.length === 0) {
+          throw new Error("No merge method is available for this repository.");
+        }
+        return resolvePullRequestMergeMethod(
+          allowed,
+          null,
+          readPullRequestDefaultMergeMethod(entry.environmentId, entry.projectId),
+          useUiStateStore.getState().pullRequestMergeMethod,
+        );
+      },
     },
   });
+  const busy = pendingAction !== null || closing || sweeping;
   return (
     <div
       className={cn(
         "hidden shrink-0 items-center gap-1 pr-3 group-data-[speed-actions]/pr-list:flex",
-        pendingAction !== null && "flex",
+        busy && "flex",
       )}
       role="group"
       aria-label={`Quick actions for pull request #${entry.number}`}
+      data-pull-request-action-pending={pendingAction !== null || closing}
     >
       {pullRequestSpeedActions(entry).map((action) => {
         const { label, Icon } = ACTIONS[action];
@@ -122,20 +107,29 @@ export function PullRequestSpeedActions({
                 <Button
                   variant={action === "close" ? "destructive-outline" : "outline"}
                   size="xs"
-                  disabled={pendingAction !== null}
+                  disabled={busy}
                   aria-label={`${label} #${entry.number}`}
                   onClick={() => void perform(action)}
+                  onPointerDown={(event) => {
+                    if (action !== "close" || !event.isPrimary || event.button !== 0) return;
+                    event.stopPropagation();
+                    onCloseSweepStart?.(entry, event.nativeEvent);
+                  }}
                 />
               }
             >
-              {pendingAction === action ? (
+              {pendingAction === action || (action === "close" && (closing || sweeping)) ? (
                 <Spinner size="xs" />
               ) : (
                 <Icon aria-hidden className="size-3" />
               )}
               {label}
             </TooltipTrigger>
-            <TooltipPopup>{`${label} immediately`}</TooltipPopup>
+            <TooltipPopup>
+              {action === "close"
+                ? "Close immediately, or drag across rows to close several"
+                : `${label} immediately`}
+            </TooltipPopup>
           </Tooltip>
         );
       })}

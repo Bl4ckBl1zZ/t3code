@@ -2,6 +2,7 @@
  * What a pull request action says and the order it reports in, shared by every surface that runs
  * one. Kept out of the hook so the order the list relies on can be tested without rendering.
  */
+import type { PullRequestMergePreparation } from "@t3tools/client-runtime/state/pull-requests";
 import {
   type AtomCommandResult,
   squashAtomCommandFailure,
@@ -77,8 +78,8 @@ const UPDATE_BRANCH_REBASE_FAILURE_HINT =
 
 /**
  * Where an action is: "sent" the moment it leaves, so a list can answer before the host does;
- * "done" or "failed" once the host has spoken. A merge refused before it was sent — a stack, a
- * method the repository no longer allows — says nothing at all, since nothing left.
+ * "done" or "failed" once the host has spoken. A quick merge the host's current answer refuses —
+ * a stack, a method the repository no longer allows — fails like any other refusal.
  */
 export type PullRequestActionPhase = "sent" | "done" | "failed";
 
@@ -105,10 +106,12 @@ export type PullRequestActionOutcome =
 export async function sendPullRequestAction(input: {
   readonly action: PullRequestAction;
   readonly options: PullRequestActionOptions;
-  readonly resolveMergeMethod?: (() => Promise<PullRequestMergeMethod>) | undefined;
+  /** A merge with no chosen method settles one from the host's answer, queued with the action. */
+  readonly prepareMerge?: PullRequestMergePreparation | undefined;
   readonly run: (request: {
     readonly mergeMethod?: PullRequestMergeMethod;
     readonly updateMethod?: PullRequestUpdateMethod;
+    readonly prepareMerge?: PullRequestMergePreparation;
   }) => Promise<AtomCommandResult<unknown, unknown>>;
   readonly onActed?:
     | ((action: PullRequestAction, phase: PullRequestActionPhase) => void)
@@ -116,19 +119,14 @@ export async function sendPullRequestAction(input: {
 }): Promise<PullRequestActionOutcome> {
   const { action, options } = input;
   if (options.before && !(await options.before())) return { _tag: "stopped" };
-  let mergeMethod = options.mergeMethod;
-  if (mergeMethod === undefined && action === "merge" && input.resolveMergeMethod) {
-    try {
-      mergeMethod = await input.resolveMergeMethod();
-    } catch (failure) {
-      return { _tag: "failed", failure, hint: ACTION_FAILURE_HINTS[action] };
-    }
-  }
-  const { updateMethod } = options;
+  const { mergeMethod, updateMethod } = options;
+  const prepareMerge =
+    action === "merge" && mergeMethod === undefined ? input.prepareMerge : undefined;
   input.onActed?.(action, "sent");
   const result = await input.run({
     ...(mergeMethod ? { mergeMethod } : {}),
     ...(updateMethod ? { updateMethod } : {}),
+    ...(prepareMerge ? { prepareMerge } : {}),
   });
   if (result._tag === "Failure") {
     input.onActed?.(action, "failed");
