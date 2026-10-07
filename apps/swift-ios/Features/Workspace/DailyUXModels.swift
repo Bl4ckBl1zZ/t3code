@@ -151,6 +151,19 @@ enum DailyUXCreationContext {
         return normalized(project.path) == normalized(root)
     }
 
+    /// The project menu's order around "No project": the selected project,
+    /// then "No project", then the rest as listed, so "No project" is in reach
+    /// without scrolling past every project and the current choice still
+    /// leads. With no listed project selected (Scratch is, or nothing yet),
+    /// "No project" leads. Matches web's new-thread picker.
+    static func projectMenuOrder(
+        _ listed: [FeatureProject],
+        selectedID: String
+    ) -> (selected: FeatureProject?, others: [FeatureProject]) {
+        guard let selected = listed.first(where: { $0.id == selectedID }) else { return (nil, listed) }
+        return (selected, listed.filter { $0.id != selectedID })
+    }
+
     /// The projects a task can be started in.
     ///
     /// `serverConfigs` is required rather than defaulted because it is the only

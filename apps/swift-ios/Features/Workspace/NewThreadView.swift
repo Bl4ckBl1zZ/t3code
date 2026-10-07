@@ -316,29 +316,14 @@ public struct NewThreadView: View {
 
     private var projectMenu: some View {
         Menu {
-            ForEach(listedProjects) { project in
-                // A toggle rather than a picker: choosing the current project
-                // again still reaches `selectProject`, which reloads branches.
-                // Its on state draws the checkmark, leaving the row's image
-                // slot for the project's icon.
-                Toggle(isOn: Binding(
-                    get: { project.id == projectID },
-                    set: { _ in selectProject(project.id) }
-                )) {
-                    // A menu row reads a second Text as its subtitle, so the
-                    // path sits small under the name instead of wrapping.
-                    let row = projectMenuRow(project)
-                    Label {
-                        Text(row.title)
-                        if let detail = row.detail {
-                            Text(detail)
-                        }
-                    } icon: {
-                        menuIcons.image(for: project, dark: colorScheme == .dark)
-                    }
-                }
+            let order = DailyUXCreationContext.projectMenuOrder(listedProjects, selectedID: projectID)
+            if let selected = order.selected {
+                projectChoice(selected)
             }
             scratchChoices
+            ForEach(order.others) { project in
+                projectChoice(project)
+            }
         } label: {
             // Primary text, not the accent role: most palettes define accent
             // as the message-bubble fill, which nearly vanishes on the sheet.
@@ -382,12 +367,34 @@ public struct NewThreadView: View {
         .accessibilityValue(isScratchSelected ? "No project" : selectedProject?.name ?? "None")
     }
 
+    /// A toggle rather than a picker: choosing the current project again
+    /// still reaches `selectProject`, which reloads branches. Its on state
+    /// draws the checkmark, leaving the row's image slot for the project's icon.
+    private func projectChoice(_ project: FeatureProject) -> some View {
+        Toggle(isOn: Binding(
+            get: { project.id == projectID },
+            set: { _ in selectProject(project.id) }
+        )) {
+            // A menu row reads a second Text as its subtitle, so the
+            // path sits small under the name instead of wrapping.
+            let row = projectMenuRow(project)
+            Label {
+                Text(row.title)
+                if let detail = row.detail {
+                    Text(detail)
+                }
+            } icon: {
+                menuIcons.image(for: project, dark: colorScheme == .dark)
+            }
+        }
+    }
+
     private var selectedProjectTitle: String {
         isScratchSelected ? "No project" : selectedProject?.name ?? "a project"
     }
 
-    /// The machines' Scratch projects are offered as "No project" below the
-    /// list rather than among it.
+    /// The machines' Scratch projects are offered as "No project" rather than
+    /// among the list.
     private var listedProjects: [FeatureProject] {
         let configs = model.client.workspaceServerConfigs()
         return creationProjects.filter { !DailyUXCreationContext.isScratchProject($0, serverConfigs: configs) }

@@ -43,6 +43,18 @@ final class NewTaskScratchProjectTests: XCTestCase {
         XCTAssertFalse(DailyUXCreationContext.isScratchProject(scratch, serverConfigs: []))
     }
 
+    func testNoProjectSitsRightAfterTheSelectedProject() {
+        let projects = ["a", "b", "c"].map { FeatureProject(id: $0, environmentID: "home", name: $0, path: "/code/\($0)") }
+        let middle = DailyUXCreationContext.projectMenuOrder(projects, selectedID: "b")
+        XCTAssertEqual(middle.selected?.id, "b")
+        XCTAssertEqual(middle.others.map(\.id), ["a", "c"])
+        // Scratch selected, or nothing yet: "No project" leads and the list keeps its order.
+        let scratch = DailyUXCreationContext.projectMenuOrder(projects, selectedID: "scratch")
+        XCTAssertNil(scratch.selected)
+        XCTAssertEqual(scratch.others.map(\.id), ["a", "b", "c"])
+        XCTAssertNil(DailyUXCreationContext.projectMenuOrder(projects, selectedID: "").selected)
+    }
+
     func testDecodesTheScratchFolderAndTheEnsureScratchReply() throws {
         let config = try JSONDecoder().decode(
             ServerConfigSnapshot.self,
