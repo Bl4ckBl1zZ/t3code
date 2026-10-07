@@ -138,6 +138,18 @@ public actor EnvironmentAPI {
         return try await send(request, as: EnvironmentDescriptor.self)
     }
 
+    /// The OAuth protected-resource metadata (RFC 9728) outside agents read
+    /// to sign in to `mcpURL`, asked at that same address. A server without
+    /// MCP sign-in answers 404. Sends no credential.
+    public func mcpProtectedResource(
+        for mcpURL: URL,
+        timeoutInterval: TimeInterval
+    ) async throws -> McpProtectedResourceMetadata {
+        var request = URLRequest(url: endpoint(mcpURL, path: "/.well-known/oauth-protected-resource/mcp"))
+        request.timeoutInterval = timeoutInterval
+        return try await send(request, as: McpProtectedResourceMetadata.self)
+    }
+
     public func shellSnapshot(
         for environment: Environment,
         timeoutInterval: TimeInterval? = nil
@@ -478,6 +490,18 @@ public struct DispatchResult: Codable, Equatable, Sendable {
 public struct WebSocketTicket: Codable, Equatable, Sendable {
     public let ticket: String
     public let expiresAt: String
+}
+
+/// The part of `AuthMcpProtectedResourceMetadata` this client reads: enough
+/// to tell that the server signs outside agents in with OAuth.
+public struct McpProtectedResourceMetadata: Decodable, Equatable, Sendable {
+    public let resource: String
+    public let authorizationServers: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case resource
+        case authorizationServers = "authorization_servers"
+    }
 }
 
 public struct AuthSessionState: Codable, Equatable, Sendable {

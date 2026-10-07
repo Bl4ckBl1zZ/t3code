@@ -1,10 +1,13 @@
 import SwiftUI
+import UIKit
 
 /// Every saved server, the pages that belong to the one in use, and the way to
 /// leave it. Pushed from the server card at the top of Settings.
 struct SettingsServersView: View {
     @Bindable var model: FeatureRootModel
     let onAddServer: () -> Void
+    /// Pushes a server's details.
+    let onShowDetails: (String) -> Void
     /// Called after Disconnect, which leaves nothing for Settings to show.
     let onDisconnected: () -> Void
 
@@ -12,7 +15,6 @@ struct SettingsServersView: View {
     @State private var confirmingDisconnect = false
     @State private var switchingID: String?
     @State private var mergeMethodError: String?
-    @State private var detailID: String?
 
     /// Servers that are on, then the ones switched off on this device.
     private var environments: [FeatureEnvironment] {
@@ -102,9 +104,6 @@ struct SettingsServersView: View {
         }
         .navigationTitle("Servers")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(item: $detailID) { id in
-            SettingsServerDetailView(model: model, environmentID: id)
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Add Server", systemImage: "plus", action: onAddServer)
@@ -146,7 +145,7 @@ struct SettingsServersView: View {
                         .accessibilityHidden(true)
                 }
                 Button {
-                    detailID = environment.id
+                    onShowDetails(environment.id)
                 } label: {
                     Image(systemName: "info.circle")
                         .foregroundStyle(T3Colors.accent)
@@ -180,9 +179,18 @@ struct SettingsServersView: View {
                 Label(environment.isEnabled ? "Switch Off" : "Switch On", systemImage: "power")
             }
             Button {
-                detailID = environment.id
+                onShowDetails(environment.id)
             } label: {
                 Label("Details", systemImage: "info.circle")
+            }
+            // Set once the details page confirmed outside agents can sign in.
+            if environment.isEnabled, let mcpURL = environment.mcpURL {
+                Button {
+                    UIPasteboard.general.string = mcpURL.absoluteString
+                    T3HUD.show("MCP URL Copied", systemImage: "doc.on.doc")
+                } label: {
+                    Label("Copy MCP URL", systemImage: "doc.on.doc")
+                }
             }
             if !environment.isActive {
                 Button(role: .destructive) {
@@ -217,7 +225,7 @@ struct SettingsServersView: View {
     private func switchTo(_ environment: FeatureEnvironment) {
         // A switched-off server never connects; its details page switches it on.
         guard environment.isEnabled else {
-            detailID = environment.id
+            onShowDetails(environment.id)
             return
         }
         guard !environment.isActive, switchingID == nil else { return }

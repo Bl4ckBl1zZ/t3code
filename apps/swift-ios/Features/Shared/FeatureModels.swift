@@ -43,6 +43,10 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var unsupportedReason: String? = nil
     /// The server is outdated and this app can update it.
     public var serverUpdateRequired: Bool = false
+    /// The address outside agents sign in to this server's MCP endpoint at.
+    /// Nil until the server confirms it signs them in with OAuth, which its
+    /// details page asks once per session.
+    public var mcpURL: URL? = nil
     /// Reachability from the latest aggregate refresh. `nil` means the client
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?

@@ -100,6 +100,10 @@ If `gh` is signed in to several accounts or hosts, expand **GitHub** in the same
 the account each host uses or turn a host off. A saved token or `GH_TOKEN` takes precedence
 over that choice; a host turned off stays off either way.
 
+In the native iOS app, open **Settings → Servers**, then a server's details and **Source Control**,
+to make the same choices per host or to save or remove a token. Saved tokens can't be viewed again
+there either.
+
 ### For GitLab
 
 1. Install the GitLab CLI:

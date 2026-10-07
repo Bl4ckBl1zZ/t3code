@@ -299,6 +299,32 @@ public enum EnvironmentRoutes {
         return next.count == routes.count ? next : nil
     }
 
+    /// The address an agent outside T3 (Claude Code, Codex) uses to reach this
+    /// environment's MCP server: `/mcp` on the first route, in preference
+    /// order, that qualifies. Mirrors `environmentMcpUrl` in the client
+    /// runtime: only HTTPS and loopback addresses qualify, because MCP clients
+    /// refuse to sign in through a plain-http token endpoint elsewhere. The
+    /// T3 Connect route qualifies through the relay address discovery gave it.
+    public static func mcpURL(_ routes: [EnvironmentRoute]) -> URL? {
+        routes.lazy.compactMap { mcpURL(httpBaseURL: $0.httpBaseURL) }.first
+    }
+
+    static func mcpURL(httpBaseURL: URL?) -> URL? {
+        guard let httpBaseURL,
+              let scheme = httpBaseURL.scheme?.lowercased(),
+              let host = httpBaseURL.host, !host.isEmpty,
+              scheme == "https" || (scheme == "http" && HostClassification.isLoopback(host)),
+              var components = URLComponents(url: httpBaseURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.path = "/mcp"
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        return components.url
+    }
+
     /// Identifies the addresses the user saved for an environment, ignoring
     /// order and learned routes. Compatibility state learned about an
     /// environment carries over while this stays the same: reordering or

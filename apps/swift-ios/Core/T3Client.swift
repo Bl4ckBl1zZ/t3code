@@ -2394,6 +2394,22 @@ public actor EnvironmentRuntime {
         return try await api.descriptor(at: httpBaseURL)
     }
 
+    /// Whether the server behind `mcpURL` signs outside agents in with OAuth,
+    /// asked at that address so the answer also says it is reachable there.
+    /// Throws only when there was no answer, so the caller can ask again.
+    public func supportsMcpOAuth(at mcpURL: URL) async throws -> Bool {
+        let api = EnvironmentAPI(transport: httpTransport, credentials: credentialStore)
+        do {
+            let metadata = try await api.mcpProtectedResource(for: mcpURL, timeoutInterval: 8)
+            return !metadata.authorizationServers.isEmpty
+        } catch let HTTPError.status(status, _, _) where status == 404 {
+            return false
+        } catch is DecodingError {
+            // An older server answers unknown paths with something else entirely.
+            return false
+        }
+    }
+
     /// Persists a fully validated managed environment. Both the environment
     /// metadata and the tagged DPoP credential must agree before either is
     /// saved. An environment already saved with another route gains T3 Connect

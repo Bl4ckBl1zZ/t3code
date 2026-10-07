@@ -365,6 +365,9 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     /// a generation once, then leaves later manual choices alone.
     public let defaultTheme: String
     public let defaultThemeSetAt: String
+    /// Per-host GitHub logins and saved tokens. Nil on a server that never
+    /// saved any, and on one that predates the setting.
+    public let github: GitHubSettings?
 
     public init(
         providerInstances: [String: JSONValue] = [:],
@@ -394,7 +397,8 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             .defaultEnableAgentBrowserAccess,
         claudeAutoCompactWindow: String = "",
         defaultTheme: String = "",
-        defaultThemeSetAt: String = ""
+        defaultThemeSetAt: String = "",
+        github: GitHubSettings? = nil
     ) {
         self.providerInstances = providerInstances
         self.providerDefinitions = providerDefinitions.isEmpty ? ["claudeAgent": .object(["autoCompactWindow": .string(claudeAutoCompactWindow)])] : providerDefinitions
@@ -421,6 +425,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         self.claudeAutoCompactWindow = claudeAutoCompactWindow
         self.defaultTheme = defaultTheme
         self.defaultThemeSetAt = defaultThemeSetAt
+        self.github = github
     }
 
     public func projectScriptsInheritDefaults(projectID: String, legacyScripts: [ProjectScript]) -> Bool {
@@ -453,6 +458,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         case providers
         case defaultTheme
         case defaultThemeSetAt
+        case github
     }
 
     /// The slice of `providers` this client reads. Deliberately not the whole
@@ -517,6 +523,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
             String.self,
             forKey: .defaultThemeSetAt
         ) ?? ""
+        github = try container.decodeIfPresent(GitHubSettings.self, forKey: .github)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -551,6 +558,7 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
         } else { try container.encode(providerDefinitions, forKey: .providers) }
         try container.encode(defaultTheme, forKey: .defaultTheme)
         try container.encode(defaultThemeSetAt, forKey: .defaultThemeSetAt)
+        try container.encodeIfPresent(github, forKey: .github)
     }
 }
 
@@ -594,6 +602,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
     /// default. Empty is a meaningful value here, so it is not the same as nil.
     public var claudeAutoCompactWindow: String?
     public var hiddenModelsByProvider: [String: [String]]?
+    public var github: GitHubSettingsPatch?
 
     public init(
         sidebarAutoSettleAfterDays: Double?? = nil,
@@ -618,7 +627,8 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         usagePriceOverrides: [String: UsageModelPriceOverride?]? = nil,
         enableAgentBrowserAccess: Bool? = nil,
         claudeAutoCompactWindow: String? = nil,
-        hiddenModelsByProvider: [String: [String]]? = nil
+        hiddenModelsByProvider: [String: [String]]? = nil,
+        github: GitHubSettingsPatch? = nil
     ) {
         self.sidebarAutoSettleAfterDays = sidebarAutoSettleAfterDays
         self.continueThreadsAfterServerUpdate = continueThreadsAfterServerUpdate
@@ -643,6 +653,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
         self.enableAgentBrowserAccess = enableAgentBrowserAccess
         self.claudeAutoCompactWindow = claudeAutoCompactWindow
         self.hiddenModelsByProvider = hiddenModelsByProvider
+        self.github = github
     }
 
     public var json: JSONValue {
@@ -703,6 +714,7 @@ public struct ServerSettingsPatchInput: Equatable, Sendable {
                 .object(["hiddenModels": .array($0.map(JSONValue.string))])
             })
         }
+        if let github { fields["github"] = github.json }
         return .object(fields)
     }
 

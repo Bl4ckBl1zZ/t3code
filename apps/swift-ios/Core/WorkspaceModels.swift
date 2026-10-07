@@ -107,28 +107,64 @@ public enum SourceControlProviderAuthStatus: String, Codable, Sendable {
 }
 
 public struct SourceControlProviderAuth: Decodable, Equatable, Sendable {
+    /// One login the provider CLI holds. Only GitHub reports these today.
+    public struct Account: Decodable, Equatable, Sendable {
+        public let host: String
+        public let account: String
+        /// The login `gh` uses for its host when Settings pin none.
+        public let active: Bool
+        /// False for a login gh holds but cannot use; `error` says why.
+        public let authenticated: Bool
+        public let error: String?
+        /// Set when the login comes from a token variable such as `GH_TOKEN`,
+        /// which wins over the account chosen in Settings.
+        public let environmentVariable: String?
+
+        public init(
+            host: String,
+            account: String,
+            active: Bool,
+            authenticated: Bool,
+            error: String? = nil,
+            environmentVariable: String? = nil
+        ) {
+            self.host = host
+            self.account = account
+            self.active = active
+            self.authenticated = authenticated
+            self.error = error
+            self.environmentVariable = environmentVariable
+        }
+    }
+
     public let status: SourceControlProviderAuthStatus
     public let account: String?
     public let host: String?
     public let detail: String?
+    /// Every login across hosts. Nil from servers that predate per-host
+    /// accounts and when gh's status could not be read.
+    public let accounts: [Account]?
 
     private enum CodingKeys: String, CodingKey {
         case status
         case account
         case host
         case detail
+        case accounts
     }
 
     public init(
         status: SourceControlProviderAuthStatus,
         account: String? = nil,
         host: String? = nil,
-        detail: String? = nil
+        detail: String? = nil,
+        accounts: [Account]? = nil
     ) {
         self.status = status
         self.account = account
         self.host = host
         self.detail = detail
+        self.accounts = accounts
     }
 
     public init(from decoder: any Decoder) throws {
@@ -137,6 +173,9 @@ public struct SourceControlProviderAuth: Decodable, Equatable, Sendable {
         account = try container.decodeEffectOptionalString(forKey: .account)
         host = try container.decodeEffectOptionalString(forKey: .host)
         detail = try container.decodeEffectOptionalString(forKey: .detail)
+        // A list this build cannot read loses the account picker, never the
+        // whole discovery result.
+        accounts = (try? container.decodeIfPresent([Account].self, forKey: .accounts)) ?? nil
     }
 }
 

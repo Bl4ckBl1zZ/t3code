@@ -62,6 +62,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var environmentConnectionDetails: [String: String] = [:]
     private var latestServerConfig: ServerConfigSnapshot?
     private var serverConfigsByEnvironmentID: [String: ServerConfigSnapshot] = [:]
+    /// Whether each server keeps GitHub choices per host, asked once per session.
+    private var gitHubSettingsSupport: [String: Bool] = [:]
+    /// Whether each MCP address signs outside agents in with OAuth, keyed by
+    /// the address and asked once per session.
+    private var mcpOAuthSupport: [String: Bool] = [:]
     private var environmentThemesByEnvironmentID: [String: [EnvironmentTheme]] = [:]
     private var projectScriptActionsInFlight: Set<String> = []
     private var pendingProjectScripts: [String: (terminalID: String, startedAt: Date)] = [:]
@@ -4836,6 +4841,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
         mapped.unsupportedReason = environment.unsupportedReason
         mapped.serverUpdateRequired = environment.serverUpdateRequired
+        mapped.mcpURL = EnvironmentRoutes.mcpURL(environment.routes)
+            .flatMap { mcpOAuthSupport[$0.absoluteString] == true ? $0 : nil }
         return mapped
     }
 
@@ -6915,7 +6922,10 @@ private enum NativeFeatureClientError: LocalizedError {
         case .invalidProjectPath: "Enter a workspace path on the connected environment."
         case .branchRequired: "Choose a base branch for the new worktree."
         case .deviceSessionNotFound: "That device session is no longer active."
-        case .missingScope: "This connection does not have permission to manage devices."
+        case let .missingScope(scope):
+            scope.hasPrefix("access:")
+                ? "This connection does not have permission to manage devices."
+                : "This connection does not have permission to change this server."
         case let .attachmentLimit(message): message
         case .crossEnvironmentMerge:
             "These threads are on different environments and cannot be merged."
@@ -7223,6 +7233,68 @@ extension NativeFeatureClient: FeatureServerSettingsManaging {
             patch: SharedServerSettings.pick(settings, restartSupported: config.environment?.capabilities.threadRestartContinuation == true))
     }
 
+}
+
+// MARK: - Server details
+
+extension NativeFeatureClient: FeatureMcpAccessProbing {
+    func verifiedMcpURL(environmentID: String) async -> URL? {
+        guard let environment = (try? await runtime.environments())?.first(where: { $0.id == environmentID }),
+              let url = EnvironmentRoutes.mcpURL(environment.routes) else { return nil }
+        if let known = mcpOAuthSupport[url.absoluteString] { return known ? url : nil }
+        // No answer (offline, timed out) is not a "no": the next visit asks again.
+        guard let supported = try? await runtime.supportsMcpOAuth(at: url) else { return nil }
+        mcpOAuthSupport[url.absoluteString] = supported
+        // The Servers list reads the address from the snapshot, so its menu
+        // offers it from now on without asking the server itself.
+        if supported, let shell = latestShell {
+            await emitSnapshot(shell, markSourceConnected: false)
+        }
+        return supported ? url : nil
+    }
+}
+
+extension NativeFeatureClient: FeatureGitHubSettingsManaging {
+    func supportsGitHubSettings(environmentID: String) async -> Bool {
+        if let known = gitHubSettingsSupport[environmentID] { return known }
+        do {
+            var config = serverConfigsByEnvironmentID[environmentID]
+            if config?.settings?.github == nil {
+                config = try await providerModelConfiguration(environmentID: environmentID)
+            }
+            // Settings carry `github` only once something was saved, so a
+            // server that never saved any shows support through discovery:
+            // only one that knows per-host accounts reports gh's logins.
+            var supported = config?.settings?.github != nil
+            if !supported {
+                let discovery = try await environmentClient(id: environmentID).discoverSourceControl()
+                supported = discovery.sourceControlProviders.contains {
+                    $0.kind == .github && $0.auth.accounts != nil
+                }
+            }
+            gitHubSettingsSupport[environmentID] = supported
+            return supported
+        } catch {
+            return false
+        }
+    }
+
+    func gitHubSettings(environmentID: String) async throws -> FeatureGitHubSettingsState {
+        let config = try await providerModelConfiguration(environmentID: environmentID)
+        let discovery = try await environmentClient(id: environmentID).discoverSourceControl()
+        return FeatureGitHubSettingsState(
+            settings: config.settings?.github,
+            provider: discovery.sourceControlProviders.first { $0.kind == .github }
+        )
+    }
+
+    func updateGitHubSettings(environmentID: String, patch: GitHubSettingsPatch) async throws {
+        try await requireScope("orchestration:operate", client: environmentClient(id: environmentID))
+        try await updateServerSettings(
+            environmentID: environmentID,
+            patch: ServerSettingsPatchInput(github: patch)
+        )
+    }
 }
 
 // MARK: - Voice Input
