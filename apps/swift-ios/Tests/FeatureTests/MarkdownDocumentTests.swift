@@ -436,4 +436,79 @@ struct MarkdownDocumentTests {
             !String(MarkdownInlineFormatter.format("Bad &#x110000; value").characters).isEmpty
         )
     }
+
+    /// The gutter every marker in a list reserves: the widest number, so a list
+    /// crossing 99 keeps one text column instead of shifting at "100.".
+    @Test
+    func orderedListGutterFitsItsWidestMarker() {
+        #expect(MarkdownListMarker.widestOrdinal(start: 1, count: 9) == "9.")
+        #expect(MarkdownListMarker.widestOrdinal(start: 1, count: 10) == "10.")
+        #expect(MarkdownListMarker.widestOrdinal(start: 98, count: 5) == "102.")
+        #expect(MarkdownListMarker.widestOrdinal(start: 100, count: 1) == "100.")
+        #expect(MarkdownListMarker.widestOrdinal(start: 7, count: 0) == "7.")
+    }
+
+    /// CommonMark reads `<A>` as inline HTML, which web had to stop from
+    /// opening a link over every block after it (upstream 5886bd8f19). Here
+    /// nothing renders HTML and the inline parser keeps a tag-like token as
+    /// literal text, so a placeholder reads exactly as written and stays in its
+    /// own paragraph.
+    @Test(arguments: ["<A>", "<a>", "<B>", "<Foo>", "<a/>", "<A />"])
+    func bareTagPlaceholdersStayLiteralText(_ token: String) {
+        let source = """
+        - **"From \(token)"** appears in the header.
+
+        - **Tests:** cover inheritance.
+
+        The deferred move continues on B.
+        """
+        let cache = MarkdownRenderCache(documentCountLimit: 8, documentCostLimit: 64_000)
+        guard let document = cache.documentImmediately(for: MarkdownContentRevision(source)),
+              document.blocks.count == 2,
+              case let .unorderedList(items) = document.blocks[0],
+              case let .paragraph(trailing) = document.blocks[1],
+              items.count == 2,
+              case let .paragraph(first)? = items[0].blocks.first else {
+            Issue.record("Expected a two-item list followed by a paragraph")
+            return
+        }
+
+        let text = first.attributedText
+        #expect(String(text.characters) == "\"From \(token)\" appears in the header.")
+        // Foundation tags the token `.inlineHTML`, which splits the bold run
+        // but leaves it bold and drawn verbatim.
+        let bold = text.runs
+            .filter { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true }
+            .map { String(text[$0.range].characters) }
+            .joined()
+        #expect(bold == "\"From \(token)\"")
+        #expect(!text.runs.contains { $0.link != nil })
+        #expect(String(trailing.attributedText.characters) == "The deferred move continues on B.")
+    }
+
+    /// Placeholders sit beside the syntax that legitimately uses angle
+    /// brackets: an autolink still links, a code span stays code, and a file
+    /// citation (which the renderer rewrites into an `<url>` link) still opens.
+    @Test
+    func placeholdersLeaveAngleBracketSyntaxIntact() {
+        let source = #"Swap `<A>` for <B>, see <https://example.com>, [docs](https://t3.gg) and :codex-file-citation{path="src/main.swift"}."#
+        let cache = MarkdownRenderCache(documentCountLimit: 8, documentCostLimit: 64_000)
+        guard let document = cache.documentImmediately(for: MarkdownContentRevision(source)),
+              case let .paragraph(inline)? = document.blocks.first else {
+            Issue.record("Expected a paragraph")
+            return
+        }
+
+        let text = inline.attributedText
+        #expect(String(text.characters) == "Swap <A> for <B>, see https://example.com, docs and main.swift.")
+        #expect(text.runs.contains { run in
+            run.inlinePresentationIntent?.contains(.code) == true
+                && String(text[run.range].characters) == "<A>"
+        })
+        let links = text.runs.compactMap(\.link)
+        #expect(links.count == 3)
+        #expect(links.first == URL(string: "https://example.com"))
+        #expect(links.dropFirst().first == URL(string: "https://t3.gg"))
+        #expect(links.last.flatMap(CodexMarkdownDirectives.fileTarget)?.path == "src/main.swift")
+    }
 }
