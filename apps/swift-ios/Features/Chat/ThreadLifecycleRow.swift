@@ -178,8 +178,8 @@ private struct RelatedThreadRow: View {
     }
 }
 
-/// "Model · ● Account · ⎇ branch": what a subagent runs on, then only where it
-/// differs from the parent.
+/// "Model · Effort · ⚡ Fast · ● Account · ⎇ branch": what a subagent runs
+/// on, then only where it differs from the parent.
 private struct SubagentMetadataLine: View {
     let metadata: SubagentRowMetadata
 
@@ -187,6 +187,16 @@ private struct SubagentMetadataLine: View {
         HStack(spacing: 4) {
             Text(verbatim: metadata.modelLabel)
                 .layoutPriority(1)
+            if let effort = metadata.traits?.effort {
+                separator
+                Text(verbatim: effort)
+                    .fixedSize()
+            }
+            if let speed = metadata.traits?.speed {
+                separator
+                speed.text
+                    .fixedSize()
+            }
             if let account = metadata.account {
                 separator
                 if let accent = metadata.accentColor.flatMap(ProviderAccountBadge.color) {
@@ -216,10 +226,26 @@ private struct SubagentMetadataLine: View {
 }
 
 extension SubagentRowMetadata {
-    /// Read in place of the line's glyphs: "Opus 4.6, Work account, Branch: fix/agents".
+    /// Read in place of the line's glyphs: "Opus 4.6, High, Fast, Work account, Branch: fix/agents".
     var accessibilityText: String {
-        ([modelLabel] + [account].compactMap { $0 } + workspace.map { "\($0.label): \($0.value)" })
+        ([modelLabel, traits?.effort, traits?.speed?.label, account].compactMap { $0 }
+            + workspace.map { "\($0.label): \($0.value)" })
             .joined(separator: ", ")
+    }
+
+    /// "Subagent · GPT-5.6 · High · ⚡ Fast": a lineage row's subtitle as one
+    /// run of text, so it truncates as a whole rather than squeezing each part.
+    func modelSummary(after leading: String) -> Text {
+        let base = [leading, modelLabel, traits?.effort].compactMap { $0 }.joined(separator: " · ")
+        guard let speed = traits?.speed else { return Text(verbatim: base) }
+        return Text("\(base) · \(speed.text)")
+    }
+}
+
+extension SubagentModelTraits.Speed {
+    /// Web's bolt beside the tier's name; the name tells Fast from Ultrafast.
+    var text: Text {
+        Text("\(Image(systemName: "bolt.fill")) \(label)")
     }
 }
 

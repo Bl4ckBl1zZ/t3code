@@ -254,11 +254,13 @@ public struct ThreadDetailView: View {
                     // disagree with the rows above them.
                     turnItems: detail?.timelineItems.map(\.item) ?? [],
                     relationships: relationships,
+                    subagentMetadata: detail?.subagentMetadata ?? [:],
                     onMergeBack: detailsMergeBack,
                     onDetachSession: {
                         try await model.client.stopThreadSession(threadID: thread.id)
                         _ = await model.detail(for: thread.id, force: true)
                     },
+                    onStopSubagent: stopSubagent,
                     onTogglePin: {
                         Task {
                             await model.setPinned(
@@ -846,8 +848,17 @@ public struct ThreadDetailView: View {
             onDetach: lineageDetach,
             onStop: canStopBackgroundWork
                 ? { Task { await model.cancelTurn(threadID: thread.id) } }
-                : nil
+                : nil,
+            onStopSubagent: stopSubagent,
+            subagentMetadata: detail?.subagentMetadata ?? [:]
         )
+    }
+
+    /// Stop on a subagent's lineage row: the composer's interrupt, aimed at the
+    /// child thread. Throws so the sheet on screen can say why it failed.
+    private func stopSubagent(_ childThreadID: String) async throws {
+        try await model.client.cancelTurn(threadID: childThreadID)
+        _ = await model.detail(for: thread.id, force: true)
     }
 
     /// The lineage sheet's merge. Throws so the sheet (the surface on screen
@@ -1178,12 +1189,7 @@ public struct ThreadDetailView: View {
                 guard let scopedThreadID = detail.subagentChildThreadIDs[link.id] else {
                     return link
                 }
-                return ThreadRelationshipSubagentLink(
-                    id: link.id,
-                    childThreadID: scopedThreadID,
-                    status: link.status,
-                    title: link.title
-                )
+                return link.withChildThreadID(scopedThreadID)
             }
         }
 

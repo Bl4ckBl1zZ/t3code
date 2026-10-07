@@ -1070,6 +1070,9 @@ public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiabl
     public var model: String? = nil
     public var driver: String? = nil
     public var providerInstanceId: String? = nil
+    /// When the task's first run started. Null while it is still pending; Stop
+    /// is offered only once there is a run to interrupt.
+    public var startedAt: OrchestrationV2Timestamp? = nil
 }
 
 public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {

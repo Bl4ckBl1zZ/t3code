@@ -41,6 +41,11 @@ struct ThreadRelationshipsBanner: View {
     /// Returning means the merge committed, so the sheet moves to the target.
     let onMerge: () async throws -> Void
     let onDetach: () async throws -> Void
+    /// Interrupts a subagent's child thread. Throws when the server refuses;
+    /// the sheet says so. Nil hides Stop.
+    var onStopSubagent: ((_ childThreadID: String) async throws -> Void)? = nil
+    /// Keyed by subagent id, the same metadata the timeline rows read.
+    var subagentMetadata: [String: SubagentRowMetadata] = [:]
 
     @State private var isSheetPresented = false
     @State private var decay = ThreadRelationshipDecay()
@@ -49,6 +54,7 @@ struct ThreadRelationshipsBanner: View {
     @State private var showsArchived = false
     @State private var busyAction: BusyAction?
     @State private var isConfirmingDetach = false
+    @State private var stoppingThreadID: String?
     @State private var failure: ActionFailure?
 
     private struct ActionFailure: Equatable {
@@ -312,11 +318,39 @@ struct ThreadRelationshipsBanner: View {
     }
 
     private func relationshipRow(_ row: ThreadRelationshipRow) -> some View {
+        let canStop = onStopSubagent != nil && model.canStopSubagent(row)
+
+        // Two buttons, not one: Stop sits beside the row's open target rather
+        // than inside it, so stopping never also opens the thread.
+        return HStack(spacing: 4) {
+            openButton(row, showsChevron: !canStop)
+
+            if canStop {
+                SubagentStopButton(isStopping: stoppingThreadID == row.threadID) {
+                    Task { await stopSubagent(row.threadID) }
+                }
+                .disabled(stoppingThreadID != nil)
+            }
+        }
+        .t3GroupedRow()
+        .contextMenu {
+            if canStop {
+                Button("Stop Subagent", systemImage: "stop.fill", role: .destructive) {
+                    Task { await stopSubagent(row.threadID) }
+                }
+                .disabled(stoppingThreadID != nil)
+            }
+        }
+    }
+
+    private func openButton(_ row: ThreadRelationshipRow, showsChevron: Bool) -> some View {
         let availability = model.availability(for: row.threadID)
         let isArchivedThread = availability == "Archived"
         let disabled = availability == "Unavailable" || availability == "Deleted"
         let subagent = model.subagent(for: row.threadID)
+        let metadata = subagent.flatMap { subagentMetadata[$0.id] }
         let status = row.edge.kind == .subagent ? WorkRowStatus(agentStatus: row.edge.status) : nil
+        let relationshipLabel = ThreadRelationships.label(row.edge, currentThreadID: model.currentThreadID)
 
         return Button {
             isSheetPresented = false
@@ -342,7 +376,7 @@ struct ThreadRelationshipsBanner: View {
                         .font(T3Typography.control)
                         .foregroundStyle(T3Colors.textPrimary)
                         .lineLimit(1)
-                    Text(verbatim: ThreadRelationships.label(row.edge, currentThreadID: model.currentThreadID))
+                    (metadata?.modelSummary(after: relationshipLabel) ?? Text(verbatim: relationshipLabel))
                         .font(T3Typography.supporting)
                         .foregroundStyle(T3Colors.textTertiary)
                         .lineLimit(1)
@@ -365,10 +399,14 @@ struct ThreadRelationshipsBanner: View {
                             .font(T3Typography.supporting)
                             .foregroundStyle(status == .failed ? T3Colors.danger : T3Colors.textTertiary)
                     }
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(T3Colors.textTertiary)
-                        .accessibilityHidden(true)
+                    // Stop takes the trailing slot while it shows; the row
+                    // still opens on tap.
+                    if showsChevron {
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(T3Colors.textTertiary)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .frame(minHeight: T3Metrics.minimumTapTarget)
@@ -376,7 +414,6 @@ struct ThreadRelationshipsBanner: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
-        .t3GroupedRow()
         .accessibilityValue(status?.accessibilityLabel ?? availability ?? "")
     }
 
@@ -429,6 +466,20 @@ struct ThreadRelationshipsBanner: View {
         }
     }
 
+    /// Interrupts the child thread's live turn; the row follows the
+    /// subagent's status as the stop lands.
+    private func stopSubagent(_ threadID: String) async {
+        guard let onStopSubagent, stoppingThreadID == nil else { return }
+        stoppingThreadID = threadID
+        defer { stoppingThreadID = nil }
+        do {
+            try await onStopSubagent(threadID)
+        } catch {
+            PlatformHapticEngine.shared.play(.error)
+            failure = ActionFailure(title: "Couldn't Stop Subagent", message: error.localizedDescription)
+        }
+    }
+
     private func orbSeed(for row: ThreadRelationshipRow) -> String {
         // The child thread id is the seed the timeline already uses, and the
         // relationship graph is keyed by thread id, so a subagent keeps one
@@ -453,6 +504,37 @@ struct ThreadRelationshipsBanner: View {
                 return
             }
         }
+    }
+}
+
+/// The trailing Stop on a running subagent's lineage row: a stop square in a
+/// tinted circle, a spinner while the interrupt is in flight.
+struct SubagentStopButton: View {
+    let isStopping: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(T3Colors.danger.opacity(0.14))
+                if isStopping {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(T3Colors.danger)
+                }
+            }
+            .frame(width: 28, height: 28)
+            .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+        }
+        // Borderless keeps this tap its own inside a List row.
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Stop subagent")
+        .accessibilityValue(isStopping ? "Stopping" : "")
     }
 }
 

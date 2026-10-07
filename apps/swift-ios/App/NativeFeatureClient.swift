@@ -5001,9 +5001,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environmentID: String
     ) -> [String: SubagentRowMetadata] {
         guard !projection.subagents.isEmpty else { return [:] }
-        let providers = serverConfigsByEnvironmentID[environmentID]?.providers ?? []
+        let config = serverConfigsByEnvironmentID[environmentID]
+        let providers = config?.providers ?? []
         let drivers = providers.map(\.driver)
         let shell = shellsByEnvironmentID[environmentID]
+        // The catalog the composer's model chip reads, so a subagent's effort
+        // is labelled the way its child thread's chip labels it.
+        let catalog = shell.map { mapProviders(environmentID: environmentID, shell: $0, config: config) } ?? []
         func project(_ id: String?) -> ThreadLifecycle.SubagentWorkspaceProject? {
             guard let id, let project = shell?.projects.first(where: { $0.id == id }) else { return nil }
             return .init(id: project.id, title: project.title, workspaceRoot: project.workspaceRoot)
@@ -5039,6 +5043,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             } ?? false
             result[subagent.id] = SubagentRowMetadata(
                 modelLabel: resolved.modelLabel,
+                traits: ThreadLifecycle.resolveSubagentModelTraits(
+                    origin: subagent.origin,
+                    model: subagent.model,
+                    providerInstanceID: subagent.providerInstanceId,
+                    childSelection: child.map { mapSelection($0.modelSelection) },
+                    provider: catalog.first { $0.id == subagent.providerInstanceId }
+                ),
                 account: showsAccount ? provider.map { $0.displayName ?? providerDisplayName($0.driver) } : nil,
                 accentColor: showsAccount ? ProviderAccountBadge.normalizedAccent(provider?.accentColor) : nil,
                 workspace: resolved.workspace
@@ -5082,14 +5093,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let subagents = projection.subagents.map { subagent -> ThreadRelationshipSubagentLink in
             let link = ThreadRelationshipSubagentLink(subagent)
             guard let childThreadID = link.childThreadID else { return link }
-            return ThreadRelationshipSubagentLink(
-                id: link.id,
-                childThreadID: scoped(childThreadID),
-                status: link.status,
-                title: link.title,
-                workflow: link.workflow,
-                usage: link.usage
-            )
+            return link.withChildThreadID(scoped(childThreadID))
         }
 
         let transfers = projection.contextTransfers.map { transfer in

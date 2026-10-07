@@ -23,6 +23,9 @@ struct TranscriptStatusBar: View {
     /// Ends the work this bar shows once its turn has settled. Nil while a turn
     /// runs (the composer's Stop covers it) or when the provider cannot.
     var onStop: (() -> Void)? = nil
+    /// Stop on a running subagent's row in the lineage sheet.
+    var onStopSubagent: ((_ childThreadID: String) async throws -> Void)? = nil
+    var subagentMetadata: [String: SubagentRowMetadata] = [:]
 
     var body: some View {
         if backgroundCommands.isEmpty {
@@ -61,7 +64,9 @@ struct TranscriptStatusBar: View {
                             model: relationships,
                             onOpenThread: onOpenThread,
                             onMerge: onMerge,
-                            onDetach: onDetach
+                            onDetach: onDetach,
+                            onStopSubagent: onStopSubagent,
+                            subagentMetadata: subagentMetadata
                         )
                     }
                     // Both capsules hug their content. A lone background

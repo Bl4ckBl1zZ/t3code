@@ -64,8 +64,12 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     /// the thread cannot disagree about what is running.
     var turnItems: [OrchestrationV2TurnItem] = []
     var relationships: ThreadRelationshipsModel?
+    /// Keyed by subagent id, the same metadata the timeline rows read.
+    var subagentMetadata: [String: SubagentRowMetadata] = [:]
     var onMergeBack: (() async throws -> Void)?
     var onDetachSession: (() async throws -> Void)?
+    /// Interrupts a running subagent's child thread. Nil hides Stop.
+    var onStopSubagent: ((_ childThreadID: String) async throws -> Void)?
     /// Thread-level actions, folded in here from the old toolbar ••• menu so
     /// the details button is the thread's single secondary surface.
     var onTogglePin: (() -> Void)?
@@ -107,6 +111,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     @State private var showsArchivedLineage = false
     @State private var lineageBusy: LineageAction?
     @State private var confirmingLineageAction: LineageAction?
+    @State private var stoppingSubagentThreadID: String?
 
     @State private var isReloading = false
     @State private var showingUnpinConfirmation = false
@@ -933,10 +938,41 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         }
     }
 
+    @ViewBuilder
     private func relationshipRow(_ row: ThreadRelationshipRow, in relationships: ThreadRelationshipsModel) -> some View {
+        if onStopSubagent != nil, relationships.canStopSubagent(row) {
+            // Stop sits beside the open target, not inside it, and both are
+            // plain so each keeps its own tap: stopping never also leaves for
+            // the thread.
+            HStack(spacing: 4) {
+                relationshipOpenButton(row, in: relationships, showsDisclosure: false)
+                    .buttonStyle(.plain)
+                SubagentStopButton(isStopping: stoppingSubagentThreadID == row.threadID) {
+                    Task { await stopSubagent(row.threadID) }
+                }
+                .disabled(stoppingSubagentThreadID != nil)
+            }
+            .contextMenu {
+                Button("Stop Subagent", systemImage: "stop.fill", role: .destructive) {
+                    Task { await stopSubagent(row.threadID) }
+                }
+                .disabled(stoppingSubagentThreadID != nil)
+            }
+        } else {
+            relationshipOpenButton(row, in: relationships, showsDisclosure: true)
+        }
+    }
+
+    private func relationshipOpenButton(
+        _ row: ThreadRelationshipRow,
+        in relationships: ThreadRelationshipsModel,
+        showsDisclosure: Bool
+    ) -> some View {
         let availability = relationships.availability(for: row.threadID)
         let isArchived = ThreadDetailsLineageSection.isArchived(availability: availability)
         let status = row.edge.kind == .subagent ? WorkRowStatus(agentStatus: row.edge.status) : nil
+        let relationshipLabel = ThreadRelationships.label(row.edge, currentThreadID: relationships.currentThreadID)
+        let metadata = relationships.subagent(for: row.threadID).flatMap { subagentMetadata[$0.id] }
         return Button {
             onExit(.thread(id: row.threadID, isArchived: isArchived))
         } label: {
@@ -955,7 +991,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                                 .font(T3Typography.threadBody)
                                 .foregroundStyle(T3Colors.textPrimary)
                                 .lineLimit(2)
-                            Text(ThreadRelationships.label(row.edge, currentThreadID: relationships.currentThreadID))
+                            (metadata?.modelSummary(after: relationshipLabel) ?? Text(relationshipLabel))
                                 .font(T3Typography.supporting)
                                 .foregroundStyle(T3Colors.textTertiary)
                         }
@@ -972,10 +1008,22 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                         }
                     }
                 }
-                if availability == nil { ThreadSheetDisclosure() }
+                if availability == nil, showsDisclosure { ThreadSheetDisclosure() }
             }
         }
         .disabled(ThreadDetailsLineageSection.isDisabled(availability: availability))
+    }
+
+    private func stopSubagent(_ threadID: String) async {
+        guard let onStopSubagent, stoppingSubagentThreadID == nil else { return }
+        stoppingSubagentThreadID = threadID
+        defer { stoppingSubagentThreadID = nil }
+        do {
+            try await onStopSubagent(threadID)
+        } catch {
+            failure = ThreadDetailsFailure(title: "Couldn't Stop Subagent", message: error.localizedDescription)
+            PlatformHapticEngine.shared.play(.error)
+        }
     }
 
     private func lineageActionRow(

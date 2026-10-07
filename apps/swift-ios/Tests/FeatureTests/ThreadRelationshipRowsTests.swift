@@ -266,6 +266,8 @@ final class ThreadRelationshipRowsTests: XCTestCase {
         let link = ThreadRelationshipSubagentLink(turnItem: item)
         XCTAssertEqual(link?.childThreadID, "thread-child")
         XCTAssertEqual(link?.status, "running")
+        XCTAssertEqual(link?.origin, "app_owned")
+        XCTAssertEqual(link?.withChildThreadID("env:thread-child").origin, "app_owned")
         // Child thread first: the relationship surfaces only know thread ids,
         // so this is what keeps one agent the same colour everywhere.
         XCTAssertEqual(link?.orbSeed, "thread-child")
@@ -279,6 +281,98 @@ final class ThreadRelationshipRowsTests: XCTestCase {
                 turnItem: V2Fixture.assistantMessage(id: "item-1", text: "hi")
             )
         )
+    }
+
+    // MARK: Stop
+
+    private func stoppable(
+        origin: String? = "app_owned",
+        status: String = "running",
+        startedAt: String? = "2026-10-07T00:00:00.000Z"
+    ) -> ThreadRelationshipSubagentLink {
+        ThreadRelationshipSubagentLink(
+            id: "subagent-1",
+            childThreadID: "thread-child",
+            status: status,
+            origin: origin,
+            startedAt: startedAt
+        )
+    }
+
+    /// Ports `canStopSubagent` from
+    /// apps/web/src/components/chat/ThreadRelationshipsControl.tsx.
+    func testOnlyAStartedT3OwnedSubagentCanBeStopped() {
+        for status in ["pending", "running", "waiting"] {
+            XCTAssertTrue(
+                ThreadRelationships.canStopSubagent(stoppable(status: status), childThreadStatus: "idle"),
+                status
+            )
+        }
+        for status in ["idle", "completed", "failed", "cancelled", "interrupted"] {
+            XCTAssertFalse(
+                ThreadRelationships.canStopSubagent(stoppable(status: status), childThreadStatus: "idle"),
+                status
+            )
+        }
+        // The provider runs its own children; T3 has no turn of theirs to end.
+        XCTAssertFalse(
+            ThreadRelationships.canStopSubagent(stoppable(origin: "provider_native"), childThreadStatus: "running")
+        )
+        XCTAssertFalse(
+            ThreadRelationships.canStopSubagent(stoppable(origin: nil), childThreadStatus: "running")
+        )
+        // Queued but never started: nothing to interrupt yet.
+        XCTAssertFalse(
+            ThreadRelationships.canStopSubagent(
+                stoppable(status: "pending", startedAt: nil),
+                childThreadStatus: nil
+            )
+        )
+        XCTAssertFalse(ThreadRelationships.canStopSubagent(nil, childThreadStatus: "running"))
+    }
+
+    /// `liveSubagent`: the parent can send a settled task's child a follow-up,
+    /// and Stop follows that run rather than the settled task.
+    func testASettledTaskCanBeStoppedWhileItsChildRunsAFollowUp() {
+        let settled = stoppable(status: "completed")
+        for status in ["preparing", "starting", "running", "waiting"] {
+            XCTAssertTrue(ThreadRelationships.canStopSubagent(settled, childThreadStatus: status), status)
+        }
+        XCTAssertFalse(ThreadRelationships.canStopSubagent(settled, childThreadStatus: "completed"))
+        XCTAssertFalse(
+            ThreadRelationships.canStopSubagent(
+                stoppable(origin: "provider_native", status: "completed"),
+                childThreadStatus: "running"
+            )
+        )
+    }
+
+    func testTheModelOffersStopOnlyOnItsOwnChildrenItCanRouteTo() {
+        let parent = shell("thread-parent", parent: "thread-root", relationship: "subagent")
+        let model = ThreadRelationships.build(
+            currentThreadID: "thread-parent",
+            currentThread: parent,
+            threads: [
+                parent,
+                shell("thread-root", status: "running"),
+                shell("thread-child", status: "running", parent: "thread-parent", relationship: "subagent"),
+            ],
+            subagents: [
+                stoppable(status: "completed"),
+                // Running, but its thread is not in this client's lists.
+                ThreadRelationshipSubagentLink(
+                    id: "subagent-2",
+                    childThreadID: "thread-missing",
+                    status: "running",
+                    origin: "app_owned",
+                    startedAt: "2026-10-07T00:00:00.000Z"
+                ),
+            ]
+        )
+        let stoppableIDs = model.rows.filter(model.canStopSubagent).map(\.threadID)
+        // The parent's subagent edge is lineage, not something this thread runs.
+        XCTAssertEqual(stoppableIDs, ["thread-child"])
+        XCTAssertTrue(model.rows.contains { $0.threadID == "thread-missing" })
     }
 
     // MARK: Decay

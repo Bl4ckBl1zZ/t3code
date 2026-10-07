@@ -104,6 +104,11 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
     public let title: String?
     public let workflow: AgentWorkflowProgress?
     public let usage: AgentTaskUsage?
+    /// `app_owned` for a child thread T3 runs, `provider_native` for one the
+    /// provider runs. Only the former has a turn Stop can interrupt.
+    public let origin: String?
+    /// When the task's first run started; nil while it is still pending.
+    public let startedAt: String?
 
     public init(
         id: String,
@@ -111,7 +116,9 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
         status: String,
         title: String? = nil,
         workflow: AgentWorkflowProgress? = nil,
-        usage: AgentTaskUsage? = nil
+        usage: AgentTaskUsage? = nil,
+        origin: String? = nil,
+        startedAt: String? = nil
     ) {
         self.id = id
         self.childThreadID = childThreadID
@@ -119,6 +126,8 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
         self.title = title
         self.workflow = workflow
         self.usage = usage
+        self.origin = origin
+        self.startedAt = startedAt
     }
 
     /// The projection's own subagent row: the authoritative link, carrying the
@@ -136,7 +145,9 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
             status: subagent.status,
             title: subagent.title,
             workflow: subagent.workflow.map(Self.workflow(_:)),
-            usage: subagent.usage.map(Self.usage(_:))
+            usage: subagent.usage.map(Self.usage(_:)),
+            origin: subagent.origin,
+            startedAt: subagent.startedAt
         )
     }
 
@@ -170,16 +181,31 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
     }
 
     /// Best-effort recovery from the transcript, for a client that holds the
-    /// thread's turn items but not its subagent table. Carries no workflow or
-    /// usage: the `subagent` turn item does not report them.
+    /// thread's turn items but not its subagent table. Carries no workflow,
+    /// usage or start time: the `subagent` turn item does not report them.
     public init?(turnItem: OrchestrationV2TurnItem) {
-        guard case let .subagent(subagentID, _, _, _, childThreadID, _, _, _) = turnItem.payload
+        guard case let .subagent(subagentID, origin, _, _, childThreadID, _, _, _) = turnItem.payload
         else { return nil }
         self.init(
             id: subagentID,
             childThreadID: childThreadID,
             status: turnItem.base.rawStatus,
-            title: turnItem.base.title
+            title: turnItem.base.title,
+            origin: origin
+        )
+    }
+
+    /// The same link pointing at a rescoped child thread id.
+    public func withChildThreadID(_ childThreadID: String) -> Self {
+        Self(
+            id: id,
+            childThreadID: childThreadID,
+            status: status,
+            title: title,
+            workflow: workflow,
+            usage: usage,
+            origin: origin,
+            startedAt: startedAt
         )
     }
 
@@ -547,6 +573,28 @@ public struct ThreadRelationshipDecay: Equatable, Sendable {
     }
 }
 
+// MARK: - Stop
+
+public extension ThreadRelationships {
+    /// Ports `canStopSubagent` and `liveSubagent` from
+    /// apps/web/src/components/chat/ThreadRelationshipsControl.tsx. Only a
+    /// T3-owned subagent with a started run has a child turn Stop can
+    /// interrupt. A settled task whose child thread is running a follow-up the
+    /// parent sent counts as live, because that run is what Stop would end.
+    static func canStopSubagent(
+        _ subagent: ThreadRelationshipSubagentLink?,
+        childThreadStatus: String?
+    ) -> Bool {
+        guard let subagent, subagent.origin == "app_owned" else { return false }
+        if let childThreadStatus, liveRunStatuses.contains(childThreadStatus) { return true }
+        return subagent.startedAt != nil && stoppableStatuses.contains(subagent.status)
+    }
+
+    /// `LIVE_THREAD_RUN_STATUSES`: a thread shell's status while a run is in flight.
+    private static let liveRunStatuses: Set<String> = ["preparing", "starting", "running", "waiting"]
+    private static let stoppableStatuses: Set<String> = ["pending", "running", "waiting"]
+}
+
 // MARK: - Banner model
 
 /// Everything the banner and its lineage sheet render, derived once.
@@ -591,6 +639,19 @@ public struct ThreadRelationshipsModel: Equatable, Sendable {
 
     public func subagent(for threadID: String) -> ThreadRelationshipSubagentLink? {
         subagentsByChildThreadID[threadID]
+    }
+
+    /// Whether this row is a subagent the open thread spawned with a live turn
+    /// Stop can end. The interrupt is routed through the child's shell, so a
+    /// child this client does not hold has nothing to aim at.
+    public func canStopSubagent(_ row: ThreadRelationshipRow) -> Bool {
+        row.edge.kind == .subagent
+            && row.edge.sourceThreadID == currentThreadID
+            && availability(for: row.threadID) == nil
+            && ThreadRelationships.canStopSubagent(
+                subagent(for: row.threadID),
+                childThreadStatus: graph.node(row.threadID)?.thread?.status
+            )
     }
 }
 

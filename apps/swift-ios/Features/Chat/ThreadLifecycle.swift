@@ -122,6 +122,9 @@ public struct SubagentRowMetadata: Equatable, Sendable {
     }
 
     public let modelLabel: String
+    /// Effort and speed, only when the child runs on the selection they come
+    /// from. See `ThreadLifecycle.resolveSubagentModelTraits`.
+    public let traits: SubagentModelTraits?
     /// The provider account, named only when the reader needs it to tell two
     /// accounts on the same provider apart.
     public let account: String?
@@ -132,14 +135,42 @@ public struct SubagentRowMetadata: Equatable, Sendable {
 
     public init(
         modelLabel: String,
+        traits: SubagentModelTraits? = nil,
         account: String? = nil,
         accentColor: String? = nil,
         workspace: [WorkspaceEntry] = []
     ) {
         self.modelLabel = modelLabel
+        self.traits = traits
         self.account = account
         self.accentColor = accentColor
         self.workspace = workspace
+    }
+}
+
+/// The reasoning effort and speed a subagent's model runs at, read after its
+/// model name: "High · ⚡ Fast".
+public struct SubagentModelTraits: Equatable, Sendable {
+    public enum Speed: Equatable, Sendable {
+        case fast
+        case ultrafast
+
+        public var label: String {
+            switch self {
+            case .fast: "Fast"
+            case .ultrafast: "Ultrafast"
+            }
+        }
+    }
+
+    /// The effort label the composer's model chip shows, e.g. "High".
+    public let effort: String?
+    /// Set only when the selection saved a faster-than-normal speed.
+    public let speed: Speed?
+
+    public init(effort: String? = nil, speed: Speed? = nil) {
+        self.effort = effort
+        self.speed = speed
     }
 }
 
@@ -237,6 +268,79 @@ public enum ThreadLifecycle {
             workspace.append(.init(label: label, value: value))
         }
         return (modelLabel, workspace)
+    }
+
+    /// Ports `resolveSubagentModelTraits` from
+    /// apps/web/src/components/chat/threadModelBadge.ts. Only a T3-owned
+    /// subagent runs on its child thread's selection; a provider-native child
+    /// mirrors the parent's, and a child that moved to another model or
+    /// instance no longer describes the subagent. Both return nil so the row
+    /// never claims traits the agent is not using.
+    static func resolveSubagentModelTraits(
+        origin: String,
+        model: String?,
+        providerInstanceID: String?,
+        childSelection: FeatureSelection?,
+        provider: FeatureProvider?
+    ) -> SubagentModelTraits? {
+        guard origin == "app_owned", let childSelection,
+              childSelection.providerID == providerInstanceID else { return nil }
+        let models = provider?.models ?? []
+        func resolveSlug(_ value: String?) -> String? {
+            guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty else { return nil }
+            return models.first { $0.id == trimmed }?.id
+                ?? models.first { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }?.id
+                ?? trimmed
+        }
+        guard let childSlug = resolveSlug(childSelection.modelID),
+              childSlug == resolveSlug(model) else { return nil }
+        guard let provider, let catalogModel = models.first(where: { $0.id == childSlug }) else {
+            return SubagentModelTraits()
+        }
+        return SubagentModelTraits(
+            effort: DailyUXModelOptions.reasoningSummary(
+                for: catalogModel,
+                selections: childSelection.options
+            ),
+            speed: savedSpeed(
+                driver: provider.driver,
+                options: catalogModel.options,
+                selections: childSelection.options
+            )
+        )
+    }
+
+    /// `getTraitsSpeedDisplay` over the options the selection saved, never a
+    /// provider default: a default is not a choice. The first speed control
+    /// the selection set decides, so a saved "off" reads as no speed.
+    private static func savedSpeed(
+        driver: String,
+        options: [FeatureModelOptionDescriptor],
+        selections: [FeatureModelOptionSelection]
+    ) -> SubagentModelTraits.Speed? {
+        for descriptor in options {
+            guard let saved = selections.first(where: { $0.id == descriptor.id })?.value else {
+                continue
+            }
+            switch (descriptor.kind, saved) {
+            case let (.boolean, .boolean(isOn)) where descriptor.id == "fastMode":
+                return isOn ? .fast : nil
+            case let (.select, .string(choiceID))
+                where driver == "codex" && descriptor.id == "serviceTier"
+                && descriptor.choices.contains(where: { $0.id == choiceID }):
+                // Codex names its fast tiers. Standard reads as no speed; a
+                // tier it names otherwise leaves the call to a later control.
+                let fast = descriptor.choices.first { $0.label == "Fast" }
+                let ultrafast = descriptor.choices.first { $0.label == "Ultrafast" }
+                if choiceID == ultrafast?.id { return .ultrafast }
+                if choiceID == fast?.id { return .fast }
+                if fast != nil || ultrafast != nil, choiceID == "default" { return nil }
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     /// `resolveSelectableModel`, against the catalog alone: slug, then name,
