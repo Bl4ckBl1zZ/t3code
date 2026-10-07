@@ -38,6 +38,9 @@ struct GitHubHostSection: Identifiable, Equatable {
     /// A variable such as `GH_TOKEN` that overrides the chosen account.
     let environmentVariable: String?
     let hasSavedToken: Bool
+    /// Listed only because Settings name it, with no gh login behind it, so
+    /// removing it from Settings takes it off the list.
+    let canRemove: Bool
 
     var id: String { host }
 
@@ -72,7 +75,8 @@ struct GitHubHostSection: Identifiable, Equatable {
                 selectableAccounts: selectable.map(\.account),
                 brokenAccounts: stored.filter { !$0.authenticated },
                 environmentVariable: entries.lazy.compactMap(\.environmentVariable).first,
-                hasSavedToken: settings.hasSavedToken(host)
+                hasSavedToken: settings.hasSavedToken(host),
+                canRemove: host != defaultHost && entries.isEmpty
             )
         }
     }
@@ -105,6 +109,8 @@ struct SettingsSourceControlView: View {
     @State private var pending: GitHubSettingsPatch?
     @State private var writeError: HostError?
     @State private var tokenTarget: TokenTarget?
+    @State private var addingHost = false
+    @State private var hostToRemove: GitHubHostSection?
 
     private struct HostError: Equatable {
         let host: String
@@ -135,8 +141,18 @@ struct SettingsSourceControlView: View {
                 ForEach(sections) { section in
                     hostSection(section)
                 }
-                if let reloadError {
-                    Section {} footer: { SettingsFooter(error: reloadError) }
+                Section {
+                    Button {
+                        addingHost = true
+                    } label: {
+                        Label("Add GitHub Host…", systemImage: "plus")
+                    }
+                    .disabled(pending != nil)
+                } footer: {
+                    SettingsFooter(
+                        text: "For GitHub Enterprise Server, or another host gh isn't signed in to.",
+                        error: reloadError
+                    )
                 }
             } else if let loadError {
                 SettingsRetrySection(message: loadError) {
@@ -158,6 +174,38 @@ struct SettingsSourceControlView: View {
             SettingsGitHubTokenSheet(host: target.host, isSaved: target.isSaved) { patch in
                 await write(patch)
             }
+        }
+        .sheet(isPresented: $addingHost) {
+            SettingsGitHubHostSheet(listedHosts: Set(sections.map(\.host))) { host, token in
+                await write(.addingHost(host, token: token, in: displayedSettings.hosts))
+            }
+        }
+        .confirmationDialog(
+            "Remove \(hostToRemove?.host ?? "host")?",
+            isPresented: Binding(
+                get: { hostToRemove != nil },
+                set: { if !$0 { hostToRemove = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: hostToRemove
+        ) { section in
+            Button("Remove Host", role: .destructive) {
+                Task {
+                    let patch = GitHubSettingsPatch.removingHost(
+                        section.host,
+                        in: displayedSettings.hosts,
+                        hasSavedToken: section.hasSavedToken
+                    )
+                    if let failure = await write(patch) {
+                        writeError = HostError(host: section.host, message: failure)
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { section in
+            Text(section.hasSavedToken
+                ? "Its choices and the token saved for it are removed from the server."
+                : "Its choices are removed from the server.")
         }
     }
 
@@ -197,6 +245,12 @@ struct SettingsSourceControlView: View {
             }
             .disabled(pending != nil)
             .accessibilityHint("Saves or removes a GitHub token for \(section.host) on the server")
+
+            if section.canRemove {
+                Button("Remove Host", role: .destructive) { hostToRemove = section }
+                    .foregroundStyle(T3Colors.danger)
+                    .disabled(pending != nil)
+            }
         } header: {
             Text(section.host)
         } footer: {
@@ -409,6 +463,78 @@ private struct SettingsGitHubTokenSheet: View {
                 error = failure
             } else {
                 dismiss()
+            }
+        }
+    }
+}
+
+/// Lists a GitHub host typed in by hand, such as a GitHub Enterprise Server,
+/// optionally with its token, the way web's token form names any host.
+private struct SettingsGitHubHostSheet: View {
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+    let listedHosts: Set<String>
+    /// Returns the failure to show, or nil once the server saved the host.
+    let onAdd: (_ host: String, _ token: String) async -> String?
+
+    @State private var host = ""
+    @State private var token = ""
+    @State private var isSaving = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            SettingsForm {
+                Section {
+                    TextField("github.example.com", text: $host)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .submitLabel(.next)
+                    SecureField("Token (optional)", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .onSubmit(add)
+                } footer: {
+                    SettingsFooter(
+                        text: "Enter the host only, with a port if it needs one. A token saved here is used before GH_TOKEN and the gh login; give it read and write access to pull requests and contents.",
+                        error: error
+                    )
+                }
+                .disabled(isSaving)
+            }
+            .navigationTitle("Add GitHub Host")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(isSaving)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(isSaving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add", action: add)
+                        .disabled(isSaving || host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func add() {
+        guard !isSaving else { return }
+        switch GitHubSettings.validatedNewHost(host, existing: listedHosts) {
+        case let .failure(reason):
+            error = reason.localizedDescription
+        case let .success(normalized):
+            isSaving = true
+            error = nil
+            Task {
+                let failure = await onAdd(normalized, token)
+                isSaving = false
+                if let failure {
+                    error = failure
+                } else {
+                    dismiss()
+                }
             }
         }
     }

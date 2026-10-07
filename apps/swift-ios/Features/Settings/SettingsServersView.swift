@@ -104,6 +104,13 @@ struct SettingsServersView: View {
         }
         .navigationTitle("Servers")
         .navigationBarTitleDisplayMode(.inline)
+        // Only the server in use is asked, and the answer is cached for the
+        // session, so its menu can offer Copy MCP URL without a request per row.
+        .task(id: activeEnvironment?.isEnabled == true ? activeEnvironment?.id : nil) {
+            guard let id = activeEnvironment?.id, activeEnvironment?.isEnabled == true,
+                  let probing = model.client as? any FeatureMcpAccessProbing else { return }
+            _ = await probing.verifiedMcpURL(environmentID: id)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Add Server", systemImage: "plus", action: onAddServer)
@@ -183,7 +190,8 @@ struct SettingsServersView: View {
             } label: {
                 Label("Details", systemImage: "info.circle")
             }
-            // Set once the details page confirmed outside agents can sign in.
+            // Set once the server confirmed outside agents can sign in: asked on
+            // appear for the server in use, from its details for the others.
             if environment.isEnabled, let mcpURL = environment.mcpURL {
                 Button {
                     UIPasteboard.general.string = mcpURL.absoluteString

@@ -7,8 +7,9 @@ import UIKit
 protocol FeatureMcpAccessProbing: AnyObject {
     /// `/mcp` on the server's first qualifying route once the server confirms
     /// it signs outside agents in with OAuth, else nil. Asked at most once per
-    /// address per session; a confirmed address also reaches
-    /// `FeatureEnvironment.mcpURL`, which the Servers list reads.
+    /// address per session (details pages, and Servers for the server in
+    /// use); a confirmed address also reaches `FeatureEnvironment.mcpURL`,
+    /// which the Servers list's menu reads.
     func verifiedMcpURL(environmentID: String) async -> URL?
 }
 

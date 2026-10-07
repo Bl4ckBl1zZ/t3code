@@ -26,6 +26,8 @@ struct SourceControlSettingsTests {
         #expect(all.map(\.host) == ["github.com", "ghe.example", "t.example", "z.example"])
         #expect(all.first { $0.host == "t.example" }?.hasSavedToken == true)
         #expect(all.first { $0.host == "z.example" }?.enabled == false)
+        // Only hosts Settings alone keep listed can be removed; gh's would come back.
+        #expect(all.filter(\.canRemove).map(\.host) == ["t.example", "z.example"])
     }
 
     @Test func splitsUsableLoginsFromBrokenAndOverriddenOnes() {

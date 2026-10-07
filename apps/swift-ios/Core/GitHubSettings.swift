@@ -64,6 +64,46 @@ public struct GitHubSettings: Codable, Equatable, Sendable {
         host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
+    /// Why a host typed in by hand cannot be added.
+    public enum NewHostError: LocalizedError, Equatable, Sendable {
+        case empty
+        case notAHost
+        case duplicate(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .empty: "Enter a host, such as github.example.com."
+            case .notAHost: "Enter only the host, such as github.example.com or github.example.com:8443, without https:// or a path."
+            case let .duplicate(host): "\(host) is already listed."
+            }
+        }
+    }
+
+    /// A bare `host[:port]` typed in by hand, trimmed and lowercased, or why it
+    /// is not one. `existing` holds the hosts already listed.
+    public static func validatedNewHost(
+        _ input: String,
+        existing: Set<String>
+    ) -> Result<String, NewHostError> {
+        let host = normalizedHost(input)
+        guard !host.isEmpty else { return .failure(.empty) }
+        let parts = host.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count <= 2, let name = parts.first else { return .failure(.notAHost) }
+        if parts.count == 2 {
+            guard parts[1].allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let port = Int(parts[1]), (1...65_535).contains(port) else { return .failure(.notAHost) }
+        }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
+        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
+        let valid = labels.allSatisfy { label in
+            !label.isEmpty && label.allSatisfy(allowed.contains)
+                && label.first != "-" && label.last != "-"
+        }
+        guard valid else { return .failure(.notAHost) }
+        guard !existing.contains(host) else { return .failure(.duplicate(host)) }
+        return .success(host)
+    }
+
     private enum CodingKeys: String, CodingKey { case hosts, tokens }
 
     public init(from decoder: any Decoder) throws {
@@ -111,8 +151,9 @@ public struct GitHubSettingsPatch: Equatable, Sendable {
 
     /// The full `hosts` map after one host changes, starting from every host
     /// the server holds. `account` is outer-nil to keep the pin and a present
-    /// nil to follow gh's active login again. A host back on gh's defaults (on,
-    /// nothing pinned) is dropped, so settings only hold real choices.
+    /// nil to follow gh's active login again. A host already in the map stays
+    /// there back on gh's defaults (on, nothing pinned), so a host added by
+    /// hand stays listed until it is removed; a no-op adds nothing.
     public static func changingHost(
         _ host: String,
         in current: [String: GitHubSettings.Host],
@@ -121,15 +162,41 @@ public struct GitHubSettingsPatch: Equatable, Sendable {
     ) -> GitHubSettingsPatch {
         let host = GitHubSettings.normalizedHost(host)
         let previous = current[host]
-        let nextEnabled = enabled ?? previous?.enabled ?? true
-        let nextAccount = account ?? previous?.account
+        let next = GitHubSettings.Host(
+            account: account ?? previous?.account,
+            enabled: enabled ?? previous?.enabled ?? true
+        )
         var hosts = current
-        if nextEnabled, nextAccount == nil {
-            hosts[host] = nil
-        } else {
-            hosts[host] = GitHubSettings.Host(account: nextAccount, enabled: nextEnabled)
+        if previous != nil || next != GitHubSettings.Host() {
+            hosts[host] = next
         }
         return GitHubSettingsPatch(hosts: hosts)
+    }
+
+    /// Lists a host typed in by hand, such as a GitHub Enterprise Server, and
+    /// saves its token in the same write when one was given. `host` is the
+    /// output of `GitHubSettings.validatedNewHost`.
+    public static func addingHost(
+        _ host: String,
+        token: String,
+        in current: [String: GitHubSettings.Host]
+    ) -> GitHubSettingsPatch {
+        let host = GitHubSettings.normalizedHost(host)
+        var hosts = current
+        hosts[host] = current[host] ?? GitHubSettings.Host()
+        return GitHubSettingsPatch(hosts: hosts, tokens: savingToken(token, host: host)?.tokens)
+    }
+
+    /// Forgets a host: its choice, and its saved token when there is one.
+    public static func removingHost(
+        _ host: String,
+        in current: [String: GitHubSettings.Host],
+        hasSavedToken: Bool
+    ) -> GitHubSettingsPatch {
+        let host = GitHubSettings.normalizedHost(host)
+        var hosts = current
+        hosts[host] = nil
+        return GitHubSettingsPatch(hosts: hosts, tokens: hasSavedToken ? [host: ""] : nil)
     }
 
     /// Saves a new token for one host, or nil when there is nothing to save:

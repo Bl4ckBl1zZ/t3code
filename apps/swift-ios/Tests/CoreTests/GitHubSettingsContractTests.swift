@@ -67,13 +67,54 @@ struct GitHubSettingsContractTests {
         #expect(pinned.hosts == ["github.com": .init(account: "octocat"), "ghe.example": .init(account: "hubot")])
         #expect(pinned.tokens == nil)
 
-        // Back on gh's defaults, a host leaves the map instead of being stored.
+        // Back on gh's defaults, a listed host stays listed; a no-op lists nothing new.
         let unpinned = GitHubSettingsPatch.changingHost("GitHub.com", in: current, account: .some(nil))
-        #expect(unpinned.hosts == ["ghe.example": .init(enabled: false)])
+        #expect(unpinned.hosts == ["github.com": .init(), "ghe.example": .init(enabled: false)])
+        #expect(GitHubSettingsPatch.changingHost("new.example", in: current, enabled: true).hosts == current)
 
         // Turning a host off keeps its pin for when it comes back on.
         let disabled = GitHubSettingsPatch.changingHost("github.com", in: current, enabled: false)
         #expect(disabled.hosts?["github.com"] == .init(account: "octocat", enabled: false))
+    }
+
+    @Test func handTypedHostsMustBeABareHostAndPort() {
+        let listed: Set<String> = ["github.com", "ghe.example"]
+        #expect(GitHubSettings.validatedNewHost("  GHE.Corp.Example  ", existing: listed) == .success("ghe.corp.example"))
+        #expect(GitHubSettings.validatedNewHost("ghe.corp.example:8443", existing: listed) == .success("ghe.corp.example:8443"))
+        #expect(GitHubSettings.validatedNewHost("localhost", existing: listed) == .success("localhost"))
+
+        #expect(GitHubSettings.validatedNewHost(" \n ", existing: listed) == .failure(.empty))
+        for input in [
+            "https://ghe.corp.example", "ghe.corp.example/org", "ghe corp.example", "ghe.corp.example:",
+            "ghe.corp.example:0", "ghe.corp.example:+443", "ghe.corp.example:99999", "a:1:2", "user@ghe.example",
+            "ghe..example", ".ghe.example", "-ghe.example", "ghe.example?x=1", "[::1]",
+        ] {
+            #expect(GitHubSettings.validatedNewHost(input, existing: listed) == .failure(.notAHost), "\(input)")
+        }
+        #expect(GitHubSettings.validatedNewHost("GHE.example", existing: listed) == .failure(.duplicate("ghe.example")))
+    }
+
+    @Test func addingAHostKeepsEveryOtherHostAndCanSaveItsToken() {
+        let current: [String: GitHubSettings.Host] = ["github.com": .init(account: "octocat")]
+
+        let bare = GitHubSettingsPatch.addingHost("ghe.corp.example", token: "  ", in: current)
+        #expect(bare.hosts == ["github.com": .init(account: "octocat"), "ghe.corp.example": .init()])
+        #expect(bare.tokens == nil)
+
+        let withToken = GitHubSettingsPatch.addingHost("ghe.corp.example", token: " ghp_x ", in: current)
+        #expect(withToken.tokens == ["ghe.corp.example": "ghp_x"])
+        #expect(ServerSettingsPatchInput(github: withToken).json == .object(["github": .object([
+            "hosts": .object([
+                "github.com": .object(["account": .string("octocat"), "enabled": .bool(true)]),
+                "ghe.corp.example": .object(["enabled": .bool(true)]),
+            ]),
+            "tokens": .object(["ghe.corp.example": .string("ghp_x")]),
+        ])]))
+
+        let removed = GitHubSettingsPatch.removingHost("ghe.corp.example", in: bare.hosts!, hasSavedToken: true)
+        #expect(removed.hosts == current)
+        #expect(removed.tokens == ["ghe.corp.example": ""])
+        #expect(GitHubSettingsPatch.removingHost("ghe.corp.example", in: bare.hosts!, hasSavedToken: false).tokens == nil)
     }
 
     @Test func tokenPatchesNeverSendTheMarkerOrABlankAsANewToken() {
