@@ -45,13 +45,15 @@ const workspaceRoot = "/repo/project";
 const makeScope = (
   capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
 ): McpInvocationContext.McpInvocationScope => ({
-  credentialId: "credential-worktree-test",
   environmentId,
-  threadId,
-  providerSessionId: "provider-session-worktree-test",
-  providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+  requestNamespace: "provider-session-worktree-test",
+  thread: {
+    threadId,
+    providerSessionId: "provider-session-worktree-test",
+    providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+  },
+  client: undefined,
   capabilities,
-  audience: "urn:t3-code:mcp:environment-worktree-test",
   issuedAt: 1,
 });
 

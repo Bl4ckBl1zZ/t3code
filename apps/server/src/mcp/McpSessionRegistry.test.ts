@@ -46,9 +46,8 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     expect(token.length).toBeGreaterThan(20);
 
     const resolved = yield* registry.resolve(token, registry.audience);
-    expect(resolved?.threadId).toBe(threadId);
+    expect(resolved?.thread.threadId).toBe(threadId);
     expect(resolved?.capabilities).toEqual(new Set(["preview", "orchestration"]));
-    expect(resolved?.audience).toBe(registry.audience);
 
     yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token, registry.audience)).toBeUndefined();
@@ -96,7 +95,7 @@ it.effect("remains valid within the liveness window and emits only audit-safe me
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     const resolved = yield* registry.resolve(token, registry.audience);
-    expect(resolved?.providerSessionId).toBe(issued.config.providerSessionId);
+    expect(resolved?.thread.providerSessionId).toBe(issued.config.providerSessionId);
     expect(yield* registry.resolve(token, "urn:t3-code:mcp:other")).toBeUndefined();
     timestamp += 23 * 60 * 60 * 1_000;
     expect(yield* registry.resolve(token, registry.audience)).toEqual(resolved);
@@ -167,7 +166,7 @@ it.effect("keeps a credential alive across turns that never touch an MCP tool", 
       yield* registry.touch(threadId);
     }
 
-    expect((yield* registry.resolve(token, registry.audience))?.threadId).toBe(threadId);
+    expect((yield* registry.resolve(token, registry.audience))?.thread.threadId).toBe(threadId);
   }),
 );
 

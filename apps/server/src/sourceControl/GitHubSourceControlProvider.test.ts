@@ -312,6 +312,7 @@ it("parses GitHub auth status accounts by host and active state", () => {
         authenticated: true,
         active: true,
         error: null,
+        environmentVariable: null,
       },
       {
         host: "github.com",
@@ -319,6 +320,7 @@ it("parses GitHub auth status accounts by host and active state", () => {
         authenticated: false,
         active: false,
         error: null,
+        environmentVariable: null,
       },
       {
         host: "github.example.test",
@@ -326,6 +328,7 @@ it("parses GitHub auth status accounts by host and active state", () => {
         authenticated: true,
         active: false,
         error: null,
+        environmentVariable: null,
       },
     ],
   );
@@ -379,4 +382,76 @@ it("reports an update hint instead of unauthenticated when gh predates --json", 
     Option.getOrElse(auth.detail, () => ""),
     /2\.81\.0/,
   );
+});
+
+const multiAccountStatus = (extra: ReadonlyArray<Record<string, unknown>> = []) =>
+  processResult(
+    JSON.stringify({
+      hosts: {
+        "github.com": [
+          { state: "success", active: true, host: "github.com", login: "personal" },
+          { state: "success", active: false, host: "github.com", login: "work" },
+          ...extra,
+        ],
+        "ghe.acme.test": [
+          { state: "error", active: true, host: "ghe.acme.test", login: "jm", error: "expired" },
+        ],
+      },
+    }),
+  );
+
+it("reports every gh login and leads with the account Settings pin", () => {
+  const auth = GitHubSourceControlProvider.parseGitHubAuth(multiAccountStatus(), {
+    hosts: { "github.com": { account: "work", enabled: true } },
+    tokens: {},
+  });
+  assert.deepStrictEqual(auth.account, Option.some("work"));
+  assert.deepStrictEqual(auth.accounts, [
+    { host: "github.com", account: "personal", active: true, authenticated: true },
+    { host: "github.com", account: "work", active: false, authenticated: true },
+    { host: "ghe.acme.test", account: "jm", active: true, authenticated: false, error: "expired" },
+  ]);
+});
+
+it("falls back to gh's active login when the pinned account is gone", () => {
+  const auth = GitHubSourceControlProvider.parseGitHubAuth(multiAccountStatus(), {
+    hosts: { "github.com": { account: "former-job", enabled: true } },
+    tokens: {},
+  });
+  assert.deepStrictEqual(auth.account, Option.some("personal"));
+});
+
+it("reports unauthenticated when Settings turn off every signed-in host", () => {
+  const auth = GitHubSourceControlProvider.parseGitHubAuth(multiAccountStatus(), {
+    hosts: { "github.com": { enabled: false } },
+    tokens: {},
+  });
+  assert.strictEqual(auth.status, "unauthenticated");
+  assert.deepStrictEqual(
+    auth.detail,
+    Option.some("Every GitHub host gh is signed in to is turned off in Settings → Source Control."),
+  );
+});
+
+it("names the environment token that overrides the Settings choice", () => {
+  const auth = GitHubSourceControlProvider.parseGitHubAuth(
+    multiAccountStatus([
+      {
+        state: "success",
+        active: false,
+        host: "github.com",
+        login: "bot",
+        tokenSource: "GH_TOKEN",
+      },
+    ]),
+    { hosts: { "github.com": { account: "work", enabled: true } }, tokens: {} },
+  );
+  assert.deepStrictEqual(auth.account, Option.some("bot"));
+  assert.deepStrictEqual(
+    auth.detail,
+    Option.some(
+      "Using GH_TOKEN from the server environment; it overrides the account chosen in Settings.",
+    ),
+  );
+  assert.strictEqual(auth.accounts?.[2]?.environmentVariable, "GH_TOKEN");
 });

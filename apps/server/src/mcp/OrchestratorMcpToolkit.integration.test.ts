@@ -1,5 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation";
 import {
   CommandId,
   EnvironmentId,
@@ -65,10 +67,18 @@ import { ProjectService } from "../project/ProjectService.ts";
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
+import { ThreadSearchQuery } from "../orchestration-v2/ThreadSearchQuery.ts";
+import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+
+/** A declared tool failure: an error result whose text is the failure's JSON. */
+const declaredFailure = (result: McpSchema.CallToolResult) => {
+  const text = result.content[0];
+  return result.isError === true && text?.type === "text" ? JSON.parse(text.text) : undefined;
+};
 
 const parentThreadId = ThreadId.make("thread:mcp-orchestrator-parent");
 const projectId = ProjectId.make("project:mcp-orchestrator");
@@ -553,7 +563,10 @@ describe("orchestrator MCP toolkit", () => {
               triggerWebhook: () => Effect.die("unused in this test"),
             }),
           );
-          const testLayer = McpHttpServer.OrchestratorToolkitRegistrationLive.pipe(
+          const testLayer = Layer.merge(
+            McpHttpServer.OrchestratorToolkitRegistrationLive,
+            McpHttpServer.ThreadToolkitRegistrationLive,
+          ).pipe(
             Layer.provideMerge(McpServer.McpServer.layer),
             Layer.provideMerge(orchestrationLayer),
             Layer.provide(providerRegistryLayer),
@@ -571,6 +584,8 @@ describe("orchestrator MCP toolkit", () => {
             // t3_thread_launch provisions real workspaces; this test covers the
             // tools that share this thread's checkout instead.
             Layer.provide(Layer.mock(ThreadLaunchService)({})),
+            Layer.provide(Layer.mock(GitVcsDriver)({})),
+            Layer.provide(Layer.mock(ThreadSearchQuery)({})),
             Layer.provideMerge(
               SecretRequests.layer.pipe(
                 Layer.provide(memorySecretStoreLayer),
@@ -621,13 +636,15 @@ describe("orchestrator MCP toolkit", () => {
             expect(parentRun?.status).toBe("running");
 
             const invocation: McpInvocationContext.McpInvocationScope = {
-              credentialId: "credential-orchestrator-test",
               environmentId: EnvironmentId.make("environment:mcp-orchestrator"),
-              threadId: parentThreadId,
-              providerSessionId: "mcp-provider-session-parent",
-              providerInstanceId: codexInstanceId,
+              requestNamespace: "mcp-provider-session-parent",
+              thread: {
+                threadId: parentThreadId,
+                providerSessionId: "mcp-provider-session-parent",
+                providerInstanceId: codexInstanceId,
+              },
+              client: undefined,
               capabilities: new Set(["orchestration"]),
-              audience: "urn:t3-code:mcp:environment-orchestrator",
               issuedAt: 1,
             };
             const invoke = (name: string, args: Record<string, unknown>) =>
@@ -663,6 +680,72 @@ describe("orchestrator MCP toolkit", () => {
               ({ tool }) => tool.name === "t3_thread_interrupt",
             );
             expect(threadInterruptTool?.tool.annotations?.destructiveHint).toBe(true);
+
+            const refusedSettle = yield* invoke("t3_thread_organize", { action: "settle" });
+            expect(refusedSettle.isError).toBe(true);
+            expect(refusedSettle.structuredContent).toBeUndefined();
+            expect(declaredFailure(refusedSettle)).toEqual({
+              _tag: "OrchestratorMcpFailure",
+              code: "orchestration_error",
+              message: `Thread ${parentThreadId} has active or blocked work and cannot be settled.`,
+            });
+            const afterRefusedSettle = yield* orchestrator.getThreadProjection(parentThreadId);
+            expect(afterRefusedSettle.thread.settledOverride).not.toBe("settled");
+            expect(afterRefusedSettle.runs.find((run) => run.id === parentRun?.id)?.status).toBe(
+              "running",
+            );
+
+            const pinned = yield* invoke("t3_thread_organize", { action: "pin" });
+            expect(pinned.isError).toBe(false);
+            expect(pinned.structuredContent).toHaveProperty("sequence");
+            expect((yield* orchestrator.getThreadShell(parentThreadId))?.pinnedAt).not.toBeNull();
+            yield* invoke("t3_thread_organize", { action: "unpin" });
+            expect((yield* orchestrator.getThreadShell(parentThreadId))?.pinnedAt).toBeNull();
+
+            if (parentRun === undefined) {
+              return yield* Effect.die(new Error("Parent run missing."));
+            }
+            for (const name of ["t3_queue_edit", "t3_queue_cancel"]) {
+              const refusedQueueMutation = yield* invoke(name, {
+                queuedRunId: parentRun.id,
+                ...(name === "t3_queue_edit" ? { text: "Keep the active turn." } : {}),
+              });
+              expect(refusedQueueMutation.isError).toBe(true);
+              expect(refusedQueueMutation.structuredContent).toBeUndefined();
+              expect(declaredFailure(refusedQueueMutation)).toEqual({
+                _tag: "OrchestratorMcpFailure",
+                code: "orchestration_error",
+                message: `Run ${parentRun.id} is not queued.`,
+              });
+            }
+
+            const queuePage = yield* invoke("t3_queue_list", { limit: 1 });
+            expect(queuePage.isError).toBe(false);
+            const queueDefinition = server.tools.find(({ tool }) => tool.name === "t3_queue_list");
+            const validateQueue = new AjvJsonSchemaValidator().getValidator(
+              queueDefinition!.tool.outputSchema! as JsonSchemaType,
+            );
+            expect(validateQueue(queuePage.structuredContent).valid).toBe(true);
+            expect(validateQueue({ items: "invalid", nextCursor: null }).valid).toBe(false);
+            const missingThreadId = ThreadId.make("00000000-0000-4000-8000-000000000000");
+            const missingThreadQueue = yield* invoke("t3_queue_list", {
+              threadId: missingThreadId,
+              limit: 1,
+            });
+            expect(missingThreadQueue.isError).toBe(true);
+            expect(declaredFailure(missingThreadQueue)).toMatchObject({
+              _tag: "OrchestratorMcpFailure",
+              code: "thread_not_found",
+              message: "The thread was not found.",
+            });
+            expect(missingThreadQueue.structuredContent).toBeUndefined();
+            const missingThreadRead = yield* invoke("t3_thread_read", {
+              threadId: missingThreadId,
+            });
+            expect(missingThreadRead.isError).toBe(true);
+            expect(declaredFailure(missingThreadRead)).toMatchObject({
+              _tag: "OrchestratorMcpFailure",
+            });
 
             const capabilities = yield* invoke("orchestrator_capabilities", {});
             expect(capabilities.isError).toBe(false);
@@ -1098,7 +1181,8 @@ describe("orchestrator MCP toolkit", () => {
               mode: "async",
               clientRequestId: "delegate-rejected-options-1",
             });
-            expect(rejectedOptionsCall.structuredContent).toMatchObject({
+            expect(rejectedOptionsCall.isError).toBe(true);
+            expect(declaredFailure(rejectedOptionsCall)).toMatchObject({
               _tag: "OrchestratorMcpFailure",
               code: "invalid_request",
               message: expect.stringContaining("rejected options"),
@@ -1119,7 +1203,8 @@ describe("orchestrator MCP toolkit", () => {
               mode: "async",
               clientRequestId: "delegate-duplicate-options-1",
             });
-            expect(duplicateOptionsCall.structuredContent).toMatchObject({
+            expect(duplicateOptionsCall.isError).toBe(true);
+            expect(declaredFailure(duplicateOptionsCall)).toMatchObject({
               _tag: "OrchestratorMcpFailure",
               code: "invalid_request",
               message: expect.stringContaining("more than once"),
@@ -1589,7 +1674,8 @@ describe("orchestrator MCP toolkit", () => {
               schedule: { type: "interval", everyMs: 60_000 },
               bindToCurrentThread: true,
             });
-            expect(boundForeignScheduleCall.structuredContent).toMatchObject({
+            expect(boundForeignScheduleCall.isError).toBe(true);
+            expect(declaredFailure(boundForeignScheduleCall)).toMatchObject({
               _tag: "OrchestratorMcpFailure",
               code: "invalid_request",
             });
@@ -1598,7 +1684,8 @@ describe("orchestrator MCP toolkit", () => {
               prompt: "check a project that does not exist",
               schedule: { type: "interval", everyMs: 60_000 },
             });
-            expect(missingProjectScheduleCall.structuredContent).toMatchObject({
+            expect(missingProjectScheduleCall.isError).toBe(true);
+            expect(declaredFailure(missingProjectScheduleCall)).toMatchObject({
               _tag: "OrchestratorMcpFailure",
               code: "invalid_request",
             });
@@ -1814,15 +1901,31 @@ describe("orchestrator MCP toolkit", () => {
                   run.status !== "running",
               ),
             );
+            // task_cancel acts as the calling thread, which has no live run
+            // once it settled, so the parent's agent can no longer cancel.
             const legacyCancelCall = yield* invoke("task_cancel", {
               taskId: legacyTask.id,
               reason: "Terminalize the legacy child after the parent settled.",
               clientRequestId: "cancel-legacy-1",
             });
-            expect(legacyCancelCall.isError).toBe(false);
+            expect(declaredFailure(legacyCancelCall)).toMatchObject({ code: "parent_not_active" });
+            // The user stops the child and dismisses its delivery instead, as
+            // task_cancel would have.
+            yield* orchestrator.dispatch({
+              type: "thread.stop",
+              commandId: CommandId.make("command:mcp-parent:stop-legacy-after-parent-settled"),
+              threadId: legacyChildThreadId,
+              reason: "Terminalize the legacy child after the parent settled.",
+            });
             yield* waitForProjection(orchestrator, legacyChildThreadId, (projection) =>
               projection.runs.some((run) => run.status === "interrupted"),
             );
+            yield* orchestrator.dispatch({
+              type: "delegated_task.completion-delivery.dispose",
+              commandId: CommandId.make("command:mcp-parent:dispose-legacy-delivery"),
+              parentThreadId,
+              taskId: legacyTask.id,
+            });
             yield* waitForProjection(orchestrator, parentThreadId, (projection) =>
               projection.subagents.some(
                 (task) =>
@@ -1832,7 +1935,7 @@ describe("orchestrator MCP toolkit", () => {
             yield* expectOffersToStay(0);
 
             // Same command against a terminal task whose delivery was already
-            // disposed by task_cancel: the policy must persist without
+            // disposed: the policy must persist without
             // reviving a wake the caller explicitly dismissed.
             const settledUpgrade = yield* orchestrator.dispatch({
               type: "delegated_task.wake-policy",

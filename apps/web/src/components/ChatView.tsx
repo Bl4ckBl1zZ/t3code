@@ -4727,6 +4727,8 @@ function ChatViewContent(props: ChatViewProps) {
               (checkpoint) => checkpoint.runId === completedRunId,
             ),
             isGitRepo: gitStatusQuery.data?.isRepo,
+            activeSurfaceKind:
+              selectActiveRightPanelSurface(panels.byThreadKey, activeThreadRef)?.kind ?? null,
           })
         : "ignore";
     const eligibleLink =
@@ -4969,6 +4971,21 @@ function ChatViewContent(props: ChatViewProps) {
       threadKey === routeThreadKey ? null : routeThreadKey,
     );
   }, [canMaximizeRightPanel, routeThreadKey]);
+  // Read when a right-panel shortcut fires, not on render, so focus is current.
+  const getRightPanelShortcutContext = useCallback(
+    () => ({
+      terminalFocus: getTerminalFocusOwner() !== null,
+      terminalOpen: Boolean(terminalUiState.terminalOpen),
+      previewFocus: isPreviewFocused(),
+      previewOpen: previewPanelOpen,
+      editableFocus: isEditableFocused(document.activeElement),
+      composerFocus: document.activeElement?.getAttribute("data-testid") === "composer-editor",
+      modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
+      isWeb: !isElectron,
+      isDesktop: isElectron,
+    }),
+    [composerRef, previewPanelOpen, terminalUiState.terminalOpen],
+  );
   const cleanupRightPanelSurfaces = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
@@ -9447,6 +9464,8 @@ function ChatViewContent(props: ChatViewProps) {
           mode="inline"
           widthStorageKey={`t3code:preview-panel-width:${activeThreadKey}`}
           open={rightPanelOpen}
+          keybindings={keybindings}
+          getShortcutContext={getRightPanelShortcutContext}
           maximized={rightPanelMaximized}
           inlineSize={previewPanelInlineSize}
           surfaces={renderedRightPanelSurfaces}
@@ -9485,6 +9504,9 @@ function ChatViewContent(props: ChatViewProps) {
         >
           <RightPanelTabs
             mode="sheet"
+            open={rightPanelOpen}
+            keybindings={keybindings}
+            getShortcutContext={getRightPanelShortcutContext}
             inlineSize={previewPanelInlineSize}
             // Same effective inset as the closed-state titlebar controls
             // (pr-3 in the tab bar plus this pixel equals the absolute

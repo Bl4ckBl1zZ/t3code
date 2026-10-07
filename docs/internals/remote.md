@@ -196,7 +196,9 @@ Constraints:
 `RepositoryIdentity` is a best-effort logical repo grouping across environments, used for UI grouping
 and correlation only, never for routing. `Project` remains environment-local: a local clone and a
 remote clone are different projects that may share a `RepositoryIdentity`, and threads bind to one
-project in one environment.
+project in one environment. The canonical key follows the `upstream` remote when one exists, so
+pull request features target the repository a fork tracks. A fork also reports its own `origin`,
+and clients group and label by that, so a fork never collapses into a checkout of its upstream.
 
 ## Access methods
 

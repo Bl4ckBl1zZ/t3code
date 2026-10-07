@@ -6,7 +6,7 @@ import {
   PullRequestTargetIncompleteError,
   PullRequestHostRequiredError,
   PullRequestThreadNotFoundError,
-  PullRequestThreadAboveLimitsError,
+  PullRequestThreadRequiredError,
   PullRequestLinkFailedError,
   PullRequestUnlinkFailedError,
   PullRequestListFailedError,
@@ -42,7 +42,6 @@ import * as Option from "effect/Option";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectService } from "../project/ProjectService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
-import { assertTargetWithinLimits, isLiveCaller } from "./threadAccess.ts";
 
 export class PullRequestMcpService extends Context.Service<
   PullRequestMcpService,
@@ -147,7 +146,8 @@ export const make = Effect.gen(function* () {
   ) {
     if (!scope.capabilities.has("pull-requests"))
       return yield* new McpPullRequestCapabilityUnavailableError({});
-    const threadId = requested ?? scope.threadId;
+    const threadId = requested ?? scope.thread?.threadId;
+    if (threadId === undefined) return yield* new PullRequestThreadRequiredError();
     const thread = yield* threads
       .getThreadShell(threadId)
       .pipe(Effect.mapError((cause) => new PullRequestListFailedError({ cause })));
@@ -155,28 +155,9 @@ export const make = Effect.gen(function* () {
       return yield* new PullRequestThreadNotFoundError({ threadId });
     return thread;
   });
-  /**
-   * A thread whose pull requests the caller may change: its own, or one that
-   * runs within the caller's modes while the caller's run is live.
-   */
-  const requireWritableThread = Effect.fn("PullRequestMcpService.requireWritableThread")(function* (
-    scope: McpInvocationScope,
-    requested: ThreadId | undefined,
-  ) {
-    const thread = yield* requireThread(scope, requested);
-    if (thread.id === scope.threadId) return thread;
-    const caller = yield* requireThread(scope, scope.threadId);
-    if (!isLiveCaller(caller, scope)) {
-      return yield* new PullRequestThreadAboveLimitsError({ threadId: thread.id });
-    }
-    yield* assertTargetWithinLimits(caller, thread).pipe(
-      Effect.mapError(() => new PullRequestThreadAboveLimitsError({ threadId: thread.id })),
-    );
-    return thread;
-  });
   const mutate = (scope: McpInvocationScope, input: PullRequestTargetInput, unlink: boolean) =>
     Effect.gen(function* () {
-      const thread = yield* requireWritableThread(scope, input.threadId);
+      const thread = yield* requireThread(scope, input.threadId);
       const project = yield* projects.getById(thread.projectId).pipe(
         Effect.map(Option.getOrUndefined),
         Effect.mapError((cause) => new PullRequestListFailedError({ cause })),
@@ -222,7 +203,7 @@ export const make = Effect.gen(function* () {
     input: PullRequestTargetInput,
     watching: boolean,
   ) {
-    const thread = yield* requireWritableThread(scope, input.threadId);
+    const thread = yield* requireThread(scope, input.threadId);
     const project = yield* projects.getById(thread.projectId).pipe(
       Effect.map(Option.getOrUndefined),
       Effect.mapError((cause) => new PullRequestWatchFailedError({ cause })),

@@ -260,7 +260,7 @@ function findTaskListMarkerOffset(markdown: string, listItemStart: number): numb
  * The default `1.25rem` marker gutter (`.chat-markdown ol`) fits one-character
  * markers. Wider markers can extend past it and get clipped by a collapsed
  * message's overflow. Widen the gutter to fit the widest marker, including a
- * negative marker's minus sign.
+ * negative marker's minus sign, the period, and the trailing space.
  */
 export function orderedListGutterStyle(
   itemCount: number,
@@ -271,7 +271,7 @@ export function orderedListGutterStyle(
   const lastNumber = firstNumber + Math.max(itemCount - 1, 0);
   const markerWidth = Math.max(String(firstNumber).length, String(lastNumber).length);
   if (markerWidth <= 1) return undefined;
-  return { "--list-gutter": `${markerWidth + 1}ch` };
+  return { "--list-gutter": `${markerWidth + 2}ch` };
 }
 
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
@@ -340,7 +340,62 @@ function rehypeEscapeWindowsDriveMediaSrc() {
   return escapeNode;
 }
 
+interface RawHastNode {
+  type: string;
+  value?: string;
+  children?: RawHastNode[];
+}
+
+/** Keep unmatched inline `<A>` placeholders from opening an HTML link over later blocks. */
+function rehypePreserveBareAnchorPlaceholders() {
+  return (tree: RawHastNode) => {
+    const anchors: Array<RawHastNode | null> = [];
+    let rawTextTag: string | undefined;
+    const visit = (node: RawHastNode) => {
+      if (node.type === "raw" && typeof node.value === "string") {
+        // Raw blocks can contain several tags. Consume whole tags, quoted attributes,
+        // and comments so text resembling a closing anchor cannot pair a placeholder.
+        const tags = /<!--[\s\S]*?(?:-->|$)|<\/?[A-Za-z](?:[^"'<>]|"[^"]*"|'[^']*')*>/g;
+        let offset = 0;
+        while (rawTextTag !== "plaintext") {
+          // Raw text ends at its closing tag even inside comment-looking text.
+          const matcher = rawTextTag ? new RegExp(`</${rawTextTag}\\s*>`, "gi") : tags;
+          matcher.lastIndex = offset;
+          const match = matcher.exec(node.value);
+          if (!match) break;
+          const [tag] = match;
+          offset = matcher.lastIndex;
+          if (rawTextTag) {
+            rawTextTag = undefined;
+            continue;
+          }
+          if (tag.startsWith("<!--")) continue;
+          const closing = /^<\/([a-z]+)\s*>$/i.exec(tag)?.[1]?.toLowerCase();
+          const opening = /^<([a-z]+)(?:\s|\/?>)/i.exec(tag)?.[1]?.toLowerCase();
+          if (
+            opening &&
+            /^(?:script|style|textarea|title|xmp|iframe|noembed|noframes|plaintext)$/.test(opening)
+          ) {
+            rawTextTag = opening;
+          } else if (opening === "a") {
+            anchors.push(node.value === tag && /^<a\s*\/?>$/i.test(tag) ? node : null);
+          } else if (closing === "a") {
+            anchors.pop();
+          }
+        }
+      }
+      node.children?.forEach(visit);
+    };
+
+    visit(tree);
+    for (const anchor of anchors) {
+      if (anchor) anchor.type = "text";
+    }
+  };
+}
+
 const CHAT_MARKDOWN_REHYPE_PLUGINS = [
+  rehypePreserveBareAnchorPlaceholders,
   rehypeRaw,
   rehypeEscapeWindowsDriveMediaSrc,
   [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],

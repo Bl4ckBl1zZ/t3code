@@ -29,6 +29,7 @@ import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPrompt
 import { ProviderModelPreferencesMigration } from "../components/ProviderModelPreferencesMigration";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { ThreadNotificationCoordinator } from "../components/ThreadNotificationCoordinator";
+import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
 import { LegacyThreadMigrationToast } from "../components/LegacyThreadMigrationToast";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
@@ -138,7 +139,12 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  if (pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/")) {
+  if (
+    pathname === "/pair" ||
+    pathname === "/connect" ||
+    pathname.startsWith("/connect/") ||
+    pathname === "/connect-agent"
+  ) {
     return (
       <>
         <DocumentTitleSync />
@@ -209,6 +215,7 @@ function RootRouteView() {
           <ConnectOnboardingDialog />
           <SshPasswordPromptDialog />
           <ThreadNotificationCoordinator />
+          <ReopenClosedViewShortcut />
           <ConfirmDialogHost />
           <SlowRpcRequestToastCoordinator />
           {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}

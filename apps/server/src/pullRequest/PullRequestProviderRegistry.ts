@@ -5,8 +5,10 @@ import type { SourceControlProviderKind } from "@t3tools/contracts";
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
-import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import * as GitHubCredentials from "../sourceControl/GitHubCredentials.ts";
 import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
@@ -55,8 +57,15 @@ export const make = Effect.map(
 export const layer = Layer.effect(PullRequestProviderRegistry, make).pipe(
   Layer.provide(
     GitHubPullRequestCli.layer.pipe(
-      Layer.provide(GitHubCli.layer),
-      Layer.provide(GitHubGraphQlBudget.layer),
+      Layer.provide(
+        GitHubApi.layer.pipe(
+          Layer.provide(GitHubCredentials.layer),
+          // The same layer references the service is built with, so the pull request service
+          // and the API share one budget and one pause per host.
+          Layer.provide(GitHubGraphQlBudget.layer),
+          Layer.provide(SourceControlRateLimit.layer),
+        ),
+      ),
     ),
   ),
   Layer.provide(GitLabPullRequestCli.layer.pipe(Layer.provide(GitLabCli.layer))),

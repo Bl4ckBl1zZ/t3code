@@ -53,6 +53,15 @@ The MCP HTTP server resolves the bearer token and supplies the resulting
 `McpInvocationScope` to tool handlers. Orchestration handlers additionally
 check the `orchestration` capability before reading or mutating state.
 
+Agents T3 Code did not launch sign in to the same endpoint with MCP OAuth (see
+[Environment Authentication](../internals/environment-auth.md#mcp-clients)).
+The middleware tries a provider session token first, then an MCP client
+session. A client session yields a scope with `client` set and no `thread`:
+the user-approved access (read-only or a runtime-mode ceiling) sets its limits,
+read-only clients pass only tools declared as reads, and tools that act as the
+calling thread (`delegate_task`, preview, worktree handoff) refuse it with
+`thread_credential_required`.
+
 ## Provider Injection
 
 ### Codex V2
@@ -294,17 +303,17 @@ without a prompt remain idle.
 Creates one ordinary top-level thread whose workspace is bound before its agent
 starts. `workspaceStrategy` chooses that binding: `worktree` provisions and
 binds a new checkout from `baseRef`, `existing_worktree` binds a path that is
-already there, and the default `root` uses the project checkout — not the
-caller's worktree. Project, provider, model and modes inherit from the caller
-unless overridden; `message` dispatches the first run after preparation, and
+already there (it must be one of the project's own git worktrees), and the
+default `root` uses the project checkout — not the caller's worktree. Project,
+provider, model and modes inherit from the caller unless overridden; `message` dispatches the first run after preparation, and
 omitting it leaves the thread idle. Returns the thread's own branch and
 worktree path alongside its run.
 
 Unlike every other mutation here it takes no `clientRequestId` and derives no
 stable ids: provisioning a worktree is not safely repeatable, so each call is
 its own launch. A caller that loses the response inspects `t3_thread_list`
-rather than retrying. It requires a full-access, default-mode calling thread,
-because it does real filesystem work on the caller's behalf.
+rather than retrying. The new thread may not run with broader runtime or
+interaction modes than the caller.
 
 Use `create_threads` instead for a batch that shares the caller's checkout.
 
@@ -409,8 +418,8 @@ escalation rule delegation uses.
   may return fewer results than `limit`. It is not paginated and is not
   exhaustive.
 - **Scheduling.** `run_scheduled_task_now` triggers any scheduled task
-  immediately. It requires a live full-access/default caller, and each call is
-  a new manual run.
+  immediately. It changes the environment, so it requires a live
+  full-access/default caller, and each call is a new manual run.
 
 ## Workspace, Environment And Preview Toolkits
 
@@ -474,6 +483,19 @@ falls back to a terminal-status message when no assistant text exists.
 
 ## Policy And Idempotency
 
+Every tool declares who may call it, through `McpToolAccess`: it `reads`,
+`readsAsCaller` (the calling thread's own tabs or worktree), `actsAsCaller`
+(its subagents, preview tabs, worktree handoff), `writes` (scheduled tasks),
+`writesThreads` (the threads it names), `startsThreads` (new threads, at modes
+no broader than the caller's) or `writesEnvironment` (preferences, running any
+scheduled task). `McpToolAccess.toLayer` accepts only these declarations and
+`McpHttpServer` registers only the layers it builds, so a tool without a
+decision does not compile; the `t3code/no-raw-mcp-registration` lint rule keeps
+Effect's raw `McpServer` registration inside `McpHttpServer`. A
+`writesThreads` target is checked before the handler runs and again by the
+orchestrator under the thread's lock (`DispatchModeLimit`), so a user raising a
+thread's modes mid-call cannot let a narrower caller act on it.
+
 - A child runtime mode may stay equal to or become narrower than the parent
   mode. It may not escalate privileges.
 - A child interaction mode may stay equal to or narrow from `default` to
@@ -511,6 +533,8 @@ thread_not_found
 run_not_found
 thread_not_sendable
 thread_not_interruptible
+thread_credential_required
+target_required
 invalid_request
 orchestration_error
 ```
@@ -521,6 +545,7 @@ orchestration_error
 - MCP service: `apps/server/src/mcp/OrchestratorMcpService.ts`
 - Tool definitions and handlers:
   `apps/server/src/mcp/toolkits/orchestrator/`
+- Caller declarations: `apps/server/src/mcp/McpToolAccess.ts`
 - HTTP registration and authentication:
   `apps/server/src/mcp/McpHttpServer.ts`
 - Credential lifecycle: `apps/server/src/mcp/McpSessionRegistry.ts`

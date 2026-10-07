@@ -1,4 +1,5 @@
-import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
+import type { ProjectId, ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
+import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 import {
   resolveThreadPullRequestChains,
   visibleThreadPullRequests,
@@ -15,9 +16,10 @@ import {
 import { useCallback, useMemo, useState } from "react";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { useOpenPrLink } from "~/lib/openPullRequestLink";
+import { findProjectForChangeRequest, useOpenPrLink } from "~/lib/openPullRequestLink";
 import { cn } from "~/lib/utils";
-import { useServerConfigs, useThreadShell } from "~/state/entities";
+import { useShortcutModifierState } from "~/shortcutModifierState";
+import { useProjects, useServerConfigs, useThreadShell } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
@@ -37,6 +39,7 @@ import {
   PullRequestStateGlyph,
   pullRequestChecksStatePresentation,
 } from "./pullRequestPresentation";
+import { PullRequestSpeedActions } from "./PullRequestSpeedActions";
 
 const SOURCE_LABELS: Record<ThreadPullRequestLink["source"], string> = {
   manual: "Linked by you",
@@ -69,24 +72,60 @@ function ChecksGlyph({
 function LinkRow({
   line,
   threadRef,
+  projectId,
   onUnlink,
   onSetWatching,
 }: {
   line: PullRequestListLine;
   threadRef: ScopedThreadRef;
+  /** The project quick actions act through; null when this environment cannot act on it. */
+  projectId: ProjectId | null;
   onUnlink: (link: ThreadPullRequestLink) => Promise<void>;
   /** Null when the environment cannot watch pull requests. */
   onSetWatching: ((link: ThreadPullRequestLink, watching: boolean) => void) | null;
 }) {
   const openPrLink = useOpenPrLink(threadRef);
+  // Right-click opens the row's actions menu at the pointer instead of under the "…" button.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const menuAnchor = useMemo(
+    () =>
+      menuPosition
+        ? { getBoundingClientRect: () => new DOMRect(menuPosition.x, menuPosition.y, 0, 0) }
+        : undefined,
+    [menuPosition],
+  );
   const { link, depth, stack } = line;
   const snapshot = link.snapshot;
   const [pending, setPending] = useState(false);
   const open = snapshot === null || snapshot.state === "open";
   const watching = link.watch !== undefined;
+  // Quick actions, shown while Shift is held, need a known state and a GitHub pull request.
+  const actionEntry =
+    projectId !== null &&
+    snapshot !== null &&
+    snapshot.state !== "merged" &&
+    detectSourceControlProviderFromRemoteUrl(link.url)?.kind === "github"
+      ? {
+          environmentId: threadRef.environmentId,
+          projectId,
+          host: link.host,
+          repository: link.repository,
+          number: link.number,
+          state: snapshot.state,
+          isDraft: snapshot.isDraft,
+          provider: "github" as const,
+        }
+      : null;
   return (
     <div
       className="group/pr-row flex items-center gap-2 rounded-md py-1 pr-1 hover:bg-accent/60"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenuPosition({ x: event.clientX, y: event.clientY });
+        setMenuOpen(true);
+      }}
       // Each layer steps in under the one it targets. The step is capped: beyond a few layers
       // the indent only says "still in the stack", which the connector line already does, and
       // a sixteen-layer stack would otherwise stair-step off the right edge.
@@ -213,7 +252,14 @@ function LinkRow({
           ) : null}
         </span>
       </a>
-      <Menu>
+      {actionEntry !== null ? <PullRequestSpeedActions entry={actionEntry} /> : null}
+      <Menu
+        open={menuOpen}
+        onOpenChange={(open) => {
+          setMenuOpen(open);
+          if (!open) setMenuPosition(null);
+        }}
+      >
         <MenuTrigger
           render={
             <Button
@@ -222,13 +268,20 @@ function LinkRow({
               aria-label={`Actions for #${link.number}`}
               className={cn(
                 "opacity-100 sm:opacity-0 group-hover/pr-row:opacity-100 group-focus-within/pr-row:opacity-100 data-[popup-open]:opacity-100",
+                "group-has-[[data-pull-request-action-pending=true]]/pr-row:hidden",
+                actionEntry !== null && "group-data-[speed-actions]/pr-list:hidden",
               )}
             >
               <MoreHorizontalIcon className="size-3.5" />
             </Button>
           }
         />
-        <MenuPopup align="end" side="bottom">
+        <MenuPopup
+          anchor={menuAnchor}
+          align={menuPosition ? "start" : "end"}
+          side="bottom"
+          sideOffset={menuPosition ? 0 : 4}
+        >
           <MenuItem onClick={() => void writeTextToClipboard(link.url, "link")}>Copy link</MenuItem>
           <MenuItem onClick={(event) => openPrLink(event, link.url, threadRef)}>Open</MenuItem>
           {onSetWatching !== null && open ? (
@@ -269,12 +322,26 @@ export function ThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
 
 function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThreadRef }) {
   const thread = useThreadShell(threadRef);
+  const projects = useProjects();
+  // The thread's own project first, so a repository two projects share acts through this one.
+  const environmentProjects = useMemo(
+    () =>
+      projects
+        .filter((project) => project.environmentId === threadRef.environmentId)
+        .toSorted((left, right) =>
+          left.id === thread?.projectId ? -1 : right.id === thread?.projectId ? 1 : 0,
+        ),
+    [projects, threadRef.environmentId, thread?.projectId],
+  );
+  // Shift alone, and never while typing, like the Pull Requests page.
+  const modifiers = useShortcutModifierState(true);
+  const speedMode =
+    modifiers.shiftKey && !modifiers.metaKey && !modifiers.ctrlKey && !modifiers.altKey;
   const openLinkDialog = useCallback(() => openLinkPullRequestDialog(threadRef), [threadRef]);
   const linking = usePullRequestLinking(threadRef.environmentId);
   const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
-  const supportsWatch =
-    useServerConfigs().get(threadRef.environmentId)?.environment.capabilities
-      .threadPullRequestWatch === true;
+  const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
+  const supportsWatch = capabilities?.threadPullRequestWatch === true;
   const handleSetWatching = useCallback(
     (link: ThreadPullRequestLink, watching: boolean) => {
       void watch({
@@ -342,12 +409,25 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col p-1.5">
+        {/* Holding Shift shows each row's quick actions through this attribute, as on the
+            Pull Requests page. */}
+        <div
+          className="group/pr-list flex flex-col p-1.5"
+          data-speed-actions={speedMode ? "" : undefined}
+        >
           {lines.map((line) => (
             <LinkRow
               key={`${line.link.host}/${line.link.repository}#${line.link.number}`}
               line={line}
               threadRef={threadRef}
+              projectId={
+                capabilities?.pullRequests === true
+                  ? (findProjectForChangeRequest(environmentProjects, line.link)?.id ??
+                    line.link.projectId ??
+                    thread?.projectId ??
+                    null)
+                  : null
+              }
               onUnlink={handleUnlink}
               onSetWatching={supportsWatch ? handleSetWatching : null}
             />

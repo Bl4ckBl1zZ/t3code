@@ -234,7 +234,7 @@ export const layer: Layer.Layer<
         }
         const staleThread = projections.getThreadRecords(childThreadId, []).pipe(
           Effect.map(({ thread }) => (thread.modelSelection.model === model ? null : thread)),
-          Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(null)),
+          Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
         );
         // Nearly every update already matches; only a mismatch takes the lock.
         if ((yield* staleThread) === null) return [];

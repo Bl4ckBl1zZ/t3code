@@ -286,7 +286,7 @@ export const OrchestratorMcpThreadLaunchInput = Schema.Struct({
   workspaceStrategy: Schema.optional(
     OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
       description:
-        "Where this thread runs, bound before its agent starts: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath; root uses the project checkout. Omitted means root, NOT the caller's worktree. For a PR stack, use the parent branch as baseRef with startFromOrigin false. Uncommitted changes are not copied.",
+        "Where this thread runs, bound before its agent starts: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath, which must be one of the project's git worktrees; root uses the project checkout. Omitted means root, NOT the caller's worktree. For a PR stack, use the parent branch as baseRef with startFromOrigin false. Uncommitted changes are not copied.",
     }),
   ),
   message: Schema.optional(
@@ -357,7 +357,7 @@ export type OrchestratorMcpThreadListItem = typeof OrchestratorMcpThreadListItem
 
 export const OrchestratorMcpThreadListResult = Schema.Struct({
   projectId: ProjectId,
-  currentThreadId: ThreadId,
+  currentThreadId: Schema.NullOr(ThreadId),
   threads: Schema.Array(OrchestratorMcpThreadListItem),
   nextCursor: Schema.NullOr(NonNegativeInt),
   total: NonNegativeInt,
@@ -516,9 +516,9 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
 export type OrchestratorMcpProviderCapability = typeof OrchestratorMcpProviderCapability.Type;
 
 export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
-  parentThreadId: ThreadId,
-  inheritedProviderInstanceId: ProviderInstanceId,
-  inheritedModel: Schema.String,
+  parentThreadId: Schema.NullOr(ThreadId),
+  inheritedProviderInstanceId: Schema.NullOr(ProviderInstanceId),
+  inheritedModel: Schema.NullOr(Schema.String),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   providers: Schema.Array(OrchestratorMcpProviderCapability),
@@ -682,6 +682,8 @@ export class OrchestratorMcpFailure extends Schema.TaggedErrorClass<Orchestrator
       "thread_not_interruptible",
       "invalid_request",
       "orchestration_error",
+      "thread_credential_required",
+      "target_required",
     ]),
     message: Schema.String,
   },

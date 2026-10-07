@@ -25,9 +25,9 @@ import {
 import type { AuthEnvironmentScope, DpopFailureReason } from "@t3tools/contracts";
 import { parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
@@ -188,6 +188,7 @@ export const environmentAuthenticatedAuthLayer = Layer.effect(
     return (httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+        const startTime = yield* Clock.currentTimeNanos;
         const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
             failEnvironmentAuthInvalid(
@@ -199,14 +200,17 @@ export const environmentAuthenticatedAuthLayer = Layer.effect(
             failEnvironmentInternal("internal_error", error),
           ),
         );
-        return yield* httpEffect.pipe(
+        const endTime = yield* Clock.currentTimeNanos;
+        const handler = httpEffect.pipe(
           Effect.provideService(EnvironmentAuthenticatedPrincipal, {
             ...session,
             scopes: new Set(session.scopes),
           }),
-          session.subject === "cloud-connect" ? traceAuthenticatedRelayRequest : identity,
         );
-      }).pipe(Effect.catchTag("EnvironmentAuthInvalidError", appendDpopChallengeOnUnauthorized));
+        return yield* session.subject === "cloud-connect"
+          ? traceAuthenticatedRelayRequest(handler, { startTime, endTime })
+          : handler;
+      }).pipe(Effect.catchTags({ EnvironmentAuthInvalidError: appendDpopChallengeOnUnauthorized }));
   }),
 );
 
@@ -237,9 +241,11 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
+            // Re-pairing this browser replaces only its own cookie session.
             const result = yield* serverAuth.createBrowserSession(
               args.payload.credential,
               deriveAuthClientMetadata({ request }),
+              request.cookies[sessions.cookieName],
             );
             const sessionCookies = yield* Effect.fromResult(
               Cookies.set(Cookies.empty, sessions.cookieName, result.sessionToken, {
@@ -432,9 +438,10 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             );
             return { revoked };
           },
-          Effect.catchTag("ServerAuthForbiddenOperationError", () =>
-            failEnvironmentOperationForbidden("current_session_revoke_not_allowed"),
-          ),
+          Effect.catchTags({
+            ServerAuthForbiddenOperationError: () =>
+              failEnvironmentOperationForbidden("current_session_revoke_not_allowed"),
+          }),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("client_session_revoke_failed", error),
           ),

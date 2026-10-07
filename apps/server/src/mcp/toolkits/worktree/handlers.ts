@@ -7,11 +7,12 @@ import * as Project from "../../../project/ProjectService.ts";
 import { readThread, unavailable } from "../../threadAccess.ts";
 
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { WorktreeMcpService } from "../../WorktreeMcpService.ts";
 import { WorktreeToolkit } from "./tools.ts";
 
 const handlers = {
-  t3_worktree_list: (input) =>
+  t3_worktree_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const context = yield* McpInvocationContext;
       if (!context.capabilities.has("worktree"))
@@ -35,18 +36,21 @@ const handlers = {
         .listRefs({ ...refs, cwd: thread.worktreePath ?? project.value.workspaceRoot })
         .pipe(Effect.mapError(unavailable));
     }),
-  t3_worktree_handoff: (input) =>
+  ),
+  t3_worktree_handoff: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* WorktreeMcpService;
       return yield* service.handoff(scope, input);
     }),
-  t3_worktree_status: () =>
+  ),
+  t3_worktree_status: McpToolAccess.readsAsCaller(() =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* WorktreeMcpService;
       return yield* service.status(scope);
     }),
-} satisfies Parameters<typeof WorktreeToolkit.toLayer>[0];
+  ),
+} satisfies McpToolAccess.Handlers<typeof WorktreeToolkit.tools>;
 
-export const WorktreeToolkitHandlersLive = WorktreeToolkit.toLayer(handlers);
+export const WorktreeToolkitHandlersLive = McpToolAccess.toLayer(WorktreeToolkit, handlers);

@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Preview from "../../../preview/Manager.ts";
 import { requireMcpCapability } from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { unavailable } from "../../threadAccess.ts";
 import { PreviewControlsToolkit } from "./tools.ts";
 
@@ -9,11 +10,11 @@ const access = Effect.gen(function* () {
   const scope = yield* requireMcpCapability("preview");
   return { scope, manager: yield* Preview.PreviewManager };
 });
-export const PreviewControlsHandlersLive = PreviewControlsToolkit.toLayer({
-  t3_preview_list: (input) =>
+export const PreviewControlsHandlersLive = McpToolAccess.toLayer(PreviewControlsToolkit, {
+  t3_preview_list: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const { scope, manager } = yield* access;
-      const result = yield* manager.list({ threadId: scope.threadId });
+      const result = yield* manager.list({ threadId: scope.thread.threadId });
       const start = input.cursor ?? 0;
       const end = start + (input.limit ?? 20);
       return {
@@ -22,12 +23,14 @@ export const PreviewControlsHandlersLive = PreviewControlsToolkit.toLayer({
         nextCursor: end < result.sessions.length ? end : null,
       };
     }),
-  t3_preview_close: (input) =>
+  ),
+  t3_preview_close: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const { scope, manager } = yield* access;
       yield* manager
-        .close({ threadId: scope.threadId, tabId: input.tabId })
+        .close({ threadId: scope.thread.threadId, tabId: input.tabId })
         .pipe(Effect.mapError(unavailable));
       return {};
     }),
+  ),
 });

@@ -1799,22 +1799,24 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
       // stdin, a port, a lock) would otherwise hang release CI until the job
       // times out with nothing useful in the log.
       Effect.timeout(BUNDLE_SELF_CHECK_TIMEOUT),
-      Effect.catchTag("TimeoutError", () =>
-        Effect.fail(
-          new BundleNotSelfContainedError({
-            exitCode: -1,
-            output: `The packaged bundle did not print its version within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
-          }),
-        ),
-      ),
-      Effect.catchTag("BuildCommandFailedError", (error) =>
-        Effect.fail(
-          new BundleNotSelfContainedError({
-            exitCode: error.exitCode,
-            output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
-          }),
-        ),
-      ),
+      Effect.catchTags({
+        TimeoutError: () =>
+          Effect.fail(
+            new BundleNotSelfContainedError({
+              exitCode: -1,
+              output: `The packaged bundle did not print its version within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
+            }),
+          ),
+      }),
+      Effect.catchTags({
+        BuildCommandFailedError: (error) =>
+          Effect.fail(
+            new BundleNotSelfContainedError({
+              exitCode: error.exitCode,
+              output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
+            }),
+          ),
+      }),
     );
   },
 );
@@ -2368,6 +2370,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   }
 
   if (platform === "linux") {
+    // electron-builder 26 defaults to its legacy AppImage runtime, which
+    // dynamically loads the system libfuse2 library. Pin the static runtime so
+    // the AppImage also launches on distributions that only provide FUSE 3.
+    buildConfig.toolsets = { appimage: "1.0.3" };
     buildConfig.linux = {
       target: [target],
       executableName: "t3code",

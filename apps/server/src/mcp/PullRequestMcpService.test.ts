@@ -20,13 +20,15 @@ import { make, resolvePullRequestTarget } from "./PullRequestMcpService.ts";
 const threadId = ThreadId.make("owner-thread");
 const projectId = ProjectId.make("owner-project");
 const scope: McpInvocationScope = {
-  credentialId: "credential",
   environmentId: EnvironmentId.make("env"),
-  threadId,
-  providerSessionId: "session",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "session",
+  thread: {
+    threadId,
+    providerSessionId: "session",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
   capabilities: new Set(["pull-requests"]),
-  audience: "urn:t3-code:mcp:env",
   issuedAt: 1,
 };
 
@@ -242,68 +244,6 @@ it.effect("refuses to watch a merged pull request and stops an existing watch", 
       { number: 1, watching: false },
       { number: 3, watching: true },
     ]);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("changes another thread's pull requests only within the caller's modes", () =>
-  Effect.gen(function* () {
-    const otherThreadId = ThreadId.make("other-thread");
-    const shells = new Map<string, OrchestrationV2ThreadShell>([
-      [
-        threadId,
-        {
-          id: threadId,
-          projectId,
-          runtimeMode: "auto-accept-edits",
-          interactionMode: "default",
-          activeRunId: "run-live",
-          archivedAt: null,
-          providerInstanceId: "codex",
-          deletedAt: null,
-          pullRequests: [],
-        } as unknown as OrchestrationV2ThreadShell,
-      ],
-      [
-        otherThreadId,
-        {
-          id: otherThreadId,
-          projectId: ProjectId.make("other-project"),
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          deletedAt: null,
-          pullRequests: [],
-        } as unknown as OrchestrationV2ThreadShell,
-      ],
-    ]);
-    const commands: OrchestrationV2ServerCommand[] = [];
-    const service = yield* make.pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.mock(ThreadManagementService)({
-            getThreadShell: (id) => Effect.succeed(shells.get(id) ?? null),
-            dispatch: (command) =>
-              Effect.sync(() => {
-                commands.push(command);
-                return { sequence: commands.length, storedEvents: [] };
-              }),
-          }),
-          Layer.mock(ProjectService)({ getById: () => Effect.succeed(Option.none()) }),
-          NodeServices.layer,
-        ),
-      ),
-    );
-    const input = { threadId: otherThreadId, url: "https://github.com/org/repo/pull/41" };
-    const refused = yield* service.link(scope, input).pipe(Effect.flip);
-    expect(refused).toMatchObject({ _tag: "PullRequestThreadAboveLimitsError" });
-    // Reading another thread's links needs no write access.
-    expect((yield* service.list(scope, { threadId: otherThreadId })).pullRequests).toEqual([]);
-
-    shells.set(otherThreadId, {
-      ...shells.get(otherThreadId)!,
-      runtimeMode: "approval-required",
-    });
-    expect((yield* service.link(scope, input)).alreadyLinked).toBe(false);
-    expect(commands).toMatchObject([{ type: "thread.metadata.update", threadId: otherThreadId }]);
   }).pipe(Effect.scoped),
 );
 

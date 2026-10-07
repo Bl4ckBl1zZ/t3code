@@ -3,6 +3,7 @@ import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -12,7 +13,7 @@ import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
-import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
+import { McpProtocol, McpSchema, McpServer, Tool, type Toolkit } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { PreviewAutomationError } from "@t3tools/contracts";
 
@@ -22,6 +23,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProjectService from "../project/ProjectService.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as McpToolAccess from "./McpToolAccess.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -47,19 +49,62 @@ import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 
-const unauthorized = HttpServerResponse.jsonUnsafe(
-  {
-    error: "invalid_mcp_credential",
-    message: "A valid provider-scoped MCP bearer credential is required.",
-  },
-  {
-    status: 401,
-    headers: {
-      "cache-control": "no-store",
-      "www-authenticate": "Bearer",
+/** Where an MCP client discovers how to sign in (RFC 9728), at this request's own origin. */
+const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
+  HttpServerRequest.toURL(request).pipe(
+    Option.map((url) => `${url.origin}/.well-known/oauth-protected-resource/mcp`),
+  );
+
+/**
+ * Agents T3 Code launched carry a registry token and must never be sent into
+ * an OAuth flow when it dies: they cannot open a browser, and a sign-in
+ * would mint a credential that outlives their session. Only a request that
+ * does not look like a provider token is pointed at the OAuth metadata.
+ */
+const unauthorized = (input: {
+  readonly request: HttpServerRequest.HttpServerRequest;
+  readonly presentedToken: boolean;
+  readonly offerOAuth: boolean;
+}) => {
+  const metadataUrl = input.offerOAuth
+    ? Option.getOrUndefined(mcpResourceMetadataUrl(input.request))
+    : undefined;
+  const challenge = [
+    "Bearer",
+    [
+      ...(metadataUrl === undefined ? [] : [`resource_metadata="${metadataUrl}"`]),
+      ...(input.presentedToken ? ['error="invalid_token"'] : []),
+    ].join(", "),
+  ]
+    .filter((part) => part.length > 0)
+    .join(" ");
+  return HttpServerResponse.jsonUnsafe(
+    {
+      error: "invalid_mcp_credential",
+      message: "A valid T3 Code MCP credential is required.",
     },
-  },
-);
+    {
+      status: 401,
+      headers: {
+        "cache-control": "no-store",
+        "www-authenticate": challenge,
+      },
+    },
+  );
+};
+
+/**
+ * Resolves a bearer token that is not a provider-session token: an OAuth
+ * client signed in from outside T3. Undefined when the token is not one.
+ */
+export class McpClientAuthenticator extends Context.Service<
+  McpClientAuthenticator,
+  {
+    readonly authenticate: (
+      request: HttpServerRequest.HttpServerRequest,
+    ) => Effect.Effect<McpInvocationContext.McpInvocationScope | undefined>;
+  }
+>()("t3/mcp/McpHttpServer/McpClientAuthenticator") {}
 
 type AuthenticatedHttpEffect = Effect.Effect<
   HttpServerResponse.HttpServerResponse,
@@ -87,34 +132,43 @@ export const normalizeMcpHttpResponse = (
     : response;
 };
 
-const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
-  Effect.map(
-    (registry): McpAuthMiddleware =>
-      Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const authorization = request.headers.authorization;
-        const token =
-          authorization?.startsWith("Bearer ") === true
-            ? authorization.slice("Bearer ".length).trim()
-            : "";
-        const invocation = yield* registry.resolve(token, registry.audience);
-        if (!invocation) {
-          // Without this the only symptom of a dead credential is the agent
-          // quietly losing the whole `t3-code` toolkit for the rest of its
-          // session, with nothing on the server to explain why.
-          yield* Effect.logWarning("rejected MCP request with an unusable credential", {
-            reason: token.length === 0 ? "missing_bearer_token" : "unknown_or_expired_token",
-          });
-          return unauthorized;
-        }
-        return yield* httpEffect.pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.map(normalizeMcpHttpResponse),
-        );
-      }),
-  ),
-  Effect.withSpan("McpHttpServer.makeAuthMiddleware"),
-);
+// Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
+const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
+
+const makeMcpAuthMiddleware = Effect.gen(function* () {
+  const registry = yield* McpSessionRegistry.McpSessionRegistry;
+  const clients = yield* Effect.serviceOption(McpClientAuthenticator);
+  return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const authorization = request.headers.authorization;
+    const token =
+      authorization?.startsWith("Bearer ") === true
+        ? authorization.slice("Bearer ".length).trim()
+        : "";
+    const invocation: McpInvocationContext.McpInvocationScope | undefined =
+      (yield* registry.resolve(token, registry.audience)) ??
+      (Option.isSome(clients) && token.length > 0
+        ? yield* clients.value.authenticate(request)
+        : undefined);
+    if (!invocation) {
+      // Without this the only symptom of a dead credential is the agent
+      // quietly losing the whole `t3-code` toolkit for the rest of its
+      // session, with nothing on the server to explain why.
+      yield* Effect.logWarning("rejected MCP request with an unusable credential", {
+        reason: token.length === 0 ? "missing_bearer_token" : "unknown_or_expired_token",
+      });
+      return unauthorized({
+        request,
+        presentedToken: token.length > 0,
+        offerOAuth: Option.isSome(clients) && !looksLikeProviderToken(token),
+      });
+    }
+    return yield* httpEffect.pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+      Effect.map(normalizeMcpHttpResponse),
+    );
+  }) satisfies McpAuthMiddleware;
+}).pipe(Effect.withSpan("McpHttpServer.makeAuthMiddleware"));
 
 const McpAuthMiddlewareLive = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
@@ -338,6 +392,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
     | WorkspacePaths.WorkspacePaths
     | FileSystem.FileSystem
     | Path.Path
+    | Crypto.Crypto
   >();
   const built = yield* PreviewSnapshotToolkit;
   const tool = PreviewSnapshotTool;
@@ -431,12 +486,29 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   });
 });
 
-const PreviewStandardToolkitRegistrationLive = McpServer.toolkit(PreviewStandardToolkit).pipe(
-  Layer.provide(PreviewStandardToolkitHandlersLive),
+/**
+ * `McpServer.toolkit` for handlers that declared their access (see
+ * `McpToolAccess`). Every toolkit on `/mcp` registers through this.
+ */
+export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, RX>(
+  toolkit: Toolkit.Toolkit<Tools>,
+  handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
+) => McpServer.toolkit(toolkit).pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
+
+/** A hand-registered tool, also only with handlers that declared their access. */
+const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, EX, RX>(
+  register: Effect.Effect<A, E, R>,
+  handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
+) => Layer.effectDiscard(register).pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
+
+const PreviewStandardToolkitRegistrationLive = toolkitRegistration(
+  PreviewStandardToolkit,
+  PreviewStandardToolkitHandlersLive,
 );
 
-const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnapshot()).pipe(
-  Layer.provide(PreviewSnapshotToolkitHandlersLive),
+const PreviewSnapshotRegistrationLive = imageToolRegistration(
+  registerPreviewSnapshot(),
+  PreviewSnapshotToolkitHandlersLive,
 );
 
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
@@ -444,35 +516,37 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
-export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
-  Layer.provide(OrchestratorToolkitHandlersLive),
-  Layer.provide(OrchestratorMcpService.layer),
-  Layer.provide(ThreadMetadataMcpService.layer),
+export const OrchestratorToolkitRegistrationLive = toolkitRegistration(
+  OrchestratorToolkit,
+  OrchestratorToolkitHandlersLive,
+).pipe(Layer.provide(OrchestratorMcpService.layer), Layer.provide(ThreadMetadataMcpService.layer));
+
+export const ThreadToolkitRegistrationLive = toolkitRegistration(
+  ThreadToolkit,
+  ThreadToolkitHandlersLive,
 );
 
-export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
-  Layer.provide(ThreadToolkitHandlersLive),
+export const EnvironmentToolkitRegistrationLive = toolkitRegistration(
+  EnvironmentToolkit,
+  EnvironmentHandlersLive,
 );
 
-export const EnvironmentToolkitRegistrationLive = McpServer.toolkit(EnvironmentToolkit).pipe(
-  Layer.provide(EnvironmentHandlersLive),
-);
-
-export const PreviewControlsToolkitRegistrationLive = McpServer.toolkit(
+export const PreviewControlsToolkitRegistrationLive = toolkitRegistration(
   PreviewControlsToolkit,
-).pipe(Layer.provide(PreviewControlsHandlersLive));
-
-export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
-  Layer.provide(WorktreeToolkitHandlersLive),
-  Layer.provide(WorktreeMcpService.layer),
+  PreviewControlsHandlersLive,
 );
 
-export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
-  Layer.provide(PullRequestsToolkitHandlersLive),
-  Layer.provide(PullRequestMcpService.layer),
-);
+export const WorktreeToolkitRegistrationLive = toolkitRegistration(
+  WorktreeToolkit,
+  WorktreeToolkitHandlersLive,
+).pipe(Layer.provide(WorktreeMcpService.layer));
 
-const McpTransportLive = McpServer.layerHttp({
+export const PullRequestsToolkitRegistrationLive = toolkitRegistration(
+  PullRequestsToolkit,
+  PullRequestsToolkitHandlersLive,
+).pipe(Layer.provide(PullRequestMcpService.layer));
+
+export const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
   path: "/mcp",

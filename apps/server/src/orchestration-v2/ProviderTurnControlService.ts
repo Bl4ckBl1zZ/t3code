@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as NodeTimersPromises from "node:timers/promises";
 
 import { AttachmentMaterialization } from "../attachments/AttachmentMaterialization.ts";
 import { appendSnapShotContext } from "../attachments/snapShotContext.ts";
@@ -187,6 +188,24 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
             requestRuntimeRestart: true,
           });
+          // Give native terminal ingestion time to finish before the Stop
+          // follow-up repairs a run whose provider no longer reports on it.
+          // Wall-clock bounded, so a provider that never reports cannot stall Stop.
+          const deadline = performance.now() + 2_000;
+          while (loaded.providerTurn.status === "running" && performance.now() < deadline) {
+            const current = yield* projections.getThreadRecords(input.threadId, [
+              "providerTurns",
+              "attempts",
+            ]);
+            const providerTurn = current.providerTurns.find(
+              (candidate) => candidate.id === input.providerTurnId,
+            );
+            const attempt = current.attempts.find(
+              (candidate) => candidate.id === providerTurn?.runAttemptId,
+            );
+            if (providerTurn?.status !== "running" && attempt?.status !== "running") break;
+            yield* Effect.promise(() => NodeTimersPromises.setTimeout(10));
+          }
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)

@@ -303,7 +303,8 @@ export const outOfBandOAuthLogin = Effect.fn("cloud.cli_token.out_of_band_oauth_
     // Clerk authorization codes expire on this horizon anyway; matching the
     // loopback flow's timeout turns an abandoned prompt into a clear error.
     Effect.timeout(CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT),
-    Effect.catchTag("TimeoutError", (cause) =>
+    // catchTags cannot map over the caller's generic error type, so refine instead.
+    Effect.catchIf(Cause.isTimeoutError, (cause) =>
       Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
     ),
   );
@@ -413,9 +414,9 @@ export const make = Effect.gen(function* () {
       authorizationUrl,
       callback: Deferred.await(callback).pipe(
         Effect.timeout(CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT),
-        Effect.catchTag("TimeoutError", (cause) =>
-          Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
-        ),
+        Effect.catchTags({
+          TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
+        }),
       ),
       terminal,
       launchBrowser: externalLauncher.launchBrowser,

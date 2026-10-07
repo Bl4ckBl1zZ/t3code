@@ -1209,83 +1209,86 @@ function OpenCommandPaletteDialog(props: {
     [startFreshHermesChat],
   );
 
-  const projectThreadItems = useMemo(
-    () =>
-      enumerateCommandPaletteItems(
-        buildProjectActionItems({
-          // The no-project home shows once, as the "No project" item.
-          projects: pickerProjects.filter(
-            (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
-          ),
-          valuePrefix: "new-thread-in",
-          searchTerms: (project) => {
-            const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-            const location = projectEnvironmentLocationById.get(project.environmentId);
-            return [
-              ...(group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ??
-                []),
-              ...(location ? [location.label] : []),
-            ];
-          },
-          renderDescription: (project) => {
-            const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
-              kind: "remote",
-              label: "Remote",
-            };
-            return (
-              <ProjectSearchDescription
-                environmentId={project.environmentId}
-                environmentLabels={[location.label]}
-                grouped={false}
-                location={location}
-                workspaceRoot={project.workspaceRoot}
-              />
+  const projectThreadItems = useMemo(() => {
+    const isScratch = (project: (typeof pickerProjects)[number]) =>
+      isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
+    const projectItems = enumerateCommandPaletteItems(
+      buildProjectActionItems({
+        // The no-project home shows once, as the "No project" item below.
+        projects: pickerProjects.filter((project) => !isScratch(project)),
+        valuePrefix: "new-thread-in",
+        searchTerms: (project) => {
+          const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+          const location = projectEnvironmentLocationById.get(project.environmentId);
+          return [
+            ...(group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ??
+              []),
+            ...(location ? [location.label] : []),
+          ];
+        },
+        renderDescription: (project) => {
+          const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
+            kind: "remote",
+            label: "Remote",
+          };
+          return (
+            <ProjectSearchDescription
+              environmentId={project.environmentId}
+              environmentLabels={[location.label]}
+              grouped={false}
+              location={location}
+              workspaceRoot={project.workspaceRoot}
+            />
+          );
+        },
+        icon: projectActionItemIcon,
+        runProject: async (project) => {
+          const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+          const contextualRefBelongsToGroup =
+            contextualProjectRef !== null &&
+            group?.memberProjectRefs.some(
+              (projectRef) =>
+                projectRef.environmentId === contextualProjectRef.environmentId &&
+                projectRef.projectId === contextualProjectRef.projectId,
             );
-          },
-          icon: projectActionItemIcon,
-          runProject: async (project) => {
-            const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-            const contextualRefBelongsToGroup =
-              contextualProjectRef !== null &&
-              group?.memberProjectRefs.some(
-                (projectRef) =>
-                  projectRef.environmentId === contextualProjectRef.environmentId &&
-                  projectRef.projectId === contextualProjectRef.projectId,
-              );
-            await handleNewThread(
-              contextualRefBelongsToGroup
-                ? contextualProjectRef
-                : scopeProjectRef(project.environmentId, project.id),
-            );
-          },
-        }),
-      ),
-    [
-      contextualProjectRef,
-      handleNewThread,
-      pickerProjects,
-      projectEnvironmentLocationById,
-      projectGroupByTargetKey,
-      scratchWorkspaceRootFor,
-    ],
-  );
-  const noProjectThreadItems = useMemo<CommandPaletteActionItem[]>(
-    () =>
-      scratchTargetEnvironmentId === null
-        ? []
-        : [
-            {
-              kind: "action",
-              value: "new-thread-in:no-project",
-              searchTerms: ["no project", "without project", "none"],
-              title: "No project",
-              icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
-              shortcutCommand: "chat.newWithoutProject",
-              run: () => startScratchThread(scratchTargetEnvironmentId),
-            },
-          ],
-    [scratchTargetEnvironmentId, startScratchThread],
-  );
+          await handleNewThread(
+            contextualRefBelongsToGroup
+              ? contextualProjectRef
+              : scopeProjectRef(project.environmentId, project.id),
+          );
+        },
+      }),
+    );
+    if (scratchTargetEnvironmentId === null) return projectItems;
+
+    // "No project" goes right after the current project: visible without
+    // scrolling past every project, while the current one keeps its place.
+    // When the current thread has no project, it is the current entry and
+    // goes first. It keeps its own shortcut, so the projects' mod+1..9 hold.
+    const noProjectIndex = pickerProjects[0] !== undefined && isScratch(pickerProjects[0]) ? 0 : 1;
+    return [
+      ...projectItems.slice(0, noProjectIndex),
+      {
+        kind: "action" as const,
+        value: "new-thread-in:no-project",
+        searchTerms: ["no project", "without project", "none"],
+        title: "No project",
+        icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
+        shortcutCommand: "chat.newWithoutProject" as const,
+        run: () => startScratchThread(scratchTargetEnvironmentId),
+      },
+      ...projectItems.slice(noProjectIndex),
+    ];
+  }, [
+    contextualProjectRef,
+    handleNewThread,
+    pickerProjects,
+    projectEnvironmentLocationById,
+    projectGroupByTargetKey,
+    scratchTargetEnvironmentId,
+    scratchWorkspaceRootFor,
+    startScratchThread,
+  ]);
 
   const allThreadItems = useMemo(
     () =>
@@ -1720,37 +1723,17 @@ function OpenCommandPaletteDialog(props: {
     setAddProjectCloneFlow(null);
     setViewStack([]);
     setQuery("");
-    const currentPrefix =
-      currentProjectEnvironmentId && currentProjectId
-        ? `new-thread-in:${currentProjectEnvironmentId}:${currentProjectId}`
-        : null;
-    const prioritized = currentPrefix
-      ? [
-          ...projectThreadItems.filter((item) => item.value === currentPrefix),
-          ...projectThreadItems.filter((item) => item.value !== currentPrefix),
-        ]
-      : projectThreadItems;
+    // projectThreadItems already lists the current project first.
     pushPaletteView({
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [
-        {
-          value: "projects",
-          label: "Projects",
-          items: [
-            newChatItem,
-            ...enumerateCommandPaletteItems(prioritized),
-            ...noProjectThreadItems,
-          ],
-        },
+        { value: "projects", label: "Projects", items: [newChatItem, ...projectThreadItems] },
       ],
     });
   }, [
     clearOpenIntent,
     browseNavigation,
-    currentProjectEnvironmentId,
-    currentProjectId,
     newChatItem,
-    noProjectThreadItems,
     openIntent,
     projectThreadItems,
     pushPaletteView,
@@ -1813,7 +1796,7 @@ function OpenCommandPaletteDialog(props: {
         {
           value: "projects",
           label: "Projects",
-          items: [newChatItem, ...projectThreadItems, ...noProjectThreadItems],
+          items: [newChatItem, ...projectThreadItems],
         },
       ],
     });

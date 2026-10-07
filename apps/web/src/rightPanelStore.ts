@@ -7,11 +7,17 @@
  * terminal surfaces point at terminal session ids, file surfaces point at
  * workspace paths, and diff/files remain singleton surfaces.
  */
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { ChatAttachment, ScopedThreadRef } from "@t3tools/contracts";
+import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import {
+  EnvironmentId,
+  ThreadId,
+  type ChatAttachment,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { useClosedViewStore } from "./closedViewStore";
 import { resolveStorage } from "./lib/storage";
 import type { ThreadPanelPresentation } from "./rightPanelLayout";
 
@@ -77,10 +83,21 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 const RIGHT_PANEL_STORAGE_VERSION = 12;
 
 /**
- * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
+ * The pull-request list's shared panel (PULL_REQUESTS_PANEL_REF below) is session
  * state: reopening the app should show the list, not last session's tabs and detail fetches.
  */
 const isPullRequestsPanelKey = (threadKey: string) => threadKey.endsWith(":pull-requests-panel");
+
+/**
+ * The pull-request list's one shared panel. A fixed sentinel, not a real server: each surface
+ * already carries the server it was read from, so the key must not move when a capable server
+ * disconnects or reconnects. Real environment ids are server-generated UUIDs, so this string
+ * can never collide with one.
+ */
+export const PULL_REQUESTS_PANEL_REF: ScopedThreadRef = {
+  environmentId: EnvironmentId.make("pull-requests-panel"),
+  threadId: ThreadId.make("pull-requests-panel"),
+};
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -96,6 +113,8 @@ export interface ThreadPanelVisibility {
 interface RightPanelStoreState {
   /** Session-only: automatic reconciliation never changes a user's choice revision. */
   userActionRevisionByThreadKey: Record<string, number>;
+  /** Session-only: advances when a user closes tabs, so the closed ones enter reopen history. */
+  closeRevisionByThreadKey: Record<string, number>;
   getUserActionRevision: (ref: ScopedThreadRef) => number;
   openProactive: (
     ref: ScopedThreadRef,
@@ -351,10 +370,26 @@ const userAction = (
   state: RightPanelStoreState,
   ref: ScopedThreadRef,
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
+  closesView = false,
 ): Partial<RightPanelStoreState> => ({
   ...updateThread(state, ref, updater),
   userActionRevisionByThreadKey: userActionRevision(state, ref),
+  ...(closesView
+    ? {
+        closeRevisionByThreadKey: {
+          ...state.closeRevisionByThreadKey,
+          [scopedThreadKey(ref)]: (state.closeRevisionByThreadKey[scopedThreadKey(ref)] ?? 0) + 1,
+        },
+      }
+    : {}),
 });
+
+/** A user action that closes tabs; the tabs it removes are remembered for reopening. */
+const closeAction = (
+  state: RightPanelStoreState,
+  ref: ScopedThreadRef,
+  updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
+): Partial<RightPanelStoreState> => userAction(state, ref, updater, true);
 
 function normalizeRevealLine(line: number | undefined): number | null {
   if (line === undefined || !Number.isFinite(line)) return null;
@@ -500,6 +535,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
     (set, get) => ({
       byThreadKey: {},
       userActionRevisionByThreadKey: {},
+      closeRevisionByThreadKey: {},
       getUserActionRevision: (ref) =>
         get().userActionRevisionByThreadKey[scopedThreadKey(ref)] ?? 0,
       openProactive: (ref, surface, expectedUserActionRevision) => {
@@ -635,7 +671,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       closeTerminal: (ref, surfaceId, terminalId) =>
         set((state) =>
-          userAction(state, ref, (current) => {
+          closeAction(state, ref, (current) => {
             const surface = current.surfaces.find(
               (entry) => entry.id === surfaceId && entry.kind === "terminal",
             );
@@ -682,7 +718,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       closeSurface: (ref, surfaceId) =>
         set((state) =>
-          userAction(state, ref, (current) => {
+          closeAction(state, ref, (current) => {
             const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
             if (index < 0) return current;
             const surfaces = current.surfaces.filter((surface) => surface.id !== surfaceId);
@@ -700,7 +736,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       closeOtherSurfaces: (ref, surfaceId) =>
         set((state) =>
-          userAction(state, ref, (current) => {
+          closeAction(state, ref, (current) => {
             const surface = current.surfaces.find((entry) => entry.id === surfaceId);
             if (!surface || current.surfaces.length === 1) return current;
             return {
@@ -713,7 +749,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       closeSurfacesToRight: (ref, surfaceId) =>
         set((state) =>
-          userAction(state, ref, (current) => {
+          closeAction(state, ref, (current) => {
             const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
             if (index < 0 || index === current.surfaces.length - 1) return current;
             const surfaces = current.surfaces.slice(0, index + 1);
@@ -729,7 +765,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       closeAllSurfaces: (ref) =>
         set((state) =>
-          userAction(state, ref, (current) =>
+          closeAction(state, ref, (current) =>
             current.surfaces.length === 0
               ? current
               : { ...current, isOpen: false, surfaces: [], activeSurfaceId: null },
@@ -852,7 +888,8 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           if (
             !(threadKey in state.byThreadKey) &&
             !(threadKey in state.threadPanelVisibilityByThreadKey) &&
-            !(threadKey in state.userActionRevisionByThreadKey)
+            !(threadKey in state.userActionRevisionByThreadKey) &&
+            !(threadKey in state.closeRevisionByThreadKey)
           ) {
             return state;
           }
@@ -861,7 +898,14 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             state.threadPanelVisibilityByThreadKey;
           const { [threadKey]: _removedRevision, ...userActionRevisionByThreadKey } =
             state.userActionRevisionByThreadKey;
-          return { byThreadKey, threadPanelVisibilityByThreadKey, userActionRevisionByThreadKey };
+          const { [threadKey]: _removedCloseRevision, ...closeRevisionByThreadKey } =
+            state.closeRevisionByThreadKey;
+          return {
+            byThreadKey,
+            threadPanelVisibilityByThreadKey,
+            userActionRevisionByThreadKey,
+            closeRevisionByThreadKey,
+          };
         }),
     }),
     {
@@ -887,6 +931,35 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
     },
   ),
 );
+
+// Tabs a user closes enter the reopen history, the active one last so it reopens first.
+// Terminals end their process on close, and a browser tab is recorded with its session
+// snapshot once the server closes it (closePreviewSession), so neither is recorded here.
+useRightPanelStore.subscribe((next, previous) => {
+  if (next.closeRevisionByThreadKey === previous.closeRevisionByThreadKey) return;
+  for (const [threadKey, revision] of Object.entries(next.closeRevisionByThreadKey)) {
+    if (revision === previous.closeRevisionByThreadKey[threadKey]) continue;
+    const threadRef = parseScopedThreadKey(threadKey);
+    if (!threadRef) continue;
+    const before = previous.byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
+    const after = next.byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
+    const removed = before.surfaces.filter(
+      (surface) => !after.surfaces.some((entry) => entry.id === surface.id),
+    );
+    const closedInOrder = [
+      ...removed.filter((surface) => surface.id !== before.activeSurfaceId),
+      ...removed.filter((surface) => surface.id === before.activeSurfaceId),
+    ];
+    for (const surface of closedInOrder) {
+      if (
+        surface.kind === "terminal" ||
+        (surface.kind === "preview" && surface.resourceId !== null)
+      )
+        continue;
+      useClosedViewStore.getState().remember({ kind: "panel-tab", threadRef, surface });
+    }
+  }
+});
 
 export function selectThreadRightPanelState(
   byThreadKey: Record<string, ThreadRightPanelState>,

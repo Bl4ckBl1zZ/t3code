@@ -297,7 +297,6 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
       const scriptPath = path.join(fixtureDir, "codex-script.json");
       yield* fileSystem.writeFileString(
         scriptPath,
-        // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed script document read by the external Codex mock peer.
         JSON.stringify({
           rootThreadId: "probe-thread",
           notifications: [],

@@ -207,6 +207,7 @@ describe("proactive panels", () => {
         resolveProactiveRunDiffAction({
           checkpoint: changedCheckpoint,
           isGitRepo: true,
+          activeSurfaceKind: null,
         }),
       ).toBe(action);
     },
@@ -226,19 +227,49 @@ describe("proactive panels", () => {
       resolveProactiveRunDiffAction({
         checkpoint: undefined,
         isGitRepo: true,
+        activeSurfaceKind: null,
       }),
     ).toBe("defer");
     expect(
       resolveProactiveRunDiffAction({
         checkpoint: missingCheckpoint,
         isGitRepo: true,
+        activeSurfaceKind: null,
       }),
     ).toBe("defer");
     expect(
       resolveProactiveRunDiffAction({
         checkpoint: changedCheckpoint,
         isGitRepo: undefined,
+        activeSurfaceKind: null,
       }),
     ).toBe("defer");
+  });
+
+  it("leaves an already open diff and its chosen scope alone", () => {
+    const largeCheckpoint = {
+      status: "ready",
+      files: Array.from({ length: 3 }, (_, index) => ({
+        path: `src/app-${index}.ts`,
+        kind: "modified" as const,
+        additions: 20,
+        deletions: 0,
+      })),
+    } satisfies Pick<ThreadCheckpointSummary, "status" | "files">;
+
+    expect(
+      resolveProactiveRunDiffAction({
+        checkpoint: largeCheckpoint,
+        isGitRepo: true,
+        activeSurfaceKind: "diff",
+      }),
+    ).toBe("ignore");
+    expect(
+      resolveProactiveRunDiffAction({
+        checkpoint: largeCheckpoint,
+        isGitRepo: true,
+        activeSurfaceKind: "file",
+      }),
+    ).toBe("open");
   });
 });

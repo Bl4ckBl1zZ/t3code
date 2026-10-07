@@ -29,6 +29,7 @@ import {
   type OrchestrationEffectV2,
 } from "./EffectOutbox.ts";
 import {
+  BackgroundWorkSettleDispatch,
   executorLayer,
   isNonRetryableProviderTurnControlFailure,
   isNonRetryableProviderTurnStartPrerequisiteFailure,
@@ -41,7 +42,10 @@ import {
 } from "./EffectWorker.ts";
 import { RunFinalizationService } from "./RunFinalizationService.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
-import { ProviderTurnControlServiceV2 } from "./ProviderTurnControlService.ts";
+import {
+  ProviderTurnControlError,
+  ProviderTurnControlServiceV2,
+} from "./ProviderTurnControlService.ts";
 import {
   canTerminalizeProviderTurnStartFailure,
   ProviderTurnStartError,
@@ -97,13 +101,17 @@ function restartEffect(
 function makeExecutorLayer(input: {
   readonly events: Ref.Ref<ReadonlyArray<string>>;
   readonly failFirstStart?: Ref.Ref<boolean>;
+  readonly interrupt?: ProviderTurnControlServiceV2["Service"]["interrupt"];
 }) {
   const record = (event: string) => Ref.update(input.events, (events) => [...events, event]);
   const dependencies = Layer.mergeAll(
+    Layer.succeed(BackgroundWorkSettleDispatch, {
+      settle: (command) => record(command.type),
+    }),
     Layer.succeed(
       ProviderTurnControlServiceV2,
       ProviderTurnControlServiceV2.of({
-        interrupt: () => Effect.void,
+        interrupt: input.interrupt ?? (() => Effect.void),
         steer: () => Effect.void,
         interruptAndAwaitTerminal: (request) =>
           record(
@@ -198,6 +206,36 @@ it("does not retry pure interrupt races where the turn is already gone", () => {
     ),
   );
 });
+
+it.effect("settles a stopped run when its adapter has already lost the native turn", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const events = yield* Ref.make<ReadonlyArray<string>>([]);
+    const layer = makeExecutorLayer({
+      events,
+      interrupt: () =>
+        new ProviderTurnControlError({
+          threadId,
+          operation: "interrupt",
+          providerTurnId,
+          cause: "Provider turn is not active.",
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const executor = yield* OrchestrationEffectExecutorV2;
+      yield* executor.execute({
+        ...restartEffect(now, { type: "detach" }),
+        request: {
+          type: "provider-turn.interrupt",
+          providerSessionId: oldSessionId,
+          providerThreadId,
+          providerTurnId,
+        },
+      });
+    }).pipe(Effect.provide(layer));
+    assert.deepEqual(yield* Ref.get(events), ["thread.background-work.settle"]);
+  }),
+);
 
 it.effect("requeues a claim when a pre-execution worker check fails", () =>
   Effect.gen(function* () {

@@ -164,9 +164,10 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(
       return yield* new AgentSessionImportProjectNotFoundError({ projectId: input.projectId });
     return row.workspace_root;
   }).pipe(
-    Effect.catchTag("SqlError", (cause) =>
-      Effect.fail(new AgentSessionScanError({ operation: "read-projects", cause })),
-    ),
+    Effect.catchTags({
+      SqlError: (cause) =>
+        Effect.fail(new AgentSessionScanError({ operation: "read-projects", cause })),
+    }),
   );
   const workspaceRoot = yield* readProject;
   const sameRoot = (root: string) =>

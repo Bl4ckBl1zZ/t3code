@@ -3382,19 +3382,20 @@ describe("AcpAdapterV2", () => {
                       nativeTaskId: "task-generic-1",
                       prompt: "background subagent",
                       title: "background subagent",
-                      model: null,
+                      // A blank model is no model: the child keeps the parent's.
+                      model: " \t ",
                       status: "running",
                       childSessionId: null,
                       result: null,
                     }
                   : // Hydration-only shape (empty prompt, null title): without a
                     // carried-over lineage this update is dropped and the item
-                    // stays running forever.
+                    // stays running forever. It reports the model the spawn left out.
                     {
                       nativeTaskId: "task-generic-1",
                       prompt: "",
                       title: null,
-                      model: null,
+                      model: "SWE-1.7 Medium",
                       status: "completed",
                       childSessionId: null,
                       result: "SUB_DONE",
@@ -3446,10 +3447,16 @@ describe("AcpAdapterV2", () => {
 
         let subagentTurnItemId: string | null = null;
         let firstTerminalStatus: string | null = null;
+        const spawnedModels: Array<string | null> = [];
+        let childThreadModel: string | null = null;
         while (firstTerminalStatus === null) {
           const event = yield* Queue.take(events);
           if (event.type === "turn_item.updated" && event.turnItem.type === "subagent") {
             subagentTurnItemId = event.turnItem.id;
+          }
+          if (event.type === "subagent.updated") spawnedModels.push(event.subagent.model);
+          if (event.type === "app_thread.created") {
+            childThreadModel = event.appThread.modelSelection.model;
           }
           if (event.type === "turn.terminal" && event.providerTurnId === firstProviderTurnId) {
             firstTerminalStatus = event.status;
@@ -3457,6 +3464,8 @@ describe("AcpAdapterV2", () => {
         }
         assert.equal(firstTerminalStatus, "interrupted");
         assert.notEqual(subagentTurnItemId, null);
+        assert.isNull(spawnedModels[0]);
+        assert.equal(childThreadModel, modelSelection.model);
 
         subagentPhase = "complete";
         const secondNow = yield* DateTime.now;
@@ -3476,8 +3485,10 @@ describe("AcpAdapterV2", () => {
         });
         let carriedItemStatus: string | null = null;
         let secondTerminalStatus: string | null = null;
+        let reportedModel: string | null = null;
         while (secondTerminalStatus === null) {
           const event = yield* Queue.take(events);
+          if (event.type === "subagent.updated") reportedModel = event.subagent.model;
           if (
             event.type === "turn_item.updated" &&
             event.turnItem.type === "subagent" &&
@@ -3491,6 +3502,7 @@ describe("AcpAdapterV2", () => {
         }
         assert.equal(carriedItemStatus, "completed");
         assert.equal(secondTerminalStatus, "completed");
+        assert.equal(reportedModel, "SWE-1.7 Medium");
       }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

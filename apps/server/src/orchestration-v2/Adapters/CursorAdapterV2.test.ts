@@ -37,12 +37,15 @@ import { isCursorCancellationError, loggedCursorAgentOptions } from "./CursorAge
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 
 describe("CursorAdapterV2", () => {
-  for (const { status, model } of [
-    { status: "finished", model: undefined },
-    { status: "cancelled", model: "claude-opus-4-6" },
-    { status: "error", model: "custom-fable" },
+  for (const { status, model, lateModel } of [
+    { status: "finished", model: undefined, lateModel: undefined },
+    { status: "cancelled", model: "claude-opus-4-6", lateModel: undefined },
+    { status: "error", model: "custom-fable", lateModel: undefined },
+    // The completion reports the model the start left out, or leaves it out itself.
+    { status: "finished", model: undefined, lateModel: "gpt-6-sol" },
+    { status: "finished", model: "gpt-6-sol", lateModel: null },
   ] as const) {
-    it.effect(`settles missing task completions when the Cursor run is ${status}`, () =>
+    it.effect(`projects Cursor tasks: ${status}, late model ${String(lateModel)}`, () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -77,21 +80,29 @@ describe("CursorAdapterV2", () => {
                 close: Effect.void,
                 send: (input) =>
                   Effect.gen(function* () {
-                    yield* input.onDelta!({
-                      type: "tool-call-started",
-                      modelCallId: "model-call",
-                      callId: "task-call",
-                      toolCall: {
-                        type: "task",
-                        args: {
-                          description: "Review",
-                          prompt: "Review the code.",
-                          subagentType: { kind: "generalPurpose" },
-                          ...(model === undefined ? {} : { model }),
-                          ...(model === undefined ? {} : { model }),
+                    const updates =
+                      lateModel !== undefined
+                        ? (["tool-call-started", "tool-call-completed"] as const)
+                        : (["tool-call-started"] as const);
+                    for (const type of updates) {
+                      yield* input.onDelta!({
+                        type,
+                        modelCallId: "model-call",
+                        callId: "task-call",
+                        toolCall: {
+                          type: "task",
+                          args: {
+                            description: "Review",
+                            prompt: "Review the code.",
+                            subagentType: { kind: "generalPurpose" },
+                            ...(model === undefined ? {} : { model }),
+                            ...(type === "tool-call-completed"
+                              ? { model: lateModel ?? undefined }
+                              : {}),
+                          },
                         },
-                      },
-                    }).pipe(Effect.orDie);
+                      }).pipe(Effect.orDie);
+                    }
                     return {
                       agentId: "native-cursor-lifecycle",
                       runId: "native-cursor-run",
@@ -168,10 +179,16 @@ describe("CursorAdapterV2", () => {
         const rows = events.filter((event) => event.type === "subagent.updated");
         assert.equal(rows[0]?.subagent.status, "running");
         assert.equal(rows[0]?.subagent.model, model ?? null);
-        assert.equal(rows[0]?.subagent.model, model ?? null);
+        assert.equal(rows.at(-1)?.subagent.model, lateModel ?? model ?? null);
         assert.equal(
           rows.at(-1)?.subagent.status,
-          status === "finished" ? "idle" : status === "cancelled" ? "cancelled" : "failed",
+          lateModel !== undefined
+            ? "completed"
+            : status === "finished"
+              ? "idle"
+              : status === "cancelled"
+                ? "cancelled"
+                : "failed",
         );
         assert.isNotNull(rows.at(-1)?.subagent.completedAt);
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, idAllocatorLayer))),

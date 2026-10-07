@@ -1,7 +1,5 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeCrypto from "node:crypto";
-
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -39,6 +37,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
@@ -68,7 +67,8 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   tabId?: PreviewTabId,
 ): Effect.fn.Return<
   A,
-  import("@t3tools/contracts").PreviewAutomationError,
+  | import("@t3tools/contracts").PreviewAutomationError
+  | import("@t3tools/contracts").OrchestratorMcpFailure,
   McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
 > {
   const scope = yield* McpInvocationContext.requireMcpCapability("preview");
@@ -121,11 +121,14 @@ const writeScreenshotFile = (input: {
 
 const saveSnapshotScreenshotArtifact = Effect.fn("PreviewToolkit.saveSnapshotScreenshotArtifact")(
   function* (input: {
-    readonly scope: McpInvocationContext.McpInvocationScope;
+    readonly scope: McpInvocationContext.McpThreadInvocationScope;
     readonly screenshotBase64: string;
   }) {
     const config = yield* ServerConfig.ServerConfig;
-    const fileName = `browser-screenshot-${(yield* Clock.currentTimeMillis).toString(36)}-${NodeCrypto.randomUUID().slice(0, 8)}.png`;
+    const crypto = yield* Crypto.Crypto;
+    // Two saves in the same millisecond must not overwrite each other.
+    const unique = (yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8);
+    const fileName = `browser-screenshot-${(yield* Clock.currentTimeMillis).toString(36)}-${unique}.png`;
     const path = yield* Path.Path;
     const absolutePath = path.join(config.browserArtifactsDir, fileName);
     yield* writeScreenshotFile({ absolutePath, screenshotBase64: input.screenshotBase64 }).pipe(
@@ -134,9 +137,9 @@ const saveSnapshotScreenshotArtifact = Effect.fn("PreviewToolkit.saveSnapshotScr
           new PreviewAutomationScreenshotSaveError({
             operation: "snapshot",
             environmentId: input.scope.environmentId,
-            threadId: input.scope.threadId,
-            providerSessionId: input.scope.providerSessionId,
-            providerInstanceId: input.scope.providerInstanceId,
+            threadId: input.scope.thread.threadId,
+            providerSessionId: input.scope.thread.providerSessionId,
+            providerInstanceId: input.scope.thread.providerInstanceId,
             savePath: fileName,
             reason: "failed to write the screenshot artifact",
             cause,
@@ -149,7 +152,7 @@ const saveSnapshotScreenshotArtifact = Effect.fn("PreviewToolkit.saveSnapshotScr
 
 const saveSnapshotScreenshot = Effect.fn("PreviewToolkit.saveSnapshotScreenshot")(
   function* (input: {
-    readonly scope: McpInvocationContext.McpInvocationScope;
+    readonly scope: McpInvocationContext.McpThreadInvocationScope;
     readonly savePath: string;
     readonly screenshotBase64: string;
   }) {
@@ -158,9 +161,9 @@ const saveSnapshotScreenshot = Effect.fn("PreviewToolkit.saveSnapshotScreenshot"
       new PreviewAutomationScreenshotSaveError({
         operation: "snapshot",
         environmentId: scope.environmentId,
-        threadId: scope.threadId,
-        providerSessionId: scope.providerSessionId,
-        providerInstanceId: scope.providerInstanceId,
+        threadId: scope.thread.threadId,
+        providerSessionId: scope.thread.providerSessionId,
+        providerInstanceId: scope.thread.providerInstanceId,
         savePath,
         reason,
         ...(cause === undefined ? {} : { cause }),
@@ -171,7 +174,7 @@ const saveSnapshotScreenshot = Effect.fn("PreviewToolkit.saveSnapshotScreenshot"
 
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const projection = yield* threadManagement
-      .getThreadProjection(scope.threadId)
+      .getThreadProjection(scope.thread.threadId)
       .pipe(Effect.mapError((cause) => fail("failed to resolve the thread workspace", cause)));
     if (projection.thread.deletedAt !== null) {
       return yield* fail("thread was not found");
@@ -337,21 +340,27 @@ export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(
 });
 
 const handlers = {
-  preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
-  preview_open: (input) =>
+  preview_status: McpToolAccess.readsAsCaller((input) =>
+    invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
+  ),
+  preview_open: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
-  preview_navigate: (input) =>
+  ),
+  preview_navigate: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs),
-  preview_resize: (input) =>
+  ),
+  preview_resize: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationResizeResult>("resize", input, input.timeoutMs),
-  preview_set_appearance: (input) =>
+  ),
+  preview_set_appearance: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
-  preview_snapshot: (input) =>
+  ),
+  preview_snapshot: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const { includeImage: _includeImage, save, savePath, ...target } = input ?? {};
       const snapshot = yield* invokeTargeted<PreviewAutomationSnapshot>("snapshot", target);
       if (savePath !== undefined) {
-        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const scope = yield* McpInvocationContext.requireMcpCapability("preview");
         const savedScreenshotPath = yield* saveSnapshotScreenshot({
           scope,
           savePath,
@@ -360,7 +369,7 @@ const handlers = {
         return { ...snapshot, savedScreenshotPath };
       }
       if (save === true) {
-        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const scope = yield* McpInvocationContext.requireMcpCapability("preview");
         const savedScreenshotPath = yield* saveSnapshotScreenshotArtifact({
           scope,
           screenshotBase64: snapshot.screenshot.data,
@@ -369,20 +378,31 @@ const handlers = {
       }
       return snapshot;
     }),
-  preview_click: (input) =>
+  ),
+  preview_click: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<void>("click", input, input.timeoutMs).pipe(Effect.as({})),
-  preview_type: (input) => invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.as({})),
-  preview_press: (input) => invokeTargeted<void>("press", input).pipe(Effect.as({})),
-  preview_scroll: (input) => invokeTargeted<void>("scroll", input).pipe(Effect.as({})),
-  preview_evaluate: (input) =>
+  ),
+  preview_type: McpToolAccess.actsAsCaller((input) =>
+    invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.as({})),
+  ),
+  preview_press: McpToolAccess.actsAsCaller((input) =>
+    invokeTargeted<void>("press", input).pipe(Effect.as({})),
+  ),
+  preview_scroll: McpToolAccess.actsAsCaller((input) =>
+    invokeTargeted<void>("scroll", input).pipe(Effect.as({})),
+  ),
+  preview_evaluate: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<unknown>("evaluate", input).pipe(
       Effect.map((result) => ({ value: result ?? null })),
     ),
-  preview_wait_for: (input) =>
+  ),
+  preview_wait_for: McpToolAccess.readsAsCaller((input) =>
     invokeTargeted<void>("waitFor", input, input.timeoutMs).pipe(Effect.as({})),
-  preview_recording_start: (input) =>
+  ),
+  preview_recording_start: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
-  preview_recording_stop: (input) =>
+  ),
+  preview_recording_stop: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.requireMcpCapability("preview");
       const response = yield* invokeTargeted<unknown>(
@@ -390,16 +410,18 @@ const handlers = {
         { ...input, transferToEnvironment: true },
         PREVIEW_RECORDING_STOP_TIMEOUT_MS,
       );
-      return yield* claimPreviewRecording(scope.threadId, response);
+      return yield* claimPreviewRecording(scope.thread.threadId, response);
     }),
-} satisfies Parameters<typeof PreviewToolkit.toLayer>[0];
+  ),
+} satisfies McpToolAccess.Handlers<typeof PreviewToolkit.tools>;
 
 const { preview_snapshot, ...standardHandlers } = handlers;
 
-export const PreviewStandardToolkitHandlersLive = PreviewStandardToolkit.toLayer(standardHandlers);
+export const PreviewStandardToolkitHandlersLive = McpToolAccess.toLayer(
+  PreviewStandardToolkit,
+  standardHandlers,
+);
 
-export const PreviewSnapshotToolkitHandlersLive = PreviewSnapshotToolkit.toLayer({
+export const PreviewSnapshotToolkitHandlersLive = McpToolAccess.toLayer(PreviewSnapshotToolkit, {
   preview_snapshot,
 });
-
-export const PreviewToolkitHandlersLive = PreviewToolkit.toLayer(handlers);

@@ -68,6 +68,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
   type ProviderChangeRequest,
@@ -469,6 +470,9 @@ function withRateLimitBackoff(
       ),
       Effect.flatMap((lease) =>
         effect.pipe(
+          // What the reader asked for may spend the host's reserve and pass a pause; what the
+          // server reads on its own may not.
+          Effect.provideService(AllowGitHubReserve, allowPaused),
           Effect.tap(() => limits.recordSuccess({ ...key, lease })),
           Effect.tapError((error) =>
             error.reason === "rate-limited"
@@ -882,7 +886,7 @@ export const make = Effect.gen(function* () {
           // unreadable worktree would otherwise report the whole host as signed out.
           const roots =
             viewerRoots.get(host) ?? forHost.map(({ project }) => project.workspaceRoot);
-          return Effect.firstSuccessOf(roots.map((cwd) => api.getViewer({ cwd }))).pipe(
+          return Effect.firstSuccessOf(roots.map((cwd) => api.getViewer({ cwd, host }))).pipe(
             Effect.map((viewer) => ({
               host,
               kind: api.kind,

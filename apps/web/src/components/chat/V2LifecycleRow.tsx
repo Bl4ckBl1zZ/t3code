@@ -34,7 +34,7 @@ import { useProviderEntryByInstanceId } from "../../state/providerEntries";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { AgentElapsed } from "./AgentElapsed";
 import { SubagentTooltipContent } from "./SubagentTooltipContent";
-import { resolveThreadModelBadge } from "./threadModelBadge";
+import { resolveSubagentModelTraits, resolveThreadModelBadge } from "./threadModelBadge";
 import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
@@ -338,6 +338,15 @@ function SubagentTimelineTooltip(props: {
       showInstanceBadge={
         providerEntry !== null && shouldShowInstanceBadge(providerEntry, providerEntries.values())
       }
+      traits={resolveSubagentModelTraits({
+        subagent: {
+          origin: item.origin,
+          model: agent?.model ?? null,
+          providerInstanceId: item.providerInstanceId,
+        },
+        modelSelection: child?.modelSelection,
+        providerEntry,
+      })}
       elapsed={
         <AgentElapsed
           agent={{

@@ -1112,7 +1112,6 @@ describe("HermesServeAdapterV2", () => {
               tool_calls: [
                 {
                   id: "call-1",
-                  // @effect-diagnostics-next-line preferSchemaOverJson:off - wire-shaped tool-call fixture.
                   function: { name: "terminal", arguments: JSON.stringify({ command: "send" }) },
                 },
               ],

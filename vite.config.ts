@@ -155,7 +155,9 @@ export default defineConfig({
       "t3code/no-native-title-tooltip": "error",
       "t3code/no-unscoped-has": "error",
       "t3code/namespace-node-imports": "error",
+      "t3code/prefer-catch-tags": "error",
       "t3code/require-suppression-reason": "error",
+      "t3code/no-raw-mcp-registration": "error",
     },
     overrides: [
       {
@@ -167,6 +169,11 @@ export default defineConfig({
             { paths: RESTRICTED_IMPORT_PATHS, patterns: RESTRICTED_UI_VARIANT_PATTERNS },
           ],
         },
+      },
+      {
+        // The registration helpers that only accept handlers built by McpToolAccess.
+        files: ["apps/server/src/mcp/McpHttpServer.ts"],
+        rules: { "t3code/no-raw-mcp-registration": "off" },
       },
     ],
     options: {

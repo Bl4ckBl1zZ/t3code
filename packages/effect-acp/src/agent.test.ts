@@ -34,6 +34,14 @@ const SessionCancelNotification = jsonRpcNotification(
 const ExtPingNotification = jsonRpcNotification("x/ping", Schema.Struct({ count: Schema.Number }));
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
+/** A response whose cause is a handler's defect, as RpcServer encodes it. */
+const DieResponse = Schema.Struct({
+  id: Schema.Number,
+  error: Schema.Struct({
+    _tag: Schema.Literal("Cause"),
+    data: Schema.Tuple([Schema.Struct({ _tag: Schema.Literal("Die") })]),
+  }),
+});
 const decodeRequestPermissionRequest = Schema.decodeEffect(
   Schema.fromJsonString(RequestPermissionRequest),
 );
@@ -251,5 +259,38 @@ it.effect("effect-acp agent uses distinct ids for RPC calls and extension reques
       assert.equal(permission.outcome.outcome, "selected");
       assert.deepEqual(yield* Fiber.join(extFiber), { ok: true });
     }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+  }),
+);
+
+it.effect("effect-acp agent answers a request whose handler dies with an error for it", () =>
+  Effect.gen(function* () {
+    const { stdio, input, output } = yield* makeInMemoryStdio();
+    const scope = yield* Scope.make();
+    const context = yield* Layer.buildWithScope(AcpAgent.layer(stdio), scope);
+    const agent = yield* Effect.service(AcpAgent.AcpAgent).pipe(Effect.provide(context));
+    yield* agent.handleInitialize(() => Effect.die(new Error("handler bug")));
+
+    yield* Queue.offer(
+      input,
+      yield* encodeJsonl(InitializeRequest, {
+        jsonrpc: "2.0",
+        id: 7,
+        method: "initialize",
+        params: {
+          protocolVersion: 1,
+          clientCapabilities: {
+            fs: { readTextFile: false, writeTextFile: false },
+            terminal: false,
+          },
+          clientInfo: { name: "effect-acp-test", version: "0.0.0" },
+        },
+        headers: [],
+      }),
+    );
+    const response = yield* Queue.take(output).pipe(
+      Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(DieResponse))),
+    );
+    assert.equal(response.id, 7);
+    yield* Scope.close(scope, Exit.void);
   }),
 );

@@ -51,6 +51,7 @@ import {
   connectionRouteLabel,
   connectionRoutes,
   connectionStatusText,
+  environmentMcpUrl,
 } from "@t3tools/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
@@ -1460,6 +1461,25 @@ function SavedBackendListRow({
     },
     [copyTraceIdToClipboard],
   );
+  const { copyToClipboard: copyMcpUrl } = useCopyToClipboard<{ url: string }>({
+    target: "MCP URL",
+    onCopy: ({ url }) => {
+      toastManager.add({
+        type: "success",
+        title: "MCP URL copied",
+        description: `Add it to an agent, e.g. claude mcp add --transport http t3 ${url}`,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not copy MCP URL",
+          description: error.message,
+        }),
+      );
+    },
+  });
   const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
   const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
   // An outdated host never delivers a server config, so its current version
@@ -1468,6 +1488,21 @@ function SavedBackendListRow({
   const discoveredDescriptor = Option.getOrNull(
     relayDiscovery.environments.get(environmentId)?.status ?? Option.none(),
   )?.descriptor;
+  // Held across discovery refreshes, so Copy MCP URL does not vanish while
+  // T3 Connect discovery reloads.
+  const discoveredRelayHttpBaseUrl =
+    relayDiscovery.environments.get(environmentId)?.environment.endpoint.httpBaseUrl;
+  const [lastRelayHttpBaseUrl, setLastRelayHttpBaseUrl] = useState(discoveredRelayHttpBaseUrl);
+  if (
+    discoveredRelayHttpBaseUrl !== undefined &&
+    discoveredRelayHttpBaseUrl !== lastRelayHttpBaseUrl
+  ) {
+    setLastRelayHttpBaseUrl(discoveredRelayHttpBaseUrl);
+  }
+  const mcpUrl = environmentMcpUrl({
+    entry: environment.entry,
+    relayHttpBaseUrl: discoveredRelayHttpBaseUrl ?? lastRelayHttpBaseUrl,
+  });
   const resumingServerUpdate =
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const sshTarget =
@@ -1689,6 +1724,11 @@ function SavedBackendListRow({
                     <RouteIcon />
                     {routesOpen ? "Hide routes" : "Routes"}
                   </MenuItem>
+                  {mcpUrl ? (
+                    <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>
+                      Copy MCP URL
+                    </MenuItem>
+                  ) : null}
                   {errorTraceId ? (
                     <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
                   ) : null}

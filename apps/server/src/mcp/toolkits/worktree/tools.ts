@@ -18,14 +18,21 @@ import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagem
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { WorktreeMcpService } from "../../WorktreeMcpService.ts";
 
-const dependencies = [McpInvocationContext.McpInvocationContext, WorktreeMcpService];
+const dependencies = [
+  McpInvocationContext.McpInvocationContext,
+  ThreadManagementService,
+  WorktreeMcpService,
+];
+
+/** What handoff and status fail with, including the access gate's refusal. */
+const WorktreeToolFailure = Schema.Union([WorktreeMcpFailure, OrchestratorMcpFailure]);
 
 export const WorktreeHandoffTool = Tool.make("t3_worktree_handoff", {
   description:
     "Move this agent thread into a new git worktree. Creates the worktree branch (optionally from origin), re-points the thread at the worktree, and by default runs the project's setup script there. Changing the workspace detaches the live provider session, so the current turn ends shortly after the handoff is recorded; call this as the last action of the turn. To keep working after the handoff, pass continuationPrompt with the remaining work: it is queued as the thread's next message and starts a new turn inside the worktree with the conversation preserved. Without it the thread stays idle until the next message. The worktree is not removed automatically when the thread is deleted. Fails if the thread is already attached to a worktree.",
   parameters: WorktreeMcpHandoffInput,
   success: WorktreeMcpHandoffResult,
-  failure: WorktreeMcpFailure,
+  failure: WorktreeToolFailure,
   failureMode: "return",
   dependencies,
 })
@@ -43,7 +50,7 @@ export const WorktreeStatusTool = Tool.make("t3_worktree_status", {
   // Schema.Struct({}) serializes to `anyOf: [object, array]`, which is not a
   // valid MCP tool input schema and makes clients reject the whole server.
   success: WorktreeMcpStatusResult,
-  failure: WorktreeMcpFailure,
+  failure: WorktreeToolFailure,
   failureMode: "return",
   dependencies,
 })

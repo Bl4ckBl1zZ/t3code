@@ -402,6 +402,127 @@ describe("OpenCodeAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(idAllocatorLayer, serverConfigLayer))),
   );
 
+  it.effect("ends a turn on the provider thread it started on", () =>
+    Effect.gen(function* () {
+      const idAllocator = yield* IdAllocatorV2;
+      const serverConfig = yield* ServerConfig;
+      const nativeEvents = asyncEventStream();
+      const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
+      const root = "ses_forked_row";
+      const client = {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
+          promptAsync: async () => ({ data: true }),
+          abort: async () => ({ data: true }),
+        },
+      } as unknown as OpencodeClient;
+      const unused = (operation: string) => () => Effect.die(`${operation} is not used`);
+      const instanceId = ProviderInstanceId.make("opencode");
+      const threadId = ThreadId.make("thread-opencode-forked-row");
+      const modelSelection = { instanceId, model: "anthropic/claude-sonnet" };
+      const policy = runtimePolicy("full-access", { cwd: "/workspace" });
+      const adapter = makeOpenCodeAdapterV2({
+        instanceId,
+        settings: OPENCODE_TEST_SETTINGS,
+        environment: {},
+        runtime: {
+          startOpenCodeServerProcess: unused("startOpenCodeServerProcess"),
+          connectToOpenCodeServer: () =>
+            Effect.succeed({
+              url: "test://opencode",
+              version: "test",
+              exitCode: null,
+              external: true,
+            }),
+          runOpenCodeCommand: unused("runOpenCodeCommand"),
+          createOpenCodeSdkClient: () => client,
+          loadOpenCodeInventory: unused("loadOpenCodeInventory"),
+          loadInventoryFromCli: unused("loadInventoryFromCli"),
+        },
+        idAllocator,
+        serverConfig,
+      });
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-opencode-forked-row"),
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const providerThread = yield* session.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      // A forked run starts on its own row for the same native session, while
+      // the adapter tracks the session under the id it minted.
+      const forkedRow = {
+        ...providerThread,
+        id: ProviderThreadId.make("provider-thread:opencode-test:forked-run-row"),
+      };
+      const now = yield* DateTime.now;
+      yield* session.startTurn({
+        appThread: {
+          id: threadId,
+          projectId: ProjectId.make("project-opencode-forked-row"),
+          title: "forked row",
+          providerInstanceId: instanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: forkedRow.id,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdBy: "user",
+          creationSource: "web",
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+        threadId,
+        runId: RunId.make("run-opencode-forked-row"),
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: RunAttemptId.make("attempt-opencode-forked-row"),
+        rootNodeId: NodeId.make("node-opencode-forked-row"),
+        providerThread: forkedRow,
+        message: {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: MessageId.make("message-opencode-forked-row"),
+          text: "hello",
+          attachments: [],
+        },
+        modelSelection,
+        runtimePolicy: policy,
+      });
+      const terminal = yield* session.events.pipe(
+        Stream.filter(
+          (event): event is Extract<typeof event, { type: "turn.terminal" }> =>
+            event.type === "turn.terminal",
+        ),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      const status = (type: "busy" | "idle") => ({
+        type: "session.status",
+        properties: { sessionID: root, status: { type } },
+      });
+      yield* push(status("busy"));
+      yield* push(status("idle"));
+      assert.equal(
+        Option.getOrUndefined(yield* Fiber.join(terminal))?.providerThreadId,
+        forkedRow.id,
+      );
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(idAllocatorLayer, serverConfigLayer))),
+  );
+
   it.effect("keeps search output on the search row and leaves empty searches without results", () =>
     Effect.gen(function* () {
       const idAllocator = yield* IdAllocatorV2;
