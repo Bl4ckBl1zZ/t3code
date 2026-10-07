@@ -92,6 +92,64 @@ final class PullRequestQuickActionTests: XCTestCase {
         XCTAssertEqual(PullRequestActionLogic.quickActions(link(state: "closed", stack: stack)), [.reopen])
     }
 
+    // MARK: Expected state after a linked quick action
+
+    func testAnAcceptedActionMovesTheStateTheListAndLinksShare() {
+        XCTAssertEqual(PullRequestActionLogic.outcome(of: .close, state: .open)?.state, .closed)
+        XCTAssertEqual(PullRequestActionLogic.outcome(of: .reopen, state: .closed)?.state, .open)
+        XCTAssertEqual(PullRequestActionLogic.outcome(of: .merge, state: .open)?.state, .merged)
+        XCTAssertNil(PullRequestActionLogic.outcome(of: .close, state: .open)?.isDraft)
+        XCTAssertEqual(PullRequestActionLogic.outcome(of: .ready, state: .open)?.isDraft, false)
+        XCTAssertEqual(PullRequestActionLogic.outcome(of: .draft, state: .open)?.isDraft, true)
+        XCTAssertNil(PullRequestActionLogic.outcome(of: .updateBranch, state: .open))
+    }
+
+    func testTheRowShowsAndActsFromTheExpectedStateUntilTheThreadReadsItAgain() throws {
+        let open = link()
+        let closing = try XCTUnwrap(LinkedPullRequestOverlays.overlay(after: .close, shown: open.snapshot, basis: open.snapshot))
+        let shown = LinkedPullRequestOverlays.shown(open, overlay: closing)
+        XCTAssertEqual(shown.snapshot?.state, "closed")
+        XCTAssertEqual(PullRequestActionLogic.quickActions(shown), [.reopen])
+
+        // Reopening from the shown state: expected open again, still over the thread's snapshot.
+        let reopening = try XCTUnwrap(LinkedPullRequestOverlays.overlay(after: .reopen, shown: shown.snapshot, basis: open.snapshot))
+        XCTAssertEqual(reopening.basis, open.snapshot)
+        XCTAssertFalse(LinkedPullRequestOverlays.holds(reopening, over: open.snapshot), "the thread already says open")
+
+        let key = LinkedPullRequestOverlays.key(threadID: "a", link: open)
+        XCTAssertEqual(LinkedPullRequestOverlays.reconcile([key: closing], threadID: "a", links: [open]).count, 1)
+        // The server's next read wins, whether or not it agrees.
+        for read in [link(state: "closed"), link(draft: true)] {
+            XCTAssertEqual(LinkedPullRequestOverlays.shown(read, overlay: closing).snapshot, read.snapshot)
+            XCTAssertTrue(LinkedPullRequestOverlays.reconcile([key: closing], threadID: "a", links: [read]).isEmpty)
+        }
+    }
+
+    func testReadyKeepsTheStateAndMergeOffersNothingMore() throws {
+        let draft = link(draft: true)
+        let ready = try XCTUnwrap(LinkedPullRequestOverlays.overlay(after: .ready, shown: draft.snapshot, basis: draft.snapshot))
+        XCTAssertEqual(PullRequestActionLogic.quickActions(LinkedPullRequestOverlays.shown(draft, overlay: ready)), [.merge, .close])
+        let merged = try XCTUnwrap(LinkedPullRequestOverlays.overlay(after: .merge, shown: link().snapshot, basis: link().snapshot))
+        XCTAssertEqual(PullRequestActionLogic.quickActions(LinkedPullRequestOverlays.shown(link(), overlay: merged)), [])
+        XCTAssertNil(LinkedPullRequestOverlays.overlay(after: .close, shown: nil, basis: nil))
+    }
+
+    func testAnOverlayStaysWithItsThreadAndLink() throws {
+        var linked = link()
+        linked.linkedAt = "2026-10-07T10:00:00.000Z"
+        let overlay = try XCTUnwrap(LinkedPullRequestOverlays.overlay(after: .close, shown: linked.snapshot, basis: linked.snapshot))
+        let overlays = [LinkedPullRequestOverlays.key(threadID: "a", link: linked): overlay]
+        // Unlinked: gone. Another thread with the same request: never applies there.
+        XCTAssertTrue(LinkedPullRequestOverlays.reconcile(overlays, threadID: "a", links: []).isEmpty)
+        XCTAssertTrue(LinkedPullRequestOverlays.reconcile(overlays, threadID: "b", links: [linked]).isEmpty)
+        XCTAssertNil(overlays[LinkedPullRequestOverlays.key(threadID: "b", link: linked)])
+        // Linked again: a new link, with no overlay of its own.
+        var relinked = linked
+        relinked.linkedAt = "2026-10-07T11:00:00.000Z"
+        XCTAssertNil(overlays[LinkedPullRequestOverlays.key(threadID: "a", link: relinked)])
+        XCTAssertTrue(LinkedPullRequestOverlays.reconcile(overlays, threadID: "a", links: [relinked]).isEmpty)
+    }
+
     func testQuickMergeRunsOnlyWhenTheDetailOffersMerge() throws {
         XCTAssertNil(PullRequestActionLogic.quickMergeRefusal(try detail()))
         XCTAssertEqual(PullRequestActionLogic.quickMergeRefusal(try detail(["isDraft": true])), "This pull request cannot be merged.")

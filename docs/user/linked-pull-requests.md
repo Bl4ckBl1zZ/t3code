@@ -32,8 +32,9 @@ in the thread's environment. Merged requests and requests whose state has not lo
 
 On iOS, swipe right or long-press a request in **Linked pull requests** for the same quick actions,
 or long-press the pull request row in Details. **Close** asks first. **Merge** works as it does in
-the pull-request list; a request that belongs to a stack offers no **Merge** there. The row shows the
-new state after the server next checks the request, which it does right after a merge.
+the pull-request list; a request that belongs to a stack offers no **Merge** there. Once the host
+accepts an action, the row shows the new state at once, and the server's next check of the request
+replaces it.
 
 In GitHub PR details, open **Stack** to browse layers, refresh their state, or review
 a merge/rebase. The confirmation captures the revisions you reviewed. A failure

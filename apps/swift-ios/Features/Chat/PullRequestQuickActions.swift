@@ -7,6 +7,8 @@ struct PullRequestQuickActionTarget {
     let number: Int
     let url: String
     let access: FeaturePullRequestAccess
+    /// Hears the action once the host has accepted it.
+    var succeeded: ((NativePullRequestAction) -> Void)? = nil
 }
 
 /// Runs the one-tap actions a pull request row offers, wherever the row sits:
@@ -56,6 +58,7 @@ final class PullRequestQuickActionRunner {
         }
         do {
             try await run(target.number, target.url, .init(action: action.rawValue, mergeMethod: mergeMethod, updateMethod: nil))
+            target.succeeded?(action)
             if action == .merge { T3HUD.show("Merged #\(target.number)", systemImage: "arrow.triangle.merge") }
             else { PlatformHapticEngine.shared.play(.success) }
         } catch {
@@ -124,6 +127,20 @@ extension View {
         } message: { failure in
             Text(failure.message)
         }
+    }
+}
+
+extension PullRequestQuickActionRunner {
+    /// Acts on a thread's linked pull request as `shown` on its row. Once the
+    /// host accepts, the row shows the expected state, and offers actions from
+    /// it, until the thread's snapshot of the request moves on.
+    func trigger(_ action: NativePullRequestAction, link: FeatureLinkedPullRequest, shown: FeatureLinkedPullRequest,
+                 threadID: String, client: any FeatureClient, overlays: Binding<[String: LinkedPullRequestOverlay]>) {
+        let key = LinkedPullRequestOverlays.key(threadID: threadID, link: link)
+        trigger(action, .init(id: key, number: link.number, url: link.url,
+            access: FeaturePullRequestAccess(link: link, client: client, threadID: threadID)) { action in
+                overlays.wrappedValue[key] = LinkedPullRequestOverlays.overlay(after: action, shown: shown.snapshot, basis: link.snapshot)
+            })
     }
 }
 

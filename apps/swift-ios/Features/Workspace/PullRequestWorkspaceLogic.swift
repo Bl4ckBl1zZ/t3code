@@ -179,18 +179,9 @@ extension NativePullRequestWorkspaceLogic {
     static let overrideTrust: TimeInterval = 60
 
     static func override(after action: NativePullRequestAction, entry: PullRequestListEntry, now: Date, token: Int) -> NativePullRequestOverride? {
-        let updatedAt = now.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
-        func note(_ state: PullRequestState, isDraft: Bool? = nil) -> NativePullRequestOverride {
-            NativePullRequestOverride(state: state, isDraft: isDraft, updatedAt: updatedAt, token: token, at: now)
-        }
-        switch action {
-        case .close: return note(.closed)
-        case .reopen: return note(.open)
-        case .merge: return note(.merged)
-        case .draft: return note(entry.state, isDraft: true)
-        case .ready: return note(entry.state, isDraft: false)
-        default: return nil
-        }
+        guard let outcome = PullRequestActionLogic.outcome(of: action, state: entry.state) else { return nil }
+        return NativePullRequestOverride(state: outcome.state, isDraft: outcome.isDraft,
+            updatedAt: now.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)), token: token, at: now)
     }
 
     /// The entry with its pending answer written over it, or nil when the

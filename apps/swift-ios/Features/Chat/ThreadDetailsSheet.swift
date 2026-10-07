@@ -116,6 +116,9 @@ struct ThreadDetailsSheet<ToolView: View>: View {
 
     @State private var failure: ThreadDetailsFailure?
     @State private var pullRequestQuickActions = PullRequestQuickActionRunner()
+    /// Expected states of linked pull requests a quick action just changed,
+    /// here and in Linked Pull Requests, until the thread's snapshot moves on.
+    @State private var pullRequestOverlays: [String: LinkedPullRequestOverlay] = [:]
     @State private var portAlert: ThreadDetailsPortsSection.OpenRefusal?
     @SwiftUI.Environment(\.openURL) private var openURL
 
@@ -199,6 +202,9 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         .onChange(of: activeProviderSessionID) { _, _ in
             if isHermesConversation { workDetailsReloadID += 1 }
         }
+        .onChange(of: thread.allLinkedPullRequests) { _, links in
+            pullRequestOverlays = LinkedPullRequestOverlays.reconcile(pullRequestOverlays, threadID: thread.id, links: links)
+        }
         .onChange(of: thread.state) { _, _ in
             if isHermesConversation { workDetailsReloadID += 1 }
         }
@@ -239,7 +245,8 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                     ThreadDetailsPullRequest(number: $0.number, state: $0.snapshot?.state ?? "", url: $0.url)
                 } ?? gitStatus?.pullRequest,
                 client: client,
-                supportsPullRequests: environment?.supportsPullRequests == true
+                supportsPullRequests: environment?.supportsPullRequests == true,
+                overlays: $pullRequestOverlays
             )
         case let .pullRequest(number):
             PullRequestDetailSheet(client: client, threadID: thread.id, number: number)
@@ -686,8 +693,11 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         )
     }
 
+    /// As shown: with the expected state of a quick action that just ran.
     private var displayedLink: FeatureLinkedPullRequest? {
-        thread.linkedPullRequest ?? thread.branchPullRequest
+        (thread.linkedPullRequest ?? thread.branchPullRequest).map {
+            LinkedPullRequestOverlays.shown($0, overlay: pullRequestOverlays[LinkedPullRequestOverlays.key(threadID: thread.id, link: $0)])
+        }
     }
 
     /// State when the branch happens to resolve to the linked request. The git
@@ -708,17 +718,17 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         let snapshot = displayedLink?.snapshot
         let state = PullRequestState(rawValue: snapshot?.state ?? pullRequest.state)
         let isDraft = snapshot?.isDraft ?? false
-        let isActing = displayedLink.map { pullRequestQuickActions.isBusy($0.identity) } ?? false
+        let isActing = displayedLink.map { pullRequestQuickActions.isBusy(LinkedPullRequestOverlays.key(threadID: thread.id, link: $0)) } ?? false
         let label = pullRequestLabel(pullRequest, snapshot: snapshot, state: state, isDraft: isDraft, isActing: isActing)
         // The native detail where the server can answer for it; the host's
         // own page everywhere else.
         if environment?.supportsPullRequests == true {
             NavigationLink(value: ThreadDetailsDestination.pullRequest(number: pullRequest.number)) { label }
             .contextMenu {
-                if let link = displayedLink {
-                    PullRequestQuickActionButtons(actions: pullRequestActions(link), placement: .menu) { action in
-                        pullRequestQuickActions.trigger(action, .init(id: link.identity, number: link.number, url: link.url,
-                            access: FeaturePullRequestAccess(link: link, client: client, threadID: thread.id)))
+                if let server = thread.linkedPullRequest ?? thread.branchPullRequest, let shown = displayedLink {
+                    PullRequestQuickActionButtons(actions: pullRequestActions(shown), placement: .menu) { action in
+                        pullRequestQuickActions.trigger(action, link: server, shown: shown, threadID: thread.id,
+                            client: client, overlays: $pullRequestOverlays)
                     }
                 }
             }
@@ -741,7 +751,8 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     /// The pull request list's quick actions on the row's request, where the
     /// thread's snapshot of it says its state; a branch's request has none.
     private func pullRequestActions(_ link: FeatureLinkedPullRequest) -> [NativePullRequestAction] {
-        guard client is any FeaturePullRequestReviewWriting, !pullRequestQuickActions.isBusy(link.identity) else { return [] }
+        guard client is any FeaturePullRequestReviewWriting,
+              !pullRequestQuickActions.isBusy(LinkedPullRequestOverlays.key(threadID: thread.id, link: link)) else { return [] }
         return PullRequestActionLogic.quickActions(link)
     }
 

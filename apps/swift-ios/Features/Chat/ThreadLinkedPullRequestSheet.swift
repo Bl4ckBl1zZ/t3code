@@ -21,7 +21,9 @@ struct ThreadLinkedPullRequestSheet: View {
     let client: any FeatureClient
     /// Whether the thread's environment reads pull requests from the host,
     /// which the rows' quick actions act through.
-    var supportsPullRequests = false
+    let supportsPullRequests: Bool
+    /// Quick actions' expected states, shared with Details so its row agrees.
+    @Binding var overlays: [String: LinkedPullRequestOverlay]
 
     @State private var entry = ""
     /// The request being linked or unlinked, whose row shows the spinner.
@@ -133,7 +135,9 @@ struct ThreadLinkedPullRequestSheet: View {
     }
 
     private func linkRow(_ line: FeaturePullRequestLine, showsRepository: Bool) -> some View {
-        let link = line.link
+        let server = line.link
+        let key = LinkedPullRequestOverlays.key(threadID: thread.id, link: server)
+        let link = LinkedPullRequestOverlays.shown(server, overlay: overlays[key])
         let watch = ThreadLinkedPullRequestPresentation.watchState(
             link, supportsWatch: thread.supportsPullRequestWatch == true
         )
@@ -169,7 +173,7 @@ struct ThreadLinkedPullRequestSheet: View {
                     }
                 }
                 .padding(.leading, CGFloat(min(line.depth, 3)) * 12)
-                if busyNumber == link.number || quickActionRunner.isBusy(link.identity) {
+                if busyNumber == link.number || quickActionRunner.isBusy(key) {
                     Spacer(minLength: 0)
                     ProgressView()
                 }
@@ -177,7 +181,7 @@ struct ThreadLinkedPullRequestSheet: View {
         }
         // One tap on the revealed button, never a full swipe: these act on the host.
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
-            PullRequestQuickActionButtons(actions: quickActions(link), placement: .swipe) { trigger($0, link) }
+            PullRequestQuickActionButtons(actions: quickActions(link), placement: .swipe) { trigger($0, server, shown: link) }
                 .disabled(isBusy)
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -192,7 +196,7 @@ struct ThreadLinkedPullRequestSheet: View {
             let actions = quickActions(link)
             if !actions.isEmpty {
                 Section {
-                    PullRequestQuickActionButtons(actions: actions, placement: .menu) { trigger($0, link) }
+                    PullRequestQuickActionButtons(actions: actions, placement: .menu) { trigger($0, server, shown: link) }
                 }
                 .disabled(isBusy)
             }
@@ -224,18 +228,16 @@ struct ThreadLinkedPullRequestSheet: View {
         PullRequestDetailSheet(access: FeaturePullRequestAccess(link: link, client: client, threadID: thread.id), number: link.number)
     }
 
-    /// The pull request list's quick actions, while none runs on the row. The
-    /// row's state is the server's snapshot, which it re-reads at once after
-    /// a merge and on its next sync after anything else.
-    private func quickActions(_ link: FeatureLinkedPullRequest) -> [NativePullRequestAction] {
+    /// The pull request list's quick actions on the row as shown, while none
+    /// runs on it.
+    private func quickActions(_ shown: FeatureLinkedPullRequest) -> [NativePullRequestAction] {
         guard supportsPullRequests, client is any FeaturePullRequestReviewWriting,
-              !quickActionRunner.isBusy(link.identity) else { return [] }
-        return PullRequestActionLogic.quickActions(link)
+              !quickActionRunner.isBusy(LinkedPullRequestOverlays.key(threadID: thread.id, link: shown)) else { return [] }
+        return PullRequestActionLogic.quickActions(shown)
     }
 
-    private func trigger(_ action: NativePullRequestAction, _ link: FeatureLinkedPullRequest) {
-        quickActionRunner.trigger(action, .init(id: link.identity, number: link.number, url: link.url,
-            access: FeaturePullRequestAccess(link: link, client: client, threadID: thread.id)))
+    private func trigger(_ action: NativePullRequestAction, _ link: FeatureLinkedPullRequest, shown: FeatureLinkedPullRequest) {
+        quickActionRunner.trigger(action, link: link, shown: shown, threadID: thread.id, client: client, overlays: $overlays)
     }
 
     private func unlink(_ link: FeatureLinkedPullRequest) {
