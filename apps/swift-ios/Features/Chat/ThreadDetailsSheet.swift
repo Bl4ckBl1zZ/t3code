@@ -115,6 +115,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     @State private var isConfirmingDelete = false
 
     @State private var failure: ThreadDetailsFailure?
+    @State private var pullRequestQuickActions = PullRequestQuickActionRunner()
     @State private var portAlert: ThreadDetailsPortsSection.OpenRefusal?
     @SwiftUI.Environment(\.openURL) private var openURL
 
@@ -128,6 +129,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     var body: some View {
         NavigationStack(path: $path) {
             list
+                .pullRequestQuickActionPrompts(pullRequestQuickActions)
                 .navigationTitle("Details")
                 .navigationBarTitleDisplayMode(.inline)
                 .t3NavigationChrome()
@@ -236,7 +238,8 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                 branchPullRequest: thread.branchPullRequest.map {
                     ThreadDetailsPullRequest(number: $0.number, state: $0.snapshot?.state ?? "", url: $0.url)
                 } ?? gitStatus?.pullRequest,
-                client: client
+                client: client,
+                supportsPullRequests: environment?.supportsPullRequests == true
             )
         case let .pullRequest(number):
             PullRequestDetailSheet(client: client, threadID: thread.id, number: number)
@@ -705,11 +708,20 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         let snapshot = displayedLink?.snapshot
         let state = PullRequestState(rawValue: snapshot?.state ?? pullRequest.state)
         let isDraft = snapshot?.isDraft ?? false
-        let label = pullRequestLabel(pullRequest, snapshot: snapshot, state: state, isDraft: isDraft)
+        let isActing = displayedLink.map { pullRequestQuickActions.isBusy($0.identity) } ?? false
+        let label = pullRequestLabel(pullRequest, snapshot: snapshot, state: state, isDraft: isDraft, isActing: isActing)
         // The native detail where the server can answer for it; the host's
         // own page everywhere else.
         if environment?.supportsPullRequests == true {
             NavigationLink(value: ThreadDetailsDestination.pullRequest(number: pullRequest.number)) { label }
+            .contextMenu {
+                if let link = displayedLink {
+                    PullRequestQuickActionButtons(actions: pullRequestActions(link), placement: .menu) { action in
+                        pullRequestQuickActions.trigger(action, .init(id: link.identity, number: link.number, url: link.url,
+                            access: FeaturePullRequestAccess(link: link, client: client, threadID: thread.id)))
+                    }
+                }
+            }
         } else {
             Button {
                 openInBrowser(pullRequest)
@@ -726,11 +738,19 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         }
     }
 
+    /// The pull request list's quick actions on the row's request, where the
+    /// thread's snapshot of it says its state; a branch's request has none.
+    private func pullRequestActions(_ link: FeatureLinkedPullRequest) -> [NativePullRequestAction] {
+        guard client is any FeaturePullRequestReviewWriting, !pullRequestQuickActions.isBusy(link.identity) else { return [] }
+        return PullRequestActionLogic.quickActions(link)
+    }
+
     private func pullRequestLabel(
         _ pullRequest: ThreadDetailsPullRequest,
         snapshot: FeaturePullRequestSnapshot?,
         state: PullRequestState?,
-        isDraft: Bool
+        isDraft: Bool,
+        isActing: Bool
     ) -> some View {
         Label {
             VStack(alignment: .leading, spacing: 4) {
@@ -746,6 +766,9 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                         .font(T3Typography.supporting)
                         .foregroundStyle(T3Colors.textTertiary)
                         .lineLimit(1)
+                    if isActing {
+                        ProgressView().controlSize(.small)
+                    }
                 }
             }
         } icon: {

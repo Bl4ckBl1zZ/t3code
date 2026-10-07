@@ -30,6 +30,11 @@ In a thread's **Pull requests** panel, right-click a linked request to open its 
 **Shift** to show the same quick actions as the pull-request list on GitHub rows whose project is
 in the thread's environment. Merged requests and requests whose state has not loaded yet show none.
 
+On iOS, swipe right or long-press a request in **Linked pull requests** for the same quick actions,
+or long-press the pull request row in Details. **Close** asks first. **Merge** works as it does in
+the pull-request list; a request that belongs to a stack offers no **Merge** there. The row shows the
+new state after the server next checks the request, which it does right after a merge.
+
 In GitHub PR details, open **Stack** to browse layers, refresh their state, or review
 a merge/rebase. The confirmation captures the revisions you reviewed. A failure
 requires closing and refreshing before another attempt.

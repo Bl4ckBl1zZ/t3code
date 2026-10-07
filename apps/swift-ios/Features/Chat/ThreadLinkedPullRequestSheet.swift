@@ -19,10 +19,14 @@ struct ThreadLinkedPullRequestSheet: View {
     /// one-tap link because it is the one the reader is most likely to mean.
     let branchPullRequest: ThreadDetailsPullRequest?
     let client: any FeatureClient
+    /// Whether the thread's environment reads pull requests from the host,
+    /// which the rows' quick actions act through.
+    var supportsPullRequests = false
 
     @State private var entry = ""
     /// The request being linked or unlinked, whose row shows the spinner.
     @State private var busyNumber: Int?
+    @State private var quickActionRunner = PullRequestQuickActionRunner()
     @State private var errorMessage: String?
     @FocusState private var isFieldFocused: Bool
     @SwiftUI.Environment(\.openURL) private var openURL
@@ -121,6 +125,7 @@ struct ThreadLinkedPullRequestSheet: View {
         .t3SheetList()
         .t3GroupedListBackground()
         .scrollDismissesKeyboard(.interactively)
+        .pullRequestQuickActionPrompts(quickActionRunner)
         .navigationTitle(supportsSeveral ? "Linked Pull Requests" : "Linked Pull Request")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isBusy)
@@ -164,11 +169,16 @@ struct ThreadLinkedPullRequestSheet: View {
                     }
                 }
                 .padding(.leading, CGFloat(min(line.depth, 3)) * 12)
-                if busyNumber == link.number {
+                if busyNumber == link.number || quickActionRunner.isBusy(link.identity) {
                     Spacer(minLength: 0)
                     ProgressView()
                 }
             }
+        }
+        // One tap on the revealed button, never a full swipe: these act on the host.
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            PullRequestQuickActionButtons(actions: quickActions(link), placement: .swipe) { trigger($0, link) }
+                .disabled(isBusy)
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
@@ -179,6 +189,13 @@ struct ThreadLinkedPullRequestSheet: View {
             .disabled(isBusy)
         }
         .contextMenu {
+            let actions = quickActions(link)
+            if !actions.isEmpty {
+                Section {
+                    PullRequestQuickActionButtons(actions: actions, placement: .menu) { trigger($0, link) }
+                }
+                .disabled(isBusy)
+            }
             Button("Copy Link", systemImage: "doc.on.doc") {
                 UIPasteboard.general.string = link.url
                 T3HUD.show("Copied", systemImage: "doc.on.doc")
@@ -203,15 +220,22 @@ struct ThreadLinkedPullRequestSheet: View {
         .accessibilityHint("Opens pull request details")
     }
 
-    @ViewBuilder
     private func detail(for link: FeatureLinkedPullRequest) -> some View {
-        if let manager = client as? any FeatureProjectPullRequestManaging,
-           let host = link.host ?? URL(string: link.url)?.host {
-            PullRequestDetailSheet(access: FeaturePullRequestAccess(manager: manager,
-                scope: FeaturePullRequestProjectScope(projectID: link.projectID, host: host, repository: link.repository)), number: link.number)
-        } else {
-            PullRequestDetailSheet(client: client, threadID: thread.id, number: link.number)
-        }
+        PullRequestDetailSheet(access: FeaturePullRequestAccess(link: link, client: client, threadID: thread.id), number: link.number)
+    }
+
+    /// The pull request list's quick actions, while none runs on the row. The
+    /// row's state is the server's snapshot, which it re-reads at once after
+    /// a merge and on its next sync after anything else.
+    private func quickActions(_ link: FeatureLinkedPullRequest) -> [NativePullRequestAction] {
+        guard supportsPullRequests, client is any FeaturePullRequestReviewWriting,
+              !quickActionRunner.isBusy(link.identity) else { return [] }
+        return PullRequestActionLogic.quickActions(link)
+    }
+
+    private func trigger(_ action: NativePullRequestAction, _ link: FeatureLinkedPullRequest) {
+        quickActionRunner.trigger(action, .init(id: link.identity, number: link.number, url: link.url,
+            access: FeaturePullRequestAccess(link: link, client: client, threadID: thread.id)))
     }
 
     private func unlink(_ link: FeatureLinkedPullRequest) {

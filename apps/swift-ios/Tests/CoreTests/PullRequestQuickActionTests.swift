@@ -58,6 +58,40 @@ final class PullRequestQuickActionTests: XCTestCase {
         XCTAssertEqual(PullRequestActionLogic.quickActions(entry(provider: "gitlab")), [])
     }
 
+    // MARK: Linked pull request quick actions
+
+    private func link(state: String? = "open", draft: Bool = false, host: String? = "github.com", url: String = "https://github.com/owner/repo/pull/7",
+                      source: String? = "manual", stack: FeaturePullRequestStack? = nil) -> FeatureLinkedPullRequest {
+        FeatureLinkedPullRequest(projectID: "project", repository: "owner/repo", number: 7, url: url, host: host, source: source,
+            snapshot: state.map { FeaturePullRequestSnapshot(state: $0, title: "Change", headBranch: "feature", baseBranch: "main", isDraft: draft) },
+            stack: stack)
+    }
+
+    func testLinkedPullRequestsOfferTheListsActionsFromTheirSnapshot() {
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link()), [.merge, .close])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(draft: true)), [.ready, .close])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(state: "closed")), [.reopen])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(state: "merged")), [])
+        // No snapshot yet: the state is unknown, so nothing is offered.
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(state: nil)), [])
+    }
+
+    func testOnlyGitHubLinksActIncludingEnterpriseHosts() {
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(host: "gitlab.com", url: "https://gitlab.com/owner/repo/-/merge_requests/7")), [])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(host: "github.example.com")), [.merge, .close])
+        // An older server sends no host; the link's URL names it.
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(host: nil)), [.merge, .close])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(host: nil, url: "https://bitbucket.org/owner/repo/pull-requests/7")), [])
+    }
+
+    func testAStackLayerKeepsItsActionsButMerge() {
+        let stack = FeaturePullRequestStack(id: "stack", number: 6, url: "https://github.com/owner/repo/pull/6", base: "main", numbers: [6, 7])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(stack: stack)), [.close])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(source: "stack")), [.close])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(draft: true, source: "stack")), [.ready, .close])
+        XCTAssertEqual(PullRequestActionLogic.quickActions(link(state: "closed", stack: stack)), [.reopen])
+    }
+
     func testQuickMergeRunsOnlyWhenTheDetailOffersMerge() throws {
         XCTAssertNil(PullRequestActionLogic.quickMergeRefusal(try detail()))
         XCTAssertEqual(PullRequestActionLogic.quickMergeRefusal(try detail(["isDraft": true])), "This pull request cannot be merged.")

@@ -111,9 +111,26 @@ enum PullRequestActionLogic {
     /// way to close it. GitHub only, where the row's state is enough to know
     /// what the host offers; nothing on a merged pull request.
     static func quickActions(_ entry: PullRequestListEntry) -> [NativePullRequestAction] {
-        guard entry.provider == "github", entry.state != .merged else { return [] }
-        if entry.state == .closed { return [.reopen] }
-        return entry.isDraft ? [.ready, .close] : [.merge, .close]
+        quickActions(isGitHub: entry.provider == "github", state: entry.state, isDraft: entry.isDraft)
+    }
+
+    /// The same for a thread's linked pull request, read from the snapshot the
+    /// server keeps on the link: nothing until a snapshot says its state, and
+    /// no merge on a layer of a known stack, which merges through its stack.
+    static func quickActions(_ link: FeatureLinkedPullRequest) -> [NativePullRequestAction] {
+        guard let snapshot = link.snapshot, let state = PullRequestState(rawValue: snapshot.state) else { return [] }
+        let host = (link.host ?? URL(string: link.url)?.host ?? "").lowercased()
+        // `isGitHubHost` from packages/shared/src/sourceControl.ts: Enterprise
+        // hosts carry a "github" label.
+        let isGitHub = host == "github.com" || host.split(separator: ".").contains("github")
+        let actions = quickActions(isGitHub: isGitHub, state: state, isDraft: snapshot.isDraft)
+        return link.stack != nil || link.source == "stack" ? actions.filter { $0 != .merge } : actions
+    }
+
+    private static func quickActions(isGitHub: Bool, state: PullRequestState, isDraft: Bool) -> [NativePullRequestAction] {
+        guard isGitHub, state != .merged else { return [] }
+        if state == .closed { return [.reopen] }
+        return isDraft ? [.ready, .close] : [.merge, .close]
     }
 
     static let stackedQuickMergeRefusal = "Open this pull request to merge its stack."
