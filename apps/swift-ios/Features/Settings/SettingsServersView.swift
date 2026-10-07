@@ -31,6 +31,14 @@ struct SettingsServersView: View {
             Section {
                 ForEach(environments) { environment in
                     serverRow(environment)
+                    if let update = environment.permissionUpdate {
+                        SettingsPermissionUpdateNotice(
+                            model: model,
+                            environmentID: environment.id,
+                            update: update,
+                            onPairAgain: onAddServer
+                        )
+                    }
                 }
             } footer: {
                 if environments.count > 1 {
@@ -256,6 +264,69 @@ struct SettingsServersView: View {
 
     private func routeLabel(_ route: SettingsRoute) -> some View {
         SettingsTileLabel(title: route.title, systemImage: route.systemImage, tint: route.tint)
+    }
+}
+
+/// Shown for a server whose grant on this device predates its granular
+/// permissions, which no longer cover Files, Git or settings. Pairing again,
+/// or renewing T3 Connect access, receives the current grant.
+struct SettingsPermissionUpdateNotice: View {
+    let model: FeatureRootModel
+    let environmentID: String
+    let update: FeaturePermissionUpdate
+    /// Opens the pairing flow; pairing the same address replaces the credential.
+    let onPairAgain: () -> Void
+
+    @State private var isRenewing = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label {
+                Text(message)
+                    .foregroundStyle(T3Colors.textPrimary)
+            } icon: {
+                Image(systemName: "lock.shield")
+                    .foregroundStyle(T3Colors.warning)
+            }
+            SettingsActionButton(
+                title: update == .pairAgain ? "Pair Again" : "Renew Access",
+                systemImage: update == .pairAgain ? "qrcode.viewfinder" : "arrow.clockwise",
+                tone: .primary,
+                isBusy: isRenewing,
+                action: act
+            )
+            if let error {
+                SettingsFooter(error: error)
+                    .font(T3Typography.supporting)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var message: String {
+        let device = UIDevice.current.model
+        return update == .pairAgain
+            ? "New permissions available. Pair this \(device) again to keep Files, Git and settings working."
+            : "New permissions available. Renew this \(device)'s T3 Connect access to keep Files, Git and settings working."
+    }
+
+    private func act() {
+        if update == .pairAgain {
+            onPairAgain()
+            return
+        }
+        isRenewing = true
+        error = nil
+        Task {
+            do {
+                try await model.renewEnvironmentAccess(environmentID)
+            } catch {
+                self.error = "Couldn't renew access. \(error.localizedDescription)"
+                PlatformHapticEngine.shared.play(.error)
+            }
+            isRenewing = false
+        }
     }
 }
 

@@ -2,6 +2,15 @@ import CryptoKit
 import XCTest
 @testable import T3Code
 
+/// The managed grant a server from before granular permissions issues.
+private let managedTestScopes = [
+    "orchestration:read",
+    "orchestration:operate",
+    "terminal:operate",
+    "review:write",
+    "relay:read",
+]
+
 final class T3ConnectRuntimeTests: XCTestCase {
     func testLegacyCredentialsRemainBearerAndManagedMetadataIsRedacted() async throws {
         let legacy = Data(#"{"accessToken":"legacy-secret","scopes":["read"]}"#.utf8)
@@ -66,7 +75,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             environment.id: .managedDPoP(
                 accessToken: "bound-token",
                 expiresAt: Date().addingTimeInterval(300),
-                scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+                scopes: managedTestScopes,
                 environmentID: environment.id,
                 proofKeyThumbprint: thumbprint
             ),
@@ -105,7 +114,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             case 2:
                 return (
                     .token(
-                        scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes
+                        scopes: managedTestScopes
                             .joined(separator: " ")
                     ),
                     200
@@ -198,7 +207,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
         let replacing = EnvironmentCredential.managedDPoP(
             accessToken: "expired-token",
             expiresAt: Date().addingTimeInterval(-1),
-            scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+            scopes: managedTestScopes,
             environmentID: environment.id,
             proofKeyThumbprint: try await signer.thumbprint()
         )
@@ -212,7 +221,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             case "/oauth/token":
                 return (
                     .token(
-                        scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes
+                        scopes: managedTestScopes
                             .joined(separator: " ")
                     ),
                     200
@@ -279,7 +288,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
         let original = EnvironmentCredential.managedDPoP(
             accessToken: "old-token",
             expiresAt: Date().addingTimeInterval(300),
-            scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+            scopes: managedTestScopes,
             environmentID: environment.id,
             proofKeyThumbprint: thumbprint
         )
@@ -349,7 +358,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             environment.id: .managedDPoP(
                 accessToken: "rejected-token",
                 expiresAt: Date().addingTimeInterval(300),
-                scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+                scopes: managedTestScopes,
                 environmentID: environment.id,
                 proofKeyThumbprint: thumbprint
             ),
@@ -361,7 +370,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             case ("/.well-known/t3/environment", 2):
                 return (.descriptor, 200)
             case ("/oauth/token", 3):
-                return (.token(scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes
+                return (.token(scopes: managedTestScopes
                     .joined(separator: " ")), 200)
             case ("/api/auth/session", 4):
                 return (remainsRejected ? Data(#"{"authenticated":false}"#.utf8) : .authSession, 200)
@@ -419,7 +428,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
         let original = EnvironmentCredential.managedDPoP(
             accessToken: "saved-token",
             expiresAt: Date().addingTimeInterval(-1),
-            scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+            scopes: managedTestScopes,
             environmentID: environment.id,
             proofKeyThumbprint: thumbprint
         )
@@ -466,7 +475,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             environment.id: .managedDPoP(
                 accessToken: "socket-token",
                 expiresAt: Date().addingTimeInterval(300),
-                scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+                scopes: managedTestScopes,
                 environmentID: environment.id,
                 proofKeyThumbprint: thumbprint
             ),
@@ -527,7 +536,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             ),
             accessToken: "access-token",
             expiresAt: Date().addingTimeInterval(300),
-            scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+            scopes: managedTestScopes,
             proofKeyThumbprint: try await signer.thumbprint()
         )
 
@@ -546,12 +555,13 @@ final class T3ConnectRuntimeTests: XCTestCase {
     func testEnvironmentExchangeRejectsMalformedTokenContracts() async throws {
         let signer = try testSigner()
         let bootstrap = try await bootstrapCredential(signer: signer)
-        let validScopes = T3ConnectManagedEnvironmentAuthorizer.standardScopes.joined(separator: " ")
+        let validScopes = managedTestScopes.joined(separator: " ")
         let invalidBodies = [
             Data.token(accessToken: "", scopes: validScopes),
             Data.token(issuedTokenType: "wrong", scopes: validScopes),
             Data.token(expiresIn: 0, scopes: validScopes),
-            Data.token(scopes: "orchestration:read"),
+            Data.token(scopes: ""),
+            Data.token(scopes: " "),
         ]
 
         for body in invalidBodies {
@@ -566,6 +576,32 @@ final class T3ConnectRuntimeTests: XCTestCase {
             } catch is T3ConnectRelayError {
                 // Expected contract rejection.
             }
+        }
+    }
+
+    /// The exchange takes whatever the server's managed grant is: a server
+    /// that split its scopes issues another set than older ones did.
+    func testEnvironmentExchangeRequestsNoScopeAndKeepsTheGrantedSet() async throws {
+        let signer = try testSigner()
+        let bootstrap = try await bootstrapCredential(signer: signer)
+        for granted in [
+            "orchestration:read orchestration:operate terminal:operate relay:read",
+            "orchestration:read settings:write filesystem:read relay:read",
+        ] {
+            let transport = T3ConnectScriptedHTTPTransport { _, _ in (.token(scopes: granted), 200) }
+            let authorizer = T3ConnectManagedEnvironmentAuthorizer(
+                transport: transport,
+                signer: signer
+            )
+
+            let authorization = try await authorizer.exchange(bootstrap)
+
+            XCTAssertEqual(authorization.scopes, granted.split(separator: " ").map(String.init))
+            let requests = await transport.requests
+            let request = try XCTUnwrap(requests.first)
+            let form = String(decoding: try XCTUnwrap(request.httpBody), as: UTF8.self)
+            XCTAssertTrue(form.contains("subject_token=one-use-bootstrap"))
+            XCTAssertFalse(form.contains("scope="))
         }
     }
 
@@ -845,7 +881,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             environment.id: .managedDPoP(
                 accessToken: "saved-token",
                 expiresAt: expiresAt,
-                scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+                scopes: managedTestScopes,
                 environmentID: environment.id,
                 proofKeyThumbprint: savedThumbprint ?? currentThumbprint
             ),
@@ -855,7 +891,7 @@ final class T3ConnectRuntimeTests: XCTestCase {
             case "/.well-known/t3/environment":
                 return (.descriptor, 200)
             case "/oauth/token":
-                return (.token(scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes
+                return (.token(scopes: managedTestScopes
                     .joined(separator: " ")), 200)
             case "/api/auth/session":
                 return (.authSession, 200)

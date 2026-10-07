@@ -131,6 +131,12 @@ public actor T3Client {
         await rpc.stop()
     }
 
+    /// Reopens the socket with the saved credential after it was replaced:
+    /// the server fixes a socket's permissions when it opens.
+    public func reconnectWithNewCredential() async {
+        await rpc.reconnectNow(reason: "credential-replaced")
+    }
+
     /// Takes an edited route list without replacing this client. A user edit
     /// (`preferFirst`) that changes which route should be in use, or removes
     /// the one in use, reconnects so the new order takes effect at once.
@@ -2313,6 +2319,21 @@ public actor EnvironmentRuntime {
             _ = await clientAfterRouteEdit(environment)
         }
         return environment
+    }
+
+    /// Exchanges a fresh T3 Connect credential for a saved environment. The
+    /// caller reconnects its client so the socket takes the new grant.
+    public func renewManagedCredential(environmentID: String) async throws {
+        guard let environment = try await environmentStore.load().first(where: { $0.id == environmentID }),
+              let relay = environment.relayRoute else {
+            throw HTTPError.incompatibleCredential
+        }
+        let api = EnvironmentAPI(
+            transport: httpTransport,
+            credentials: credentialStore,
+            managedAuthorization: managedAuthorization
+        )
+        try await api.renewManagedCredential(for: environment.routed(through: relay))
     }
 
     /// Reorders a saved environment's routes; `routeIDs` lists every route,

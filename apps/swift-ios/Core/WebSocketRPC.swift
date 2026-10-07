@@ -268,9 +268,9 @@ public actor WebSocketRPCClient {
     /// Drops the open socket so the connection loop dials again, for example
     /// over a better route. Subscriptions resubscribe on the new socket; unary
     /// calls in flight fail like on any dropped connection.
-    public func reconnectNow() async {
+    public func reconnectNow(reason: String = "route-change") async {
         guard desired, connection != nil else { return }
-        ConnectionLog.logger.info("[conn] reconnect-requested reason=route-change")
+        ConnectionLog.logger.info("[conn] reconnect-requested reason=\(reason, privacy: .public)")
         await disconnected()
     }
 
@@ -783,7 +783,10 @@ public actor WebSocketRPCClient {
 
     private func remoteError(_ exit: RPCResponseEnvelope.Exit) -> RPCError {
         let value = exit.cause?.first?.error
-        let message = value?["message"]?.stringValue
+        // A missing split-off permission says how to get it instead of naming it.
+        let message = value?["requiredPermission"]?.stringValue
+            .flatMap(AuthPermissionRequired.init)?.errorDescription
+            ?? value?["message"]?.stringValue
             ?? value?["detail"]?.stringValue
             ?? "The environment rejected the RPC request."
         return .remote(message)

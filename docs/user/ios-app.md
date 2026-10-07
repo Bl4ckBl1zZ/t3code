@@ -92,6 +92,11 @@ sheets use the system glass material.
   setting goes back to its previous value and the reason appears under its section.
 - **Servers.** **Settings → Servers** switches, adds, removes and disconnects servers. Removing or
   disconnecting asks first.
+- **Permissions.** A server that gives Files, Git, settings and other features their own permissions
+  keeps a device paired before that on its old ones. Its row and details page then say new
+  permissions are available. **Pair Again** opens Add Server for a new pairing code from that
+  server; a T3 Connect server shows **Renew Access** instead, which needs no code. Until then those
+  features say to pair the device again.
 - **Notifications.** **Settings → Notifications** chooses which events alert you: a task that needs
   your input, finishes, or fails. Tapping a notification opens its thread, waiting for it to load if
   it was started elsewhere.

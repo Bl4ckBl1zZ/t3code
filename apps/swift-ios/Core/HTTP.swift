@@ -101,6 +101,14 @@ private struct ErrorBody: Decodable {
     let message: String?
     let reason: String?
     let traceId: String?
+    /// The permission a denial needs, from servers with granular permissions.
+    let requiredPermission: String?
+
+    /// A missing split-off permission says how to get it instead of naming it.
+    var displayMessage: String? {
+        requiredPermission.flatMap(AuthPermissionRequired.init)?.errorDescription
+            ?? message ?? reason
+    }
 }
 
 public actor EnvironmentAPI {
@@ -253,6 +261,22 @@ public actor EnvironmentAPI {
             path: "/api/auth/clients/revoke-others",
             method: "POST",
             as: AuthOtherClientSessionsRevokeResult.self
+        )
+    }
+
+    /// Replaces a T3 Connect credential with a freshly exchanged one now
+    /// rather than at expiry, so a grant the server has since widened applies.
+    /// `environment` must be routed through its T3 Connect route.
+    public func renewManagedCredential(for environment: Environment) async throws {
+        guard environment.kind == .managedDPoP else { throw HTTPError.incompatibleCredential }
+        guard let managedAuthorization else { throw HTTPError.managedAuthorizationUnavailable }
+        guard let credential = try await credentials.credential(for: environment.credentialID) else {
+            throw HTTPError.missingCredential
+        }
+        _ = try await refreshManagedCredential(
+            credential,
+            environment: environment,
+            using: managedAuthorization
         )
     }
 
@@ -468,7 +492,7 @@ public actor EnvironmentAPI {
             let body = try? JSONDecoder.t3.decode(ErrorBody.self, from: data)
             throw HTTPError.status(
                 response.statusCode,
-                message: body?.message ?? body?.reason ?? "Environment request failed.",
+                message: body?.displayMessage ?? "Environment request failed.",
                 traceID: body?.traceId
             )
         }
@@ -506,9 +530,23 @@ public struct McpProtectedResourceMetadata: Decodable, Equatable, Sendable {
 
 public struct AuthSessionState: Codable, Equatable, Sendable {
     public let authenticated: Bool
+    /// Absent before granular permissions; see ``ServerAuthDescriptor``.
+    public var auth: ServerAuthDescriptor? = nil
+    /// Kept in the vocabulary from before granular permissions.
     public let scopes: [String]?
+    /// The exact grant, from servers with granular permissions. Read through
+    /// ``grants(_:)`` rather than directly.
+    public var permissions: [String]? = nil
     public let sessionMethod: String?
     public let expiresAt: String?
+}
+
+/// The part of the server's auth descriptor that changes how a session's
+/// grant reads.
+public struct ServerAuthDescriptor: Codable, Equatable, Sendable {
+    /// Present on servers from the first granular release, which report no
+    /// `permissions` but no longer let a broad scope stand in for a split one.
+    public var serverUpdateScope: String? = nil
 }
 
 public struct AuthClientMetadata: Codable, Equatable, Sendable {
@@ -526,6 +564,8 @@ public struct AuthClientSession: Codable, Identifiable, Equatable, Sendable {
     public let sessionId: String
     public let subject: String
     public let scopes: [String]
+    /// The exact grant, from servers with granular permissions.
+    public var permissions: [String]? = nil
     public let method: String
     public let client: AuthClientMetadata
     public let issuedAt: String

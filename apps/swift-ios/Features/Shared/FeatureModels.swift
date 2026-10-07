@@ -47,6 +47,9 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     /// Nil until the server confirms it signs them in with OAuth, which its
     /// details page asks once per session.
     public var mcpURL: URL? = nil
+    /// Set when this device's grant predates the server's granular
+    /// permissions, so Files, Git and settings are denied until it is renewed.
+    public var permissionUpdate: FeaturePermissionUpdate? = nil
     /// Reachability from the latest aggregate refresh. `nil` means the client
     /// has not probed this saved environment yet.
     public var connectionState: FeatureConnection.State?
@@ -93,6 +96,15 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
         self.supportsCustomModelDefinitions = supportsCustomModelDefinitions
         self.supportsProjectIcons = supportsProjectIcons
     }
+}
+
+/// How a device whose grant predates a server's granular permissions gets
+/// the current grant.
+public enum FeaturePermissionUpdate: String, Sendable, Equatable, Hashable, Codable {
+    /// A direct pairing: pair again with a new link from the server.
+    case pairAgain
+    /// T3 Connect: a fresh credential exchange receives the current grant.
+    case renewManagedAccess
 }
 
 /// One way to reach a saved environment, as Settings lists it.

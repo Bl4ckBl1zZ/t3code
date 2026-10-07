@@ -28,6 +28,7 @@ struct SettingsServerDetailView: View {
     @State private var addingRoute = false
     @State private var supportsGitHubSettings = false
     @State private var probedMcpURL: URL?
+    @State private var pairingAgain = false
 
     private var environment: FeatureEnvironment? {
         (model.snapshot.environments + model.snapshot.switchedOffEnvironments)
@@ -96,12 +97,28 @@ struct SettingsServerDetailView: View {
                 onAdd: { url in await model.addEnvironmentRoute(environmentID, pairingURL: url) }
             )
         }
+        .sheet(isPresented: $pairingAgain) {
+            ConnectionOnboardingView(model: model, onCancel: { pairingAgain = false })
+        }
     }
 
     @ViewBuilder
     private func content(_ environment: FeatureEnvironment) -> some View {
         if let reason = environment.unsupportedReason {
             compatibilitySection(environment, reason: reason)
+        }
+
+        if let update = environment.permissionUpdate {
+            Section {
+                SettingsPermissionUpdateNotice(
+                    model: model,
+                    environmentID: environment.id,
+                    update: update,
+                    onPairAgain: { pairingAgain = true }
+                )
+            } header: {
+                Text("Permissions")
+            }
         }
 
         Section {

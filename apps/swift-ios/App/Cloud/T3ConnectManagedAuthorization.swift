@@ -16,15 +16,11 @@ public struct T3ConnectPreparedEnvironmentConnection: Sendable {
 /// Converts the relay's short-lived environment bootstrap credential into the
 /// DPoP access token and one-time WebSocket ticket understood by a T3 server.
 /// The same signer must authorize every later HTTP request for that token.
+///
+/// The exchange names no scope, so the server grants its whole managed set.
+/// That set changes as servers split scopes into permissions, and a fresh
+/// exchange is how a managed connection picks the new set up.
 public actor T3ConnectManagedEnvironmentAuthorizer {
-    public static let standardScopes = [
-        "orchestration:read",
-        "orchestration:operate",
-        "terminal:operate",
-        "review:write",
-        "relay:read",
-    ]
-
     private struct AccessTokenResponse: Decodable, Sendable {
         let accessToken: String
         let issuedTokenType: String
@@ -65,12 +61,10 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
 
     public func prepare(
         _ credential: T3ConnectManagedEnvironmentCredential,
-        scopes: [String] = standardScopes,
         clientLabel: String? = nil
     ) async throws -> T3ConnectPreparedEnvironmentConnection {
         let accessToken = try await exchange(
             credential,
-            scopes: scopes,
             clientLabel: clientLabel
         )
         let webSocketURL = try await webSocketURL(using: accessToken)
@@ -82,7 +76,6 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
 
     public func exchange(
         _ credential: T3ConnectManagedEnvironmentCredential,
-        scopes: [String] = standardScopes,
         clientLabel: String? = nil,
         deviceType: PairingClientIdentity.DeviceType = .mobile
     ) async throws -> T3ConnectEnvironmentAccessToken {
@@ -104,7 +97,6 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
             "subject_token": credential.bootstrapCredential,
             "subject_token_type": "urn:t3:params:oauth:token-type:environment-bootstrap",
             "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
-            "scope": scopes.joined(separator: " "),
             "client_device_type": deviceType.rawValue,
             "client_os": ProcessInfo.processInfo.operatingSystemVersionString,
         ]
@@ -117,20 +109,14 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(proof.value, forHTTPHeaderField: "DPoP")
         let response = try await send(request, as: AccessTokenResponse.self)
-        let grantedScopes = Set(response.scope.split(separator: " ").map(String.init))
+        let grantedScopes = response.scope.split(separator: " ").map(String.init)
         guard response.tokenType == "DPoP",
               response.issuedTokenType
                 == "urn:ietf:params:oauth:token-type:access_token",
               response.accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
               response.expiresIn.isFinite,
               response.expiresIn > 0,
-              grantedScopes == Set(scopes) else {
-            if grantedScopes != Set(scopes) {
-                throw T3ConnectRelayError.unexpectedScope(
-                    requested: scopes,
-                    granted: response.scope
-                )
-            }
+              !grantedScopes.isEmpty else {
             throw T3ConnectRelayError.invalidResponse
         }
         return T3ConnectEnvironmentAccessToken(
@@ -139,7 +125,7 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
             endpoint: credential.endpoint,
             accessToken: response.accessToken,
             expiresAt: Date().addingTimeInterval(response.expiresIn),
-            scopes: response.scope.split(separator: " ").map(String.init),
+            scopes: grantedScopes,
             proofKeyThumbprint: thumbprint
         )
     }

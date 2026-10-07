@@ -22,6 +22,9 @@ public protocol FeatureClient: AnyObject {
     func removeEnvironmentRoute(id: String, routeID: String) async throws
     /// The route the environment's connection uses, if it has one.
     func environmentRouteInUse(id: String) async -> String?
+    /// Exchanges a fresh T3 Connect credential, which carries the server's
+    /// current grant. See ``FeaturePermissionUpdate/renewManagedAccess``.
+    func renewEnvironmentAccess(id: String) async throws
     /// Updates a server too old for this app to connect to, then switches it
     /// back on. Returns the version it came back on.
     func updateOutdatedEnvironment(
@@ -304,6 +307,9 @@ public extension FeatureClient {
         throw FeatureCapabilityUnavailable("Server routes")
     }
     func environmentRouteInUse(id: String) async -> String? { nil }
+    func renewEnvironmentAccess(id: String) async throws {
+        throw FeatureCapabilityUnavailable("Renewing T3 Connect access")
+    }
     func updateOutdatedEnvironment(
         id: String,
         progress: @escaping @Sendable (String) async -> Void
