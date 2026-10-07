@@ -143,11 +143,52 @@ RPC method.
 - Scope values follow the OAuth 2.0 scope model from RFC 6749: space-delimited,
   unordered capabilities with subset checking during exchange.
 
-This is intentionally not a general-purpose OAuth authorization server. The
-environment bootstrap token type is private, the bootstrap cookie and WebSocket
-connection-token routes are product-specific adapters, and the API returns its
-typed `HttpApi` errors rather than implementing every OAuth error response
-surface.
+Apart from the narrow MCP client server below, this is intentionally not a
+general-purpose OAuth authorization server. The environment bootstrap token
+type is private, the bootstrap cookie and WebSocket connection-token routes are
+product-specific adapters, and the API returns its typed `HttpApi` errors rather
+than implementing every OAuth error response surface.
+
+## MCP Clients
+
+Agents T3 Code did not launch sign in to `/mcp` through a narrow OAuth
+authorization-code server ([McpOAuth](../../apps/server/src/auth/McpOAuth.ts)):
+protected-resource and authorization-server metadata (RFC 9728, RFC 8414),
+dynamic client registration (RFC 7591) at `/oauth/mcp/register`, and PKCE S256
+codes at `/oauth/mcp/authorize` and `/oauth/mcp/token`. It accepts only loopback
+redirect URIs: an HTTPS redirect would let anyone send the owner an approval
+link that delivers the code to their own server. Client registration is
+stateless (the client id is signed), so an unauthenticated caller cannot grow
+server state. Authorization codes are single-use and live for 60 seconds.
+
+Approval spends a one-time pairing code that holds the scopes being granted, or
+uses a browser cookie session with `access:write` and `orchestration:read`
+whose scopes cover the grant. Proof-bound T3 Connect codes are refused without
+being spent.
+
+The user grants either read-only access or a runtime-mode ceiling, not a scope
+list: MCP tools are all orchestration, and `orchestration:operate` alone would
+let an agent start a thread in full access and act through it. The result is an
+ordinary session with subject `mcp-client` that lasts 30 days and appears in
+Connections. A read-only grant holds `orchestration:read` alone; on `/mcp` it
+passes only tools declared as reads in
+[McpToolAccess](../../apps/server/src/mcp/McpToolAccess.ts), where every tool
+must declare who may call it to compile. Any other grant adds
+`orchestration:operate` and a signed ceiling (the `rtc` session claim). Only
+`/mcp` accepts these sessions. Every other HTTP route and the WebSocket ticket
+path reject that subject, because the RPC surface would let the agent act above
+its ceiling. Inside MCP the credential sets the limits and tool parameters only
+pick targets; see [threadAccess](../../apps/server/src/mcp/threadAccess.ts).
+
+`/mcp` tries a provider session token first, then an MCP client session. A
+`401` points at the protected-resource metadata in `WWW-Authenticate` unless the
+presented token was a provider token, so an agent T3 launched never starts an
+OAuth flow.
+
+Issuer and resource URLs come from the request's Host and
+`X-Forwarded-Proto`, so one server answers over loopback, Tailscale Serve and a
+T3 Connect tunnel. A proxy that rewrites Host or drops the protocol header
+breaks sign-in.
 
 ## Upgrade Behavior
 

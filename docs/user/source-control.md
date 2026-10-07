@@ -80,17 +80,25 @@ Run a quick **Rescan** after setting up a new machine or changing credentials.
 
 ### For GitHub (Recommended for most users)
 
-1. Install the GitHub CLI (version 2.81.0 or newer) on the machine running T3 Code:
+T3 Code talks to GitHub's API directly and only needs a token. Any of these works, in this
+order of precedence:
+
+1. A token saved in **Settings → Source Control → GitHub**. It is kept in the server's secret
+   store, never sent back to the app, and works without the GitHub CLI.
+2. `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` with `GH_HOST` for GitHub Enterprise Server) in the
+   server's environment.
+3. The GitHub CLI (version 2.81.0 or newer), signed in on the machine running T3 Code:
    ```bash
    brew install gh
-   ```
-2. Sign in:
-   ```bash
    gh auth login
    ```
-3. Open **Settings → Source Control** in T3 Code and verify GitHub shows as authenticated
 
-You can now clone, publish, and create pull requests.
+Then open **Settings → Source Control** and verify GitHub shows as authenticated. You can now
+clone, publish, and create pull requests.
+
+If `gh` is signed in to several accounts or hosts, expand **GitHub** in the same place to pick
+the account each host uses or turn a host off. A saved token or `GH_TOKEN` takes precedence
+over that choice; a host turned off stays off either way.
 
 ### For GitLab
 
@@ -158,7 +166,7 @@ If both kinds are set, the access token wins. Saved credentials always win over 
 **Common issues:**
 
 - **Provider shows "Not authenticated"** – Run the login command for that provider (e.g., `gh auth login`) in a terminal on the server, then rescan in Settings
-- **GitHub says it could not verify sign-in status** – T3 Code needs GitHub CLI 2.81.0 or newer to check sign-in status. Update `gh` (e.g., `brew upgrade gh`), then rescan
+- **GitHub says it could not verify sign-in status** – T3 Code needs GitHub CLI 2.81.0 or newer to check sign-in status. Update `gh` (e.g., `brew upgrade gh`) and rescan, or save a token in **Settings → Source Control**
 - **Bitbucket not connecting** – Check the credentials saved in **Settings → Source Control**. If you use environment variables instead, make sure they are set in the correct shell profile and the server was restarted
 - **Can't push to a remote** – Verify your Git remote URL matches the provider you've authenticated with (SSH vs HTTPS remotes may need different credentials)
 

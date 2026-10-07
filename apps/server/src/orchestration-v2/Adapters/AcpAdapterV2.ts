@@ -2328,10 +2328,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               nativeTaskRef: nativeItemRef,
               prompt: update.prompt,
               title: update.title,
-              model: update.model,
               result: null,
               startedAt: now,
             }),
+            // A later update can report the model the first one left out.
+            model: update.model?.trim() || existing?.task.model || null,
             status: taskStatus,
             result: existing?.assistantText || update.result,
             completedAt: taskStatus === "running" ? null : now,
@@ -2364,7 +2365,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 providerInstanceId: context.input.modelSelection.instanceId,
                 modelSelection: {
                   ...context.input.modelSelection,
-                  model: update.model ?? context.input.modelSelection.model,
+                  model: task.model ?? context.input.modelSelection.model,
                 },
                 title: subagentThreadTitle({
                   parentTitle: context.input.appThread.title,

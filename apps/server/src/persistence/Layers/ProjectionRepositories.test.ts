@@ -51,7 +51,6 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       assert.strictEqual(
         row.defaultModelSelection,
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify({
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",

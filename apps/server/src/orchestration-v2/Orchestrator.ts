@@ -55,8 +55,10 @@ import {
   orchestrationV2BackgroundWorkStopRunId,
   orchestrationV2CanStopSettledBackgroundWork,
   ProviderInstanceId,
+  ProviderInteractionMode,
   type ProviderSessionId,
   RunId,
+  RuntimeMode,
   ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
@@ -76,6 +78,7 @@ import * as Stream from "effect/Stream";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { CommandPolicyV2 } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
+import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
@@ -98,6 +101,7 @@ import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
+import * as RunExecutionService from "./RunExecutionService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
@@ -172,6 +176,22 @@ export class OrchestratorSubagentThreadReadOnlyError extends Schema.TaggedErrorC
   }
 }
 
+/** The command's thread runs above the modes its sender may touch (see `DispatchModeLimit`). */
+export class OrchestratorThreadAboveModeLimitError extends Schema.TaggedErrorClass<OrchestratorThreadAboveModeLimitError>()(
+  "OrchestratorThreadAboveModeLimitError",
+  {
+    commandId: CommandId,
+    threadId: ThreadId,
+    mode: Schema.Literals(["runtime", "interaction"]),
+    runtimeMode: RuntimeMode,
+    interactionMode: ProviderInteractionMode,
+  },
+) {
+  override get message(): string {
+    return `Thread ${this.threadId} now runs in ${this.runtimeMode}/${this.interactionMode} mode, above what this caller may change.`;
+  }
+}
+
 export class OrchestratorCommandPreviouslyRejectedError extends Schema.TaggedErrorClass<OrchestratorCommandPreviouslyRejectedError>()(
   "OrchestratorCommandPreviouslyRejectedError",
   {
@@ -220,6 +240,7 @@ export const OrchestratorV2Error = Schema.Union([
   OrchestratorCommandPreviouslyRejectedError,
   OrchestratorCommandIdConflictError,
   OrchestratorSubagentThreadReadOnlyError,
+  OrchestratorThreadAboveModeLimitError,
 ]);
 export type OrchestratorV2Error = typeof OrchestratorV2Error.Type;
 
@@ -2719,6 +2740,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  /** Fails when a limited sender's command would touch a thread running above its limit. */
+  const refuseAboveDispatchModeLimit = Effect.fn("orchestrationV2.dispatch.refuseAboveModeLimit")(
+    function* (
+      command: OrchestrationV2ServerCommand,
+      threadId: ThreadId,
+      modes: {
+        readonly runtimeMode: RuntimeMode;
+        readonly interactionMode: ProviderInteractionMode;
+      },
+    ) {
+      const limit = yield* DispatchModeLimit;
+      const exceeded = limit === undefined ? undefined : exceededDispatchModeLimit(limit, modes);
+      if (limit === undefined || exceeded === undefined) return;
+      const refusal = {
+        threadId,
+        mode: exceeded,
+        runtimeMode: modes.runtimeMode,
+        interactionMode: modes.interactionMode,
+      };
+      if (limit.refused !== undefined) yield* Ref.set(limit.refused, refusal);
+      return yield* new OrchestratorThreadAboveModeLimitError({
+        commandId: command.commandId,
+        ...refusal,
+      });
+    },
+  );
+
   const dispatchThreadFork = Effect.fn("orchestrationV2.dispatch.threadFork")(function* (
     command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.fork" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -2742,6 +2790,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
+    // The source is not under this command's lock, so check the modes this
+    // command copies, not an earlier read the source's user could outrun.
+    yield* refuseAboveDispatchModeLimit(command, command.sourceThreadId, sourceProjection.thread);
 
     const sourceRun = runForSourcePoint(sourceProjection, command.sourcePoint);
 
@@ -2823,6 +2874,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
+    // The source is not under this command's lock, so check the modes this
+    // command copies, not an earlier read the source's user could outrun.
+    yield* refuseAboveDispatchModeLimit(command, command.sourceThreadId, sourceProjection.thread);
     const targetProjection = yield* projectionStore
       .getThreadProjection(command.targetThreadId)
       .pipe(
@@ -7171,12 +7225,186 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     });
 
+  /**
+   * Ends a run Stop reached that no provider will report ending: its session
+   * or native turn already died, or its final write was lost (a full disk).
+   * Does nothing unless the run is still running on the stopped turn's
+   * attempt, so a newer attempt keeps running.
+   */
+  const settleInterruptedRun = (input: {
+    readonly command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "run.interrupt" | "thread.background-work.settle" }
+    >;
+    readonly projection: OrchestrationV2ThreadProjection;
+    readonly providerTurn: OrchestrationV2ProviderTurn;
+    readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
+    readonly effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>;
+    readonly now: DateTime.Utc;
+  }) =>
+    Effect.gen(function* () {
+      const attempt = input.projection.attempts.find(
+        (candidate) => candidate.id === input.providerTurn.runAttemptId,
+      );
+      const run = input.projection.runs.find((candidate) => candidate.id === attempt?.runId);
+      const rootNode = input.projection.nodes.find((candidate) => candidate.id === run?.rootNodeId);
+      if (
+        attempt === undefined ||
+        run === undefined ||
+        rootNode === undefined ||
+        run.activeAttemptId !== attempt.id ||
+        run.status !== "running" ||
+        attempt.status !== "running"
+      )
+        return;
+      const emitEvent = emit(input.events, input.command);
+      const base = {
+        threadId: input.command.threadId,
+        runId: run.id,
+        nodeId: rootNode.id,
+        providerInstanceId: run.providerInstanceId,
+        occurredAt: input.now,
+      };
+      if (input.providerTurn.status === "running") {
+        yield* emitEvent({
+          ...base,
+          type: "provider-turn.updated",
+          payload: { ...input.providerTurn, status: "interrupted", completedAt: input.now },
+        });
+      }
+      yield* emitEvent({
+        ...base,
+        type: "run-attempt.updated",
+        payload: { ...attempt, status: "interrupted", completedAt: input.now },
+      });
+      const providerThread = input.projection.providerThreads.find(
+        (candidate) => candidate.id === input.providerTurn.providerThreadId,
+      );
+      if (providerThread?.status === "active" && providerThread.lastRunOrdinal === run.ordinal) {
+        yield* emitEvent({
+          ...base,
+          type: "provider-thread.updated",
+          payload: { ...providerThread, status: "idle", updatedAt: input.now },
+        });
+      }
+      for (const message of input.projection.messages) {
+        if (message.runId !== run.id || message.role !== "assistant" || !message.streaming) {
+          continue;
+        }
+        yield* emitEvent({
+          ...base,
+          ...(message.nodeId === null ? {} : { nodeId: message.nodeId }),
+          type: "message.updated",
+          payload: { ...message, streaming: false, updatedAt: input.now },
+        });
+      }
+      // The root node, provider-native subagents and streaming output end
+      // with the run, as a reported terminal would end them. Delegated tasks
+      // are their own threads and are stopped separately.
+      const delegatedNodeIds = new Set(
+        input.projection.subagents
+          .filter((subagent) => subagent.origin === "app_owned")
+          .map((subagent) => subagent.id),
+      );
+      const cascaded = yield* RunExecutionService.cascadeTerminalizeRunOwnedSubagents({
+        run,
+        status: "interrupted",
+        completedAt: input.now,
+        allocateEventId: () =>
+          idAllocator.allocate.event({
+            threadId: input.command.threadId,
+            commandId: input.command.commandId,
+          }),
+        open: {
+          subagents: new Map(
+            input.projection.subagents
+              .filter((task) => task.runId === run.id && task.origin !== "app_owned")
+              .map((task) => [task.id, task]),
+          ),
+          nodes: new Map(
+            input.projection.nodes
+              .filter((node) => node.runId === run.id && !delegatedNodeIds.has(node.id))
+              .map((node) => [node.id, node]),
+          ),
+          turnItems: new Map(),
+          childTurnItems: new Map(
+            input.projection.turnItems
+              .filter(
+                (item) =>
+                  item.runId === run.id &&
+                  (item.type === "assistant_message" || item.type === "reasoning"),
+              )
+              .map((item) => [item.id, item]),
+          ),
+          linkedChildThreadIds: new Set([run.threadId]),
+        },
+      }).pipe(mapDispatchError(input.command));
+      yield* Ref.update(input.events, (events) => [...events, ...cascaded]);
+      for (const request of input.projection.runtimeRequests) {
+        if (
+          request.status !== "pending" ||
+          !input.projection.nodes.some(
+            (node) => node.id === request.nodeId && node.runId === run.id,
+          )
+        )
+          continue;
+        yield* emitEvent({
+          ...base,
+          nodeId: request.nodeId,
+          type: "runtime-request.updated",
+          payload: {
+            ...request,
+            status: "cancelled",
+            resolvedAt: input.now,
+            responseCapability: { type: "not_resumable", reason: "The run was interrupted." },
+          },
+        });
+      }
+      if (providerThread !== undefined) {
+        yield* emitEvent({
+          ...base,
+          type: "turn-item.updated",
+          payload: RunExecutionService.makeInterruptResultTurnItem({
+            idAllocator,
+            run,
+            rootNode,
+            providerThread,
+            completedAt: input.now,
+          }),
+        });
+      }
+      const { delegatedCompletion: _delegatedCompletion, ...runWithoutDelegatedCompletion } = run;
+      yield* emitEvent({
+        ...base,
+        type: "run.updated",
+        payload: {
+          ...runWithoutDelegatedCompletion,
+          status: "interrupted",
+          completedAt: input.now,
+        },
+      });
+      // A stopped run's checkpoint is the rollback point for the next message.
+      const scopeId = rootNode.checkpointScopeId;
+      if (scopeId !== null) {
+        yield* Ref.update(input.effects, (effects) => [
+          ...effects,
+          {
+            id: `effect:checkpoint.capture:${run.id}`,
+            commandId: CommandId.make(`command:effect:checkpoint.capture:${run.id}`),
+            threadId: input.command.threadId,
+            request: { type: "checkpoint.capture", runId: run.id, scopeId },
+          } satisfies PendingOrchestrationEffectV2,
+        ]);
+      }
+    });
+
   const dispatchBackgroundWorkSettle = (
     command: Extract<
       OrchestrationV2ServerCommand,
       { readonly type: "thread.background-work.settle" }
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) =>
     Effect.gen(function* () {
       const projection = yield* loadProjectionForCommand(command);
@@ -7187,12 +7415,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (attempt) => attempt.id === stoppedTurn?.runAttemptId,
       )?.runId;
       const stoppedRun = projection.runs.find((run) => run.id === stoppedRunId);
-      // A new turn may have started since Stop; its work is not this Stop's.
+      // A live run on a newer attempt is not this Stop's.
       if (
         stoppedRun === undefined ||
+        (["preparing", "starting", "running"].includes(stoppedRun.status) &&
+          stoppedRun.activeAttemptId !== stoppedTurn?.runAttemptId)
+      ) {
+        return;
+      }
+      const now = yield* DateTime.now;
+      // The interrupt returned but no terminal followed: end the run here.
+      if (stoppedTurn !== undefined && stoppedRun.status === "running") {
+        yield* settleInterruptedRun({
+          command,
+          projection,
+          providerTurn: stoppedTurn,
+          events,
+          effects,
+          now,
+        });
+      }
+      // A new turn may have started since Stop; its work is not this Stop's.
+      if (
         projection.runs.some(
           (run) =>
-            run.status === "preparing" || run.status === "starting" || run.status === "running",
+            run.id !== stoppedRun.id &&
+            (run.status === "preparing" || run.status === "starting" || run.status === "running"),
         )
       ) {
         return;
@@ -7203,7 +7451,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection,
         stoppedProviderThreadId: command.providerThreadId,
         throughRunOrdinal: stoppedRun.ordinal,
-        now: yield* DateTime.now,
+        now,
       });
     });
 
@@ -7441,7 +7689,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection.providerTurns.findLast(
           (candidate) =>
             candidate.runAttemptId === run?.activeAttemptId &&
-            (candidate.status === "running" || hasBackgroundWork),
+            (run?.status === "running" || candidate.status === "running" || hasBackgroundWork),
         ) ??
         (hasBackgroundWork
           ? projection.providerTurns.findLast(
@@ -7715,18 +7963,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Run ${command.runId} is not interruptible.`,
         });
       }
-      // Stop on a settled thread's background work. Its process may be gone
-      // (released, restarted) and only the projection still shows the work,
-      // so it is settled here: no provider is left to report it ending.
-      const settleOnly =
-        providerTurn.status !== "running" &&
-        (providerThread.providerSessionId === null ||
-          Option.isNone(
-            yield* providerSessions
-              .get(providerThread.providerSessionId)
-              .pipe(Effect.orElseSucceed(() => Option.none())),
-          ));
-      if (settleOnly) {
+      // A dead session cannot report a terminal for a running turn or for a
+      // settled turn's background work (released, restarted), so Stop ends
+      // both here: no provider is left to report them ending.
+      const sessionOption =
+        providerThread.providerSessionId === null
+          ? Option.none()
+          : yield* providerSessions.get(providerThread.providerSessionId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestratorProviderAdapterError({
+                    commandId: command.commandId,
+                    providerInstanceId: run.providerInstanceId,
+                    cause,
+                  }),
+              ),
+            );
+      if (Option.isNone(sessionOption)) {
         yield* emitEvent({
           type: "turn-item.updated",
           threadId: command.threadId,
@@ -7737,6 +7990,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           payload: interruptRequestItem,
         });
         yield* stopRemainingWork();
+        yield* settleInterruptedRun({ command, projection, providerTurn, events, effects, now });
         yield* settleBackgroundWork({
           command,
           events,
@@ -7756,23 +8010,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       const providerSessionId = providerThread.providerSessionId;
-      const sessionOption = yield* providerSessions.get(providerSessionId).pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorProviderAdapterError({
-              commandId: command.commandId,
-              providerInstanceId: run.providerInstanceId,
-              cause,
-            }),
-        ),
-      );
-      if (Option.isNone(sessionOption)) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: `Provider session ${providerThread.providerSessionId} is not active.`,
-        });
-      }
       yield* enforceCommandPolicy(command)(
         commandPolicy.ensureInterrupt({
           commandId: command.commandId,
@@ -8716,7 +8953,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cancelUnsettledEffects = yield* dispatchThreadStop(command, events, effects);
         break;
       case "thread.background-work.settle":
-        yield* dispatchBackgroundWorkSettle(command, events);
+        yield* dispatchBackgroundWorkSettle(command, events, effects);
         break;
       case "queued-message.promote-to-steer":
         yield* dispatchQueuedMessagePromoteToSteer(command, events, effects);
@@ -8827,6 +9064,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       } satisfies OrchestratorV2DispatchResult;
     }
 
+    // A limited sender checked these modes before dispatching; the thread's
+    // user may have raised them since, and only here can they not change.
+    const limit = yield* DispatchModeLimit;
+    if (limit !== undefined) {
+      // A fork or merge-back source is not under this lock: its dispatch
+      // checks the copy it reads instead.
+      const threadId = commandThreadId(command);
+      const shell = yield* projectionStore
+        .getThreadShell(threadId)
+        .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+      if (shell !== null) yield* refuseAboveDispatchModeLimit(command, threadId, shell);
+    }
+
     const plan = yield* dispatchOnce(command).pipe(
       Effect.flatMap((planned) =>
         // A settle that finds the provider already ended everything, or a
@@ -8846,8 +9096,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
       Effect.catch((cause) =>
         Effect.gen(function* () {
-          const rejectedAt = yield* DateTime.now;
           yield* settlePendingDispatchCompensation(command.commandId, "rejected");
+          // Refused like the check above: nothing recorded, so the same command
+          // can go through once the thread's user lowers it again.
+          if (cause._tag === "OrchestratorThreadAboveModeLimitError") return yield* cause;
+          const rejectedAt = yield* DateTime.now;
           yield* eventSink
             .commitRejectedCommand({
               commandId: command.commandId,

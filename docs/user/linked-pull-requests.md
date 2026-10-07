@@ -26,6 +26,10 @@ use the current project's repository; a full URL can link another repository wit
 readable project in the same environment. Unlinking removes the association without
 changing the request on its host.
 
+In a thread's **Pull requests** panel, right-click a linked request to open its actions, and hold
+**Shift** to show the same quick actions as the pull-request list on GitHub rows whose project is
+in the thread's environment. Merged requests and requests whose state has not loaded yet show none.
+
 In GitHub PR details, open **Stack** to browse layers, refresh their state, or review
 a merge/rebase. The confirmation captures the revisions you reviewed. A failure
 requires closing and refreshing before another attempt.

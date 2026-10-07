@@ -19,6 +19,7 @@ import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as Etag from "effect/unstable/http/Etag";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -185,15 +186,21 @@ function makeHarness(options: Harness = {}) {
       maxParamLength: RELAY_MAX_PATH_PARAM_LENGTH,
     }),
   );
+  // Goes through Effect's request handler, which applies pre-response handlers
+  // (such as CORS) to the response it sends, as the Workers runtime does.
   const send = (request: Request) =>
     Effect.gen(function* () {
       const handler = yield* httpEffect;
-      return yield* handler.pipe(
+      const sent = yield* Deferred.make<HttpServerResponse.HttpServerResponse>();
+      yield* HttpEffect.toHandled(handler, (_request, response) =>
+        Deferred.succeed(sent, response),
+      ).pipe(
         Effect.provideService(
           HttpServerRequest.HttpServerRequest,
           HttpServerRequest.fromWeb(request),
         ),
       );
+      return yield* Deferred.await(sent);
     });
   return { sent, rateLimitKeys, held, send, httpEffect };
 }

@@ -39,7 +39,6 @@ layer("GitLabCli.layer", (it) => {
       mockedRun.mockReturnValueOnce(
         Effect.succeed(
           processOutput(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               iid: 42,
               title: "Add MR thread creation",
@@ -93,7 +92,6 @@ layer("GitLabCli.layer", (it) => {
       mockedRun.mockReturnValueOnce(
         Effect.succeed(
           processOutput(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify([
               {
                 iid: 0,
@@ -161,7 +159,6 @@ layer("GitLabCli.layer", (it) => {
       mockedRun.mockReturnValueOnce(
         Effect.succeed(
           processOutput(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               path_with_namespace: "octocat/t3code",
               web_url: "https://gitlab.com/octocat/t3code",
@@ -228,18 +225,10 @@ layer("GitLabCli.layer", (it) => {
     Effect.gen(function* () {
       mockedRun
 
+        .mockReturnValueOnce(Effect.succeed(processOutput(JSON.stringify({ id: 1234 }))))
         .mockReturnValueOnce(
           Effect.succeed(
             processOutput(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              JSON.stringify({ id: 1234 }),
-            ),
-          ),
-        )
-        .mockReturnValueOnce(
-          Effect.succeed(
-            processOutput(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify({
                 path_with_namespace: "octocat/t3code",
                 web_url: "https://gitlab.com/octocat/t3code",

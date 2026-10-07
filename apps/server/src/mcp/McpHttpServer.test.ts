@@ -10,6 +10,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  OrchestratorMcpFailure,
   PreviewTabId,
   ProjectId,
   ProviderInstanceId,
@@ -21,7 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
+import { McpProtocol, McpSchema, McpServer, Tool, Toolkit } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
@@ -30,6 +31,9 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+import * as McpToolAccess from "./McpToolAccess.ts";
+import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
@@ -38,13 +42,15 @@ const tabId = PreviewTabId.make("tab-mcp-test");
 const alternateTabId = PreviewTabId.make("tab-mcp-alternate");
 const testWorkspaceRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "mcp-snapshot-test-"));
 const invocation = {
-  credentialId: "credential-mcp-test",
   environmentId,
-  threadId,
-  providerSessionId: "provider-session-mcp-test",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "provider-session-mcp-test",
+  thread: {
+    threadId,
+    providerSessionId: "provider-session-mcp-test",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
   capabilities: new Set(["preview"] as const),
-  audience: "urn:t3-code:mcp:environment-mcp-test",
   issuedAt: 1,
 };
 const client = McpSchema.McpServerClient.of({
@@ -59,6 +65,8 @@ const client = McpSchema.McpServerClient.of({
 });
 const projectId = ProjectId.make("project-mcp-test");
 const stubThreadManagementLayer = Layer.mock(ThreadManagementService)({
+  // The access gate reads every caller as a live full-access thread.
+  getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
   getThreadProjection: (projectionThreadId) =>
     projectionThreadId === threadId
       ? Effect.succeed({
@@ -652,6 +660,28 @@ it.effect.each([
   ).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("refuses preview tools to a client outside a thread before they run", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const readOnly = {
+      ...invocation,
+      thread: undefined,
+      requestNamespace: "client:session-1",
+      client: { sessionId: "session-1", label: "Claude Code", access: "read-only" as const },
+    };
+    const click = yield* server
+      .callTool({ name: "preview_click", arguments: { locator: "text=Send" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, readOnly),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(click.isError).toBe(true);
+    expect(click.content).toEqual([
+      { type: "text", text: expect.stringContaining("needs an agent running inside T3 Code") },
+    ]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("rejects non-boolean snapshot image options before selecting a browser host", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -898,4 +928,121 @@ it.effect.each([null, 42, "hello", [1, "two"], { nested: true }])(
         expect(response.structuredContent).toEqual({ value });
       }),
     ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("admits provider and OAuth client credentials and points only clients at OAuth", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerToken = "providerTokenWithoutDots";
+      const clientToken = "client-payload.client-signature";
+      const providerScope: McpInvocationContext.McpThreadInvocationScope = {
+        environmentId,
+        requestNamespace: "provider-session",
+        thread: {
+          threadId: ThreadId.make("thread-provider"),
+          providerSessionId: "provider-session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 1,
+      };
+      const clientScope: McpInvocationContext.McpInvocationScope = {
+        environmentId,
+        requestNamespace: "client:session-1",
+        thread: undefined,
+        client: { sessionId: "session-1", label: "Claude Code", access: "auto" },
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 1,
+      };
+      const seen: Array<McpInvocationContext.McpInvocationScope> = [];
+      const ProbeToolkit = Toolkit.make(
+        Tool.make("probe", {
+          description: "Reports the caller.",
+          success: Schema.Struct({ ok: Schema.Boolean }),
+          failure: OrchestratorMcpFailure,
+          failureMode: "return",
+          dependencies: [McpInvocationContext.McpInvocationContext],
+        }),
+      );
+      const serverLayer = McpHttpServer.toolkitRegistration(
+        ProbeToolkit,
+        McpToolAccess.toLayer(ProbeToolkit, {
+          probe: McpToolAccess.reads(() =>
+            McpInvocationContext.McpInvocationContext.pipe(
+              Effect.tap((scope) => Effect.sync(() => seen.push(scope))),
+              Effect.as({ ok: true }),
+            ),
+          ),
+        }),
+      ).pipe(
+        Layer.provideMerge(McpHttpServer.McpTransportLive),
+        Layer.provide(
+          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            audience: "urn:t3-code:mcp:test",
+            resolve: (token) => Effect.succeed(token === providerToken ? providerScope : undefined),
+          }),
+        ),
+        Layer.provide(
+          Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+            authenticate: (request) =>
+              Effect.succeed(
+                request.headers.authorization === `Bearer ${clientToken}` ? clientScope : undefined,
+              ),
+          }),
+        ),
+      );
+      yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
+        Layer.build,
+      );
+      const httpClient = yield* HttpClient.HttpClient;
+      const call = (token: string | undefined) =>
+        Effect.gen(function* () {
+          const headers = {
+            accept: "application/json, text/event-stream",
+            ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+          };
+          const initialize = yield* httpClient.post("/mcp", {
+            headers,
+            body: HttpBody.text(
+              `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+              "application/json",
+            ),
+          });
+          if (initialize.status !== 200) return initialize;
+          return yield* httpClient.post("/mcp", {
+            headers: {
+              ...headers,
+              "mcp-session-id": initialize.headers["mcp-session-id"]!,
+              "mcp-protocol-version": "2025-06-18",
+            },
+            body: HttpBody.text(
+              `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"probe","arguments":{}}}`,
+              "application/json",
+            ),
+          });
+        });
+
+      expect((yield* call(providerToken)).status).toBe(200);
+      expect((yield* call(clientToken)).status).toBe(200);
+      expect(seen.map((scope) => scope.requestNamespace)).toEqual([
+        "provider-session",
+        "client:session-1",
+      ]);
+
+      const missing = yield* call(undefined);
+      expect(missing.status).toBe(401);
+      expect(missing.headers["www-authenticate"]).toMatch(
+        /^Bearer resource_metadata="http:\/\/[^"]+\/\.well-known\/oauth-protected-resource\/mcp"$/,
+      );
+
+      const expiredClient = yield* call("stale-payload.stale-signature");
+      expect(expiredClient.headers["www-authenticate"]).toContain("resource_metadata=");
+      expect(expiredClient.headers["www-authenticate"]).toContain('error="invalid_token"');
+
+      const deadProvider = yield* call("deadProviderToken");
+      expect(deadProvider.status).toBe(401);
+      expect(deadProvider.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

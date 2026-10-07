@@ -144,6 +144,10 @@ export interface CodexAppServerReplayState {
 export interface CodexAppServerReplayDriver {
   readonly transcript: CodexAppServerReplayTranscript;
   readonly state: Ref.Ref<CodexAppServerReplayState>;
+  /** Runs before each scripted inbound frame, so a test can hold a response. */
+  readonly beforeEmitInbound?: (
+    entry: Extract<CodexAppServerReplayEntry, { readonly type: "emit_inbound" }>,
+  ) => Effect.Effect<void>;
 }
 
 const encoder = new TextEncoder();
@@ -346,10 +350,14 @@ export function layerReplay(
 }
 
 export const makeReplayDriver = Effect.fn("effect-codex-app-server/replay.makeReplayDriver")(
-  function* (transcript: CodexAppServerReplayTranscript) {
+  function* (
+    transcript: CodexAppServerReplayTranscript,
+    options: Pick<CodexAppServerReplayDriver, "beforeEmitInbound"> = {},
+  ) {
     return {
       transcript,
       state: yield* Ref.make<CodexAppServerReplayState>({ cursor: 0, failure: null }),
+      ...options,
     } satisfies CodexAppServerReplayDriver;
   },
 );
@@ -400,6 +408,9 @@ const makeReplayClientWithState = Effect.fn(
       }
 
       if (entry.type === "emit_inbound") {
+        if (driver.beforeEmitInbound !== undefined) {
+          yield* driver.beforeEmitInbound(entry);
+        }
         if (entry.afterMs !== undefined && entry.afterMs > 0) {
           yield* Effect.sleep(Duration.millis(entry.afterMs));
         }

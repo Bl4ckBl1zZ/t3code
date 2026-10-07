@@ -58,7 +58,6 @@ describe("VcsProjectConfig", () => {
         yield* fileSystem.makeDirectory(nested, { recursive: true });
         yield* fileSystem.writeFileString(
           path.join(configDir, "vcs.json"),
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
           JSON.stringify({ vcs: { kind: "jj" } }),
         );
 
@@ -88,7 +87,6 @@ describe("VcsProjectConfig", () => {
         yield* fileSystem.makeDirectory(configDir, { recursive: true });
         yield* fileSystem.writeFileString(
           path.join(configDir, "vcs.json"),
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
           JSON.stringify({ vcs: { kind: "jj" } }),
         );
 

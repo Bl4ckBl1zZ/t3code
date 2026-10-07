@@ -294,6 +294,15 @@ export function applyServerSettingsPatch(
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
       : {}),
+    // Host replacement: deepMerge would keep a cleared account pin. Tokens merge per host.
+    ...(patch.github !== undefined
+      ? {
+          github: {
+            hosts: patch.github.hosts ?? current.github?.hosts ?? {},
+            tokens: { ...current.github?.tokens, ...patch.github.tokens },
+          },
+        }
+      : {}),
     // Remember custom worktree locations the server moved away from, so the
     // worktrees left there stay managed.
     ...(patch.worktreesDirectory !== undefined &&

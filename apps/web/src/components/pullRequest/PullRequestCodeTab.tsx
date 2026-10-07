@@ -221,7 +221,9 @@ export function PullRequestCodeTab({
     false,
     Schema.Boolean,
   );
-  const [viewer, setViewer] = useState<CodeViewHandle<ReviewAnnotationGroup> | null>(null);
+  const [viewer, setViewer] = useState<CodeViewHandle<ReviewAnnotationGroup, undefined> | null>(
+    null,
+  );
   const settings = useClientSettings();
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather

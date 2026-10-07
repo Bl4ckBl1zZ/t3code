@@ -19,6 +19,7 @@ import * as SecretRequests from "../../../secrets/SecretRequests.ts";
 import { ThreadLaunchService } from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../../vcs/VcsStatusBroadcaster.ts";
+import { GitVcsDriver } from "../../../vcs/GitVcsDriver.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
@@ -56,6 +57,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
   Layer.mock(VcsStatusBroadcaster)({}),
+  Layer.mock(GitVcsDriver)({}),
   WorkspacePaths.layer,
   ServerConfig.layerTest(process.cwd(), { prefix: "mcp-registration-test-" }),
 );

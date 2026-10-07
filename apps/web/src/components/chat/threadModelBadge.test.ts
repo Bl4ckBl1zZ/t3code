@@ -1,8 +1,13 @@
-import type { ModelSelection, ServerProviderModel } from "@t3tools/contracts";
+import type {
+  ModelSelection,
+  ProviderInstanceId,
+  ProviderOptionDescriptor,
+  ServerProviderModel,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ProviderInstanceEntry } from "../../providerInstances";
-import { resolveThreadModelBadge } from "./threadModelBadge";
+import { resolveSubagentModelTraits, resolveThreadModelBadge } from "./threadModelBadge";
 
 function model(input: {
   readonly slug: string;
@@ -104,5 +109,136 @@ describe("resolveThreadModelBadge", () => {
 
   it("renders nothing without a model selection", () => {
     expect(resolveThreadModelBadge({ modelSelection: null, providerEntry: null })).toBeNull();
+  });
+});
+
+describe("resolveSubagentModelTraits", () => {
+  const serviceTier: ProviderOptionDescriptor = {
+    id: "serviceTier",
+    label: "Service Tier",
+    type: "select",
+    currentValue: "priority",
+    options: [
+      { id: "default", label: "Standard", isDefault: true },
+      { id: "priority", label: "Fast" },
+      { id: "ultrafast", label: "Ultrafast" },
+      { id: "flex", label: "Flex" },
+    ],
+  };
+  const fastMode: ProviderOptionDescriptor = {
+    id: "fastMode",
+    label: "Fast Mode",
+    type: "boolean",
+    currentValue: true,
+  };
+  const reasoning: ProviderOptionDescriptor = {
+    id: "reasoningEffort",
+    label: "Reasoning",
+    type: "select",
+    options: [
+      { id: "medium", label: "Medium", isDefault: true },
+      { id: "high", label: "High" },
+    ],
+  };
+  const subagent = {
+    origin: "app_owned" as const,
+    model: "gpt-5.4",
+    providerInstanceId: "codex" as ProviderInstanceId,
+  };
+  function providerEntry(driverKind: string, descriptors: ReadonlyArray<ProviderOptionDescriptor>) {
+    return {
+      instanceId: "codex",
+      driverKind,
+      models: [
+        {
+          slug: "gpt-5.4",
+          name: "My GPT",
+          isCustom: false,
+          capabilities: { optionDescriptors: [reasoning, ...descriptors] },
+        },
+      ],
+    } as unknown as ProviderInstanceEntry;
+  }
+  function childSelection(
+    options: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>,
+    overrides: Partial<{ instanceId: string; model: string }> = {},
+  ): ModelSelection {
+    return { instanceId: "codex", model: "gpt-5.4", options, ...overrides } as ModelSelection;
+  }
+
+  it("names the reasoning tier and saved speed of a T3-owned subagent", () => {
+    for (const [driver, descriptor, value, expected] of [
+      ["codex", serviceTier, "default", null],
+      ["codex", serviceTier, "priority", "fast"],
+      ["codex", serviceTier, "ultrafast", "ultrafast"],
+      ["codex", serviceTier, "flex", null],
+      ["codex", serviceTier, "unknown", null],
+      ["codex", serviceTier, true, null],
+      ["codex", serviceTier, undefined, null],
+      ["claudeAgent", fastMode, true, "fast"],
+      ["claudeAgent", fastMode, false, null],
+      ["cursor", fastMode, "true", null],
+      // Only Codex reports speed as a service tier.
+      ["cursor", serviceTier, "priority", null],
+    ] as const) {
+      const traits = resolveSubagentModelTraits({
+        subagent,
+        modelSelection: childSelection([
+          { id: "reasoningEffort", value: "high" },
+          ...(value === undefined ? [] : [{ id: descriptor.id, value }]),
+        ]),
+        providerEntry: providerEntry(driver, [descriptor]),
+      });
+      expect(traits, `${driver} ${descriptor.id}=${String(value)}`).toEqual({
+        reasoning: "High",
+        speedIcon: expected,
+      });
+    }
+  });
+
+  it("resolves a subagent model reported by display name", () => {
+    expect(
+      resolveSubagentModelTraits({
+        subagent: { ...subagent, model: "My GPT" },
+        modelSelection: childSelection([{ id: "fastMode", value: true }]),
+        providerEntry: providerEntry("claudeAgent", [fastMode]),
+      }),
+    ).toEqual({ reasoning: "Medium", speedIcon: "fast" });
+  });
+
+  it("claims nothing for a selection the subagent does not run on", () => {
+    const options = [
+      { id: "reasoningEffort", value: "high" },
+      { id: "serviceTier", value: "priority" },
+    ];
+    const entry = providerEntry("codex", [serviceTier]);
+    for (const input of [
+      { subagent: { ...subagent, origin: "provider_native" as const } },
+      { subagent: { ...subagent, model: null } },
+      { subagent: { ...subagent, model: " " } },
+      { subagent: { ...subagent, model: "gpt-5.5" } },
+      { modelSelection: childSelection(options, { instanceId: "other" }) },
+      { modelSelection: childSelection(options, { model: "gpt-5.5" }) },
+      { modelSelection: null },
+    ]) {
+      expect(
+        resolveSubagentModelTraits({
+          subagent,
+          modelSelection: childSelection(options),
+          providerEntry: entry,
+          ...input,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("keeps the match but no traits once the provider instance is gone", () => {
+    expect(
+      resolveSubagentModelTraits({
+        subagent,
+        modelSelection: childSelection([{ id: "reasoningEffort", value: "high" }]),
+        providerEntry: null,
+      }),
+    ).toEqual({ reasoning: null, speedIcon: null });
   });
 });

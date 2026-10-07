@@ -1114,7 +1114,7 @@ describe("ManagedEndpointProvider", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("does no Cloudflare work when the registered origin is unchanged", () => {
+  it.effect("only confirms the tunnel exists when the registered origin is unchanged", () => {
     const tunnelCalls: TunnelCall[] = [];
     const layer = providerLayer(makePersistentTunnelClient(tunnelCalls));
 
@@ -1133,7 +1133,31 @@ describe("ManagedEndpointProvider", () => {
           endpoint: provisioned.endpoint,
         }),
       ).toBe("ready");
-      expect(tunnelCalls).toEqual([]);
+      expect(tunnelCalls).toEqual([{ operation: "get", input: "tunnel-id" }]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("asks for recovery when the recorded tunnel was deleted", () => {
+    const tunnelCalls: TunnelCall[] = [];
+    const layer = providerLayer(makePersistentTunnelClient(tunnelCalls));
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+      const origin = { localHttpHost: "127.0.0.1", localHttpPort: 3773 } as const;
+      const provisioned = yield* provider.provision({ ...key, origin });
+      // A shutdown release deletes the tunnel but keeps the recorded id; the
+      // host was killed before it dropped its stored config.
+      expect(yield* provider.release(key)).toBe(true);
+
+      expect(
+        yield* provider.reconcileOrigin({
+          ...key,
+          tunnelId: provisioned.runtime.tunnelId!,
+          origin,
+          endpoint: provisioned.endpoint,
+        }),
+      ).toBe("recovery_required");
     }).pipe(Effect.provide(layer));
   });
 
@@ -1159,6 +1183,7 @@ describe("ManagedEndpointProvider", () => {
         }),
       ).toBe("ready");
       expect(tunnelCalls).toEqual([
+        { operation: "get", input: "tunnel-id" },
         {
           operation: "putConfiguration",
           input: {

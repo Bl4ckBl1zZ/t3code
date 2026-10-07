@@ -1,5 +1,6 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
+import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { SharedSettingsMismatchAlert } from "./SharedSettingsMismatchAlert";
 import { ProviderAccountSetup } from "./ProviderAccountSetup";
 import { ProjectAgentCreditsSettings, ProjectAutoPullSettings } from "./ProjectBooleanSettings";
@@ -3537,6 +3538,19 @@ export function GeneralSettingsPanel() {
             description="Current version of the application."
           />
         )}
+        <SettingsRow
+          {...searchableSetting("privacy-policy")}
+          description="How we handle your data, including the anonymous usage data T3 Code collects."
+          control={
+            <Button
+              render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
+              size="xs"
+              variant="outline"
+            >
+              View policy
+            </Button>
+          }
+        />
         <SettingsRow
           {...searchableSetting("diagnostics")}
           description={diagnosticsDescription}

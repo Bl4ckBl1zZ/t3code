@@ -22,7 +22,7 @@ import {
   Rows3Icon,
   TextWrapIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { useFileContextMenuHandler } from "../fileContextMenu";
 import { type DraftId } from "../composerDraftStore";
@@ -90,6 +90,47 @@ interface CollapsedDiffFilesState {
 }
 
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+
+/** Collapse control for one file header; re-renders only when its own file changes. */
+function DiffFileCollapseToggle({
+  filePath,
+  fileKey,
+  collapsed,
+  iconClassName,
+  onToggle,
+}: {
+  filePath: string;
+  fileKey: string;
+  collapsed: boolean;
+  iconClassName: string;
+  onToggle: (fileKey: string) => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-micro"
+            variant="ghost"
+            className="-ms-0.5"
+            aria-label={collapsed ? `Expand ${filePath}` : `Collapse ${filePath}`}
+            aria-expanded={!collapsed}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle(fileKey);
+            }}
+          />
+        }
+      >
+        <MorphIcon
+          className={cn("size-4", iconClassName)}
+          icon={collapsed ? ChevronRight : ChevronDown}
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{collapsed ? "Expand diff" : "Collapse diff"}</TooltipPopup>
+    </Tooltip>
+  );
+}
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
@@ -467,22 +508,24 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
     },
     [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef],
   );
-  const toggleDiffFileCollapsed = useCallback(
-    (fileKey: string) => {
-      setCollapsedDiffFiles((current) => {
-        const next = new Set(
-          current.scopeKey === collapseScopeKey ? current.fileKeys : defaultCollapsedDiffFileKeys,
-        );
-        if (next.has(fileKey)) {
-          next.delete(fileKey);
-        } else {
-          next.add(fileKey);
-        }
-        return { scopeKey: collapseScopeKey, fileKeys: next };
-      });
-    },
-    [collapseScopeKey, defaultCollapsedDiffFileKeys],
-  );
+  const collapseDefaultsRef = useRef({ collapseScopeKey, defaultCollapsedDiffFileKeys });
+  useLayoutEffect(() => {
+    collapseDefaultsRef.current = { collapseScopeKey, defaultCollapsedDiffFileKeys };
+  }, [collapseScopeKey, defaultCollapsedDiffFileKeys]);
+  const toggleDiffFileCollapsed = useCallback((fileKey: string) => {
+    const { collapseScopeKey, defaultCollapsedDiffFileKeys } = collapseDefaultsRef.current;
+    setCollapsedDiffFiles((current) => {
+      const next = new Set(
+        current.scopeKey === collapseScopeKey ? current.fileKeys : defaultCollapsedDiffFileKeys,
+      );
+      if (next.has(fileKey)) {
+        next.delete(fileKey);
+      } else {
+        next.add(fileKey);
+      }
+      return { scopeKey: collapseScopeKey, fileKeys: next };
+    });
+  }, []);
 
   const fileTreeEntries = useMemo(() => diffFileTreeEntries(renderableFiles), [renderableFiles]);
   const requestFileReveal = useCodeViewFileReveal(codeView, collapseScopeKey);
@@ -975,38 +1018,15 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
                     sectionId={reviewSectionId}
                     sectionTitle={reviewSectionTitle}
                     composerDraftTarget={composerDraftTarget}
-                    renderHeaderPrefix={(fileDiff, fileKey, collapsed) => {
-                      const filePath = resolveFileDiffPath(fileDiff);
-                      return (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <Button
-                                size="icon-micro"
-                                variant="ghost"
-                                className="-ms-0.5"
-                                aria-label={
-                                  collapsed ? `Expand ${filePath}` : `Collapse ${filePath}`
-                                }
-                                aria-expanded={!collapsed}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  toggleDiffFileCollapsed(fileKey);
-                                }}
-                              />
-                            }
-                          >
-                            <MorphIcon
-                              className={cn("size-4", getDiffCollapseIconClassName(fileDiff))}
-                              icon={collapsed ? ChevronRight : ChevronDown}
-                            />
-                          </TooltipTrigger>
-                          <TooltipPopup side="top">
-                            {collapsed ? "Expand diff" : "Collapse diff"}
-                          </TooltipPopup>
-                        </Tooltip>
-                      );
-                    }}
+                    renderHeaderPrefix={(fileDiff, fileKey, collapsed) => (
+                      <DiffFileCollapseToggle
+                        filePath={resolveFileDiffPath(fileDiff)}
+                        fileKey={fileKey}
+                        collapsed={collapsed}
+                        iconClassName={getDiffCollapseIconClassName(fileDiff)}
+                        onToggle={toggleDiffFileCollapsed}
+                      />
+                    )}
                     options={{
                       diffStyle: diffRenderMode === "split" ? "split" : "unified",
                       lineDiffType: "none",

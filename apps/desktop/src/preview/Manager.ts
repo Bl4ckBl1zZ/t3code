@@ -5,7 +5,6 @@
  * elements live in the renderer; we only attach listeners and forward state
  * here). Single layer-scoped browser session partition.
  */
-import * as NodeCrypto from "node:crypto";
 import {
   DesktopPreviewRecordingInputSchema,
   DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
@@ -35,13 +34,16 @@ import type {
   PreviewAutomationSnapshot,
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
+  PreviewForwardedShortcut,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { matchesKeybindingShortcut } from "@t3tools/shared/keybindings";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { BrowserWindow, type Session, clipboard, nativeImage, shell, webContents } from "electron";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -61,7 +63,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
-import { PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
+import { MENU_ACTION_CHANNEL, PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -611,6 +613,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
   const hostPlatform = yield* HostProcessPlatform;
   const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
   const parentScope = yield* Scope.Scope;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
@@ -619,6 +622,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     playwrightInjectedRuntimeInstallExpression(),
   );
 
+  // App shortcuts a focused guest page hands back to the app (see setForwardedShortcuts).
+  let forwardedShortcuts: ReadonlyArray<PreviewForwardedShortcut> = [];
   const annotationThemeRef = yield* Ref.make(DEFAULT_ANNOTATION_THEME);
   const mainWindowRef = yield* Ref.make<Option.Option<BrowserWindow>>(Option.none());
   const tabsRef = yield* SynchronizedRef.make<ReadonlyMap<string, PreviewTabState>>(new Map());
@@ -1634,9 +1639,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     returnByValue: boolean,
     awaitPromise = true,
   ): Effect.Effect<A, PreviewManagerError> =>
-    Effect.suspend(() => {
-      const objectGroup = `t3-evaluation-${NodeCrypto.randomUUID()}`;
-      return send("Runtime.evaluate", {
+    Effect.gen(function* () {
+      const objectGroup = `t3-evaluation-${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`;
+      return yield* send("Runtime.evaluate", {
         expression,
         awaitPromise,
         returnByValue,
@@ -2063,6 +2068,39 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     };
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       syncMenuShortcuts(wc, input);
+      const host = wc.hostWebContents;
+      // Off macOS, Ctrl+Alt is AltGr: a chord that types a symbol belongs to the page.
+      const forwarded =
+        input.type === "keyDown" &&
+        !input.isComposing &&
+        host &&
+        !host.isDestroyed() &&
+        webContents.getFocusedWebContents() === wc &&
+        !(
+          hostPlatform !== "darwin" &&
+          input.control &&
+          input.alt &&
+          /^(?:[^a-zA-Z0-9]|Dead)$/u.test(input.key)
+        ) &&
+        forwardedShortcuts.find(({ shortcut }) =>
+          matchesKeybindingShortcut(
+            {
+              key: input.key,
+              code: input.code,
+              metaKey: input.meta,
+              ctrlKey: input.control,
+              shiftKey: input.shift,
+              altKey: input.alt,
+            },
+            shortcut,
+            hostPlatform === "darwin" ? "MacIntel" : hostPlatform,
+          ),
+        );
+      if (forwarded && host) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) host.send(MENU_ACTION_CHANNEL, forwarded.command);
+        return;
+      }
       if (isPreviewRefreshShortcut(input)) {
         event.preventDefault();
         runFork(
@@ -3017,7 +3055,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc,
       ),
     ]);
-    const id = `browser-screenshot-${artifactSiteSlug(wc.getURL())}-${millis.toString(36)}`;
+    const uuid = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+    const id = `browser-screenshot-${artifactSiteSlug(wc.getURL())}-${millis.toString(36)}-${uuid.slice(0, 8)}`;
     const artifactPath = path.join(resolvedArtifactDirectory, `${id}.png`);
     const data = image.toPNG();
     yield* fileSystem.makeDirectory(resolvedArtifactDirectory, { recursive: true }).pipe(
@@ -4230,10 +4269,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const context = { operation: "automationPress.awaitNativeKey", tabId, webContentsId: wc.id };
     const evaluate = (frame: Electron.WebFrameMain, expression: string) =>
       attemptPromise(context, () => frame.executeJavaScript(expression));
+    const receiptId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
     const { frames, receiptKey } = yield* Effect.acquireRelease(
       attempt(context, () => ({
         frames: wc.mainFrame.framesInSubtree,
-        receiptKey: JSON.stringify(`__t3NativeKey_${NodeCrypto.randomUUID()}`),
+        receiptKey: JSON.stringify(`__t3NativeKey_${receiptId}`),
       })),
       ({ frames, receiptKey }) =>
         Effect.all(
@@ -4491,10 +4531,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           keySequence,
           clipboardData,
         );
-        const selectionKey = yield* encodeJson(
-          context,
-          `__t3EditingSelection_${NodeCrypto.randomUUID()}`,
-        );
+        const selectionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+        const selectionKey = yield* encodeJson(context, `__t3EditingSelection_${selectionId}`);
         // Editing requires an active document. Preserve the target
         // and selection across focus handlers without focusing the desktop.
         yield* Effect.acquireUseRelease(
@@ -4820,6 +4858,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setColorScheme,
     setDeviceEmulation,
     setMainWindow,
+    setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) =>
+      Effect.sync(() => {
+        forwardedShortcuts = shortcuts;
+      }),
     startRecording,
     closePictureInPicture,
     stopRecording,
@@ -5134,6 +5176,10 @@ export class PreviewManager extends Context.Service<
   PreviewManager,
   {
     readonly setMainWindow: (window: BrowserWindow) => Effect.Effect<void, PreviewManagerError>;
+    /** App shortcuts a focused browser guest sends to the app as menu actions instead of the page. */
+    readonly setForwardedShortcuts: (
+      shortcuts: ReadonlyArray<PreviewForwardedShortcut>,
+    ) => Effect.Effect<void>;
     readonly getBrowserSession: (
       scope?: string,
       persistent?: boolean,
@@ -5262,6 +5308,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   return PreviewManager.of({
     setMainWindow: operations.setMainWindow,
+    setForwardedShortcuts: operations.setForwardedShortcuts,
     getBrowserSession: Effect.fn("PreviewManager.getBrowserSession")(
       function* (scope, persistent, namespace) {
         const session = yield* browserSession

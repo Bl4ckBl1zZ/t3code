@@ -1547,10 +1547,11 @@ export function makeCursorAdapterV2(
               },
               prompt: args.prompt,
               title: args.description,
-              model: args.model?.trim() || null,
               result: null,
               startedAt: now,
             }),
+            // A later update can report the model the first one left out.
+            model: args.model?.trim() || existing?.task.model || null,
             nativeTaskRef: {
               driver: CURSOR_PROVIDER,
               nativeId: input.callId,

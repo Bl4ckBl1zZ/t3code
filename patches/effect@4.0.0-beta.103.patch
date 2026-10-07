@@ -1,5 +1,5 @@
 diff --git a/dist/unstable/ai/McpServer.js b/dist/unstable/ai/McpServer.js
-index 755e41c..dc431aa 100644
+index 755e41c..1b7e067 100644
 --- a/dist/unstable/ai/McpServer.js
 +++ b/dist/unstable/ai/McpServer.js
 @@ -262,6 +262,26 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
@@ -38,6 +38,26 @@ index 755e41c..dc431aa 100644
    return Layer.merge(layerWithProtocolState(options), routes).pipe(Layer.provide(layerMcpProtocolHttp(options)), Layer.provide(protocolState), Layer.provide(RpcSerialization.layerJsonRpc()));
  };
  const layerMcpProtocolHttp = options => Layer.effect(RpcServer.Protocol)(Effect.gen(function* () {
+@@ -861,6 +881,10 @@ const toolErrorResult = message => new CallToolResult({
+     text: message
+   }]
+ });
++// A failure a `failureMode: "return"` tool declared is still an error: mark it,
++// and keep it out of structuredContent, which must match the success schema.
++// Toolkit errors (invalid results, encoding) stay private.
++const declaredFailureResult = result => AiError.isAiError(result.result) ? toolErrorResult(INTERNAL_TOOL_ERROR_MESSAGE) : toolErrorResult(JSON.stringify(result.encodedResult));
+ /**
+  * Registers a `Toolkit` with the `McpServer`.
+  *
+@@ -898,7 +922,7 @@ export const registerToolkit = /*#__PURE__*/Effect.fnUntraced(function* (toolkit
+       tool: mcpTool,
+       annotations,
+       handle(payload) {
+-        return built.handle(tool.name, payload).pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption), Effect.provideContext(services), Effect.map(result => new CallToolResult({
++        return built.handle(tool.name, payload).pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption), Effect.provideContext(services), Effect.map(result => result.isFailure ? declaredFailureResult(result) : new CallToolResult({
+           isError: false,
+           structuredContent: typeof result.encodedResult === "object" ? result.encodedResult : undefined,
+           content: [{
 diff --git a/dist/unstable/rpc/RpcClient.d.ts b/dist/unstable/rpc/RpcClient.d.ts
 index aba2779..581d267 100644
 --- a/dist/unstable/rpc/RpcClient.d.ts

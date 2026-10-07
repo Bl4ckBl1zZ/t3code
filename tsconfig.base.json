@@ -51,7 +51,13 @@
           "globalTimersInEffect": "error",
           "globalFetch": "error",
           "globalFetchInEffect": "error"
-        }
+        },
+        "overrides": [
+          {
+            "include": ["**/*.test.ts", "**/*.test.tsx"],
+            "options": { "diagnosticSeverity": { "preferSchemaOverJson": "off" } }
+          }
+        ]
       }
     ]
   }

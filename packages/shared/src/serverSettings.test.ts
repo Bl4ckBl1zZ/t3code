@@ -23,6 +23,34 @@ import {
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("replaces GitHub host choices so a cleared account pin does not survive", () => {
+    const pinned = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      github: { hosts: { "github.com": { account: "work", enabled: true } } },
+    });
+    expect(pinned.github?.hosts).toEqual({ "github.com": { account: "work", enabled: true } });
+    expect(
+      applyServerSettingsPatch(pinned, {
+        github: { hosts: { "github.com": { enabled: false } } },
+      }).github?.hosts,
+    ).toEqual({ "github.com": { enabled: false } });
+  });
+
+  it("merges GitHub tokens per host and keeps host choices a token patch leaves out", () => {
+    const pinned = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      github: {
+        hosts: { "github.com": { account: "work", enabled: true } },
+        tokens: { "github.com": "one" },
+      },
+    });
+    const next = applyServerSettingsPatch(pinned, {
+      github: { tokens: { "ghe.acme.dev": "two" } },
+    });
+    expect(next.github).toEqual({
+      hosts: { "github.com": { account: "work", enabled: true } },
+      tokens: { "github.com": "one", "ghe.acme.dev": "two" },
+    });
+  });
+
   it("normalizes optional persisted strings", () => {
     expect(normalizePersistedServerSettingString(undefined)).toBeUndefined();
     expect(normalizePersistedServerSettingString("   ")).toBeUndefined();

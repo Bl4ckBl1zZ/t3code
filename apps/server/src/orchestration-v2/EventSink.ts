@@ -108,6 +108,8 @@ export interface EventSinkV2Shape {
     readonly activeAttemptId: RunAttemptId;
     readonly expectedStatus: OrchestrationV2Run["status"];
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+    /** Enqueued in the same transaction, so a rejected write drops them too. */
+    readonly effects?: ReadonlyArray<PendingOrchestrationEffectV2>;
   }) => Effect.Effect<
     {
       readonly committed: boolean;
@@ -473,14 +475,18 @@ const baseLayer: Layer.Layer<
               events: normalized,
             });
             yield* applyStoredEvents(storedEvents);
+            yield* effectOutbox.enqueue(input.effects ?? []);
             return { committed: true as const, storedEvents };
           }),
           (result) =>
-            result.committed
-              ? eventStore
-                  .publishCommitted(result.storedEvents)
-                  .pipe(Effect.andThen(PubSub.publishAll(liveEvents, result.storedEvents)))
-              : Effect.void,
+            Effect.gen(function* () {
+              if (!result.committed) return;
+              if (input.effects !== undefined && input.effects.length > 0) {
+                yield* effectOutbox.notifyAvailable(input.effects.length);
+              }
+              yield* eventStore.publishCommitted(result.storedEvents);
+              yield* PubSub.publishAll(liveEvents, result.storedEvents);
+            }),
         );
       },
     );

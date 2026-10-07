@@ -115,6 +115,68 @@ describe("hasMarkdownFilePrimaryAction", () => {
   });
 });
 
+describe("ChatMarkdown bare anchor placeholders", () => {
+  const render = (text: string) =>
+    renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
+  const textOf = (html: string) =>
+    html
+      .replace(/<[^>]+>/g, "")
+      .replaceAll("&lt;", "<")
+      .replaceAll("&gt;", ">")
+      .replaceAll("&quot;", '"')
+      .replaceAll("&amp;", "&");
+  const elementTexts = (html: string, tag: string) =>
+    [...html.matchAll(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "g"))].map((match) =>
+      textOf(match[1] ?? ""),
+    );
+
+  it.each(["<A>", "<a>", "<a >", "<a/>", "<A/>", "<a />"])(
+    "preserves unmatched %s without linking later blocks",
+    (token) => {
+      const html = render(
+        `- **"From ${token}"** appears in the header.\n\n- **Tests:** cover inheritance.\n\nThe deferred move continues on B.\n\nSee <a href="https://example.com">the link</a>.`,
+      );
+
+      expect(elementTexts(html, "strong")[0]).toBe(`"From ${token}"`);
+      expect(elementTexts(html, "a")).toEqual(["the link"]);
+      expect(elementTexts(html, "li")).toHaveLength(2);
+      expect(elementTexts(html, "p")).toContain("The deferred move continues on B.");
+    },
+  );
+
+  it.each(["</a>  ", "<div>more</div>\n</a>"])(
+    "preserves a paired anchor closing in the raw block %s",
+    (closing) => {
+      const html = render(`See <a>label\n\n${closing}\n\nfinish`);
+      expect(elementTexts(html, "p")[0]).toBe("See label");
+    },
+  );
+
+  it("preserves a paired anchor after comment-looking raw text", () => {
+    const html = render("See <a>label<script><!-- </script> --></a>");
+    expect(elementTexts(html, "p")[0]).toBe("See label -->");
+  });
+
+  it.each(["<!-- </a> -->", '<div title="</a>">more</div>', '<script>"</a>"</script>'])(
+    "ignores apparent closing anchors inside %s",
+    (raw) => {
+      const html = render(`Before <A>.\n\n${raw}\n\nAfter.`);
+      expect(elementTexts(html, "p")[0]).toBe("Before <A>.");
+      expect(elementTexts(html, "a")).toHaveLength(0);
+    },
+  );
+
+  it("preserves paired HTML anchors, details, markdown links, and inline code", () => {
+    const html = render(
+      'Bare <a>label</a>, <a id="section"></a>, `<A>`, and [docs](https://example.com).\n\n<details><summary>More</summary>Details</details>',
+    );
+
+    expect(elementTexts(html, "a")).toEqual(["label", "", "docs"]);
+    expect(elementTexts(html, "code")[0]).toBe("<A>");
+    expect(html).toContain("data-markdown-details");
+  });
+});
+
 describe("ChatMarkdown file option chips", () => {
   it("keeps the fallback button text selectable", () => {
     const html = renderToStaticMarkup(
@@ -230,38 +292,38 @@ describe("orderedListGutterStyle", () => {
   });
 
   it("widens the gutter for two-digit lists", () => {
-    expect(orderedListGutterStyle(99, undefined)).toEqual({ "--list-gutter": "3ch" });
+    expect(orderedListGutterStyle(99, undefined)).toEqual({ "--list-gutter": "4ch" });
   });
 
   it("widens the gutter for a two-digit list that starts above 1", () => {
     // start=50 + 49 items => last marker is "98", still two digits.
-    expect(orderedListGutterStyle(49, 50)).toEqual({ "--list-gutter": "3ch" });
+    expect(orderedListGutterStyle(49, 50)).toEqual({ "--list-gutter": "4ch" });
   });
 
   it("widens the gutter once the last marker reaches three digits", () => {
     // item 100 is the bug from #6512: a 100-item list starting at 1.
-    expect(orderedListGutterStyle(100, undefined)).toEqual({ "--list-gutter": "4ch" });
+    expect(orderedListGutterStyle(100, undefined)).toEqual({ "--list-gutter": "5ch" });
   });
 
   it("accounts for a non-default start attribute", () => {
     // start=95 + 9 items => last marker is "103", three digits.
-    expect(orderedListGutterStyle(9, 95)).toEqual({ "--list-gutter": "4ch" });
-    expect(orderedListGutterStyle(5, "999995")).toEqual({ "--list-gutter": "7ch" });
+    expect(orderedListGutterStyle(9, 95)).toEqual({ "--list-gutter": "5ch" });
+    expect(orderedListGutterStyle(5, "999995")).toEqual({ "--list-gutter": "8ch" });
   });
 
   it("scales further for four-digit markers", () => {
-    expect(orderedListGutterStyle(1000, undefined)).toEqual({ "--list-gutter": "5ch" });
+    expect(orderedListGutterStyle(1000, undefined)).toEqual({ "--list-gutter": "6ch" });
   });
 
   it("uses the widest marker and includes a negative start's minus sign", () => {
-    expect(orderedListGutterStyle(1001, -1000)).toEqual({ "--list-gutter": "6ch" });
-    expect(orderedListGutterStyle(3, -15)).toEqual({ "--list-gutter": "4ch" });
-    expect(orderedListGutterStyle(3, -5)).toEqual({ "--list-gutter": "3ch" });
+    expect(orderedListGutterStyle(1001, -1000)).toEqual({ "--list-gutter": "7ch" });
+    expect(orderedListGutterStyle(3, -15)).toEqual({ "--list-gutter": "5ch" });
+    expect(orderedListGutterStyle(3, -5)).toEqual({ "--list-gutter": "4ch" });
   });
 
   it("treats a missing/zero item count as a single item", () => {
     expect(orderedListGutterStyle(0, undefined)).toBeUndefined();
-    expect(orderedListGutterStyle(0, 100)).toEqual({ "--list-gutter": "4ch" });
+    expect(orderedListGutterStyle(0, 100)).toEqual({ "--list-gutter": "5ch" });
   });
 });
 

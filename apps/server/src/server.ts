@@ -123,6 +123,8 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import * as McpOAuth from "./auth/McpOAuth.ts";
+import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ReplayRecordPruner from "./auth/ReplayRecordPruner.ts";
 import { webhookHttpApiLayer } from "./scheduledTasks/webhookRoute.ts";
@@ -640,6 +642,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
       Layer.provide(authHttpApiLayer),
+      Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
       Layer.provide(connectHttpApiLayer.pipe(Layer.provide(CloudPreferences.layer))),
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(projectHttpApiLayer),
@@ -662,6 +665,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
   Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(McpOAuth.layerMcpClientAuthenticator),
   Layer.provide(ServerSelfUpdateLayerLive),
   Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),

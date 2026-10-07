@@ -4,7 +4,7 @@ import { type LucideIcon, LockIcon, LockOpenIcon, PenLineIcon, SparklesIcon } fr
 
 import { HERMES_DRIVER_KIND } from "../../t3WorkProject";
 
-const runtimeModeConfig: Record<
+export const runtimeModeConfig: Record<
   RuntimeMode,
   { label: string; description: string; icon: LucideIcon }
 > = {

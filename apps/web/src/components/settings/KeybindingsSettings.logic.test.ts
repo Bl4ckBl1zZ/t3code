@@ -7,6 +7,7 @@ import {
   buildKeybindingCommandOptions,
   buildWhenVariableOptions,
   commandLabel,
+  groupKeybindingRows,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
@@ -17,6 +18,25 @@ import {
 } from "./KeybindingsSettings.logic";
 
 describe("KeybindingsSettings.logic", () => {
+  it("groups rows by command area in page order and drops empty groups", () => {
+    const groups = groupKeybindingRows(buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, ""));
+    expect(groups.map((group) => group.title)).toEqual([
+      "Navigation",
+      "Threads",
+      "Composer",
+      "Terminal",
+      "Preview & diff",
+      "Appearance",
+      "Other",
+    ]);
+    const composer = groups.find((group) => group.id === "composer");
+    expect(composer?.rows.map((row) => row.command)).toEqual(
+      expect.arrayContaining(["composer.stash", "modelPicker.toggle"]),
+    );
+    expect(groupKeybindingRows(buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "split"))).toEqual(
+      [expect.objectContaining({ id: "terminal" })],
+    );
+  });
   it("builds searchable rows with readable key and when values", () => {
     const rows = buildKeybindingRows(
       [
@@ -162,6 +182,7 @@ describe("KeybindingsSettings.logic", () => {
   it("formats static and project script command labels", () => {
     expect(commandLabel("commandPalette.toggle")).toBe("Command Palette: Toggle");
     expect(commandLabel("themeEditor.toggle")).toBe("Theme Editor: Toggle");
+    expect(commandLabel("view.reopenClosed")).toBe("Reopen Closed Tab");
     expect(commandLabel("script.setup-db.run")).toBe("Run Script: Setup Db");
     expect(commandLabel("usage.tokens")).toBe("Usage: Tokens");
     expect(commandLabel("usage.period.day")).toBe("Usage: Period: Past 24h");

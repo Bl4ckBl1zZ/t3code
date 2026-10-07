@@ -17,8 +17,7 @@ import { sortPullRequestGroups } from "../components/pullRequest/pullRequestList
 import { pullRequestFilterProjects } from "../components/pullRequest/pullRequestProjectFilter.logic";
 import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { environmentMachineIcon } from "../components/EnvironmentMachineIcon";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { pullRequestHostOf, ThreadId } from "@t3tools/contracts";
+import { pullRequestHostOf } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ProjectId,
@@ -136,6 +135,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip"
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import { useEscapeToGoBack } from "../hooks/useNavigateBack";
 import {
+  PULL_REQUESTS_PANEL_REF,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
@@ -156,6 +156,19 @@ import {
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
+
+/** The page has no terminal or browser of its own; only terminal focus can change a binding. */
+function getShortcutContext() {
+  return {
+    terminalFocus: isTerminalFocused(),
+    terminalOpen: false,
+    previewFocus: false,
+    previewOpen: false,
+    modelPickerOpen: false,
+    isWeb: !isElectron,
+    isDesktop: isElectron,
+  };
+}
 
 export interface PullRequestsSearch {
   readonly involvement: PullRequestInvolvement;
@@ -236,15 +249,8 @@ const pullRequestListEntryId = (target: Parameters<typeof pullRequestSurfaceId>[
   pullRequestSurfaceId({ ...target, repository: target.repository.toLowerCase() });
 /** Stable empty map so the memos below do not see a new object on every render. */
 const EMPTY_VIEWERS: PullRequestListResult["viewers"] = {};
-/** The list owns one environment-scoped right panel rather than borrowing a real thread's. */
-const PULL_REQUESTS_PANEL_ID = ThreadId.make("pull-requests-panel");
-/**
- * A fixed sentinel, not a real server: the panel is one workspace-level surface list (each
- * surface already carries the server it was read from), so its store key must not move when a
- * capable server disconnects or reconnects. Real environment ids are server-generated UUIDs, so
- * this string can never collide with one.
- */
-const PULL_REQUESTS_PANEL_ENVIRONMENT_ID = "pull-requests-panel" as EnvironmentId;
+/** The list owns one shared right panel rather than borrowing a real thread's. */
+const PULL_REQUESTS_PANEL_ID = PULL_REQUESTS_PANEL_REF.threadId;
 /** Stable so a read that is not wanted right now does not re-key on every render. */
 const NO_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> = [];
 const EMPTY_PREVIEW_SESSIONS = {};
@@ -463,10 +469,7 @@ function PullRequestsRouteView() {
   // uses a fixed sentinel environment, not whichever server happens to sort first, so the tab
   // strip survives a capable server disconnecting or losing the pull-requests capability.
   const rightPanelRef = useMemo(
-    () =>
-      capableEnvironments.length === 0
-        ? null
-        : scopeThreadRef(PULL_REQUESTS_PANEL_ENVIRONMENT_ID, PULL_REQUESTS_PANEL_ID),
+    () => (capableEnvironments.length === 0 ? null : PULL_REQUESTS_PANEL_REF),
     [capableEnvironments.length],
   );
   const rightPanelState = useRightPanelStore((state) =>
@@ -2191,6 +2194,8 @@ function PullRequestsRouteView() {
           <RightPanelTabs
             mode="inline"
             open={rightPanelState.isOpen}
+            keybindings={keybindings}
+            getShortcutContext={getShortcutContext}
             widthStorageKey="t3code:pull-request-panel-width"
             // Default to roughly half the viewport: the PR list needs more
             // room than a chat, so the 540px chat-preview default squashes

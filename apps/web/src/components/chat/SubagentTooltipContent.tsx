@@ -21,6 +21,8 @@ import { ThreadHoverCard } from "../ThreadHoverCard";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { SubagentWorkflowSummary } from "./SubagentWorkflowSummary";
+import type { SubagentModelTraits } from "./threadModelBadge";
+import { TraitsSpeedIcon } from "./TraitsSpeed";
 
 const WORKING_STATUSES = new Set(["running", "in_progress", "pending", "waiting"]);
 const FAILED_STATUSES = new Set(["failed", "error"]);
@@ -39,6 +41,8 @@ export function SubagentTooltipContent(props: {
   readonly providerAccentColor?: string | undefined;
   /** Several accounts on this provider: the card names the account, as the sidebar does. */
   readonly showInstanceBadge?: boolean | undefined;
+  /** Reasoning and speed, from `resolveSubagentModelTraits`. */
+  readonly traits?: SubagentModelTraits | null | undefined;
   readonly elapsed?: ReactNode;
   readonly parentThread?:
     | Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath">
@@ -84,6 +88,8 @@ export function SubagentTooltipContent(props: {
   const compactDetail = detail.replace(/\s+/g, " ");
   const preview =
     compactDetail.length > 280 ? `${compactDetail.slice(0, 280).trimEnd()}…` : compactDetail;
+  const reasoning = props.traits?.reasoning;
+  const speedIcon = props.traits?.speedIcon;
   const working = WORKING_STATUSES.has(props.status);
   const failed = FAILED_STATUSES.has(props.status);
   const StatusIcon = failed
@@ -108,10 +114,21 @@ export function SubagentTooltipContent(props: {
         ) : (
           <BotIcon className="size-3 shrink-0" />
         )}
-        <span className="min-w-0 truncate text-foreground/75">
-          {props.showInstanceBadge && props.providerDisplayName
-            ? `${props.modelLabel ?? "Not reported"} · ${props.providerDisplayName}`
-            : (props.modelLabel ?? "Not reported")}
+        <span className="inline-flex min-w-0 items-center gap-1 text-foreground/75">
+          <span className="min-w-0 truncate">
+            {props.showInstanceBadge && props.providerDisplayName
+              ? `${props.modelLabel ?? "Not reported"} · ${props.providerDisplayName}`
+              : (props.modelLabel ?? "Not reported")}
+          </span>
+          {reasoning || (speedIcon && props.driver) ? (
+            <span className="inline-flex shrink-0 items-center gap-1">
+              {reasoning ? " · " : null}
+              {speedIcon && props.driver ? (
+                <TraitsSpeedIcon provider={props.driver} speedIcon={speedIcon} size="xs" />
+              ) : null}
+              {reasoning}
+            </span>
+          ) : null}
         </span>
       </div>
       <div className="flex min-w-0 items-center justify-between gap-4">

@@ -310,6 +310,34 @@ To forget an environment on this device instead, open its **⋯** menu and choos
 device…**. Removing asks first, because it deletes the pairing, credentials, and cached threads
 here.
 
+## Connect an Outside Agent
+
+An agent T3 Code did not start, such as Claude Code in your own terminal, can
+drive threads on an environment through its MCP server. In **Settings →
+Connections**, open a saved environment's menu and choose **Copy MCP URL**, then
+add it to the agent. For example:
+
+```sh
+claude mcp add --transport http t3 https://<environment-address>/mcp
+```
+
+The first time the agent connects, it opens a sign-in page on the environment.
+Enter a pairing code from **Settings → Connections** on a device that can manage
+access, or from `t3 auth pairing create` on the host, and choose what the agent
+may do. A browser already signed in to that environment as an administrator can
+approve without a code.
+
+- **Read only** lets the agent read projects and threads in every project, and
+  see which providers and models are available. It cannot change anything.
+- **Supervised** through **Full access** also let it start, message and stop
+  threads in every project, but it cannot start or steer a thread with more
+  permissions than the mode you chose.
+
+Use an HTTPS address: T3 Connect, Tailscale Serve, or `localhost` on the host
+itself. Agents refuse to sign in through a plain `http://` LAN or tailnet
+address. The agent appears under **Settings → Connections** like any other
+client; revoke it there. Sign-ins last 30 days.
+
 ## Managing Access Later
 
 Use `t3 auth` to manage access after the initial pairing flow.
@@ -319,6 +347,25 @@ Typical uses:
 - issue additional pairing credentials
 - inspect active sessions
 - revoke old pairing links or sessions
+
+To choose a token's permissions, pass `--scope` once for each scope you want:
+
+```sh
+npx t3 pair --scope orchestration:read --scope relay:read
+```
+
+The selected scopes replace the default permissions. The same option works with
+`npx t3 auth pairing create` and `npx t3 auth session issue`; each command's
+`--help` lists the available scopes. Without `--scope`, pairing tokens keep
+standard client permissions and issued bearer sessions keep administrative
+permissions.
+
+To change an existing client's permissions, create a fresh pairing link with the
+scopes it needs. In a browser opened directly on the environment, open that link
+to replace the browser's current grant. For the iOS app, or a saved remote
+environment in web or desktop, pair again with the fresh link or code; pairing
+the same address again replaces its saved grant. Reconnecting alone does not
+change permissions.
 
 Use `t3 auth --help` and the nested subcommand help pages for the full reference.
 

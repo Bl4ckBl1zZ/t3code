@@ -270,9 +270,13 @@ export interface PullRequestProviderApi {
   readonly kind: SourceControlProviderKind;
   readonly capabilities: PullRequestCapabilities;
 
-  /** The signed-in account, which is what involvement filtering compares against. */
+  /**
+   * The signed-in account, which is what involvement filtering compares against. `host` names
+   * which install to ask, for a provider that reaches more than one; one that does not ignores it.
+   */
   readonly getViewer: (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
   }) => Effect.Effect<string, PullRequestProviderError>;
 
   readonly listChangeRequests: (

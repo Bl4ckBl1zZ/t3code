@@ -103,7 +103,6 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         ...row,
         description: "x".repeat(10_000),
       }));
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const response = JSON.stringify(rows);
       expect(Buffer.byteLength(response)).toBeGreaterThan(1_000_000);
 
@@ -227,7 +226,6 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         .mockReturnValueOnce(
           Effect.succeed(
             output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify([
                 { pullRequestId: "malformed" },
                 pullRequestRows(1, 1)[0],
@@ -320,7 +318,6 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       // `--query user` unwraps the object, so the wrapper has to put it back.
       mockedExecute.mockReturnValueOnce(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         Effect.succeed(output(JSON.stringify({ name: "bilal@acme.dev", type: "user" }))),
       );
       const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
@@ -521,7 +518,6 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
           output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               value: [
                 {
@@ -556,7 +552,6 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         Effect.succeed(
           output(
             // Well-formed, but with nothing to build a link from: not a decode failure.
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               pullRequestId: 42,
               title: "Add the page",

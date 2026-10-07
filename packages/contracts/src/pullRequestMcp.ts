@@ -90,12 +90,12 @@ export class PullRequestThreadNotFoundError extends Schema.TaggedErrorClass<Pull
   }
 }
 
-export class PullRequestThreadAboveLimitsError extends Schema.TaggedErrorClass<PullRequestThreadAboveLimitsError>()(
-  "PullRequestThreadAboveLimitsError",
-  { threadId: Schema.String },
+export class PullRequestThreadRequiredError extends Schema.TaggedErrorClass<PullRequestThreadRequiredError>()(
+  "PullRequestThreadRequiredError",
+  {},
 ) {
   override get message(): string {
-    return `Thread ${this.threadId} cannot be changed from here: it runs with broader permissions than this caller, or the calling thread has no active run.`;
+    return "Pass threadId: this MCP client is not running inside a T3 thread.";
   }
 }
 
@@ -159,7 +159,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestTargetIncompleteError,
   PullRequestHostRequiredError,
   PullRequestThreadNotFoundError,
-  PullRequestThreadAboveLimitsError,
+  PullRequestThreadRequiredError,
   PullRequestLinkFailedError,
   PullRequestUnlinkFailedError,
   PullRequestListFailedError,

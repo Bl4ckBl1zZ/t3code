@@ -121,6 +121,7 @@ export class WorktreeMcpFailure extends Schema.TaggedErrorClass<WorktreeMcpFailu
       "handoff_in_progress",
       "invalid_request",
       "operation_failed",
+      "thread_credential_required",
     ]),
     message: Schema.String,
   },

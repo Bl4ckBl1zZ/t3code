@@ -121,7 +121,50 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 
-  it.effect("does not exchange ordinary pairing grants for administrative access tokens", () =>
+  it.effect("re-pairing a browser replaces only that browser's session", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const pairBrowser = (previousSessionToken?: string) =>
+        serverAuth
+          .issuePairingCredential({ scopes: ["orchestration:read"] })
+          .pipe(
+            Effect.flatMap((pairing) =>
+              serverAuth.createBrowserSession(
+                pairing.credential,
+                requestMetadata,
+                previousSessionToken,
+              ),
+            ),
+          );
+      const authenticate = (sessionToken: string) =>
+        serverAuth.authenticateHttpRequest(makeCookieRequest(sessions.cookieName, sessionToken));
+
+      const browser = yield* pairBrowser();
+      const otherBrowser = yield* pairBrowser();
+      const bearer = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        (yield* serverAuth.issuePairingCredential()).credential,
+        undefined,
+        requestMetadata,
+      );
+      const replacement = yield* pairBrowser(browser.sessionToken);
+
+      expect((yield* Effect.flip(authenticate(browser.sessionToken)))._tag).toBe(
+        "ServerAuthInvalidCredentialError",
+      );
+      expect((yield* authenticate(replacement.sessionToken)).scopes).toEqual([
+        "orchestration:read",
+      ]);
+      expect((yield* authenticate(otherBrowser.sessionToken)).scopes).toEqual([
+        "orchestration:read",
+      ]);
+      yield* serverAuth.authenticateHttpRequest(makeBearerRequest(bearer.access_token));
+      // A stale or unknown cookie still pairs; there is just nothing to replace.
+      yield* pairBrowser("not-a-session-token");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("preserves pairing grants after rejecting scopes they do not grant", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const pairingCredential = yield* serverAuth.issuePairingCredential();
@@ -135,10 +178,40 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         .pipe(Effect.flip);
 
       expect(error._tag).toBe("ServerAuthScopeNotGrantedError");
+      expect((yield* serverAuth.listPairingLinks()).map((link) => link.id)).toContain(
+        pairingCredential.id,
+      );
+      expect(yield* serverAuth.listSessions()).toEqual([]);
+
+      const token = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        pairingCredential.credential,
+        ["orchestration:read"],
+        requestMetadata,
+      );
+      const session = yield* serverAuth.authenticateHttpRequest(
+        makeBearerRequest(token.access_token),
+      );
+
+      expect(token.scope).toBe("orchestration:read");
+      expect(session.scopes).toEqual(["orchestration:read"]);
+      expect((yield* serverAuth.listPairingLinks()).map((link) => link.id)).not.toContain(
+        pairingCredential.id,
+      );
+      const reused = yield* serverAuth
+        .exchangeBootstrapCredentialForAccessToken(
+          pairingCredential.credential,
+          ["orchestration:read"],
+          requestMetadata,
+        )
+        .pipe(Effect.flip);
+      expect(reused._tag).toBe("ServerAuthInvalidCredentialError");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 
-  it.effect("inherits a constrained pairing grant when token exchange omits scope", () =>
+  it.effect.each([
+    { label: "omits scope", requestedScopes: undefined },
+    { label: "requests no scopes", requestedScopes: [] },
+  ])("inherits a constrained pairing grant when token exchange $label", ({ requestedScopes }) =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const pairingCredential = yield* serverAuth.issuePairingCredential({
@@ -147,12 +220,33 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
 
       const token = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
         pairingCredential.credential,
-        undefined,
+        requestedScopes,
         requestMetadata,
       );
 
       expect(token.scope).toBe("orchestration:read");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("narrows seeded desktop grants to the requested scopes", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const token = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        "desktop-bootstrap-token",
+        ["orchestration:read"],
+        requestMetadata,
+      );
+      const session = yield* serverAuth.authenticateHttpRequest(
+        makeBearerRequest(token.access_token),
+      );
+
+      expect(token.scope).toBe("orchestration:read");
+      expect(session.scopes).toEqual(["orchestration:read"]);
+    }).pipe(
+      Effect.provide(
+        makeEnvironmentAuthLayer({ desktopBootstrapToken: "desktop-bootstrap-token" }),
+      ),
+    ),
   );
 
   it.effect("rotates desktop bearer sessions without accumulating authorized clients", () =>

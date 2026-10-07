@@ -68,8 +68,20 @@ Use **Inspect** to pick an element in the app and reveal its color token. Inspec
 successful pick; its hover glow and badge preview the element and color family that click will select.
 **Cancel** or `Escape` exits Inspect and clears its selection and spotlight.
 
+`rightPanel.new` (`mod+t`) opens the side panel's add-tab menu while the panel is open; pick a tab
+with the arrow keys or its letter. It does not run while the terminal has focus, and in a browser
+the browser may keep `mod+t` for itself.
+
 `rightPanel.toggleMaximized` maximizes or restores the open right panel. It has no default shortcut,
 so add one in **Settings** → **Keybindings** if you want to use it.
+
+`view.reopenClosed` (`mod+shift+t`) reopens the last tab you closed in a thread's side panel or
+on the Pull Requests page, including files, diffs, plans, pull requests, and browsers, in the
+order you closed them, and takes you back to the thread it belongs to. A browser opens in a fresh
+session at the same address without its old page history. Incognito browser tabs can reopen until
+you reload or quit the app. Terminals are not reopened, and the shortcut does not undo deleted
+work. Browsers also use `mod+shift+t` to reopen browser tabs; choose another binding in
+**Settings** → **Keybindings** if the browser takes it first.
 
 `thread.settle` settles the active thread or restores it when it is already settled. Its default
 shortcut is `mod+shift+s`, and it does not run while the terminal has focus.
@@ -102,7 +114,7 @@ but the new thread does not reuse the worktree created for the thread that just 
 
 A `when` expression is evaluated against context keys describing the current UI state. The keys
 the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`,
-`modelPickerOpen`, `usagePageOpen`, `editableFocus`, `composerFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
+`modelPickerOpen`, `usagePageOpen`, `rightPanelOpen`, `editableFocus`, `composerFocus`, `isWeb`, and `isDesktop`. `editableFocus` is true while a text
 field, the composer, or another editor has the keyboard; `composerFocus` only while the composer does. The default `mod+1`…`mod+9` thread and model jumps
 are limited to `isDesktop`, so a browser keeps those keys for switching tabs. The set is open and grows over time, so treat that as the current list rather
 than a fixed one. Any key the running app does not supply evaluates to `false`.

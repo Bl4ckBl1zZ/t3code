@@ -67,7 +67,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -77,6 +79,10 @@ import {
   delegatedTaskProgress,
   subagentResultForRun,
 } from "../orchestration-v2/SubagentProjection.ts";
+import {
+  DispatchModeLimit,
+  type DispatchModeRefusal,
+} from "../orchestration-v2/DispatchModeLimit.ts";
 import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
 import {
   isActiveRun,
@@ -89,7 +95,13 @@ import {
 import { ProjectService } from "../project/ProjectService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
-import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
+import {
+  clientRuntimeModeCeiling,
+  type McpInvocationScope,
+  type McpThreadInvocationScope,
+  requireThreadScope,
+} from "./McpInvocationContext.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 
@@ -234,7 +246,12 @@ function scheduledTaskWorkspaceStrategy(
     : { type: "worktree", baseRef: "main", startFromOrigin: true };
 }
 
-function scheduledTaskSummary(task: ScheduledTask): OrchestratorMcpScheduledTask {
+/**
+ * A scheduled task as an agent sees it. `mayRun` says whether the caller may
+ * run it: a webhook's URL carries the secret that starts the task's runs, so
+ * only such a caller sees it.
+ */
+function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): OrchestratorMcpScheduledTask {
   return {
     scheduledTaskId: task.id,
     title: task.title,
@@ -246,7 +263,7 @@ function scheduledTaskSummary(task: ScheduledTask): OrchestratorMcpScheduledTask
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
     // A bare path is not a URL anyone can call, so agents never get one to share.
-    ...(task.webhook?.url == null ? {} : { webhookUrl: task.webhook.url }),
+    ...(task.webhook?.url == null || !mayRun ? {} : { webhookUrl: task.webhook.url }),
     ...(task.webhook === undefined
       ? {}
       : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),
@@ -525,7 +542,7 @@ function stableCommandId(input: {
     [
       "command",
       "mcp",
-      stablePart(input.scope.providerSessionId),
+      stablePart(input.scope.requestNamespace),
       stablePart(input.operation),
       stablePart(input.requestKey),
       ...(input.index === undefined ? [] : [String(input.index)]),
@@ -542,7 +559,7 @@ function stableThreadId(input: {
     [
       "thread",
       "mcp",
-      stablePart(input.scope.providerSessionId),
+      stablePart(input.scope.requestNamespace),
       stablePart(input.requestKey),
       String(input.index),
     ].join(":"),
@@ -558,7 +575,7 @@ function stableMessageId(input: {
     [
       "message",
       "mcp",
-      stablePart(input.scope.providerSessionId),
+      stablePart(input.scope.requestNamespace),
       stablePart(input.requestKey),
       String(input.index),
     ].join(":"),
@@ -574,7 +591,7 @@ function stableOperationMessageId(input: {
     [
       "message",
       "mcp",
-      stablePart(input.scope.providerSessionId),
+      stablePart(input.scope.requestNamespace),
       stablePart(input.operation),
       stablePart(input.requestKey),
     ].join(":"),
@@ -790,6 +807,8 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
   const projects = yield* ProjectService;
+  const git = yield* GitVcsDriver;
+  const fileSystem = yield* FileSystem.FileSystem;
 
   /** A caller-named project, which must exist before anything is recorded against it. */
   const requireProject = (projectId: ProjectId) =>
@@ -808,6 +827,40 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+  /** A client has no thread to inherit a model from, so it falls back to the project default. */
+  const projectDefaultModelSelection = (
+    project: Effect.Success<ReturnType<typeof requireProject>>,
+  ) =>
+    project.defaultModelSelection === null || project.defaultModelSelection === undefined
+      ? Effect.fail(
+          failure(
+            "invalid_request",
+            `Project ${project.id} has no default model, so this caller cannot pick one for it. Pass target.`,
+          ),
+        )
+      : Effect.succeed(project.defaultModelSelection);
+
+  /**
+   * An existing checkout a launch may bind: one of the project's own git
+   * worktrees. Without this check a launch could point an agent at any
+   * directory on the machine.
+   */
+  const assertProjectWorktree = (workspaceRoot: string, worktreePath: string) =>
+    Effect.gen(function* () {
+      const real = (path: string) =>
+        fileSystem.realPath(path).pipe(Effect.orElseSucceed(() => path));
+      const worktrees = yield* git.listWorktreePaths(workspaceRoot).pipe(
+        Effect.flatMap((paths) => Effect.forEach(paths, real)),
+        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      );
+      if (!worktrees.includes(yield* real(worktreePath))) {
+        return yield* failure(
+          "invalid_request",
+          "worktreePath must be one of the project's git worktrees. t3_worktree_list shows them.",
+        );
+      }
+    });
+
   const secretRequests = yield* SecretRequests.SecretRequests;
 
   const requireCapability = (scope: McpInvocationScope) =>
@@ -859,19 +912,73 @@ const make = Effect.gen(function* () {
       return yield* loadProjectThread(shell.projectId, threadId);
     });
 
-  /** The calling thread and a target thread, which may live in any project. */
-  const loadScopedThread = (scope: McpInvocationScope, threadId: ThreadId) =>
+  /**
+   * The caller's own thread and the most it may hand to threads it targets. A
+   * thread caller is capped by its own modes; an OAuth client by the ceiling
+   * chosen when it was approved.
+   */
+  const loadCaller = (scope: McpInvocationScope) =>
     Effect.gen(function* () {
       yield* requireCapability(scope);
-      const parent = yield* loadProjection(scope.threadId);
-      const target = threadId === scope.threadId ? parent : yield* loadTargetThread(threadId);
-      return { parent, target } as const;
+      if (scope.thread === undefined) {
+        return {
+          parent: undefined,
+          limits: {
+            runtimeMode: clientRuntimeModeCeiling(scope.client),
+            interactionMode: "default",
+          } satisfies { runtimeMode: RuntimeMode; interactionMode: ProviderInteractionMode },
+        } as const;
+      }
+      const parent = yield* loadProjection(scope.thread.threadId);
+      return {
+        parent,
+        limits: {
+          runtimeMode: parent.thread.runtimeMode,
+          interactionMode: parent.thread.interactionMode,
+        },
+      } as const;
+    });
+
+  /** The caller's own thread, for operations that act as the caller. */
+  const loadThreadCaller = (scope: McpInvocationScope, operation: string) =>
+    Effect.gen(function* () {
+      yield* requireCapability(scope);
+      const threadScope = yield* requireThreadScope(scope, operation);
+      const parent = yield* loadProjection(threadScope.thread.threadId);
+      return { scope: threadScope, parent } as const;
+    });
+
+  /** A target project: the one passed, else the calling thread's. */
+  const resolveProjectTarget = (
+    parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
+    projectId: ProjectId | undefined,
+  ) =>
+    projectId !== undefined
+      ? Effect.succeed(projectId)
+      : parent !== undefined
+        ? Effect.succeed(parent.thread.projectId)
+        : Effect.fail(
+            failure(
+              "target_required",
+              "Pass projectId: this MCP client is not running inside a T3 thread.",
+            ),
+          );
+
+  /** The caller and a target thread, which may live in any project. */
+  const loadScopedThread = (scope: McpInvocationScope, threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const caller = yield* loadCaller(scope);
+      const target =
+        caller.parent !== undefined && threadId === caller.parent.thread.id
+          ? caller.parent
+          : yield* loadTargetThread(threadId);
+      return { ...caller, target } as const;
     });
 
   /**
-   * The caller writes to another thread, or to scheduled work outside its own
-   * project, only while its own run is live, so a credential that outlived its
-   * session cannot reach across threads.
+   * A thread caller writes to another thread, or to scheduled work outside
+   * its own project, only while its own run is live, so a credential that
+   * outlived its session cannot reach across threads.
    */
   const assertLiveCaller = (
     scope: McpInvocationScope,
@@ -880,23 +987,41 @@ const make = Effect.gen(function* () {
     const activeRun = latestActiveRun(parent);
     return parent.thread.archivedAt !== null ||
       activeRun === undefined ||
-      activeRun.providerInstanceId !== scope.providerInstanceId
+      activeRun.providerInstanceId !== scope.thread?.providerInstanceId
       ? Effect.fail(
           failure("parent_not_active", "The calling provider no longer owns an active thread run."),
         )
       : Effect.void;
   };
 
-  /** Writing to another thread: the caller's live run, and the target within the caller's modes. */
+  /** Scheduled work outside the caller's own project needs the same live run. */
+  const assertLiveCallerForOtherProject = (
+    scope: McpInvocationScope,
+    parent: Pick<OrchestrationV2ThreadProjection, "thread" | "runs"> | undefined,
+    projectId: ProjectId,
+  ) =>
+    parent === undefined || projectId === parent.thread.projectId
+      ? Effect.void
+      : assertLiveCaller(scope, parent);
+
+  /** Writing to another thread: the caller's live run, and the target within the caller's limits. */
   const assertWritableTarget = (
     scope: McpInvocationScope,
-    parent: OrchestrationV2ThreadProjection,
+    caller: {
+      readonly parent: OrchestrationV2ThreadProjection | undefined;
+      readonly limits: {
+        readonly runtimeMode: RuntimeMode;
+        readonly interactionMode: ProviderInteractionMode;
+      };
+    },
     target: OrchestrationV2ThreadProjection,
   ) =>
     Effect.gen(function* () {
-      if (target.thread.id !== parent.thread.id) yield* assertLiveCaller(scope, parent);
-      yield* resolveRuntimeMode(parent.thread.runtimeMode, target.thread.runtimeMode);
-      yield* resolveInteractionMode(parent.thread.interactionMode, target.thread.interactionMode);
+      if (caller.parent !== undefined && target.thread.id !== caller.parent.thread.id) {
+        yield* assertLiveCaller(scope, caller.parent);
+      }
+      yield* resolveRuntimeMode(caller.limits.runtimeMode, target.thread.runtimeMode);
+      yield* resolveInteractionMode(caller.limits.interactionMode, target.thread.interactionMode);
     });
 
   const loadProviders = providerRegistry.getProviders;
@@ -909,9 +1034,7 @@ const make = Effect.gen(function* () {
   const resolveTargetRechecking = (input: Parameters<typeof resolveTarget>[0]) => {
     const instanceId =
       input.target?.providerInstanceId ??
-      (input.target?.driverKind === undefined
-        ? input.parent.thread.modelSelection.instanceId
-        : undefined);
+      (input.target?.driverKind === undefined ? input.inherited?.instanceId : undefined);
     const resolved = resolveTarget(input);
     if (instanceId === undefined) return resolved;
     return resolved.pipe(
@@ -926,7 +1049,11 @@ const make = Effect.gen(function* () {
   };
 
   const resolveTarget = (input: {
-    readonly parent: OrchestrationV2ThreadProjection;
+    /**
+     * What an omitted target inherits: the caller's model, or for a client
+     * the project's default, which may be unset.
+     */
+    readonly inherited: ModelSelection | undefined;
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
   }): Effect.Effect<ResolvedTarget, OrchestratorMcpFailure> =>
@@ -952,7 +1079,7 @@ const make = Effect.gen(function* () {
         // requested driver rather than failing the delegation.
         const inheritedCandidate = candidates.find(
           (candidate) =>
-            candidate.instanceId === input.parent.thread.modelSelection.instanceId &&
+            candidate.instanceId === input.inherited?.instanceId &&
             providerConstraints(candidate, isBuiltInProviderAdapterDriverV2(candidate.driver))
               .length === 0,
         );
@@ -970,7 +1097,13 @@ const make = Effect.gen(function* () {
           );
         }
       }
-      instanceId ??= input.parent.thread.modelSelection.instanceId;
+      instanceId ??= input.inherited?.instanceId;
+      if (instanceId === undefined) {
+        return yield* failure(
+          "invalid_request",
+          "Pass target: the project has no default model. orchestrator_capabilities lists providers and models.",
+        );
+      }
 
       const provider = input.providers.find((candidate) => candidate.instanceId === instanceId);
       if (provider === undefined) {
@@ -996,11 +1129,11 @@ const make = Effect.gen(function* () {
         );
       }
 
-      const inheritedSelection = input.parent.thread.modelSelection;
+      const inheritedSelection = input.inherited;
       const requestedModel = input.target?.model;
       const model =
         requestedModel ??
-        (instanceId === inheritedSelection.instanceId
+        (inheritedSelection !== undefined && instanceId === inheritedSelection.instanceId
           ? inheritedSelection.model
           : provider?.models[0]?.slug);
       if (model === undefined) {
@@ -1036,6 +1169,7 @@ const make = Effect.gen(function* () {
 
       return {
         modelSelection:
+          inheritedSelection !== undefined &&
           instanceId === inheritedSelection.instanceId &&
           model === inheritedSelection.model &&
           requestedOptions === undefined
@@ -1052,7 +1186,7 @@ const make = Effect.gen(function* () {
       : Effect.succeed(clientRequestId);
 
   const readTask = (
-    scope: McpInvocationScope,
+    scope: McpThreadInvocationScope,
     taskId: NodeId,
     waitTimedOut = false,
     acknowledgeTerminal = false,
@@ -1060,17 +1194,17 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> =>
     Effect.gen(function* () {
       yield* requireCapability(scope);
-      const parentProjection = yield* loadProjection(scope.threadId);
+      const parentProjection = yield* loadProjection(scope.thread.threadId);
       const task = parentProjection.subagents.find(
         (candidate) =>
           candidate.id === taskId &&
           candidate.origin === "app_owned" &&
-          candidate.threadId === scope.threadId,
+          candidate.threadId === scope.thread.threadId,
       );
       if (task === undefined || task.childThreadId === null) {
         return yield* failure(
           "task_not_found",
-          `Delegated task ${taskId} does not belong to thread ${scope.threadId}.`,
+          `Delegated task ${taskId} does not belong to thread ${scope.thread.threadId}.`,
         );
       }
       const childProjection = yield* loadProjection(task.childThreadId);
@@ -1110,7 +1244,7 @@ const make = Effect.gen(function* () {
         (transfer) =>
           transfer.type === "subagent_result" &&
           transfer.sourceThreadId === task.childThreadId &&
-          transfer.targetThreadId === scope.threadId,
+          transfer.targetThreadId === scope.thread.threadId,
       );
       // A transfer recorded before runs were pinned to it belongs to the
       // delegated run, so fall back to the unpinned one only for that run.
@@ -1165,10 +1299,10 @@ const make = Effect.gen(function* () {
               requestKey: acknowledgementRequestKey,
               operation: acknowledgementOperation,
             }),
-            parentThreadId: scope.threadId,
+            parentThreadId: scope.thread.threadId,
             taskId,
             observedByRunId:
-              observingRun?.providerInstanceId === scope.providerInstanceId
+              observingRun?.providerInstanceId === scope.thread.providerInstanceId
                 ? observingRun.id
                 : null,
           })
@@ -1186,7 +1320,7 @@ const make = Effect.gen(function* () {
 
   // Re-read the task only when an event on the parent or child thread can
   // change its status, instead of polling the projections every 50 ms.
-  const waitForTask = (scope: McpInvocationScope, taskId: NodeId, timeoutMs: number) =>
+  const waitForTask = (scope: McpThreadInvocationScope, taskId: NodeId, timeoutMs: number) =>
     Effect.gen(function* () {
       const streamError = (error: unknown) =>
         failure(
@@ -1196,14 +1330,14 @@ const make = Effect.gen(function* () {
       // Sequences are global, so one cursor taken before the first read
       // replays anything either thread records after it.
       const afterSequence = yield* threadManagement
-        .getThreadEventSequence(scope.threadId)
+        .getThreadEventSequence(scope.thread.threadId)
         .pipe(Effect.mapError(streamError));
       const initial = yield* readTask(scope, taskId, false, true);
       if (isTerminalTaskStatus(initial.status)) return Option.some(initial);
       return yield* Stream.mergeAll(
         TASK_WAKE_EVENTS.map(({ thread, eventType }) =>
           threadManagement.streamStoredEventsFrom({
-            threadId: thread === "parent" ? scope.threadId : initial.childThreadId,
+            threadId: thread === "parent" ? scope.thread.threadId : initial.childThreadId,
             afterSequence,
             eventType,
           }),
@@ -1218,9 +1352,75 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.timeoutOption(Duration.millis(timeoutMs)), Effect.map(Option.flatten));
 
   /**
-   * A scheduled task the caller may change: one whose modes are no broader
-   * than the caller's own, so editing its prompt cannot run work above the
-   * caller's limits.
+   * The modes a task's runs execute at: its own, or for a task bound to a
+   * thread, also that thread's modes as they are now, since its runs are
+   * messages to that thread.
+   */
+  const scheduledTaskRunModes = (task: ScheduledTask) =>
+    Effect.gen(function* () {
+      const modes = [{ runtimeMode: task.runtimeMode, interactionMode: task.interactionMode }];
+      if (task.threadId === null) return modes;
+      const threadId = task.threadId;
+      const bound = yield* threadManagement
+        .getThreadShell(threadId)
+        .pipe(
+          Effect.mapError((error) =>
+            failure(
+              "orchestration_error",
+              `Unable to read thread ${threadId}: ${errorMessage(error)}`,
+            ),
+          ),
+        );
+      return bound === null || bound.deletedAt !== null ? modes : [...modes, bound];
+    });
+
+  const withinLimits = (
+    limits: {
+      readonly runtimeMode: RuntimeMode;
+      readonly interactionMode: ProviderInteractionMode;
+    },
+    modes: { readonly runtimeMode: RuntimeMode; readonly interactionMode: ProviderInteractionMode },
+  ) =>
+    runtimeModeRank(modes.runtimeMode) <= runtimeModeRank(limits.runtimeMode) &&
+    interactionModeRank(modes.interactionMode) <= interactionModeRank(limits.interactionMode);
+
+  /**
+   * A task as the caller may see it. Its webhook URL starts runs, so only a
+   * caller that may start one sees it: never a client approved for read-only
+   * access, and a thread caller only with a live turn, at modes covering every
+   * mode the task runs at.
+   */
+  const summarizeScheduledTask = (
+    scope: McpInvocationScope,
+    caller: {
+      readonly parent: Pick<OrchestrationV2ThreadProjection, "thread" | "runs"> | undefined;
+      readonly limits: {
+        readonly runtimeMode: RuntimeMode;
+        readonly interactionMode: ProviderInteractionMode;
+      };
+    },
+    task: ScheduledTask,
+  ) =>
+    Effect.gen(function* () {
+      const live =
+        caller.parent === undefined
+          ? scope.client?.access !== "read-only"
+          : Exit.isSuccess(yield* Effect.exit(assertLiveCaller(scope, caller.parent)));
+      // This runs after a save, so a failed lookup of the bound thread hides
+      // the webhook URL instead of reporting a saved task as an error.
+      const modes = yield* scheduledTaskRunModes(task).pipe(Effect.option);
+      return scheduledTaskSummary(
+        task,
+        live &&
+          Option.isSome(modes) &&
+          modes.value.every((mode) => withinLimits(caller.limits, mode)),
+      );
+    });
+
+  /**
+   * A scheduled task the caller may change: one whose runs execute at modes no
+   * broader than the caller's own, so editing its prompt cannot run work above
+   * the caller's limits.
    */
   const loadScheduledTask = (
     scheduledTaskId: ScheduledTask["id"],
@@ -1241,28 +1441,33 @@ const make = Effect.gen(function* () {
       if (task === undefined) {
         return yield* failure("task_not_found", `Scheduled task ${scheduledTaskId} was not found.`);
       }
-      yield* resolveRuntimeMode(limits.runtimeMode, task.runtimeMode);
-      yield* resolveInteractionMode(limits.interactionMode, task.interactionMode);
+      for (const modes of yield* scheduledTaskRunModes(task)) {
+        yield* resolveRuntimeMode(limits.runtimeMode, modes.runtimeMode);
+        yield* resolveInteractionMode(limits.interactionMode, modes.interactionMode);
+      }
       return task;
     });
 
   return OrchestratorMcpService.of({
     scheduleTask: (scope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
-        const projectId = input.projectId ?? parent.thread.projectId;
-        const inCallerProject = projectId === parent.thread.projectId;
-        if (!inCallerProject) yield* assertLiveCaller(scope, parent);
-        yield* requireProject(projectId);
-        // Binding means "wake this thread", which only fits the thread's own project.
+        const { parent, limits } = yield* loadCaller(scope);
+        const projectId = yield* resolveProjectTarget(parent, input.projectId);
+        yield* assertLiveCallerForOtherProject(scope, parent, projectId);
+        const project = yield* requireProject(projectId);
+        // Binding means "wake this thread", which only a thread caller in that project has.
+        const inCallerProject = parent !== undefined && parent.thread.projectId === projectId;
         const bindToCurrentThread = input.bindToCurrentThread ?? inCallerProject;
         if (bindToCurrentThread && !inCallerProject) {
           return yield* failure(
             "invalid_request",
-            "bindToCurrentThread binds to this thread, which belongs to a different project.",
+            parent === undefined
+              ? "bindToCurrentThread needs an agent running inside a T3 thread."
+              : "bindToCurrentThread binds to this thread, which belongs to a different project.",
           );
         }
+        const modelSelection =
+          parent?.thread.modelSelection ?? (yield* projectDefaultModelSelection(project));
         const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
         const title =
           input.title ?? (derivedTitle.length > 0 ? derivedTitle.slice(0, 80) : "Scheduled task");
@@ -1272,11 +1477,11 @@ const make = Effect.gen(function* () {
           enabled: input.enabled ?? true,
           schedule: input.schedule,
           projectId,
-          threadId: bindToCurrentThread ? scope.threadId : null,
+          threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
           workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
-          modelSelection: parent.thread.modelSelection,
-          runtimeMode: parent.thread.runtimeMode,
-          interactionMode: parent.thread.interactionMode,
+          modelSelection,
+          runtimeMode: limits.runtimeMode,
+          interactionMode: limits.interactionMode,
           createdBy: "agent",
           creationSource: "mcp",
           // Scope the idempotency key by provider session so two callers
@@ -1298,13 +1503,12 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Could not schedule task: ${error.message}`),
             ),
           );
-        return scheduledTaskSummary(task);
+        return yield* summarizeScheduledTask(scope, { parent, limits }, task);
       }),
     listScheduledTasks: (scope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
-        const projectId = input.projectId ?? parent.thread.projectId;
+        const { parent, limits } = yield* loadCaller(scope);
+        const projectId = input.projectId ?? parent?.thread.projectId;
         const { tasks } = yield* scheduledTasks
           .list()
           .pipe(
@@ -1313,27 +1517,33 @@ const make = Effect.gen(function* () {
             ),
           );
         return {
-          tasks: tasks.filter((task) => task.projectId === projectId).map(scheduledTaskSummary),
+          tasks: yield* Effect.forEach(
+            tasks.filter((task) => projectId === undefined || task.projectId === projectId),
+            (task) => summarizeScheduledTask(scope, { parent, limits }, task),
+          ),
         };
       }),
     updateScheduledTask: (scope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, parent.thread);
-        const inCallerProject = existing.projectId === parent.thread.projectId;
-        if (!inCallerProject) yield* assertLiveCaller(scope, parent);
-        if (input.bindToCurrentThread === true && !inCallerProject) {
+        const { parent, limits } = yield* loadCaller(scope);
+        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+        yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
+        if (
+          input.bindToCurrentThread === true &&
+          (parent === undefined || parent.thread.projectId !== existing.projectId)
+        ) {
           return yield* failure(
             "invalid_request",
-            "bindToCurrentThread binds to this thread, which belongs to a different project.",
+            parent === undefined
+              ? "bindToCurrentThread needs an agent running inside a T3 thread."
+              : "bindToCurrentThread binds to this thread, which belongs to a different project.",
           );
         }
         const threadId =
           input.bindToCurrentThread === undefined
             ? existing.threadId
-            : input.bindToCurrentThread
-              ? scope.threadId
+            : input.bindToCurrentThread && parent !== undefined
+              ? parent.thread.id
               : null;
         // Rebinding changes where runs execute, so the workspace strategy must
         // follow: unbinding a root-strategy task would otherwise run loose
@@ -1364,14 +1574,13 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
             ),
           );
-        return scheduledTaskSummary(task);
+        return yield* summarizeScheduledTask(scope, { parent, limits }, task);
       }),
     deleteScheduledTask: (scope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, parent.thread);
-        if (existing.projectId !== parent.thread.projectId) yield* assertLiveCaller(scope, parent);
+        const { parent, limits } = yield* loadCaller(scope);
+        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+        yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         yield* scheduledTasks
           .delete({ id: existing.id })
           .pipe(
@@ -1383,15 +1592,14 @@ const make = Effect.gen(function* () {
       }),
     requestSecret: (scope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
         // The card is shown in, and answered from, the caller's own thread.
-        const threadId = scope.threadId;
-        const parent = yield* loadProjection(threadId);
+        const { scope: threadScope, parent } = yield* loadThreadCaller(scope, "request_secret");
+        const threadId = threadScope.thread.threadId;
         const run = latestActiveRun(parent);
         if (
           run === undefined ||
           run.rootNodeId === null ||
-          run.providerInstanceId !== scope.providerInstanceId
+          run.providerInstanceId !== threadScope.thread.providerInstanceId
         ) {
           return yield* failure(
             "parent_not_active",
@@ -1515,15 +1723,14 @@ const make = Effect.gen(function* () {
 
     capabilities: (scope) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
+        const { parent, limits } = yield* loadCaller(scope);
         const providers = yield* loadProviders;
         return {
-          parentThreadId: scope.threadId,
-          inheritedProviderInstanceId: parent.thread.modelSelection.instanceId,
-          inheritedModel: parent.thread.modelSelection.model,
-          runtimeMode: parent.thread.runtimeMode,
-          interactionMode: parent.thread.interactionMode,
+          parentThreadId: parent?.thread.id ?? null,
+          inheritedProviderInstanceId: parent?.thread.modelSelection.instanceId ?? null,
+          inheritedModel: parent?.thread.modelSelection.model ?? null,
+          runtimeMode: limits.runtimeMode,
+          interactionMode: limits.interactionMode,
           providers: providers.map((provider) => {
             const constraints = providerConstraints(
               provider,
@@ -1558,17 +1765,16 @@ const make = Effect.gen(function* () {
           },
         };
       }),
-    delegateTask: (scope, input) =>
+    delegateTask: (callerScope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
+        const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
         const parentRun = parent.runs
           .filter(isActiveRun)
           .toSorted((left, right) => right.ordinal - left.ordinal)[0];
         if (
           parentRun === undefined ||
           parentRun.rootNodeId === null ||
-          parentRun.providerInstanceId !== scope.providerInstanceId
+          parentRun.providerInstanceId !== scope.thread.providerInstanceId
         ) {
           return yield* failure(
             "parent_not_active",
@@ -1577,7 +1783,7 @@ const make = Effect.gen(function* () {
         }
         const providers = yield* loadProviders;
         const target = yield* resolveTargetRechecking({
-          parent,
+          inherited: parent.thread.modelSelection,
           target: input.target,
           providers,
         });
@@ -1598,7 +1804,7 @@ const make = Effect.gen(function* () {
             createdBy: "agent",
             creationSource: "mcp",
             commandId,
-            parentThreadId: scope.threadId,
+            parentThreadId: scope.thread.threadId,
             parentRunId: parentRun.id,
             parentNodeId: parentRun.rootNodeId,
             task: taskPrompt(input),
@@ -1654,7 +1860,7 @@ const make = Effect.gen(function* () {
               requestKey: key,
               operation: "delegate-task-wake-policy",
             }),
-            parentThreadId: scope.threadId,
+            parentThreadId: scope.thread.threadId,
             taskId,
             completionWake: "always",
           })
@@ -1683,12 +1889,47 @@ const make = Effect.gen(function* () {
           );
         return yield* readTask(scope, taskId, true, true);
       }),
-    taskStatus: (scope, taskId) => readTask(scope, taskId, false, true),
-    cancelTask: (scope, input) =>
+    taskStatus: (callerScope, taskId) =>
+      requireThreadScope(callerScope, "task_status").pipe(
+        Effect.flatMap((scope) => readTask(scope, taskId, false, true)),
+      ),
+    cancelTask: (callerScope, input) =>
       Effect.gen(function* () {
+        const scope = yield* requireThreadScope(callerScope, "task_cancel");
         const current = yield* readTask(scope, input.taskId);
         const key = yield* requestKey(input.clientRequestId);
-        const parentProjection = yield* loadProjection(scope.threadId);
+        const parentProjection = yield* loadProjection(scope.thread.threadId);
+        // Cancelling stops the child and every task under it, each a write to a
+        // thread its user may have raised above the parent's modes since it was
+        // delegated. All of them are checked before anything is stopped.
+        const assertStoppable = (threadId: ThreadId): Effect.Effect<void, OrchestratorMcpFailure> =>
+          Effect.gen(function* () {
+            const readFailure = (error: unknown) =>
+              failure(
+                "orchestration_error",
+                `Unable to read thread ${threadId}: ${errorMessage(error)}`,
+              );
+            const shell = yield* threadManagement
+              .getThreadShell(threadId)
+              .pipe(Effect.mapError(readFailure));
+            // A deleted thread takes no stop, but the tasks under it still do.
+            if (shell !== null && shell.deletedAt === null) {
+              yield* resolveRuntimeMode(parentProjection.thread.runtimeMode, shell.runtimeMode);
+              yield* resolveInteractionMode(
+                parentProjection.thread.interactionMode,
+                shell.interactionMode,
+              );
+            }
+            const { subagents } = yield* threadManagement
+              .getThreadRecords(threadId, ["subagents"])
+              .pipe(Effect.mapError(readFailure));
+            for (const task of subagents) {
+              if (task.origin === "app_owned" && task.childThreadId !== null) {
+                yield* assertStoppable(task.childThreadId);
+              }
+            }
+          });
+        yield* assertStoppable(current.childThreadId);
         const parentTask = parentProjection.subagents.find(
           (task) => task.id === input.taskId && task.origin === "app_owned",
         );
@@ -1705,7 +1946,7 @@ const make = Effect.gen(function* () {
                     requestKey: key,
                     operation: "cancel-task-completion-delivery",
                   }),
-                  parentThreadId: scope.threadId,
+                  parentThreadId: scope.thread.threadId,
                   taskId: input.taskId,
                 })
                 .pipe(
@@ -1750,8 +1991,32 @@ const make = Effect.gen(function* () {
               ),
             );
         });
+        // Checked above; a user raising one of these threads meanwhile is
+        // caught again under that thread's lock, which leaves it running.
+        const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
+        const stopWithinLimit = stopChild.pipe(
+          Effect.provideService(DispatchModeLimit, {
+            runtimeMode: parentProjection.thread.runtimeMode,
+            interactionMode: parentProjection.thread.interactionMode,
+            refused,
+          }),
+          Effect.catch((error) =>
+            Effect.flatMap(Ref.get(refused), (refusal) =>
+              Effect.fail(
+                refusal === undefined
+                  ? error
+                  : failure(
+                      refusal.mode === "runtime"
+                        ? "runtime_mode_escalation_denied"
+                        : "interaction_mode_escalation_denied",
+                      `Thread ${refusal.threadId} now runs in ${refusal.runtimeMode}/${refusal.interactionMode} mode, above this thread's; its user changed it while the task was being cancelled.`,
+                    ),
+              ),
+            ),
+          ),
+        );
         if (isTerminalTaskStatus(current.status)) {
-          yield* stopChild;
+          yield* stopWithinLimit;
           yield* disposeCompletionDelivery;
           return {
             taskId: input.taskId,
@@ -1767,7 +2032,7 @@ const make = Effect.gen(function* () {
             `Delegated task ${input.taskId} has no interruptible child run.`,
           );
         }
-        yield* stopChild;
+        yield* stopWithinLimit;
         yield* disposeCompletionDelivery.pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("orchestrator-mcp.cancel-task.delivery-dispose-failed", {
@@ -1783,24 +2048,26 @@ const make = Effect.gen(function* () {
       }),
     launchThread: (scope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
-        // Binding a workspace and provisioning a worktree is real filesystem
-        // work; a restricted or planning caller must not reach it.
-        if (
-          parent.thread.runtimeMode !== "full-access" ||
-          parent.thread.interactionMode !== "default"
-        ) {
-          return yield* failure(
-            "capability_denied",
-            "Launching a thread requires a full-access, default-mode calling thread.",
-          );
+        // The launched thread runs within the caller's modes. An existing
+        // worktree must be one of the project's own, so a launch cannot bind
+        // an agent to an arbitrary directory.
+        const { parent, limits } = yield* loadCaller(scope);
+        const projectId = yield* resolveProjectTarget(parent, input.projectId);
+        const project = yield* requireProject(projectId);
+        const workspaceStrategy = input.workspaceStrategy ?? { type: "root" as const };
+        if (workspaceStrategy.type === "existing_worktree") {
+          yield* assertProjectWorktree(project.workspaceRoot, workspaceStrategy.worktreePath);
         }
         const providers = yield* loadProviders;
-        const target = yield* resolveTargetRechecking({ parent, target: input.target, providers });
-        const runtimeMode = yield* resolveRuntimeMode(parent.thread.runtimeMode, input.runtimeMode);
+        const target = yield* resolveTargetRechecking({
+          // A client has no model of its own, so it inherits the project's default.
+          inherited: parent?.thread.modelSelection ?? project.defaultModelSelection ?? undefined,
+          target: input.target,
+          providers,
+        });
+        const runtimeMode = yield* resolveRuntimeMode(limits.runtimeMode, input.runtimeMode);
         const interactionMode = yield* resolveInteractionMode(
-          parent.thread.interactionMode,
+          limits.interactionMode,
           input.interactionMode,
         );
         // Deliberately not keyed off a client request id: preparing a worktree
@@ -1815,18 +2082,18 @@ const make = Effect.gen(function* () {
           .launch({
             commandId,
             threadId,
-            projectId: input.projectId ?? parent.thread.projectId,
+            projectId,
             title: input.title,
             modelSelection: target.modelSelection,
             runtimeMode,
             interactionMode,
-            workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
+            workspaceStrategy,
             ...(input.message === undefined
               ? {}
               : {
                   initialMessage: {
                     messageId,
-                    senderThreadId: scope.threadId,
+                    ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
                     text: input.message,
                     attachments: [],
                   },
@@ -1854,15 +2121,14 @@ const make = Effect.gen(function* () {
           status: run?.status ?? null,
         };
       }),
-    createThreads: (scope, input) =>
+    createThreads: (callerScope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
+        const { scope, parent } = yield* loadThreadCaller(callerScope, "create_threads");
         const parentRun = latestActiveRun(parent);
         if (
           parentRun === undefined ||
           parentRun.rootNodeId === null ||
-          parentRun.providerInstanceId !== scope.providerInstanceId
+          parentRun.providerInstanceId !== scope.thread.providerInstanceId
         ) {
           return yield* failure(
             "parent_not_active",
@@ -1877,7 +2143,7 @@ const make = Effect.gen(function* () {
           (request, index) =>
             Effect.gen(function* () {
               const target = yield* resolveTargetRechecking({
-                parent,
+                inherited: parent.thread.modelSelection,
                 target: request.target,
                 providers,
               });
@@ -1941,7 +2207,7 @@ const make = Effect.gen(function* () {
                       index,
                     }),
                     threadId,
-                    senderThreadId: scope.threadId,
+                    senderThreadId: scope.thread.threadId,
                     messageId: stableMessageId({
                       scope,
                       requestKey: key,
@@ -1972,7 +2238,7 @@ const make = Effect.gen(function* () {
                     operation: "record-created-thread",
                     index,
                   }),
-                  parentThreadId: scope.threadId,
+                  parentThreadId: scope.thread.threadId,
                   parentRunId: parentRun.id,
                   parentNodeId,
                   targetThreadId: threadId,
@@ -2003,9 +2269,8 @@ const make = Effect.gen(function* () {
       }),
     listThreads: (scope, input) =>
       Effect.gen(function* () {
-        yield* requireCapability(scope);
-        const parent = yield* loadProjection(scope.threadId);
-        const projectId = input.projectId ?? parent.thread.projectId;
+        const { parent } = yield* loadCaller(scope);
+        const projectId = yield* resolveProjectTarget(parent, input.projectId);
         const projectThreads = yield* threadManagement
           .listProjectThreads({
             projectId,
@@ -2035,7 +2300,7 @@ const make = Effect.gen(function* () {
         const nextCursor = cursor + page.length < filtered.length ? cursor + page.length : null;
         return {
           projectId,
-          currentThreadId: scope.threadId,
+          currentThreadId: parent?.thread.id ?? null,
           threads: page.map(listItemFromShell),
           nextCursor,
           total: filtered.length,
@@ -2079,12 +2344,23 @@ const make = Effect.gen(function* () {
             (projection) => [projection.thread.id, projection.messages] as const,
           ),
         ]);
-        const task = directAppOwnedChildTask(parent, target);
+        // Reading a delegated child's result acknowledges it, which only
+        // the parent thread itself can do.
+        const task =
+          parent === undefined || scope.thread === undefined
+            ? undefined
+            : directAppOwnedChildTask(parent, target);
         if (
           task !== undefined &&
           pageIncludesTerminalTaskResult({ page, task, target, maxChars })
         ) {
-          yield* readTask(scope, task.id, false, true, "thread-read-acknowledge");
+          yield* readTask(
+            scope as McpThreadInvocationScope,
+            task.id,
+            false,
+            true,
+            "thread-read-acknowledge",
+          );
         }
         return {
           thread: threadDetail(target),
@@ -2099,8 +2375,9 @@ const make = Effect.gen(function* () {
       }),
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target } = yield* loadScopedThread(scope, input.threadId);
-        yield* assertWritableTarget(scope, parent, target);
+        const caller = yield* loadScopedThread(scope, input.threadId);
+        const { parent, target } = caller;
+        yield* assertWritableTarget(scope, caller, target);
 
         const mode = input.mode ?? "auto";
         const key = yield* requestKey(input.clientRequestId);
@@ -2118,7 +2395,7 @@ const make = Effect.gen(function* () {
               operation: "thread-send",
             }),
             threadId: input.threadId,
-            senderThreadId: scope.threadId,
+            ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
             messageId,
             text: input.message,
             attachments: [],
@@ -2167,9 +2444,10 @@ const make = Effect.gen(function* () {
       }),
     interruptThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target } = yield* loadScopedThread(scope, input.threadId);
+        const caller = yield* loadScopedThread(scope, input.threadId);
+        const { target } = caller;
         // Stopping another thread's work is a write: it must run within the caller's modes.
-        yield* assertWritableTarget(scope, parent, target);
+        yield* assertWritableTarget(scope, caller, target);
         const key = yield* requestKey(input.clientRequestId);
         const result = yield* threadManagement
           .interruptThread({
@@ -2219,4 +2497,6 @@ export const layer: Layer.Layer<
   | ScheduledTaskService
   | ProjectService
   | SecretRequests.SecretRequests
+  | GitVcsDriver
+  | FileSystem.FileSystem
 > = Layer.effect(OrchestratorMcpService, make);

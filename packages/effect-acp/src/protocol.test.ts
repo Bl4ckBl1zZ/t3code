@@ -11,6 +11,7 @@ import * as Sink from "effect/Sink";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { it, assert } from "@effect/vitest";
@@ -52,6 +53,11 @@ const decodeExtRequest = Schema.decodeEffect(Schema.fromJsonString(ExtRequest));
 const decodeExtResponse = Schema.decodeEffect(Schema.fromJsonString(ExtResponse));
 const decodeRequestPermissionResponse = Schema.decodeEffect(
   Schema.fromJsonString(RequestPermissionResponse),
+);
+const decodeJsonRpcErrorResponse = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ id: Schema.Number, error: Schema.Struct({ code: Schema.Number }) }),
+  ),
 );
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encoder = new TextEncoder();
@@ -179,6 +185,42 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       assert.isTrue(Schema.isSchemaError(cause));
       assert.notInclude(parseError.message, secret);
       assert.notInclude(encodeUnknownJsonString(directDiagnostics), secret);
+    }),
+  );
+
+  it.effect("terminates when a callback on the reader dies", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const termination = yield* Deferred.make<AcpError.AcpError>();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        transformSessionUpdate: () => {
+          throw new Error("normalizer bug");
+        },
+        onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+      });
+
+      yield* Queue.offer(
+        input,
+        encoder.encode(
+          `${encodeUnknownJsonString({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "session-1",
+              update: { sessionUpdate: "plan", entries: [] },
+            },
+          })}\n`,
+        ),
+      );
+
+      // Pending requests are failed through termination instead of hanging.
+      const error = yield* TestClock.withLive(
+        Deferred.await(termination).pipe(Effect.timeout("2 seconds")),
+      );
+      assert.instanceOf(error, AcpError.AcpTransportError);
+      assert.equal((error as AcpError.AcpTransportError).operation, "read-input-stream");
     }),
   );
 
@@ -384,6 +426,36 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         requestId: 1,
         operation: "receive-response",
       });
+    }),
+  );
+
+  it.effect("answers an extension request whose handler also dies as an internal error", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        // The typed failure must not hide the defect from its cleanup.
+        onExtRequest: () =>
+          Effect.fail(AcpError.AcpRequestError.invalidParams("bad params")).pipe(
+            Effect.ensuring(Effect.die(new Error("cleanup bug"))),
+          ),
+      });
+
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(ExtRequest, {
+          jsonrpc: "2.0",
+          id: 9,
+          method: "x/test",
+          params: { hello: "world" },
+          headers: [],
+        }),
+      );
+
+      const response = yield* decodeJsonRpcErrorResponse(yield* Queue.take(output));
+      assert.equal(response.id, 9);
+      assert.equal(response.error.code, -32603);
     }),
   );
 

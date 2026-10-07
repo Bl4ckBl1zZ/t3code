@@ -22,8 +22,21 @@ import {
   usePullRequestActionRunner,
 } from "./usePullRequestActions";
 
-export interface PullRequestSpeedActionResult {
-  readonly entry: EnvironmentPullRequestEntry;
+/** What a row must know to act; list rows and linked pull requests both supply it. */
+type PullRequestSpeedActionEntry = Pick<
+  EnvironmentPullRequestEntry,
+  | "environmentId"
+  | "projectId"
+  | "host"
+  | "repository"
+  | "number"
+  | "state"
+  | "isDraft"
+  | "provider"
+>;
+
+export interface PullRequestSpeedActionResult<Entry = EnvironmentPullRequestEntry> {
+  readonly entry: Entry;
   readonly action: PullRequestAction;
   readonly phase: PullRequestActionPhase;
 }
@@ -39,20 +52,20 @@ const ACTIONS = {
  * The buttons a row shows while Shift is held. Shown by the list's own attribute rather than a
  * prop, so holding Shift re-renders no row; nothing is read from the host until one is pressed.
  */
-export function PullRequestSpeedActions({
+export function PullRequestSpeedActions<Entry extends PullRequestSpeedActionEntry>({
   entry,
   onActed,
   closing = false,
   sweeping = false,
   onCloseSweepStart,
 }: {
-  entry: EnvironmentPullRequestEntry;
-  onActed: (result: PullRequestSpeedActionResult) => void;
+  entry: Entry;
+  onActed?: (result: PullRequestSpeedActionResult<Entry>) => void;
   /** Closing as part of a swept batch. */
   closing?: boolean;
   /** Inside a close sweep that is still being dragged. */
   sweeping?: boolean;
-  onCloseSweepStart?: (entry: EnvironmentPullRequestEntry, event: PointerEvent) => void;
+  onCloseSweepStart?: (entry: Entry, event: PointerEvent) => void;
 }) {
   const reference = {
     projectId: entry.projectId,
@@ -63,7 +76,7 @@ export function PullRequestSpeedActions({
   const { pendingAction, perform } = usePullRequestActionRunner({
     environmentId: entry.environmentId,
     reference,
-    onActed: (action, phase) => onActed({ entry, action, phase }),
+    onActed: (action, phase) => onActed?.({ entry, action, phase }),
     // The row knows too little to merge with: whether this viewer may, which methods the
     // repository allows, and whether the pull request sits in a stack all come from the host,
     // read when the merge's turn in the environment's queue comes.
@@ -126,7 +139,7 @@ export function PullRequestSpeedActions({
               {label}
             </TooltipTrigger>
             <TooltipPopup>
-              {action === "close"
+              {action === "close" && onCloseSweepStart
                 ? "Close immediately, or drag across rows to close several"
                 : `${label} immediately`}
             </TooltipPopup>

@@ -312,9 +312,12 @@ lineage, then the editor picker, keeping scripts and in-progress Git actions.
 
 On web and desktop, a thread's subagents are listed in the thread details card under **Lineage**
 (or **Subagents** when the thread has no other relatives). Click a subagent to open its thread.
-Hover it to see its model, status, workflow phase progress and token usage. A workflow subagent
-shows its phase count beside its name, and when the run reported a script or a session, the menu
-beside the row can view the workflow script or open the run session.
+Hover it to see its model, status, workflow phase progress and token usage; for a subagent T3 Code
+started, the model line also shows its reasoning effort and a bolt when it runs in fast mode. A
+workflow subagent shows its phase count beside its name, and when the run reported a script or a
+session, the menu beside the row can view the workflow script or open the run session. While a
+subagent T3 Code started is running, the stop button beside its row (or **Stop subagent** in that
+menu) stops it, the same as Stop in the subagent's own thread.
 
 On iOS and iPadOS, you can drop files onto the composer to attach them. The composer shows an outline while it is a drop target and prepares files before enabling Send. The same 100-attachment limit applies to the picker and dropped files.
 

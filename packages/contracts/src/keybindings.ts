@@ -62,8 +62,10 @@ export const BUILT_IN_KEYBINDING_COMMANDS = [
   "terminal.new",
   "terminal.close",
   "rightPanel.toggle",
+  "rightPanel.new",
   "rightPanel.toggleMaximized",
   "threadPanel.toggle",
+  "view.reopenClosed",
   "diff.toggle",
   "preview.toggle",
   "preview.refresh",
@@ -138,6 +140,13 @@ export const KeybindingShortcut = Schema.Struct({
   modKey: Schema.Boolean,
 });
 export type KeybindingShortcut = typeof KeybindingShortcut.Type;
+
+/** A chord the desktop browser guest hands back to the app instead of the page. */
+export const PreviewForwardedShortcut = Schema.Struct({
+  command: KeybindingCommand,
+  shortcut: KeybindingShortcut,
+});
+export type PreviewForwardedShortcut = typeof PreviewForwardedShortcut.Type;
 
 const KeybindingWhenNodeRef = Schema.suspend(
   (): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode,

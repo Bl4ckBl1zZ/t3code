@@ -7,6 +7,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import {
+  SourceControlProviderError,
   SourceControlRepositoryError,
   type SourceControlCloneRepositoryInput,
   type SourceControlCloneRepositoryResult,
@@ -21,8 +22,11 @@ import {
 
 import { ServerConfig } from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as BitbucketApi from "./BitbucketApi.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 const isSourceControlRepositoryError = Schema.is(SourceControlRepositoryError);
+const isSourceControlProviderError = Schema.is(SourceControlProviderError);
+const isBitbucketRepositoryLocatorError = Schema.is(BitbucketApi.BitbucketRepositoryLocatorError);
 
 export class SourceControlRepositoryService extends Context.Service<
   SourceControlRepositoryService,
@@ -46,7 +50,12 @@ function mapRepositoryError(operation: string, provider: SourceControlProviderKi
       : new SourceControlRepositoryError({
           operation,
           provider,
-          detail: "The source control operation could not be completed.",
+          detail:
+            isSourceControlProviderError(cause) &&
+            cause.provider === "bitbucket" &&
+            isBitbucketRepositoryLocatorError(cause.cause)
+              ? BitbucketApi.BitbucketRepositoryLocatorError.detail
+              : "The source control operation could not be completed.",
           cause,
         }),
   );
@@ -206,7 +215,8 @@ export const make = Effect.gen(function* () {
     yield* git.execute({
       operation: "SourceControlRepositoryService.cloneRepository",
       cwd: preparedDestination.parentPath,
-      args: ["clone", remoteUrl, preparedDestination.directoryName],
+      // `--` ends the options, so a repository named like `--bare` is still a URL.
+      args: ["clone", "--", remoteUrl, preparedDestination.directoryName],
       timeoutMs: 120_000,
       maxOutputBytes: 256 * 1024,
     });

@@ -40,6 +40,7 @@ import * as Stream from "effect/Stream";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
+import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
 import type { ProviderAdapterV2Event, ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
@@ -2011,7 +2012,7 @@ it.effect("cascade helper is provider-neutral for Claude and Codex-shaped child 
 
 it.effect("omits interrupt results and subagent cascade for a superseded attempt", () =>
   Effect.gen(function* () {
-    const written = yield* captureInterruptTerminalTurnItems({
+    const { written } = yield* captureInterruptTerminalTurnItems({
       key: "steer-supersede",
       shouldFinalizeRun: () => Effect.succeed(false),
       seedOpenSubagent: true,
@@ -2025,7 +2026,7 @@ it.effect("omits interrupt results and subagent cascade for a superseded attempt
 
 it.effect("emits run_interrupt_result when superseded attempt still has a hard-stop request", () =>
   Effect.gen(function* () {
-    const written = yield* captureInterruptTerminalTurnItems({
+    const { written } = yield* captureInterruptTerminalTurnItems({
       key: "stop-then-steer-supersede",
       shouldFinalizeRun: () => Effect.succeed(false),
       hasUnpairedRunInterruptRequest: () => Effect.succeed(true),
@@ -2048,7 +2049,7 @@ it.effect("emits run_interrupt_result when superseded attempt still has a hard-s
 
 it.effect("omits run_interrupt_result when superseded attempt request is already paired", () =>
   Effect.gen(function* () {
-    const written = yield* captureInterruptTerminalTurnItems({
+    const { written } = yield* captureInterruptTerminalTurnItems({
       key: "stop-then-steer-already-paired",
       shouldFinalizeRun: () => Effect.succeed(false),
       hasUnpairedRunInterruptRequest: () => Effect.succeed(false),
@@ -2060,15 +2061,36 @@ it.effect("omits run_interrupt_result when superseded attempt request is already
   }),
 );
 
+it.effect("does not overwrite Stop when ownership changes after the finalization read", () =>
+  Effect.gen(function* () {
+    const { written, submittedEffects, committedEffects } =
+      yield* captureInterruptTerminalTurnItems({
+        key: "stop-wins-finalization-gap",
+        shouldFinalizeRun: () => Effect.succeed(true),
+        rejectTerminalWrite: true,
+      });
+    assert.deepEqual(written, []);
+    assert.deepEqual(
+      submittedEffects.map((effect) => effect.request.type),
+      ["checkpoint.capture"],
+    );
+    assert.deepEqual(committedEffects, []);
+  }),
+);
+
 it.effect("emits run_interrupt_result when hard-stop finalizes the active attempt", () =>
   Effect.gen(function* () {
-    const written = yield* captureInterruptTerminalTurnItems({
+    const { written, committedEffects } = yield* captureInterruptTerminalTurnItems({
       key: "hard-stop",
       shouldFinalizeRun: () => Effect.succeed(true),
     });
     assert.deepEqual(
       written.map((item) => item.type),
       ["run_interrupt_result"],
+    );
+    assert.deepEqual(
+      committedEffects.map((effect) => effect.request.type),
+      ["checkpoint.capture"],
     );
   }),
 );
@@ -2078,6 +2100,8 @@ function captureInterruptTerminalTurnItems(input: {
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, never>;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
   readonly seedOpenSubagent?: boolean;
+  /** The run moved on before the terminal write, as when Stop commits first. */
+  readonly rejectTerminalWrite?: boolean;
 }) {
   return Effect.gen(function* () {
     const ids = backgroundScenarioIds(input.key);
@@ -2092,6 +2116,8 @@ function captureInterruptTerminalTurnItems(input: {
     const writtenItems = yield* Ref.make<
       ReadonlyArray<{ readonly type: string; readonly parentItemId: string | null }>
     >([]);
+    const submittedEffects = yield* Ref.make<ReadonlyArray<PendingOrchestrationEffectV2>>([]);
+    const committedEffects = yield* Ref.make<ReadonlyArray<PendingOrchestrationEffectV2>>([]);
     const ingestionDone = yield* Deferred.make<void>();
     const captureTurnItem = (payload: {
       readonly type: string;
@@ -2101,6 +2127,13 @@ function captureInterruptTerminalTurnItems(input: {
         ...current,
         { type: payload.type, parentItemId: payload.parentItemId },
       ]);
+    const captureFinalEvents = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
+      Effect.forEach(
+        events,
+        (event) =>
+          event.type === "turn-item.updated" ? captureTurnItem(event.payload) : Effect.void,
+        { discard: true },
+      );
     const testLayer = runExecutionServiceLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -2117,14 +2150,22 @@ function captureInterruptTerminalTurnItems(input: {
               }),
             writeWithEffects: (payload) =>
               Effect.gen(function* () {
-                for (const event of payload.events) {
-                  if (event.type === "turn-item.updated") {
-                    yield* captureTurnItem(event.payload);
-                  }
-                }
+                yield* Ref.update(submittedEffects, (current) => [...current, ...payload.effects]);
+                yield* Ref.update(committedEffects, (current) => [...current, ...payload.effects]);
+                yield* captureFinalEvents(payload.events);
                 return [];
               }),
-            writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
+            writeIfRunCurrent: (payload) =>
+              Effect.gen(function* () {
+                const effects = payload.effects ?? [];
+                yield* Ref.update(submittedEffects, (current) => [...current, ...effects]);
+                if (input.rejectTerminalWrite === true) {
+                  return { committed: false, storedEvents: [] };
+                }
+                yield* Ref.update(committedEffects, (current) => [...current, ...effects]);
+                yield* captureFinalEvents(payload.events);
+                return { committed: true, storedEvents: [] };
+              }),
           }),
           idAllocatorLayer,
           Layer.mock(ProviderEventIngestorV2)({
@@ -2225,7 +2266,11 @@ function captureInterruptTerminalTurnItems(input: {
 
     const closed = yield* Deferred.await(ingestionDone).pipe(Effect.timeoutOption("2 seconds"));
     assert.isTrue(Option.isSome(closed), "event ingestion fiber did not finish");
-    return yield* Ref.get(writtenItems);
+    return {
+      written: yield* Ref.get(writtenItems),
+      submittedEffects: yield* Ref.get(submittedEffects),
+      committedEffects: yield* Ref.get(committedEffects),
+    };
   });
 }
 

@@ -4086,9 +4086,10 @@ export function makeHermesServeAdapterV2(
             const existing = yield* options.repository.getByThreadId(String(threadInput.threadId));
             if (Option.isNone(existing)) return yield* createBinding(threadInput);
             return yield* resumeBinding(existing.value, threadInput).pipe(
-              Effect.catchTag("HermesImportedSessionUnavailableError", (unavailable) =>
-                rebindVanishedSession(existing.value, threadInput, unavailable),
-              ),
+              Effect.catchTags({
+                HermesImportedSessionUnavailableError: (unavailable) =>
+                  rebindVanishedSession(existing.value, threadInput, unavailable),
+              }),
             );
           }).pipe(
             Effect.mapError(

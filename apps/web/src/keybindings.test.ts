@@ -8,6 +8,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import {
+  effectiveShortcutsForCommand,
   formatShortcutLabel,
   isChatNewShortcut,
   isChatNewLocalShortcut,
@@ -168,6 +169,40 @@ const DEFAULT_BINDINGS = compile([
   },
 ]);
 
+describe("effectiveShortcutsForCommand", () => {
+  it("passes only effective preview shortcuts to the desktop bridge", () => {
+    const reopen = modShortcut("t", { shiftKey: true });
+    const second = modShortcut("y", { shiftKey: true });
+    const keybindings = compile([
+      { shortcut: reopen, command: "view.reopenClosed" },
+      {
+        shortcut: second,
+        command: "view.reopenClosed",
+        whenAst: whenIdentifier("previewFocus"),
+      },
+      {
+        shortcut: reopen,
+        command: "preview.toggle",
+        whenAst: whenIdentifier("previewFocus"),
+      },
+    ]);
+    assert.deepEqual(
+      effectiveShortcutsForCommand(keybindings, "view.reopenClosed", {
+        platform: "MacIntel",
+        context: { previewFocus: true, previewOpen: true },
+      }),
+      [second],
+    );
+    assert.deepEqual(
+      effectiveShortcutsForCommand(keybindings, "view.reopenClosed", {
+        platform: "MacIntel",
+        context: { previewFocus: false },
+      }),
+      [reopen],
+    );
+  });
+});
+
 describe("isTerminalToggleShortcut", () => {
   it("matches Cmd+J on macOS", () => {
     assert.isTrue(
@@ -210,6 +245,44 @@ describe("settle thread shortcut", () => {
         platform: "Win32",
         context: { terminalFocus: true },
       }),
+    );
+  });
+});
+
+describe("right panel new-tab shortcut", () => {
+  it("resolves mod+t only while the right panel is open", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { rightPanelOpen: true },
+      }),
+      "rightPanel.new",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { rightPanelOpen: false },
+      }),
+    );
+  });
+
+  it("leaves Ctrl+T to a focused terminal", () => {
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "t", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux x86_64",
+        context: { rightPanelOpen: true, terminalFocus: true },
+      }),
+    );
+  });
+
+  it("keeps mod+shift+t for reopening a closed tab", () => {
+    assert.equal(
+      resolveShortcutCommand(
+        event({ key: "T", ctrlKey: true, shiftKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "Win32", context: { rightPanelOpen: true } },
+      ),
+      "view.reopenClosed",
     );
   });
 });

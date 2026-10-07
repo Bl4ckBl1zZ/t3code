@@ -1479,6 +1479,15 @@ const decodeCodexChildModel = Schema.decodeUnknownEffect(
   }),
 );
 
+const decodeCodexChildThread = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    thread: Schema.Struct({
+      id: Schema.String,
+      model: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  }),
+);
+
 export const makeCodexAppServerSpawnCommand = Effect.fn(
   "CodexAdapterV2.makeCodexAppServerSpawnCommand",
 )(function* (input: {
@@ -1796,21 +1805,39 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           environment: adapterOptions.environment,
         });
         const initialized = yield* Ref.make(false);
-        const ensureInitialized = Effect.gen(function* () {
-          const alreadyInitialized = yield* Ref.get(initialized);
-          if (alreadyInitialized) {
-            return;
-          }
+        // Threads share this app-server, and Codex rejects a second
+        // `initialize`. Callers wait for an in-flight handshake instead of
+        // starting their own; a failed handshake leaves the flag unset so the
+        // next caller retries.
+        const initializePermit = yield* Semaphore.make(1);
+        const ensureInitialized = initializePermit.withPermit(
+          Effect.gen(function* () {
+            const alreadyInitialized = yield* Ref.get(initialized);
+            if (alreadyInitialized) {
+              return;
+            }
 
-          yield* client.request("initialize", {
-            // Codex uses the client name as the request originator, so sessions
-            // identify themselves exactly like the provider probe.
-            clientInfo: buildCodexInitializeParams().clientInfo,
-            capabilities: CODEX_CLIENT_CAPABILITIES,
-          });
-          yield* client.notify("initialized", undefined);
-          yield* Ref.set(initialized, true);
-        });
+            yield* client
+              .request("initialize", {
+                // Codex uses the client name as the request originator, so sessions
+                // identify themselves exactly like the provider probe.
+                clientInfo: buildCodexInitializeParams().clientInfo,
+                capabilities: CODEX_CLIENT_CAPABILITIES,
+              })
+              .pipe(
+                Effect.catchTags({
+                  // A caller interrupted after its `initialize` reached Codex
+                  // leaves the app-server initialized but the flag unset.
+                  CodexAppServerRequestError: (error) =>
+                    error.code === -32600 && error.errorMessage === "Already initialized"
+                      ? Effect.void
+                      : Effect.fail(error),
+                }),
+              );
+            yield* client.notify("initialized", undefined);
+            yield* Ref.set(initialized, true);
+          }),
+        );
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
@@ -2892,10 +2919,28 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               yield* emitSubagentProviderTurnStarted(subagent, pendingTurn);
             }
             if (task.model === null) {
+              // `thread/read` reports the child's model without resuming it.
+              // App servers that leave it out fall back to `thread/resume`.
               yield* client.raw
-                .request("thread/resume", { threadId: input.nativeThreadId, excludeTurns: true })
+                .request("thread/read", { threadId: input.nativeThreadId, includeTurns: false })
                 .pipe(
-                  Effect.flatMap(decodeCodexChildModel),
+                  Effect.flatMap(decodeCodexChildThread),
+                  Effect.map((response) =>
+                    response.thread.id === input.nativeThreadId && response.thread.model?.trim()
+                      ? { thread: response.thread, model: response.thread.model }
+                      : null,
+                  ),
+                  Effect.catch(() => Effect.succeed(null)),
+                  Effect.flatMap((response) =>
+                    response === null
+                      ? client.raw
+                          .request("thread/resume", {
+                            threadId: input.nativeThreadId,
+                            excludeTurns: true,
+                          })
+                          .pipe(Effect.flatMap(decodeCodexChildModel))
+                      : Effect.succeed(response),
+                  ),
                   Effect.timeout("5 seconds"),
                   Effect.flatMap((response) =>
                     response.thread.id === input.nativeThreadId &&

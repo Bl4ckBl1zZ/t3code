@@ -35,13 +35,19 @@ import {
 } from "@t3tools/contracts";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
+import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { OrchestratorMcpService } from "../../OrchestratorMcpService.ts";
 import { ThreadMetadataMcpService } from "../../ThreadMetadataMcpService.ts";
 
-const dependencies = [McpInvocationContext.McpInvocationContext, OrchestratorMcpService];
+const dependencies = [
+  McpInvocationContext.McpInvocationContext,
+  ThreadManagementService,
+  OrchestratorMcpService,
+];
 const threadMetadataDependencies = [
   McpInvocationContext.McpInvocationContext,
+  ThreadManagementService,
   ThreadMetadataMcpService,
 ];
 
@@ -179,7 +185,7 @@ export const CreateThreadsTool = Tool.make("create_threads", {
 
 export const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   description:
-    'Create an ordinary TOP-LEVEL T3 thread with an explicit workspace binding, established before its agent starts. Use this when the user asks for independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child agents/subagents, and create_threads for a batch that shares this checkout. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree from local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to reuse a checkout; set startFromOrigin true to base it on upstream commits. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Do not ask the agent to create its own worktree in its prompt: that leaves the thread bound elsewhere. Put the first task in message, or omit it to create an idle thread. Omit projectId, target and the modes to inherit them. Each call is its own launch with no retry key, because preparing a worktree is not safely repeatable: keep the returned threadId, follow preparation with t3_thread_read and t3_thread_wait, and inspect t3_thread_list after an error or a lost response instead of calling again. Requires a full-access, default-mode calling thread.',
+    'Create an ordinary TOP-LEVEL T3 thread with an explicit workspace binding, established before its agent starts. Use this when the user asks for independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child agents/subagents, and create_threads for a batch that shares this checkout. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree from local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to reuse a checkout; set startFromOrigin true to base it on upstream commits. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Do not ask the agent to create its own worktree in its prompt: that leaves the thread bound elsewhere. Put the first task in message, or omit it to create an idle thread. Omit projectId, target and the modes to inherit them from the calling thread; a caller outside a T3 thread must pass projectId and gets the project\'s default model. Each call is its own launch with no retry key, because preparing a worktree is not safely repeatable: keep the returned threadId, follow preparation with t3_thread_read and t3_thread_wait, and inspect t3_thread_list after an error or a lost response instead of calling again. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with.',
   parameters: OrchestratorMcpThreadLaunchInput,
   success: OrchestratorMcpThreadLaunchResult,
   failure: OrchestratorMcpFailure,
