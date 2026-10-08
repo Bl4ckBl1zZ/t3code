@@ -33,7 +33,9 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     /// paragraph and keeps rendering as its alt text, which is all Foundation's
     /// inline parser can express.
     case image(MarkdownInlineImage)
-    case codeBlock(language: String?, code: String)
+    /// `title` comes from the fence's info string (`title="x.ts"` or a bare
+    /// file name); `terminated` is false while the closing fence is missing.
+    case codeBlock(language: String?, code: String, title: String? = nil, terminated: Bool = true)
     /// A `t3-html` fence, which renders as a live sandboxed embed rather than
     /// as source. The block carries the fence body verbatim; assembling the
     /// document around it belongs to `HtmlEmbed`. `terminated` is false while
@@ -44,6 +46,8 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     /// and whenever rendering fails, it reads as the code block it is.
     case mermaid(source: String, terminated: Bool)
     case artifactTemplate(CodexArtifactTemplate)
+    /// A `<details>` section; see `MarkdownDetails`.
+    case details(MarkdownDetails)
     case thematicBreak
 }
 
@@ -85,7 +89,9 @@ enum MarkdownTaskState: Equatable, Sendable {
 }
 
 private struct MarkdownBlockParser {
-    private let lines: [String]
+    /// Mutable only so a `<details>` tag can hand the rest of its line back
+    /// to the parser as a line of its own.
+    private var lines: [String]
     private var index = 0
 
     init(source: String) {
@@ -112,6 +118,11 @@ private struct MarkdownBlockParser {
             if let template = CodexArtifactTemplate.parse(lines[index]) {
                 blocks.append(.artifactTemplate(template))
                 index += 1
+                continue
+            }
+
+            if let opening = MarkdownDetailsSyntax.opening(in: lines[index]) {
+                blocks.append(parseDetails(opening: opening))
                 continue
             }
 
@@ -180,7 +191,70 @@ private struct MarkdownBlockParser {
         if MermaidDiagram.isMermaidLanguage(opening.language) {
             return .mermaid(source: code, terminated: terminated)
         }
-        return .codeBlock(language: opening.language, code: code)
+        return .codeBlock(
+            language: opening.language,
+            code: code,
+            title: MarkdownCodeFenceInfo.title(meta: opening.meta),
+            terminated: terminated
+        )
+    }
+
+    /// Everything up to the matching `</details>` becomes the section's body,
+    /// counting nested sections and ignoring tags inside code fences. Text
+    /// after the closing tag stays on its line for the parser to continue with.
+    private mutating func parseDetails(opening: MarkdownDetailsSyntax.Opening) -> MarkdownBlock {
+        var rest = opening.remainder
+        var summary: String?
+        if let found = MarkdownDetailsSyntax.summary(in: rest) {
+            summary = found.text
+            rest = found.remainder
+        } else if rest.isMarkdownBlank,
+                  let next = nextNonblankLine(after: index),
+                  let found = MarkdownDetailsSyntax.summary(in: lines[next]) {
+            summary = found.text
+            rest = found.remainder
+            index = next
+        }
+
+        // What follows the tags on their line is the body's first line.
+        lines[index] = rest
+        var bodyLines: [String] = []
+        var depth = 1
+        var fence: FenceMarker?
+        var terminated = false
+
+        scan: while index < lines.count {
+            let line = lines[index]
+            if let open = fence {
+                if isClosingFence(line, matching: open) { fence = nil }
+            } else if let marker = fenceMarker(in: line) {
+                fence = marker
+            } else {
+                for tag in MarkdownDetailsSyntax.tags(in: line) {
+                    depth += tag.delta
+                    guard depth == 0 else { continue }
+                    bodyLines.append(String(line[..<tag.range.lowerBound]))
+                    let after = String(line[tag.range.upperBound...]).markdownTrimmed
+                    if after.isEmpty {
+                        index += 1
+                    } else {
+                        lines[index] = after
+                    }
+                    terminated = true
+                    break scan
+                }
+            }
+            bodyLines.append(line)
+            index += 1
+        }
+
+        var parser = MarkdownBlockParser(source: bodyLines.joined(separator: "\n"))
+        return .details(MarkdownDetails(
+            summary: summary.flatMap { $0.isMarkdownBlank ? nil : $0 },
+            isOpen: opening.isOpen,
+            content: MarkdownDocument(blocks: parser.parse()),
+            terminated: terminated
+        ))
     }
 
     private mutating func parseBlockquote() -> MarkdownBlock {
@@ -450,6 +524,7 @@ private struct MarkdownBlockParser {
 
     private func isBlockStarter(_ line: String) -> Bool {
         CodexArtifactTemplate.parse(line) != nil
+            || MarkdownDetailsSyntax.opening(in: line) != nil
             || fenceMarker(in: line) != nil
             || atxHeading(in: line) != nil
             || blockquoteContent(in: line) != nil
@@ -622,10 +697,12 @@ private struct MarkdownBlockParser {
             ? String(characters[cursor...]).markdownTrimmed
             : ""
         guard character != "`" || !info.contains("`") else { return nil }
+        let language = info.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
         return FenceMarker(
             character: character,
             length: length,
-            language: info.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+            language: language,
+            meta: language.map { String(info.dropFirst($0.count)).markdownTrimmed } ?? ""
         )
     }
 
@@ -806,6 +883,8 @@ private struct FenceMarker {
     let character: Character
     let length: Int
     let language: String?
+    /// The info string after the language, where a title can live.
+    let meta: String
 }
 
 private struct ListMarker {

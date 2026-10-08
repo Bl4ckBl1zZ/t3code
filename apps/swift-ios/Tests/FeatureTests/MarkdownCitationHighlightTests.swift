@@ -25,7 +25,7 @@ struct MarkdownCitationHighlightTests {
         #expect(tableCell.attributedText.runs.allSatisfy { $0.backgroundColor == nil })
         #expect(table.rows[0][0].attributedText.runs.contains { $0.backgroundColor != nil })
         let codeMarked = MarkdownCitationHighlight.blocks(blocks, range: text.range(of: "meg"))
-        guard case let .codeBlock(language, code, local) = codeMarked[3] else { Issue.record("Missing code block"); return }
+        guard case let .codeBlock(language, code, local, _, _) = codeMarked[3] else { Issue.record("Missing code block"); return }
         #expect(language == "swift")
         #expect(code == "omega")
         #expect(local == NSRange(location: 1, length: 3))

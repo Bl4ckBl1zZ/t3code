@@ -56,6 +56,8 @@ enum T3Colors {
     static let statusInput = color(light: rgb(0x4F46E5), dark: rgb(0xA5B4FC))
     static let success = color(light: rgb(0x16A34A), dark: rgb(0x30D158))
     static let warning = color(light: rgb(0xD97706), dark: rgb(0xFF9F0A))
+    /// Skill chips in messages: the web's fuchsia-700 / fuchsia-300.
+    static let skillChip = color(light: rgb(0xA21CAF), dark: rgb(0xF0ABFC))
 
     static let syntaxKeyword = color(light: rgb(0x7C3AED), dark: rgb(0xC78EFF))
     static let syntaxLiteral = color(light: rgb(0x2563EB), dark: rgb(0x8CC7FF))

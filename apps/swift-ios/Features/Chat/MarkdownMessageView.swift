@@ -23,6 +23,7 @@ struct MarkdownMessageView: View {
     @State private var isSelectingText = false
     @State private var previewTarget: PullRequestLinkTarget?
     @SwiftUI.Environment(\.markdownPullRequestContext) private var pullRequestContext
+    @SwiftUI.Environment(\.markdownTranscriptContext) private var transcript
     @SwiftUI.Environment(\.openURL) private var openURL
 
     init(_ source: String, isStreaming: Bool = false, citationMessageID: String? = nil, timestamp: Date? = nil) {
@@ -45,12 +46,13 @@ struct MarkdownMessageView: View {
     var body: some View {
         Group {
             if let displayDocument {
-                MarkdownBlocksView(blocks: highlightedBlocks(displayDocument))
+                MarkdownBlocksView(blocks: skillBlocks(displayDocument, highlightedBlocks(displayDocument)))
                     .environment(\.markdownGallery, MarkdownGallery.images(in: displayDocument.blocks))
                     // An unterminated embed means something different mid-turn
                     // than it does once the turn is over: still coming, or never
                     // coming. Only the message knows which.
                     .environment(\.markdownIsStreaming, isStreaming)
+                    .environment(\.markdownDetailsScope, citationMessageID)
             } else {
                 // Parsing waits briefly so token-by-token streaming cancels stale revisions
                 // instead of scheduling work for content the user will never see.
@@ -163,6 +165,11 @@ struct MarkdownMessageView: View {
               let range = AssistantCitationTextRange.resolve(in: document.citationText, quote: citation.text,
                   start: citation.start, end: citation.end, prefix: citation.prefix, suffix: citation.suffix) else { return document.blocks }
         return MarkdownCitationHighlight.blocks(document.blocks, range: range)
+    }
+
+    private func skillBlocks(_ document: MarkdownRenderedDocument, _ blocks: [MarkdownRenderedBlock]) -> [MarkdownRenderedBlock] {
+        guard document.mayContainSkills, let skills = transcript?.skills else { return blocks }
+        return MarkdownSkillChips.blocks(blocks, catalog: skills)
     }
 
     private var displayDocument: MarkdownRenderedDocument? {
@@ -293,7 +300,7 @@ private struct MarkdownSelectableTextView: UIViewRepresentable {
     }
 }
 
-private struct MarkdownBlocksView: View {
+struct MarkdownBlocksView: View {
     let blocks: [MarkdownRenderedBlock]
     var spacing: CGFloat = 12
 
@@ -349,8 +356,14 @@ private struct MarkdownBlockView: View, Equatable {
         case let .image(image):
             MarkdownMediaView(image: image)
 
-        case let .codeBlock(language, code, citationRange):
-            MarkdownCodeBlockView(language: language, code: code, citationRange: citationRange)
+        case let .codeBlock(language, code, citationRange, title, terminated):
+            MarkdownCodeBlockView(
+                language: language,
+                code: code,
+                citationRange: citationRange,
+                title: title,
+                terminated: terminated
+            )
 
         case let .htmlEmbed(html, terminated):
             HtmlEmbedView(html: html, terminated: terminated)
@@ -366,6 +379,9 @@ private struct MarkdownBlockView: View, Equatable {
 
         case let .artifactTemplate(template):
             NativeArtifactTemplateCard(template: template)
+
+        case let .details(details):
+            MarkdownDetailsView(details: details)
 
         case .thematicBreak:
             Rectangle()
@@ -437,34 +453,48 @@ private struct MarkdownGithubAlertView: View {
 private struct MarkdownTableView: View {
     let table: MarkdownRenderedTable
 
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.horizontal) {
+                MarkdownTableGrid(table: table, columnWidths: table.columnWidths)
+            }
+            .scrollIndicators(.visible)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Table with \(table.header.count) columns and \(table.rows.count) rows")
+            MarkdownTableActionBar(table: table)
+        }
+    }
+}
+
+/// The bordered grid of a table, sized to `columnWidths` (points at the
+/// default text size) and wider than its container when it needs to be.
+struct MarkdownTableGrid: View {
+    let table: MarkdownRenderedTable
+    let columnWidths: [CGFloat]
+
     /// The estimates are in points at the default text size; this keeps a
     /// column fitting its text as Dynamic Type grows.
     @ScaledMetric(relativeTo: .body) private var widthScale: CGFloat = 1
 
-    private var columnWidths: [CGFloat] { table.columnWidths.map { $0 * widthScale } }
+    private var scaledWidths: [CGFloat] { columnWidths.map { $0 * widthScale } }
 
     var body: some View {
-        ScrollView(.horizontal) {
-            Grid(horizontalSpacing: 0, verticalSpacing: 0) {
-                tableRow(table.header, isHeader: true)
-                ForEach(table.rows.indices, id: \.self) { rowIndex in
-                    tableRow(table.rows[rowIndex], isHeader: false)
-                }
-            }
-            // A horizontal ScrollView still proposes the viewport width to its child.
-            // Preserve the grid's measured column widths so it overflows and scrolls
-            // instead of compressing prose columns into unreadable slivers.
-            .fixedSize(horizontal: true, vertical: true)
-            .background(T3Colors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(T3Colors.border, lineWidth: 1)
+        Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+            tableRow(table.header, isHeader: true)
+            ForEach(table.rows.indices, id: \.self) { rowIndex in
+                tableRow(table.rows[rowIndex], isHeader: false)
             }
         }
-        .scrollIndicators(.visible)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Table with \(table.header.count) columns and \(table.rows.count) rows")
+        // A horizontal ScrollView still proposes the viewport width to its child.
+        // Preserve the grid's measured column widths so it overflows and scrolls
+        // instead of compressing prose columns into unreadable slivers.
+        .fixedSize(horizontal: true, vertical: true)
+        .background(T3Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(T3Colors.border, lineWidth: 1)
+        }
     }
 
     private func tableRow(
@@ -476,7 +506,7 @@ private struct MarkdownTableView: View {
                 MarkdownInlineText(cells[columnIndex])
                     .lineSpacing(3)
                     .frame(
-                        width: columnWidths[columnIndex],
+                        width: scaledWidths[columnIndex],
                         alignment: alignment(for: columnIndex)
                     )
                     .frame(
@@ -593,10 +623,15 @@ private struct MarkdownCodeBlockView: View {
     let language: String?
     let code: String
     let citationRange: NSRange?
+    /// From the fence's info string; shown ahead of the language.
+    var title: String? = nil
+    /// Whether the closing fence arrived; only a closed shell block can run.
+    var terminated = true
     /// Set for a ```mermaid fence: whether its fence has closed. A closed fence
     /// renders as a diagram, with a toggle back to this source.
     var diagramTerminated: Bool? = nil
     @SwiftUI.Environment(\.markdownIsStreaming) private var isStreaming
+    @SwiftUI.Environment(\.markdownTranscriptContext) private var transcript
     @SwiftUI.Environment(\.colorScheme) private var colorScheme
     @State private var showsCode = false
     @State private var diagramFailure: String?
@@ -641,13 +676,16 @@ private struct MarkdownCodeBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 4) {
-                Text(verbatim: (language?.isEmpty == false ? language! : "code").lowercased())
-                    .font(T3Typography.supporting.monospaced())
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .lineLimit(1)
+                MarkdownCodeBlockTitle(title: title, language: language)
                 Spacer(minLength: 8)
                 if diagramReady { diagramToggle }
                 if showsDiagram { expandDiagramButton } else { wrapButton }
+                if let transcript, let run = transcript.runShellCommand,
+                   let command = MarkdownShellCommand.runnable(
+                       language: language, code: code, terminated: terminated, isStreaming: isStreaming
+                   ) {
+                    MarkdownRunCommandButton(isRunning: transcript.isRunningShellCommand) { run(command) }
+                }
                 Button(action: copy) {
                     Label(showsCopied ? "Copied" : "Copy", systemImage: showsCopied ? "checkmark" : "doc.on.doc")
                         .labelStyle(.iconOnly)
@@ -809,7 +847,7 @@ enum MarkdownCodeBlockWrapping {
     }
 }
 
-private struct MarkdownInlineText: View {
+struct MarkdownInlineText: View {
     private let attributedText: AttributedString
     private let font: Font
 
@@ -861,6 +899,7 @@ enum MarkdownGallery {
             switch block {
             case let .image(image): MarkdownMediaSource.isVideo(image.src) ? [] : [image]
             case let .blockquote(children), let .githubAlert(_, children): images(in: children)
+            case let .details(details): images(in: details.blocks)
             case let .unorderedList(items), let .orderedList(_, items): items.flatMap { images(in: $0.blocks) }
             default: []
             }

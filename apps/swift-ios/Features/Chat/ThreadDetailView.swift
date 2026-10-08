@@ -18,6 +18,8 @@ public struct ThreadDetailView: View {
     /// Opens a new task in this thread's project, for Cmd+Option+Return.
     let onStartNewThread: ((_ projectID: String) -> Void)?
     @State private var nativeToolIcons = NativeAppToolIconStore()
+    /// Skill chips, shell-block runs and `<details>` expansion for the transcript's Markdown.
+    @State private var markdownTranscript = MarkdownTranscriptContext()
     /// Shared by this screen's MCP App rows; nil when the client cannot host apps.
     @State private var mcpApps: ThreadMcpApps?
     @State private var isSwappingDraft = false
@@ -106,6 +108,15 @@ public struct ThreadDetailView: View {
             apps: mcpApps,
             threadID: thread.id,
             awaitingUser: detail.map { !$0.approvals.isEmpty || !$0.userInputs.isEmpty } ?? false
+        ))
+        .modifier(MarkdownTranscriptContextModifier(
+            context: markdownTranscript,
+            client: model.client,
+            threadID: thread.id,
+            skills: threadProviders.first { $0.id == currentSelection?.providerID }?.inWorkspace(threadWorkspaceRoot).skills ?? [],
+            canRunCommands: !isChatConversation && threadWorkspaceRoot != nil && !isEnvironmentOffline
+                && !ModelOptions.isHermesProvider(currentThread.providerID, in: environmentProviders),
+            onTerminalStarted: { toolSurface = .terminal(terminalID: $0) }
         ))
         .onChange(of: model.pendingPullRequestPrompts[thread.id]?.id) { consumePullRequestPrompt() }
         .alert("Pull request checkout", isPresented: Binding(get: { pullRequestCheckoutWarning != nil }, set: { if !$0 { pullRequestCheckoutWarning = nil } })) {
@@ -786,6 +797,7 @@ public struct ThreadDetailView: View {
                     }
                     composerFocused = true
                 },
+                markdownTranscript: markdownTranscript,
                 mcpApps: mcpApps,
                 threadLinks: threadLinks,
                 statusLine: ThreadStatusLine.resolve(currentThread, now: .now),
@@ -2351,6 +2363,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var onOpenCitation: (AssistantCitation) -> Void = { _ in }
     var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
+    var markdownTranscript: MarkdownTranscriptContext? = nil
     var mcpApps: ThreadMcpApps? = nil
     /// Resolves `t3-thread://` links in messages against this thread's environment.
     var threadLinks: ThreadLinkResolver? = nil
@@ -2433,6 +2446,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onOpenCitation: onOpenCitation,
                 citationContext: citationContext,
                 onUseTemplate: onUseTemplate,
+                markdownTranscript: markdownTranscript,
                 mcpApps: mcpApps,
                 threadLinks: threadLinks,
                 onStatusLineAction: onStatusLineAction
@@ -2507,6 +2521,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenCitation: (AssistantCitation) -> Void = { _ in }
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
+            var markdownTranscript: MarkdownTranscriptContext?
             var mcpApps: ThreadMcpApps?
             var threadLinks: ThreadLinkResolver?
             var onStatusLineAction: (ThreadStatusLine.Kind) async -> Void = { _ in }
@@ -2713,6 +2728,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.threadMcpApps, context.mcpApps)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
+                    .environment(\.markdownTranscriptContext, context.markdownTranscript)
                     .environment(\.threadLinkResolver, context.threadLinks)
                     .environment(\.openURL, OpenURLAction { url in
                         // A thread link names a thread in this transcript's environment.
