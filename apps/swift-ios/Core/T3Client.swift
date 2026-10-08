@@ -454,18 +454,32 @@ public actor T3Client {
         }
     }
 
+    /// Opens after `sequence`, and on every reconnect resumes after the newest
+    /// frame this stream has delivered.
     public func shellEvents(
         after sequence: Int? = nil
     ) async -> AsyncThrowingStream<OrchestrationV2ShellStreamItem, Error> {
-        var payload: [String: JSONValue] = ["requestCompletionMarker": .bool(true)]
-        if let sequence { payload["afterSequence"] = .number(Double(sequence)) }
-        return await rpc.subscribe(
-            RPCMethod.subscribeShell.rawValue,
-            payload: .object(payload),
-            as: OrchestrationV2ShellStreamItem.self
+        let cursor = StreamResumeCursor(after: sequence)
+        return await subscribeResumable(
+            .subscribeShell,
+            payload: [:],
+            resumeSequence: { cursor.sequence },
+            observe: { cursor.advance(to: $0.resumeSequence) }
         )
     }
 
+    /// Asks `resumeSequence` for the sequence to resume after each time the
+    /// subscription is sent, first and on every reconnect. Return the sequence
+    /// of the shell the caller holds, or nil for a full snapshot.
+    public func shellEvents(
+        resumeSequence: @escaping @Sendable () async -> Int?
+    ) async -> AsyncThrowingStream<OrchestrationV2ShellStreamItem, Error> {
+        await subscribeResumable(.subscribeShell, payload: [:], resumeSequence: resumeSequence)
+    }
+
+    /// Opens after `sequence`, and on every reconnect resumes after the newest
+    /// frame this stream has delivered.
+    ///
     /// `snapshotMaxVisibleItems` bounds any snapshot frame this subscription
     /// sends. The HTTP snapshot endpoint spells the same idea `maxVisibleItems`.
     public func threadEvents(
@@ -473,19 +487,67 @@ public actor T3Client {
         after sequence: Int? = nil,
         snapshotMaxVisibleItems: Int? = nil
     ) async -> AsyncThrowingStream<OrchestrationV2ThreadStreamItem, Error> {
-        var payload: [String: JSONValue] = [
-            "threadId": .string(threadID),
-            "requestCompletionMarker": .bool(true),
-        ]
-        if let sequence { payload["afterSequence"] = .number(Double(sequence)) }
+        let cursor = StreamResumeCursor(after: sequence)
+        return await subscribeResumable(
+            .subscribeThread,
+            payload: threadPayload(threadID, snapshotMaxVisibleItems: snapshotMaxVisibleItems),
+            resumeSequence: { cursor.sequence },
+            observe: { cursor.advance(to: $0.resumeSequence) }
+        )
+    }
+
+    /// Like ``shellEvents(resumeSequence:)``: the caller names the sequence
+    /// of the projection it holds each time the subscription is sent.
+    public func threadEvents(
+        threadID: String,
+        snapshotMaxVisibleItems: Int? = nil,
+        resumeSequence: @escaping @Sendable () async -> Int?
+    ) async -> AsyncThrowingStream<OrchestrationV2ThreadStreamItem, Error> {
+        await subscribeResumable(
+            .subscribeThread,
+            payload: threadPayload(threadID, snapshotMaxVisibleItems: snapshotMaxVisibleItems),
+            resumeSequence: resumeSequence
+        )
+    }
+
+    private func threadPayload(
+        _ threadID: String,
+        snapshotMaxVisibleItems: Int?
+    ) -> [String: JSONValue] {
+        var payload: [String: JSONValue] = ["threadId": .string(threadID)]
         if let snapshotMaxVisibleItems {
             payload["snapshotMaxVisibleItems"] = .number(Double(snapshotMaxVisibleItems))
         }
-        return await rpc.subscribe(
-            RPCMethod.subscribeThread.rawValue,
-            payload: .object(payload),
-            as: OrchestrationV2ThreadStreamItem.self
-        )
+        return payload
+    }
+
+    private func subscribeResumable<Item: Decodable & Sendable>(
+        _ method: RPCMethod,
+        payload: [String: JSONValue],
+        resumeSequence: @escaping @Sendable () async -> Int?,
+        observe: (@Sendable (Item) -> Void)? = nil
+    ) async -> AsyncThrowingStream<Item, Error> {
+        var base = payload
+        base["requestCompletionMarker"] = .bool(true)
+        return await rpc.subscribe(method.rawValue, as: Item.self, observe: observe) { [base] in
+            var payload = base
+            if let sequence = await resumeSequence() {
+                payload["afterSequence"] = .number(Double(sequence))
+            }
+            return .object(payload)
+        }
+    }
+
+    /// Pings the live socket and waits up to `timeout` for the answer. A
+    /// socket that stays silent is dropped and redialed. False when no socket
+    /// is open.
+    public func probeConnection(timeout: Duration) async -> Bool {
+        await rpc.probe(timeout: timeout)
+    }
+
+    /// Replaces the live socket outright. Subscriptions resume on the new one.
+    public func reconnect(reason: String) async {
+        await rpc.reconnectNow(reason: reason)
     }
 
     public func preparePullRequestCheckout(cwd: String, reference: String, mode: PullRequestCheckoutMode, threadID: String) async throws -> PullRequestCheckoutResult {
@@ -3033,12 +3095,27 @@ public struct OrchestrationSourcePlanRef: Equatable, Sendable {
     }
 }
 
-/// `orchestration.launchThread`'s reply. The full result also carries the new
-/// thread's projection; this decodes only the identity so a projection the
-/// Swift models cannot yet parse never turns an accepted launch into a failure.
+/// `orchestration.launchThread`'s reply. The projection decodes leniently: one
+/// the Swift models cannot parse is dropped rather than turning an accepted
+/// launch into a failure. It paints the new thread's first open.
 public struct ThreadLaunchResult: Decodable, Equatable, Sendable {
     public let threadId: String
     public let resumed: Bool
+    public let projection: OrchestrationV2ThreadProjection?
+
+    private enum CodingKeys: String, CodingKey {
+        case threadId, resumed, projection
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        threadId = try container.decode(String.self, forKey: .threadId)
+        resumed = try container.decode(Bool.self, forKey: .resumed)
+        projection = try? container.decodeIfPresent(
+            OrchestrationV2ThreadProjection.self,
+            forKey: .projection
+        )
+    }
 }
 
 /// `orchestration.generateHandoffScript`'s reply.

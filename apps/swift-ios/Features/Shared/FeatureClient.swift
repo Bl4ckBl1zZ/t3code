@@ -333,9 +333,15 @@ public protocol FeatureClient: AnyObject {
     ) async throws
     func clearTerminal(threadID: String, terminalID: String) async throws
     func closeTerminal(threadID: String, terminalID: String) async throws
+    /// Whether the environment's socket is open right now. The published
+    /// connection state can read reconnecting while the socket is fine (an
+    /// HTTP fallback tick, a stream resubscribing); the outbox still sends.
+    func hasLiveConnection(environmentID: String) async -> Bool
 }
 
 public extension FeatureClient {
+    func hasLiveConnection(environmentID _: String) async -> Bool { false }
+
     func refreshProviderWorkspace(projectID: String, instanceID: String, cwd: String?) async throws {}
 
     func loadEarlierThreadTurns(id _: String) async throws -> FeatureThreadDetail? {

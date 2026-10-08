@@ -125,12 +125,21 @@ gets a credential). It runs on every socket dial; idempotent HTTP reads (shell a
 session reads) retry over the other routes once when the route itself fails. While connected over a
 later route, the client preflights the earlier ones every 60 seconds (descriptor plus an
 authenticated session read) and redials when one passes; a route that passed but then failed is not
-preferred again for five minutes. There is no network-change wakeup yet. Learned addresses come from
+preferred again for five minutes. A network change does not re-check routes yet. Learned addresses come from
 the first `server.getConfig` per route a client connects over. The app allows plain HTTP
 (`NSAllowsArbitraryLoads`), so learned `http://` LAN and tailnet routes are kept; the first request
 to a LAN address can raise the iOS Local Network prompt (`NSLocalNetworkUsageDescription`), and if
 it is denied those requests fail like an unreachable route and the walk falls back to the next one.
 An environment with one route connects exactly as before: no checks, no preflight.
+
+The socket is pinged every 5 seconds and replaced when a ping goes unanswered for 10, because a
+half-open socket never fails a send. Returning to the app probes it with a 3-second deadline, or
+replaces it outright after 10 seconds or more in the background (mobile's rule); a network change
+probes too. Shell and thread subscriptions build their request when it is sent, so a reconnect
+resumes after the newest sequence the client holds rather than the one the stream opened with. The
+active environment's shell stream carries the effect of an action, so actions read the whole shell
+over HTTP only when that stream is down or the environment is passive, and an HTTP shell older than
+the one held is dropped.
 
 ### AdvertisedEndpoint
 

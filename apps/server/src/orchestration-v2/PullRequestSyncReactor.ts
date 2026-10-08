@@ -1,7 +1,7 @@
 import { parseChangeRequestUrl, siblingPullRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import {
   CommandId,
-  type OrchestrationV2ThreadShell,
+  type OrchestrationV2AppThread,
   type PullRequestSummary,
   type ThreadId,
   type ThreadPullRequestKey,
@@ -30,6 +30,7 @@ import type * as Scope from "effect/Scope";
 import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import { isTerminalRunStatus, ThreadManagementService } from "./ThreadManagementService.ts";
 import { allThreadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
 import * as Stream from "effect/Stream";
@@ -43,7 +44,7 @@ const isPullRequestProviderError = Schema.is(PullRequestProviderError);
 type SnapshotFields = Omit<ThreadPullRequestSnapshot, "syncedAt">;
 
 interface LinkEntry {
-  readonly thread: OrchestrationV2ThreadShell;
+  readonly thread: OrchestrationV2AppThread;
   readonly link: ThreadPullRequestLink;
 }
 
@@ -126,13 +127,15 @@ function rateLimitRetryAt(cause: Cause.Cause<unknown>): number | undefined {
   return undefined;
 }
 
-function isUnsettled(thread: OrchestrationV2ThreadShell): boolean {
+function isUnsettled(
+  thread: Pick<OrchestrationV2AppThread, "settledOverride" | "settledAt">,
+): boolean {
   return thread.settledOverride !== "settled" && thread.settledAt === null;
 }
 
 /**
  * Keeps every thread ↔ pull request link's host snapshot current. One sweep a minute reads
- * the shell snapshot, groups visible links by pull request so the host is asked once per PR
+ * the threads that carry links, groups visible links by pull request so the host is asked once per PR
  * no matter how many threads share it, and writes back only what changed. Native stacks the
  * host reports are auto-linked to the thread as `source: "stack"`.
  */
@@ -152,6 +155,7 @@ export class PullRequestSyncReactor extends Context.Service<
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
 
@@ -183,13 +187,13 @@ export const make = Effect.gen(function* () {
       Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.logWarning(message, fields);
 
   const sweep = Effect.fn("PullRequestSyncReactor.sweep")(function* () {
-    const snapshot = yield* threads.getShellSnapshot({ location: "active" });
+    const linked = yield* projections.listThreads({ kind: "pull-request-links" });
     const now = yield* DateTime.now;
     const nowMs = DateTime.toEpochMillis(now);
     const nowIso = DateTime.formatIso(now);
 
     const groups = new Map<string, Array<LinkEntry>>();
-    for (const thread of snapshot.threads) {
+    for (const thread of linked) {
       if (thread.archivedAt !== null || thread.deletedAt !== null) continue;
       for (const link of visibleThreadPullRequests(allThreadPullRequestsOf(thread))) {
         const key = threadPullRequestKeyOf(link);

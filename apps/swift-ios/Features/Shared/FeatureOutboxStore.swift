@@ -123,14 +123,22 @@ public enum FeatureOutboxPolicy {
     /// follow-up messages while a turn is running, matching the web queue.
     /// A creation whose thread already exists was committed before a cleanup
     /// interruption, so it is removed instead of sent twice.
+    ///
+    /// `socketIsLive` reports an open socket while the snapshot does not read
+    /// connected (a transient reconnecting state, or rows painted from the
+    /// cache). It lets a submission whose project or thread is known send at
+    /// once — delivery is idempotent — but never discards: only a
+    /// synchronized snapshot proves something is gone.
     public static func decision(
         for submission: FeatureQueuedSubmission,
         snapshot: FeatureSnapshot,
-        pendingCreationThreadIDs: Set<String> = []
+        pendingCreationThreadIDs: Set<String> = [],
+        socketIsLive: Bool = false
     ) -> FeatureOutboxDeliveryDecision {
         let environment = snapshot.environments.first { $0.id == submission.environmentID }
         let isConnected = environment?.connectionState == .connected
             || (environment?.isActive == true && snapshot.connection.state == .connected)
+        let canSend = isConnected || socketIsLive
         let thread = snapshot.threads.first { $0.id == submission.threadID }
 
         if submission.creation != nil {
@@ -140,7 +148,7 @@ public enum FeatureOutboxPolicy {
                     && $0.environmentID == submission.environmentID
             }
             if isConnected, !projectExists { return .discard }
-            return isConnected ? .send : .wait
+            return canSend && projectExists ? .send : .wait
         }
 
         if pendingCreationThreadIDs.contains(submission.threadID) {
@@ -150,7 +158,7 @@ public enum FeatureOutboxPolicy {
             // A fully synchronized environment proves the thread was deleted.
             return isConnected ? .discard : .wait
         }
-        guard isConnected else { return .wait }
+        guard canSend else { return .wait }
         return .send
     }
 }

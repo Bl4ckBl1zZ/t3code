@@ -3,7 +3,6 @@ import {
   EnvironmentHttpApi,
   type OrchestrationProjectShell,
 } from "@t3tools/contracts";
-import { windowOrchestrationV2ThreadProjection } from "@t3tools/shared/orchestrationV2Window";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -101,28 +100,27 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          const snapshot = yield* threadManagement.getThreadSnapshot(args.params.threadId).pipe(
-            traceLocalHandlerWork,
-            Effect.catch(
-              Effect.fnUntraced(function* (error) {
-                if (isThreadNotFound(error)) {
-                  return yield* failEnvironmentNotFound("thread_not_found");
-                }
-                return yield* failEnvironmentInternal(
-                  "orchestration_thread_snapshot_failed",
-                  error,
-                );
-              }),
-            ),
-          );
-          const maxVisibleItems = args.query.maxVisibleItems;
-          const windowed =
-            maxVisibleItems === undefined
-              ? snapshot.projection
-              : windowOrchestrationV2ThreadProjection(snapshot.projection, maxVisibleItems);
+          const snapshot = yield* threadManagement
+            .getThreadSnapshot(args.params.threadId, {
+              maxVisibleItems: args.query.maxVisibleItems,
+            })
+            .pipe(
+              traceLocalHandlerWork,
+              Effect.catch(
+                Effect.fnUntraced(function* (error) {
+                  if (isThreadNotFound(error)) {
+                    return yield* failEnvironmentNotFound("thread_not_found");
+                  }
+                  return yield* failEnvironmentInternal(
+                    "orchestration_thread_snapshot_failed",
+                    error,
+                  );
+                }),
+              ),
+            );
           return {
             snapshotSequence: snapshot.snapshotSequence,
-            projection: projectThreadProjectionForWire(windowed),
+            projection: projectThreadProjectionForWire(snapshot.projection),
           };
         }),
       );

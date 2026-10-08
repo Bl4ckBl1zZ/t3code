@@ -353,6 +353,13 @@ const makeEventStore = Effect.gen(function* () {
     );
   };
 
+  // Every read shape names its index. Installs are never ANALYZEd, and without
+  // stats SQLite picks the (version, sequence) index even for a single thread,
+  // walking every V2 event after the cursor: ~20s cold for an idle thread 836k
+  // events behind, against <1ms on the stream index. Pinning the index also
+  // keeps a later ANALYZE from flipping a plan. The thread and command filters
+  // are branched here, not written as `? IS NULL OR column = ?`, because that
+  // form is opaque to the planner.
   const readApplicationRows = (input: {
     readonly afterSequence: number;
     readonly throughSequence?: number;
@@ -360,8 +367,33 @@ const makeEventStore = Effect.gen(function* () {
     readonly commandId?: CommandId;
     readonly onlyAgentEvents?: boolean;
     readonly limit: number;
-  }) =>
-    sql<ApplicationEventRow>`
+  }) => {
+    const agentEvents = sql`application_event_version = 2 AND aggregate_kind = 'thread'`;
+    // Project events of any version plus V2 thread events.
+    const applicationEvents = sql`(aggregate_kind = 'project' OR (${agentEvents}))`;
+    const [index, scope] =
+      input.commandId !== undefined
+        ? [
+            sql`INDEXED BY idx_orch_events_command_id`,
+            sql`command_id = ${input.commandId}
+              AND ${input.onlyAgentEvents === true ? agentEvents : applicationEvents}${
+                input.threadId === undefined ? sql`` : sql` AND stream_id = ${input.threadId}`
+              }`,
+          ]
+        : input.threadId !== undefined
+          ? [
+              sql`INDEXED BY idx_orch_events_stream_sequence`,
+              sql`aggregate_kind = 'thread' AND stream_id = ${input.threadId}
+                AND application_event_version = 2`,
+            ]
+          : input.onlyAgentEvents === true
+            ? [sql`INDEXED BY idx_orchestration_events_application_sequence`, agentEvents]
+            : // Indexed, the OR became a MULTI-INDEX OR that collected and
+              // sorted every match after the cursor (and every project event)
+              // before applying LIMIT. The primary key walks in order and
+              // stops at the page size.
+              [sql`NOT INDEXED`, applicationEvents];
+    return sql<ApplicationEventRow>`
       SELECT
         sequence,
         event_id,
@@ -375,23 +407,14 @@ const makeEventStore = Effect.gen(function* () {
         application_event_version,
         causation_event_id,
         correlation_id
-      FROM orchestration_events
-      ${
-        // The sequence range otherwise wins and a command lookup scans every
-        // V2 event, which blocks the server for seconds on large histories.
-        input.commandId === undefined ? sql`` : sql`INDEXED BY idx_orch_events_command_id`
-      }
-      WHERE sequence > ${input.afterSequence}
+      FROM orchestration_events ${index}
+      WHERE ${scope}
+        AND sequence > ${input.afterSequence}
         AND sequence <= ${input.throughSequence ?? Number.MAX_SAFE_INTEGER}
-        AND (
-          (${input.onlyAgentEvents === true ? 1 : 0} = 0 AND aggregate_kind = 'project')
-          OR (application_event_version = 2 AND aggregate_kind = 'thread')
-        )
-        AND (${input.threadId ?? null} IS NULL OR stream_id = ${input.threadId ?? null})
-        ${input.commandId === undefined ? sql`` : sql`AND command_id = ${input.commandId}`}
       ORDER BY sequence ASC
       LIMIT ${input.limit}
     `;
+  };
 
   const appendAgentEvents: OrchestrationEventStoreShape["appendAgentEvents"] = (input) =>
     Effect.forEach(
@@ -491,13 +514,13 @@ const makeEventStore = Effect.gen(function* () {
     (threadId === undefined || threadId === null
       ? sql<{ readonly sequence: number | null }>`
           SELECT MAX(sequence) AS sequence
-          FROM orchestration_events
+          FROM orchestration_events INDEXED BY idx_orchestration_events_application_sequence
           WHERE application_event_version = 2
             AND aggregate_kind = 'thread'
         `
       : sql<{ readonly sequence: number | null }>`
           SELECT sequence
-          FROM orchestration_events
+          FROM orchestration_events INDEXED BY idx_orch_events_stream_sequence
           WHERE aggregate_kind = 'thread'
             AND stream_id = ${threadId}
             AND application_event_version = 2
@@ -522,7 +545,7 @@ const makeEventStore = Effect.gen(function* () {
       WHERE aggregate_kind = 'project'
       UNION ALL
       SELECT MAX(sequence) AS sequence
-      FROM orchestration_events
+      FROM orchestration_events INDEXED BY idx_orchestration_events_application_sequence
       WHERE application_event_version = 2
         AND aggregate_kind = 'thread'
     )

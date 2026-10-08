@@ -1554,10 +1554,16 @@ public final class FeatureRootModel {
             if pendingThreadsByID[submission.threadID] != nil {
                 policySnapshot.threads.removeAll { $0.id == submission.threadID }
             }
+            var socketIsLive = false
+            if !isEnvironmentConnected(submission.environmentID) {
+                socketIsLive = await client.hasLiveConnection(environmentID: submission.environmentID)
+            }
+            guard !Task.isCancelled, outboxGeneration == generation else { return false }
             switch FeatureOutboxPolicy.decision(
                 for: submission,
                 snapshot: policySnapshot,
-                pendingCreationThreadIDs: Set(pendingThreadsByID.keys)
+                pendingCreationThreadIDs: Set(pendingThreadsByID.keys),
+                socketIsLive: socketIsLive
             ) {
             case .discard:
                 if !(await discardQueuedSubmission(submission)) {

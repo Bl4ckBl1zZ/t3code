@@ -3,12 +3,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProjectId,
   ThreadId,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ServerCommand,
   type Project,
   type PullRequestSummary,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -23,6 +26,7 @@ import {
 import { GitManager } from "../git/GitManager.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { ProjectionStoreV2, threadMatchesQuery } from "./ProjectionStore.ts";
 import { make } from "./ThreadSettlementReactor.ts";
 
 const epoch = DateTime.makeUnsafe(0);
@@ -48,6 +52,18 @@ const fixture = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
     ...overrides,
   }) as OrchestrationV2ThreadShell;
 
+/** A projection store over these shells, narrowing each sweep's read like the SQL store does. */
+const projectionsOf = (shells: () => ReadonlyArray<OrchestrationV2ThreadShell>) => {
+  const listThreads = vi.fn((query: Parameters<ProjectionStoreV2["Service"]["listThreads"]>[0]) =>
+    Effect.succeed(
+      shells().filter((thread) =>
+        threadMatchesQuery(thread as unknown as OrchestrationV2AppThread, query),
+      ) as unknown as ReadonlyArray<OrchestrationV2AppThread>,
+    ),
+  );
+  return { listThreads, layer: Layer.mock(ProjectionStoreV2)({ listThreads }) };
+};
+
 function harness(thread: OrchestrationV2ThreadShell, enabled = true) {
   const summary = vi.fn(() => Effect.die("Unexpected host read"));
   const branch = vi.fn(() => Effect.die("Unexpected git read"));
@@ -57,22 +73,15 @@ function harness(thread: OrchestrationV2ThreadShell, enabled = true) {
       return { sequence: 8, storedEvents: [] };
     }),
   );
-  const snapshot = vi.fn(() =>
-    Effect.succeed({
-      schemaVersion: 1,
-      snapshotSequence: 7,
-      threads: [thread],
-      archivedThreads: [],
-    }),
-  );
+  const projections = projectionsOf(() => [thread]);
   return {
     summary,
     branch,
     dispatch,
-    snapshot,
+    listThreads: projections.listThreads,
     layer: Layer.mergeAll(
+      projections.layer,
       Layer.mock(ThreadManagementService)({
-        getShellSnapshot: snapshot,
         getThreadEventSequence: () => Effect.succeed(7),
         getThreadShell: () => Effect.succeed(thread),
         dispatch,
@@ -108,13 +117,54 @@ it.effect("settles inactivity without touching git or host APIs", () =>
   }).pipe(Effect.scoped),
 );
 
+it.effect("a thread's own events decide that thread again, not every thread", () =>
+  Effect.gen(function* () {
+    const one = fixture({ id: ThreadId.make("one") });
+    const two = fixture({ id: ThreadId.make("two") });
+    const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+    const shellReads = yield* Queue.unbounded<ThreadId>();
+    const layer = Layer.mergeAll(
+      projectionsOf(() => [one, two]).layer,
+      Layer.mock(ThreadManagementService)({
+        streamDomainEvents: Stream.fromQueue(events),
+        getThreadEventSequence: () => Effect.succeed(7),
+        getThreadShell: (id) =>
+          Queue.offer(shellReads, id).pipe(Effect.as(id === one.id ? one : two)),
+        dispatch: () => Effect.die("Nothing is due"),
+      }),
+      Layer.mock(ProjectService)({
+        snapshot: Effect.succeed({ projects: [], updatedAt: "1970-01-01T00:00:00Z" }),
+      }),
+      Layer.mock(PullRequestService)({ subscribeMerges: Effect.succeed(Stream.never) }),
+      Layer.mock(GitManager)({}),
+      Layer.mock(GitWorkflowService)({}),
+      ServerSettings.layerTest({}),
+      NodeServices.layer,
+    );
+    const reactor = yield* make.pipe(Effect.provide(layer));
+    yield* reactor.start();
+    // The first periodic sweep decides every thread.
+    const initial = [yield* Queue.take(shellReads), yield* Queue.take(shellReads)];
+    expect(initial.toSorted()).toEqual([one.id, two.id]);
+    yield* reactor.drain;
+
+    yield* Queue.offer(events, {
+      type: "run.updated",
+      threadId: one.id,
+    } as unknown as OrchestrationV2DomainEvent);
+    expect(yield* Queue.take(shellReads)).toBe(one.id);
+    yield* reactor.drain;
+    expect(yield* Queue.size(shellReads)).toBe(0);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("disabled automatic settings do not even scan threads", () =>
   Effect.gen(function* () {
     const h = harness(fixture(), false);
     const reactor = yield* make.pipe(Effect.provide(h.layer));
     yield* reactor.requestSweep;
     yield* reactor.drain;
-    expect(h.snapshot).not.toHaveBeenCalled();
+    expect(h.listThreads).not.toHaveBeenCalled();
     expect(h.dispatch).not.toHaveBeenCalled();
   }).pipe(Effect.scoped),
 );
@@ -264,15 +314,9 @@ it.effect("a confirmed merge invalidates the matching checkout before scheduling
       return Deferred.succeed(invalidated, undefined).pipe(Effect.asVoid);
     });
     const layer = Layer.mergeAll(
+      projectionsOf(() => [thread]).layer,
       Layer.mock(ThreadManagementService)({
         streamDomainEvents: Stream.empty,
-        getShellSnapshot: () =>
-          Effect.succeed({
-            schemaVersion: 1,
-            snapshotSequence: 1,
-            threads: [thread],
-            archivedThreads: [],
-          }),
       }),
       Layer.mock(ProjectService)({
         snapshot: Effect.succeed({ projects: [project], updatedAt: project.updatedAt }),
@@ -335,14 +379,8 @@ function deleteHarness(thread: OrchestrationV2ThreadShell, others: Orchestration
       Effect.sync(() => void calls.push(`branch ${input.refName} force=${input.force}`)),
   );
   const layer = Layer.mergeAll(
+    projectionsOf(() => [thread, ...others]).layer,
     Layer.mock(ThreadManagementService)({
-      getShellSnapshot: (options) =>
-        Effect.succeed({
-          schemaVersion: 1,
-          snapshotSequence: 7,
-          threads: options?.location === "active" ? [thread] : others.filter((t) => !t.archivedAt),
-          archivedThreads: options?.location === "active" ? [] : others.filter((t) => t.archivedAt),
-        }),
       getThreadEventSequence: () => Effect.succeed(7),
       getThreadShell: () => Effect.succeed(thread),
       dispatch,

@@ -6,6 +6,7 @@ import type {
   OrchestrationV2ThreadShell,
   OrchestrationV2ThreadShellSnapshot,
   OrchestrationV2ShellStreamItem,
+  OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
 } from "@t3tools/contracts";
 import {
@@ -30,6 +31,31 @@ export function buildActiveShellSnapshot(input: {
     threads: input.threads.threads,
     archivedThreads: [],
   };
+}
+
+/**
+ * Thread events whose projection writes never reach a shell row. The shell reads the thread,
+ * its runs, messages, items, requests, plans, subagents, and provider threads and sessions; it
+ * never reads attempts, nodes, provider turns, checkpoints, or context handoffs and transfers.
+ * A test pins the shell query off those tables.
+ */
+export const SHELL_INERT_THREAD_EVENT_TYPES: ReadonlySet<OrchestrationV2DomainEvent["type"]> =
+  new Set([
+    "run-attempt.created",
+    "run-attempt.updated",
+    "node.updated",
+    "provider-turn.updated",
+    "checkpoint-scope.created",
+    "checkpoint.captured",
+    "checkpoint.rollback-requested",
+    "context-handoff.updated",
+    "context-transfer.created",
+    "context-transfer.updated",
+  ]);
+
+/** Whether an event can change a shell row, so whether a shell stream needs to read one. */
+export function canChangeShell(stored: ApplicationStoredEvent): boolean {
+  return "aggregateKind" in stored || !SHELL_INERT_THREAD_EVENT_TYPES.has(stored.event.type);
 }
 
 /** Keep only the newest shell-relevant event per project/thread aggregate. */
