@@ -381,6 +381,39 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("follows sequence gaps and a snapshot that replaces a dropped live backlog", () =>
+    Effect.gen(function* () {
+      // The server drops superseded events (gaps) and, for a client that fell
+      // too far behind, swaps its unsent backlog for one mid-stream snapshot.
+      const harness = yield* makeHarness({ cached: BASE_PROJECTION });
+      yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
+      yield* Queue.offer(harness.inputs, titleUpdated("Live title", 4));
+      yield* Queue.offer(harness.inputs, titleUpdated("After a gap", 9));
+      yield* Queue.offer(
+        harness.inputs,
+        snapshot(
+          { ...BASE_PROJECTION, thread: { ...BASE_PROJECTION.thread, title: "Resync" } },
+          20,
+        ),
+      );
+      yield* Queue.offer(harness.inputs, titleUpdated("Covered by the snapshot", 18));
+      yield* Queue.offer(harness.inputs, titleUpdated("After the snapshot", 23));
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.thread.title === "After the snapshot",
+      );
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+
+      expect(Option.getOrThrow(state.data).thread.title).toBe("After the snapshot");
+      expect((yield* Ref.get(harness.savedThreads)).at(-1)?.snapshotSequence).toBe(23);
+    }),
+  );
+
   it.effect("does not rewrite a deleted thread from a save still sitting in the queue", () =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();

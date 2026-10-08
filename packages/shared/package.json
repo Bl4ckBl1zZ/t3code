@@ -43,6 +43,10 @@
       "types": "./src/orchestrationV2Window.ts",
       "import": "./src/orchestrationV2Window.ts"
     },
+    "./orchestrationV2EventSupersession": {
+      "types": "./src/orchestrationV2EventSupersession.ts",
+      "import": "./src/orchestrationV2EventSupersession.ts"
+    },
     "./workflowObservability": {
       "types": "./src/workflowObservability.ts",
       "import": "./src/workflowObservability.ts"

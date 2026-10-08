@@ -213,6 +213,85 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
     }),
   );
 
+  it.effect("routes live events to each thread's subscribers only", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadA = makeThread(ThreadId.make("thread:foundation-routing:a"), now);
+      const threadB = makeThread(ThreadId.make("thread:foundation-routing:b"), now);
+      const created = yield* eventSink.write({
+        events: [
+          threadCreatedEvent({ id: "event:foundation-routing:a", thread: threadA, now }),
+          threadCreatedEvent({ id: "event:foundation-routing:b", thread: threadB, now }),
+        ],
+      });
+      const afterSequence = created.at(-1)!.sequence;
+      const update = (thread: OrchestrationV2AppThread, id: string) =>
+        ({
+          id: EventId.make(`event:foundation-routing:${id}`),
+          type: "thread.metadata-updated" as const,
+          threadId: thread.id,
+          providerInstanceId,
+          occurredAt: now,
+          payload: { ...thread, title: id },
+        }) satisfies OrchestrationV2DomainEvent;
+      const take = <E>(
+        pull: Effect.Effect<ReadonlyArray<{ readonly event: OrchestrationV2DomainEvent }>, E>,
+        count: number,
+      ) =>
+        Effect.gen(function* () {
+          const ids: Array<string> = [];
+          while (ids.length < count) {
+            for (const stored of yield* pull) ids.push(stored.event.id);
+          }
+          return ids;
+        });
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          // Opening the pulls subscribes, so every write below is live.
+          const pullA = yield* Stream.toPull(
+            eventSink.stream({ threadId: threadA.id, afterSequence }),
+          );
+          const pullB = yield* Stream.toPull(
+            eventSink.stream({ threadId: threadB.id, afterSequence }),
+          );
+          const pullAll = yield* Stream.toPull(eventSink.stream({ afterSequence }));
+          yield* eventSink.write({ events: [update(threadA, "a1")] });
+          yield* eventSink.write({ events: [update(threadB, "b1")] });
+          yield* eventSink.write({ events: [update(threadA, "a2"), update(threadB, "b2")] });
+
+          assert.deepEqual(yield* take(pullA, 2), [
+            "event:foundation-routing:a1",
+            "event:foundation-routing:a2",
+          ]);
+          assert.deepEqual(yield* take(pullB, 2), [
+            "event:foundation-routing:b1",
+            "event:foundation-routing:b2",
+          ]);
+          assert.deepEqual(yield* take(pullAll, 4), [
+            "event:foundation-routing:a1",
+            "event:foundation-routing:b1",
+            "event:foundation-routing:a2",
+            "event:foundation-routing:b2",
+          ]);
+        }),
+      );
+
+      // A thread whose last subscriber left still reaches the next one live.
+      const latest = yield* eventSink.latestSequence();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const pullA = yield* Stream.toPull(
+            eventSink.stream({ threadId: threadA.id, afterSequence: latest }),
+          );
+          yield* eventSink.write({ events: [update(threadA, "a3")] });
+          assert.deepEqual(yield* take(pullA, 1), ["event:foundation-routing:a3"]);
+        }),
+      );
+    }),
+  );
+
   it.effect("keeps a failing write from failing the writes committed alongside it", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSinkV2;

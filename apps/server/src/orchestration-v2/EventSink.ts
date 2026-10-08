@@ -188,6 +188,61 @@ const baseLayer: Layer.Layer<
     const projectionStore = yield* ProjectionStoreV2;
     const turnItemPositions = yield* TurnItemPositionStoreV2;
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
+    // Thread-scoped streams (every open chat, the desktop keep-alive, waits)
+    // subscribe to their own thread's PubSub. Through the shared one, each of
+    // them would receive, and hold until it reads, every thread's events.
+    const threadLiveEvents = new Map<
+      ThreadId,
+      { readonly pubsub: PubSub.PubSub<OrchestrationV2StoredEvent>; subscribers: number }
+    >();
+    const publishLive = (stored: ReadonlyArray<OrchestrationV2StoredEvent>) =>
+      Effect.suspend(() => {
+        const publishes = [PubSub.publishAll(liveEvents, stored)];
+        if (threadLiveEvents.size > 0) {
+          const byThread = new Map<
+            ThreadId,
+            {
+              readonly pubsub: PubSub.PubSub<OrchestrationV2StoredEvent>;
+              readonly events: Array<OrchestrationV2StoredEvent>;
+            }
+          >();
+          for (const event of stored) {
+            let batch = byThread.get(event.event.threadId);
+            if (batch === undefined) {
+              const subscribed = threadLiveEvents.get(event.event.threadId);
+              if (subscribed === undefined) continue;
+              batch = { pubsub: subscribed.pubsub, events: [] };
+              byThread.set(event.event.threadId, batch);
+            }
+            batch.events.push(event);
+          }
+          for (const batch of byThread.values()) {
+            publishes.push(PubSub.publishAll(batch.pubsub, batch.events));
+          }
+        }
+        return Effect.all(publishes, { discard: true });
+      });
+    const subscribeLive = (threadId: ThreadId | undefined) =>
+      threadId === undefined
+        ? PubSub.subscribe(liveEvents)
+        : Effect.acquireRelease(
+            PubSub.unbounded<OrchestrationV2StoredEvent>().pipe(
+              Effect.map((created) => {
+                const entry = threadLiveEvents.get(threadId) ?? {
+                  pubsub: created,
+                  subscribers: 0,
+                };
+                entry.subscribers += 1;
+                threadLiveEvents.set(threadId, entry);
+                return entry;
+              }),
+            ),
+            (entry) =>
+              Effect.sync(() => {
+                entry.subscribers -= 1;
+                if (entry.subscribers === 0) threadLiveEvents.delete(threadId);
+              }),
+          ).pipe(Effect.flatMap((entry) => PubSub.subscribe(entry.pubsub)));
 
     // Transactions commit one at a time, but each writer publishes after its
     // commit. If a writer is descheduled in between, a later commit reaches
@@ -348,7 +403,7 @@ const baseLayer: Layer.Layer<
         for (const [index, pending] of batch.entries()) {
           const stored = committed[index] ?? [];
           yield* eventStore.publishCommitted(stored);
-          yield* PubSub.publishAll(liveEvents, stored);
+          yield* publishLive(stored);
           yield* Deferred.succeed(pending.deferred, stored);
         }
       });
@@ -485,7 +540,7 @@ const baseLayer: Layer.Layer<
                 yield* effectOutbox.notifyAvailable(input.effects.length);
               }
               yield* eventStore.publishCommitted(result.storedEvents);
-              yield* PubSub.publishAll(liveEvents, result.storedEvents);
+              yield* publishLive(result.storedEvents);
             }),
         );
       },
@@ -566,7 +621,7 @@ const baseLayer: Layer.Layer<
             }
             if (result.committed) {
               yield* eventStore.publishCommitted(result.storedEvents);
-              yield* PubSub.publishAll(liveEvents, result.storedEvents);
+              yield* publishLive(result.storedEvents);
             }
           }),
       );
@@ -644,7 +699,7 @@ const baseLayer: Layer.Layer<
         Effect.gen(function* () {
           // Subscribe first, then capture the database high-water mark. Events
           // committed between those operations are buffered by the subscription.
-          const subscription = yield* PubSub.subscribe(liveEvents);
+          const subscription = yield* subscribeLive(input?.threadId);
           const highWater = yield* eventStore.latestSequence();
           const afterSequence = input?.afterSequence ?? 0;
           const replay = catchUp({

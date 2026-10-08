@@ -133,7 +133,10 @@ import {
   projectDomainEventForWire,
   projectThreadProjectionForWire,
 } from "./orchestration-v2/WireProjection.ts";
-import { coalesceThreadStreamFrames } from "./orchestration-v2/ThreadStreamFrames.ts";
+import {
+  coalesceThreadStreamFrames,
+  streamThreadLiveFrames,
+} from "./orchestration-v2/ThreadStreamFrames.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ThreadSearchQuery from "./orchestration-v2/ThreadSearchQuery.ts";
 import { readWorkflowScript } from "./orchestration-v2/WorkflowScriptQuery.ts";
@@ -858,28 +861,59 @@ const makeWsRpcLayer = (
             ),
           );
 
-          const eventStreamFrom = (afterSequence: number) =>
-            threadManagement
-              .streamStoredEventsFrom({
-                threadId: input.threadId,
-                afterSequence,
-              })
-              .pipe(
-                Stream.map((stored) => ({
-                  kind: "event" as const,
-                  sequence: stored.sequence,
-                  event: projectDomainEventForWire(stored.event),
-                })),
-                coalesceThreadStreamFrames,
-                Stream.mapError(
+          const loadSnapshotItem = Effect.fn("ws.orchestrationV2.loadThreadSnapshotItem")(
+            function* () {
+              const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
+                Effect.mapError(
                   (cause) =>
                     new OrchestrationV2GetThreadProjectionError({
                       threadId: input.threadId,
-                      message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
+                      message: `Failed to load orchestration V2 thread ${input.threadId}`,
                       cause,
                     }),
                 ),
               );
+              const windowed =
+                input.snapshotMaxVisibleItems === undefined
+                  ? snapshot.projection
+                  : windowOrchestrationV2ThreadProjection(
+                      snapshot.projection,
+                      input.snapshotMaxVisibleItems,
+                    );
+              return {
+                kind: "snapshot" as const,
+                snapshotSequence: snapshot.snapshotSequence,
+                projection: projectThreadProjectionForWire(windowed),
+              };
+            },
+          );
+
+          // Paced by the client's acks: superseded updates are dropped, and a
+          // backlog over the resume budget is replaced by one snapshot.
+          const eventStreamFrom = (afterSequence: number) =>
+            streamThreadLiveFrames({
+              events: threadManagement
+                .streamStoredEventsFrom({
+                  threadId: input.threadId,
+                  afterSequence,
+                })
+                .pipe(
+                  Stream.map((stored) => ({
+                    kind: "event" as const,
+                    sequence: stored.sequence,
+                    event: projectDomainEventForWire(stored.event),
+                  })),
+                  Stream.mapError(
+                    (cause) =>
+                      new OrchestrationV2GetThreadProjectionError({
+                        threadId: input.threadId,
+                        message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
+                        cause,
+                      }),
+                  ),
+                ),
+              loadSnapshot: loadSnapshotItem(),
+            });
 
           const loadReplayThrough = (
             afterSequence: number,
@@ -918,35 +952,10 @@ const makeWsRpcLayer = (
 
           const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(
             function* () {
-              const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationV2GetThreadProjectionError({
-                      threadId: input.threadId,
-                      message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                      cause,
-                    }),
-                ),
-              );
-              const { snapshotSequence } = snapshot;
-              const windowed =
-                input.snapshotMaxVisibleItems === undefined
-                  ? snapshot.projection
-                  : windowOrchestrationV2ThreadProjection(
-                      snapshot.projection,
-                      input.snapshotMaxVisibleItems,
-                    );
-              const projection = projectThreadProjectionForWire(windowed);
+              const snapshot = yield* loadSnapshotItem();
               return Stream.concat(
-                Stream.concat(
-                  Stream.make({
-                    kind: "snapshot" as const,
-                    snapshotSequence,
-                    projection,
-                  }),
-                  completionMarker,
-                ),
-                eventStreamFrom(snapshotSequence),
+                Stream.concat(Stream.make(snapshot), completionMarker),
+                eventStreamFrom(snapshot.snapshotSequence),
               );
             },
           );
