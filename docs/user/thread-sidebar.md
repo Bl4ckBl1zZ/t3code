@@ -13,6 +13,9 @@ request merges if **Auto-settle merged threads** is enabled.
 When you un-settle a thread, it returns to the top of the active list so you can find it right
 away. Its timestamps do not change. Other threads keep their positions.
 
+On web and desktop, an open settled or snoozed thread says so in one line after its last message,
+with **Un-settle** or **Wake now** beside it. Sending a message does the same.
+
 A thread whose composer holds unsent text or attachments shows an amber tint and a pen icon in the
 sidebar, the same marks a new-thread draft uses. On web and desktop, hover the row and choose the
 **X** to discard that draft without opening the thread. Right-click a new-thread draft, or press
@@ -225,6 +228,14 @@ reopen any settled thread to bring it back to the active list. Automatic settlem
 
 Settling a thread, by hand or automatically, also closes its terminals that wait at an idle prompt,
 and keeps their output. A terminal that runs a command, such as a dev server, stays open.
+
+To reclaim disk space from settled work, turn on **Run in the thread's worktree when the
+thread settles** for one of the project's actions, or set `"runOnSettle": true` on a
+`t3.json` script, for example `cargo clean`. It runs each time a thread in its own
+worktree settles, manually or automatically, even if a terminal there still runs a
+command such as a dev server. Threads in the project's main checkout skip it. Its terminal
+closes when the command succeeds and stays open when it fails. A project has one settle
+action; turning it on for one action turns it off for the others.
 
 To keep one thread out of **Settled** no matter how long it sits idle, open its menu, choose
 **Auto-settle behavior**, and pick **Disabled**. On iOS, long-press the thread on Home to open the

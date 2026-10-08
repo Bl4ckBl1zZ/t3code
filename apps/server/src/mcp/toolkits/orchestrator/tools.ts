@@ -79,7 +79,7 @@ export const DelegateTaskTool = Tool.make("delegate_task", {
 
 export const TaskStatusTool = Tool.make("task_status", {
   description:
-    "Read the latest durable state and final summary for a T3-owned delegated task created by this parent thread. hasPendingChildRuns reports later queued or executing turns in the backing child thread, even after the task is terminal; it does not reopen the task, and task_cancel stops those turns too. Reading a terminal result acknowledges its automatic parent delivery.",
+    "Read the latest durable state and final summary for a T3-owned delegated task created by this parent thread. hasPendingChildRuns reports later queued or executing turns in the backing child thread, even after the task is terminal; it does not reopen the task, and task_cancel stops those turns too. Turns held in a stopped queue wait for the user and do not count. Reading a terminal result acknowledges its automatic parent delivery.",
   parameters: OrchestratorMcpTaskStatusInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -185,7 +185,7 @@ export const CreateThreadsTool = Tool.make("create_threads", {
 
 export const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   description:
-    'Create an ordinary TOP-LEVEL T3 thread with an explicit workspace binding, established before its agent starts. Use this when the user asks for independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child agents/subagents, and create_threads for a batch that shares this checkout. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree from local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to reuse a checkout; set startFromOrigin true to base it on upstream commits. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Do not ask the agent to create its own worktree in its prompt: that leaves the thread bound elsewhere. Put the first task in message, or omit it to create an idle thread. Omit projectId, target and the modes to inherit them from the calling thread; a caller outside a T3 thread must pass projectId and gets the project\'s default model. Each call is its own launch with no retry key, because preparing a worktree is not safely repeatable: keep the returned threadId, follow preparation with t3_thread_read and t3_thread_wait, and inspect t3_thread_list after an error or a lost response instead of calling again. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with.',
+    'Create an ordinary TOP-LEVEL T3 thread with an explicit workspace binding, established before its agent starts. Use this when the user asks for independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child agents/subagents, and create_threads for a batch that shares this checkout. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree from local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to reuse a checkout; set startFromOrigin true to base it on upstream commits. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Do not ask the agent to create its own worktree in its prompt: that leaves the thread bound elsewhere. Put the first task in message, or omit it to create an idle thread. Omit projectId, target and the modes to inherit them from the calling thread; a caller outside a T3 thread must pass projectId and gets the project\'s default model. Each call is its own launch with no retry key, because preparing a worktree is not safely repeatable: keep the returned threadId, follow preparation with t3_thread_read and t3_thread_wait, and inspect t3_thread_list after an error or a lost response instead of calling again. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread\'s current title. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with.',
   parameters: OrchestratorMcpThreadLaunchInput,
   success: OrchestratorMcpThreadLaunchResult,
   failure: OrchestratorMcpFailure,
@@ -198,7 +198,7 @@ export const ThreadLaunchTool = Tool.make("t3_thread_launch", {
 
 export const ThreadListTool = Tool.make("t3_thread_list", {
   description:
-    "List T3 threads in a project, newest first. Omit projectId for the calling thread's project. Filter by durable run status, title, or settled state (settled=true lists threads the user or auto-settlement moved out of the active list) and paginate with the returned cursor.",
+    "List T3 threads in a project, newest first. Omit projectId for the calling thread's project. Filter by durable run status, title, or settled state (settled=true lists threads the user or auto-settlement moved out of the active list), or snoozed state, and paginate with the returned cursor. A snoozed thread wakes early when it asks for something, fails, or completes. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title.",
   parameters: OrchestratorMcpThreadListInput,
   success: OrchestratorMcpThreadListResult,
   failure: OrchestratorMcpFailure,
@@ -212,7 +212,7 @@ export const ThreadListTool = Tool.make("t3_thread_list", {
 
 export const ThreadReadTool = Tool.make("t3_thread_read", {
   description:
-    "Read durable state and a paginated timeline from any T3 thread in this environment. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition.",
+    "Read durable state and a paginated timeline from any T3 thread in this environment. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition. The thread also reports its snooze state. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread's current title.",
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,

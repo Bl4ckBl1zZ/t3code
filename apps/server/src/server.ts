@@ -74,7 +74,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
-import * as GitHubCli from "./sourceControl/GitHubCli.ts";
+import * as GitHubRepositoryApi from "./sourceControl/GitHubRepositoryApi.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
@@ -171,8 +171,10 @@ import {
   ProjectServiceLayerLive,
   ProjectSetupScriptRunnerLayerLive,
 } from "./orchestration-v2/runtimeLayer.ts";
+import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
+import * as ThreadSettleAction from "./orchestration-v2/ThreadSettleAction.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
@@ -372,7 +374,12 @@ const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
 
 const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.layer.pipe(
   Layer.provide(
-    Layer.mergeAll(AzureDevOpsCli.layer, BitbucketApi.layer, GitHubCli.layer, GitLabCli.layer),
+    Layer.mergeAll(
+      AzureDevOpsCli.layer,
+      BitbucketApi.layer,
+      GitHubRepositoryApi.layer,
+      GitLabCli.layer,
+    ),
   ),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
@@ -507,10 +514,16 @@ const ScheduledTaskWebhookOriginLive = Layer.effect(
   }),
 );
 
+// Projection reads are SQL-backed, so this store sees what the orchestrator committed.
+const ThreadSettleActionLayerLive = ThreadSettleAction.layer.pipe(
+  Layer.provide(Layer.merge(ProjectionStore.layer, ProjectSetupScriptRunnerLayerLive)),
+);
+
 const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(ScheduledTaskWebhookOriginLive),
   Layer.provide(CheckpointStoreLayerLive),
   Layer.provide(ResourceCleanupService.live),
+  Layer.provide(ThreadSettleActionLayerLive),
   Layer.provide(RunFinalizationService.observerLive),
 );
 

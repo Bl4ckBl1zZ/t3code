@@ -1,7 +1,11 @@
 import { UsageLimitSources } from "./UsageLimitSources";
 import { ResetCredits } from "./ResetCredits";
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, ServerProviderUsageWindow } from "@t3tools/contracts";
+import {
+  AuthOrchestrationReadScope,
+  type EnvironmentId,
+  type ServerProviderUsageWindow,
+} from "@t3tools/contracts";
 import { AlertTriangleIcon, GaugeIcon } from "lucide-react";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import * as Option from "effect/Option";
@@ -42,6 +46,8 @@ const refreshAccessAtom = Atom.make(
           session: Option.getOrNull(AsyncResult.value(session)),
           isPending: session.waiting,
           hasError: session._tag === "Failure",
+          // Refreshing re-reads provider status, which any reader may ask for.
+          scope: AuthOrchestrationReadScope,
         };
         const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
         return [

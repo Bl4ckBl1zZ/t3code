@@ -18,7 +18,8 @@ import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { runStream } from "../rpc/client.ts";
+import { runStreamGuarded, RpcPermissionGuard } from "../rpc/client.ts";
+import { createCommandPermissions } from "./commandPermissions.ts";
 import {
   createRuntimeCommand,
   runStreamInEnvironment,
@@ -479,7 +480,7 @@ export function createVcsActionManager<R, E>(
         return consumeVcsActionProgress(
           runStreamInEnvironment(
             target.environmentId,
-            runStream(WS_METHODS.gitRunStackedAction, rpcInput),
+            runStreamGuarded(WS_METHODS.gitRunStackedAction, rpcInput),
           ),
           {
             target,
@@ -503,6 +504,10 @@ export function createVcsActionManager<R, E>(
               }),
           },
         ).pipe(
+          Effect.provideService(RpcPermissionGuard, {
+            authorize: (id, method, payload) =>
+              createCommandPermissions(runtime, method).authorize(registry, id, payload),
+          }),
           Effect.ensuring(invalidateCachedVcsRefs(registry, target)),
           Effect.tap(() => clearOwnedState),
           Effect.tapError((error) =>

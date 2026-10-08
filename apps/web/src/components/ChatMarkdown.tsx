@@ -1,5 +1,7 @@
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
+import { parseThreadLinkHref, THREAD_LINK_PROTOCOL } from "@t3tools/shared/threadLinks";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { CodexArtifactTemplateCard } from "./CodexArtifactTemplateCard";
@@ -287,7 +289,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "file", "t3-citation"],
+    href: [...(defaultSchema.protocols?.href ?? []), "file", "t3-citation", THREAD_LINK_PROTOCOL],
     src: [...(defaultSchema.protocols?.src ?? []), "file"],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
@@ -1915,6 +1917,8 @@ interface ChatMarkdownComponentsContext {
   readonly inlineCodeFileLinkMetaByText: ReadonlyMap<string, MarkdownFileLinkMeta>;
   readonly skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   readonly threadRef: ScopedThreadRef | undefined;
+  /** The environment this message belongs to; thread links resolve in it. */
+  readonly environmentId: EnvironmentId | null;
   readonly onTaskListChange: ChatMarkdownProps["onTaskListChange"];
   readonly isStreaming: boolean;
   readonly resolvedTheme: "light" | "dark";
@@ -2011,6 +2015,7 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
     inlineCodeFileLinkMetaByText,
     skills,
     threadRef,
+    environmentId,
     onTaskListChange,
     onRunShellCommand,
     isStreaming,
@@ -2194,6 +2199,20 @@ function createChatMarkdownComponents(context: ChatMarkdownComponentsContext): C
     a({ node, href, children, title: _title, ...props }) {
       const citation = href ? parseAssistantCitationHref(href) : null;
       if (citation) return <AssistantCitationChip citation={citation} />;
+      // A thread link names a thread in this message's environment and opens it in the app.
+      const linkedThreadId = href ? parseThreadLinkHref(href) : null;
+      if (linkedThreadId) {
+        const label = nodeToPlainText(children) || linkedThreadId;
+        return environmentId ? (
+          <MarkdownThreadLink
+            environmentId={environmentId}
+            threadId={linkedThreadId}
+            label={label}
+          />
+        ) : (
+          <span>{label}</span>
+        );
+      }
       const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
       // The href map is built by regex-scanning the markdown source, which
       // misses destinations the regex can't express (spaces, parentheses);
@@ -2589,6 +2608,7 @@ function ChatMarkdown({
   }, [inlineCodeFileLinkMetaByText, markdownFileLinkMetaByHref]);
   const markdownUrlTransform = useCallback((href: string) => {
     if (parseAssistantCitationHref(href)) return href;
+    if (parseThreadLinkHref(href)) return href;
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
   // Re-emit highlighted content as markdown so copying out of the rendered
@@ -2775,6 +2795,7 @@ function ChatMarkdown({
         inlineCodeFileLinkMetaByText,
         skills,
         threadRef,
+        environmentId,
         onTaskListChange,
         isStreaming,
         resolvedTheme,
@@ -2821,6 +2842,7 @@ function ChatMarkdown({
       skills,
       text,
       threadRef,
+      environmentId,
     ],
   );
 

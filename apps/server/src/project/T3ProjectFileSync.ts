@@ -55,6 +55,7 @@ interface NormalizedScript {
   readonly icon: ProjectScript["icon"];
   readonly runOnWorktreeCreate: boolean;
   readonly runOnWorktreeDelete: boolean;
+  readonly runOnSettle: boolean;
   readonly previewUrl: string | null;
   readonly autoOpenPreview: boolean;
   readonly singleRun: boolean;
@@ -69,6 +70,7 @@ function normalizeScripts(
     icon: script.icon ?? "play",
     runOnWorktreeCreate: script.runOnWorktreeCreate ?? false,
     runOnWorktreeDelete: script.runOnWorktreeDelete ?? false,
+    runOnSettle: script.runOnSettle ?? false,
     previewUrl: script.previewUrl ?? null,
     autoOpenPreview: script.autoOpenPreview ?? false,
     singleRun: script.singleRun ?? false,
@@ -112,6 +114,7 @@ function scriptsFromFile(
       icon: fileScript.icon ?? "play",
       runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
       ...(fileScript.runOnWorktreeDelete === true ? { runOnWorktreeDelete: true } : {}),
+      ...(fileScript.runOnSettle === true ? { runOnSettle: true } : {}),
       ...(fileScript.previewUrl === undefined ? {} : { previewUrl: fileScript.previewUrl }),
       ...(fileScript.autoOpenPreview === undefined
         ? {}
@@ -128,6 +131,7 @@ function fileScriptFromProjectScript(script: ProjectScript): T3ProjectFileScript
     icon: script.icon,
     ...(script.runOnWorktreeCreate ? { runOnWorktreeCreate: true } : {}),
     ...(script.runOnWorktreeDelete === true ? { runOnWorktreeDelete: true } : {}),
+    ...(script.runOnSettle === true ? { runOnSettle: true } : {}),
     ...(script.previewUrl === undefined ? {} : { previewUrl: script.previewUrl }),
     ...(script.autoOpenPreview === undefined ? {} : { autoOpenPreview: script.autoOpenPreview }),
     ...(script.singleRun === undefined ? {} : { singleRun: script.singleRun }),

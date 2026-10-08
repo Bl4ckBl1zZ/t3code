@@ -25,6 +25,7 @@ import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderAdapterV2Event } from "./ProviderAdapter.ts";
 import { makeProviderFailureTurnItem } from "./ProviderFailure.ts";
 import { ThreadCommandExecutor } from "./ThreadCommandExecutor.ts";
+import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 
 type TodoListPlan = Extract<OrchestrationV2PlanArtifact, { readonly kind: "todo_list" }>;
 
@@ -343,7 +344,7 @@ export const layer: Layer.Layer<
               yield* makeDomainEvent(input, {
                 type: "turn-item.updated",
                 threadId: input.event.turnItem.threadId,
-                payload: input.event.turnItem,
+                payload: stripUnservedToolOutputImageBytes(input.event.turnItem),
                 runId: input.event.turnItem.runId,
                 nodeId: input.event.turnItem.nodeId,
               }),

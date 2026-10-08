@@ -5,7 +5,9 @@ import {
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { backgroundProcessTail } from "@t3tools/shared/backgroundProcess";
+import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
 import {
+  mcpAppFromToolItem,
   omitToolOutputImageData,
   toolOutputImages,
   toolOutputIndicatesFailure,
@@ -103,7 +105,15 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
         result: item.result === null ? null : (truncateDetail(item.result) ?? null),
       };
     case "dynamic_tool": {
-      const output = item.output === undefined ? undefined : summarizeDynamicValue(item.output);
+      // A captured MCP App goes out as its reference alone, so it survives a
+      // result too large to send; the app fetches the result on demand.
+      const app = mcpAppFromToolItem(item);
+      const output =
+        app !== undefined
+          ? { [MCP_APP_OUTPUT_KEY]: app }
+          : item.output === undefined
+            ? undefined
+            : summarizeDynamicValue(item.output);
       return {
         ...item,
         input: summarizeDynamicValue(item.input),

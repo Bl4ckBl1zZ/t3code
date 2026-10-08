@@ -2,6 +2,7 @@ import type {
   AuthBrowserSessionResult,
   AuthClientMetadata,
   AuthEnvironmentScope,
+  AuthGrantScope,
   AuthPairingCredentialResult,
   ServerAuthSessionMethod,
   AuthSessionId,
@@ -362,7 +363,7 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
 
 export async function createServerPairingCredential(input?: {
   readonly label?: string;
-  readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
+  readonly scopes?: ReadonlyArray<AuthGrantScope>;
 }): Promise<AuthPairingCredentialResult> {
   const trimmedLabel = input?.label?.trim();
   try {
@@ -403,7 +404,7 @@ export async function listServerPairingLinks(): Promise<ReadonlyArray<ServerPair
         return {
           id: pairingLink.id,
           credential: pairingLink.credential,
-          scopes: pairingLink.scopes,
+          scopes: pairingLink.permissions ?? pairingLink.scopes,
           subject: pairingLink.subject,
           createdAt: timestamps.createdAt,
           expiresAt: timestamps.expiresAt,
@@ -412,7 +413,7 @@ export async function listServerPairingLinks(): Promise<ReadonlyArray<ServerPair
       return {
         id: pairingLink.id,
         credential: pairingLink.credential,
-        scopes: pairingLink.scopes,
+        scopes: pairingLink.permissions ?? pairingLink.scopes,
         subject: pairingLink.subject,
         label: pairingLink.label,
         createdAt: timestamps.createdAt,
@@ -455,7 +456,7 @@ export async function listServerClientSessions(): Promise<
     return clientSessions.map((clientSession) => ({
       sessionId: clientSession.sessionId,
       subject: clientSession.subject,
-      scopes: clientSession.scopes,
+      scopes: clientSession.permissions ?? clientSession.scopes,
       method: clientSession.method,
       client: clientSession.client,
       issuedAt: DateTime.formatIso(clientSession.issuedAt),

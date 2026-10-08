@@ -1,6 +1,8 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it, vi } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -75,6 +77,7 @@ for (const mode of ["legacy", "inherit-empty", "inherit-reset", "disabled"] as c
           }),
           Layer.mock(TerminalManager.TerminalManager)({ open, write }),
           Layer.mock(ServerSettingsService)({ getSettings: Effect.succeed(settings) }),
+          NodeCrypto.layer,
         ),
       ),
     );
@@ -105,3 +108,219 @@ for (const mode of ["legacy", "inherit-empty", "inherit-reset", "disabled"] as c
     }).pipe(Effect.provide(layer));
   });
 }
+
+it.effect("runs the settle action in its own shell and closes it after a clean run", () => {
+  const open = vi.fn((input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
+    Effect.succeed({
+      threadId: input.threadId,
+      terminalId: input.terminalId,
+      cwd: input.cwd,
+      worktreePath: input.worktreePath ?? null,
+      status: "running" as const,
+      pid: 123,
+      history: "",
+      exitCode: null,
+      exitSignal: null,
+      label: "Shell",
+      updatedAt: "2026-06-20T00:00:00.000Z",
+    }),
+  );
+  const write = vi.fn(
+    (_input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) => Effect.void,
+  );
+  const closeIdle = vi.fn(
+    (_input: Parameters<TerminalManager.TerminalManager["Service"]["closeIdle"]>[0]) => Effect.void,
+  );
+  const listeners: Array<Parameters<TerminalManager.TerminalManager["Service"]["subscribe"]>[0]> =
+    [];
+  const subscribe: TerminalManager.TerminalManager["Service"]["subscribe"] = (listener) =>
+    Effect.sync(() => {
+      listeners.push(listener);
+      return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+      };
+    });
+  const projectId = ProjectId.make("project:settle-runner-v2");
+  const project = {
+    id: projectId,
+    title: "Project",
+    workspaceRoot: "/repo",
+    repositoryIdentity: null,
+    faviconPath: null,
+    defaultModelSelection: null,
+    scripts: [
+      {
+        id: "setup",
+        name: "Setup",
+        command: "vp install",
+        icon: "configure" as const,
+        runOnWorktreeCreate: true,
+      },
+      {
+        id: "clean",
+        name: "Clean",
+        command: "cargo clean",
+        icon: "build" as const,
+        runOnWorktreeCreate: false,
+        runOnSettle: true,
+      },
+    ],
+    createdAt: "2026-06-20T00:00:00.000Z",
+    updatedAt: "2026-06-20T00:00:00.000Z",
+    deletedAt: null,
+  };
+  const layer = ProjectSetupScriptRunner.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () => Effect.succeed(Option.some(project)),
+        }),
+        Layer.mock(TerminalManager.TerminalManager)({ open, write, subscribe, closeIdle }),
+        Layer.mock(ServerSettingsService)({ getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS) }),
+        NodeCrypto.layer,
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+    const settle = yield* runner.runForThread({
+      threadId: "thread-1",
+      projectId,
+      worktreePath: "/repo-worktree",
+      trigger: "settle",
+    });
+    const settleTerminalId = settle.status === "started" ? settle.terminalId : "";
+    assert.match(settleTerminalId, /^settle-clean-/);
+    assert.equal(write.mock.calls.at(-1)?.[0].data, "cargo clean\r");
+
+    // A clean run closes its shell once the prompt is back, not at the
+    // sentinel, so the prompt redraw is not taken for new activity.
+    const observedSettle = yield* runner.runForThread({
+      threadId: "thread-1",
+      projectId,
+      worktreePath: "/repo-worktree",
+      trigger: "settle",
+      observeCompletion: true,
+    });
+    const observedTerminalId = observedSettle.status === "started" ? observedSettle.terminalId : "";
+    // Each settle gets its own shell, so a busy one is never typed into.
+    assert.notEqual(observedTerminalId, settleTerminalId);
+    const token = /__T3_SETUP_DONE___(\w+):/.exec(write.mock.calls.at(-1)?.[0].data ?? "")?.[1];
+    const settleListener = listeners.at(-1)!;
+    const completion = yield* Effect.forkChild(
+      observedSettle.status === "started" && observedSettle.completion
+        ? observedSettle.completion
+        : Effect.die("no completion"),
+    );
+    yield* settleListener({
+      type: "output",
+      threadId: "thread-1",
+      terminalId: observedTerminalId,
+      data: `\r\n__T3_SETUP_DONE___${token}:0\r\n`,
+    });
+    yield* Effect.yieldNow;
+    assert.equal(closeIdle.mock.calls.length, 0);
+    yield* settleListener({
+      type: "output",
+      threadId: "thread-1",
+      terminalId: observedTerminalId,
+      data: "$ ",
+    });
+    assert.deepEqual((yield* Fiber.join(completion)).exitCode, 0);
+    assert.deepEqual(closeIdle.mock.calls[0]?.[0], {
+      threadId: "thread-1",
+      terminalId: observedTerminalId,
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps a failed settle action's shell open", () => {
+  const open = vi.fn((input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
+    Effect.succeed({
+      threadId: input.threadId,
+      terminalId: input.terminalId,
+      cwd: input.cwd,
+      worktreePath: input.worktreePath ?? null,
+      status: "running" as const,
+      pid: 123,
+      history: "",
+      exitCode: null,
+      exitSignal: null,
+      label: "Shell",
+      updatedAt: "2026-06-20T00:00:00.000Z",
+    }),
+  );
+  const write = vi.fn(
+    (_input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) => Effect.void,
+  );
+  const closeIdle = vi.fn(
+    (_input: Parameters<TerminalManager.TerminalManager["Service"]["closeIdle"]>[0]) => Effect.void,
+  );
+  const listeners: Array<Parameters<TerminalManager.TerminalManager["Service"]["subscribe"]>[0]> =
+    [];
+  const subscribe: TerminalManager.TerminalManager["Service"]["subscribe"] = (listener) =>
+    Effect.sync(() => {
+      listeners.push(listener);
+      return () => {};
+    });
+  const projectId = ProjectId.make("project:settle-runner-failed");
+  const project = {
+    id: projectId,
+    title: "Project",
+    workspaceRoot: "/repo",
+    repositoryIdentity: null,
+    faviconPath: null,
+    defaultModelSelection: null,
+    scripts: [
+      {
+        id: "clean",
+        name: "Clean",
+        command: "cargo clean",
+        icon: "build" as const,
+        runOnWorktreeCreate: false,
+        runOnSettle: true,
+      },
+    ],
+    createdAt: "2026-06-20T00:00:00.000Z",
+    updatedAt: "2026-06-20T00:00:00.000Z",
+    deletedAt: null,
+  };
+  const layer = ProjectSetupScriptRunner.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () => Effect.succeed(Option.some(project)),
+        }),
+        Layer.mock(TerminalManager.TerminalManager)({ open, write, subscribe, closeIdle }),
+        Layer.mock(ServerSettingsService)({ getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS) }),
+        NodeCrypto.layer,
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+    const run = yield* runner.runForThread({
+      threadId: "thread-1",
+      projectId,
+      worktreePath: "/repo-worktree",
+      trigger: "settle",
+      observeCompletion: true,
+    });
+    const terminalId = run.status === "started" ? run.terminalId : "";
+    const token = /__T3_SETUP_DONE___(\w+):/.exec(write.mock.calls.at(-1)?.[0].data ?? "")?.[1];
+    const completion = yield* Effect.forkChild(
+      run.status === "started" && run.completion ? run.completion : Effect.die("no completion"),
+    );
+    yield* listeners.at(-1)!({
+      type: "output",
+      threadId: "thread-1",
+      terminalId,
+      data: `\r\n__T3_SETUP_DONE___${token}:101\r\n$ `,
+    });
+    assert.equal((yield* Fiber.join(completion)).exitCode, 101);
+    assert.equal(closeIdle.mock.calls.length, 0);
+  }).pipe(Effect.provide(layer));
+});

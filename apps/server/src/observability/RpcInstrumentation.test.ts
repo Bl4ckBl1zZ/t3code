@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
-  AuthOrchestrationOperateScope,
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationReadScope,
   type AuthEnvironmentScope,
   ScheduledTaskError,
@@ -322,7 +322,7 @@ describe("WS RPC instrumentation middleware", () => {
                   message: Option.none(),
                 }).pipe(Effect.withSpan("signalProcess.child")),
               ),
-              connectionMiddleware([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+              connectionMiddleware([AuthOrchestrationReadScope, AuthEnvironmentMaintainScope]),
             ),
           ),
         );

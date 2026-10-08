@@ -121,6 +121,10 @@ A point-in-time view of state. The word is used in multiple layers, including or
 
 The per-driver list of current model slugs that decides which models land in the model picker's legacy section. Bundled at `apps/server/src/provider/model-manifest.json` and refreshed at runtime from the same file on `main`, so classification updates ship as commits instead of releases. See the [provider architecture][16] model manifest section.
 
+#### MCP app
+
+An interactive `ui://` HTML resource an MCP tool names (the MCP Apps extension). When a Codex tool call completes, the adapter reads the resource through Codex's MCP client, stores it as a `-html` thread attachment with its CSP injected, and records a `t3McpApp` reference in the dynamic tool item's output (`packages/shared/src/mcpApp.ts`). Clients host it in an opaque-origin frame and relay its requests through the `mcpApps.*` RPCs, which only reach the app's own server through the thread's live provider session (`apps/server/src/mcpApps/`).
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].

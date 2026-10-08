@@ -13,7 +13,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as BitbucketApi from "./BitbucketApi.ts";
 import * as GitHubApi from "./GitHubApi.ts";
-import * as GitHubCli from "./GitHubCli.ts";
+import * as GitHubRepositoryApi from "./GitHubRepositoryApi.ts";
 import * as GitLabCli from "./GitLabCli.ts";
 import * as SourceControlDiscovery from "./SourceControlDiscovery.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
@@ -31,7 +31,7 @@ const sourceControlProviderRegistryTestLayer = (input: {
         Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
         Layer.mock(BitbucketApi.BitbucketApi)(input.bitbucket),
         ServerSettings.layerTest(),
-        Layer.mock(GitHubCli.GitHubCli)({}),
+        Layer.mock(GitHubRepositoryApi.GitHubRepositoryApi)({}),
         Layer.mock(GitHubApi.GitHubApi)({}),
         Layer.mock(GitLabCli.GitLabCli)({}),
         Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({}),

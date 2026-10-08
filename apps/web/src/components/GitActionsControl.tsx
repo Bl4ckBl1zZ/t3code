@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { type ScopedThreadRef } from "@t3tools/contracts";
+import { AuthSourceControlWriteScope, type ScopedThreadRef } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -83,6 +83,7 @@ import {
   useVcsInitAction,
   useVcsPullAction,
 } from "~/lib/sourceControlActions";
+import { useEnvironmentScope } from "~/state/session";
 import { useThreadShell } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
@@ -1049,6 +1050,12 @@ export default function GitActionsControl({
     "thread branch metadata update",
   );
   const activeEnvironmentId = activeThreadRef?.environmentId ?? null;
+  // Direct Git writes need their own grant; the command layer and server
+  // enforce it, this only keeps the controls honest.
+  const canWriteSourceControl = useEnvironmentScope(
+    activeEnvironmentId,
+    AuthSourceControlWriteScope,
+  );
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(activeEnvironmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     activeEnvironmentId,
@@ -1223,9 +1230,11 @@ export default function GitActionsControl({
       resolveQuickAction(gitStatusForActions, isGitActionRunning, isDefaultRef, hasPrimaryRemote),
     [gitStatusForActions, hasPrimaryRemote, isDefaultRef, isGitActionRunning],
   );
-  const quickActionDisabledReason = quickAction.disabled
-    ? (quickAction.hint ?? "This action is currently unavailable.")
-    : null;
+  const quickActionDisabledReason = !canWriteSourceControl
+    ? "This connection cannot change source control."
+    : quickAction.disabled
+      ? (quickAction.hint ?? "This action is currently unavailable.")
+      : null;
   const gitActionProgress = resolveGitActionProgressPresentation(vcsActionState);
   const pendingDefaultBranchActionCopy = pendingDefaultBranchAction
     ? resolveDefaultBranchActionDialogCopy({
@@ -1621,7 +1630,8 @@ export default function GitActionsControl({
     [gitCwd, openInPreferredEditor, threadToastData],
   );
 
-  const canPublishRepository = isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
+  const canPublishRepository =
+    canWriteSourceControl && isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
 
   if (!gitCwd) return null;
 
@@ -1632,7 +1642,7 @@ export default function GitActionsControl({
           size="xs"
           variant={isPanel ? "ghost" : "outline"}
           className={isPanel ? THREAD_DETAILS_PANEL_ROW_CLASS : undefined}
-          disabled={initAction.isPending}
+          disabled={!canWriteSourceControl || initAction.isPending}
           onClick={() => {
             void (async () => {
               const result = await initAction.run();
@@ -1725,7 +1735,7 @@ export default function GitActionsControl({
               variant={isPanel ? "ghost" : "outline"}
               size="xs"
               className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : "ps-[8.5px]"}
-              disabled={isGitActionRunning || quickAction.disabled}
+              disabled={!canWriteSourceControl || isGitActionRunning || quickAction.disabled}
               onClick={runQuickAction}
             >
               <GitQuickActionIcon
@@ -1812,7 +1822,7 @@ export default function GitActionsControl({
                 return (
                   <MenuItem
                     key={`${item.id}-${item.label}`}
-                    disabled={item.disabled}
+                    disabled={!canWriteSourceControl || item.disabled}
                     onClick={() => {
                       openDialogForMenuItem(item);
                     }}
@@ -2041,12 +2051,16 @@ export default function GitActionsControl({
             <Button
               variant="outline"
               size="sm"
-              disabled={noneSelected}
+              disabled={!canWriteSourceControl || noneSelected}
               onClick={runDialogActionOnNewBranch}
             >
               Commit on new branch
             </Button>
-            <Button size="sm" disabled={noneSelected} onClick={runDialogAction}>
+            <Button
+              size="sm"
+              disabled={!canWriteSourceControl || noneSelected}
+              onClick={runDialogAction}
+            >
               Commit
             </Button>
           </DialogFooter>

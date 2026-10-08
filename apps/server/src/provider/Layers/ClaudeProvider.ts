@@ -397,10 +397,12 @@ const probeClaudeCapabilities = (
       const init = await q.initializationResult();
       // A bounded enrichment on the existing no-prompt probe. A slow usage
       // request cannot discard the account and commands already discovered.
+      // Only the rate limits are read, so skip the local transcript scan that fills
+      // `behaviors`: with a few GB of transcripts it outlasts the deadline.
       const usage = includeUsage
         ? await Effect.runPromise(
             Effect.tryPromise(() =>
-              q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+              q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }),
             ).pipe(
               Effect.timeoutOption(2_000),
               Effect.map(Option.getOrUndefined),

@@ -55,6 +55,7 @@ import {
   isOrchestrationV2TurnItemVisible,
 } from "@t3tools/shared/orchestrationV2Timeline";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -64,6 +65,8 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type * as Statement from "effect/unstable/sql/Statement";
+
+import { threadMcpAppAttachmentIds } from "../attachmentStore.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedErrorClass<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -3743,13 +3746,37 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       );
 
     const getThreadAttachmentIds: ProjectionStoreV2Shape["getThreadAttachmentIds"] = (threadId) =>
-      sql<{ readonly id: string }>`
-        SELECT DISTINCT json_extract(attachment.value, '$.id') AS id
-        FROM orchestration_v2_projection_messages AS message,
-          json_each(message.payload_json, '$.attachments') AS attachment
-        WHERE message.thread_id = ${threadId}
-      `.pipe(
-        Effect.map((rows) => rows.map((row) => row.id)),
+      Effect.all([
+        sql<{ readonly id: string }>`
+          SELECT DISTINCT json_extract(attachment.value, '$.id') AS id
+          FROM orchestration_v2_projection_messages AS message,
+            json_each(message.payload_json, '$.attachments') AS attachment
+          WHERE message.thread_id = ${threadId}
+        `,
+        // Captured MCP App documents live in the attachment store too.
+        sql<{ readonly payload_json: string }>`
+          SELECT payload_json
+          FROM orchestration_v2_projection_turn_items
+          WHERE thread_id = ${threadId}
+            AND type = 'dynamic_tool'
+            AND payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
+        `,
+      ]).pipe(
+        Effect.map(([messages, apps]) => [
+          ...new Set([
+            ...messages.map((row) => row.id),
+            ...threadMcpAppAttachmentIds(
+              threadId,
+              apps.map((row) => {
+                const item = parseEncodedPayload(row.payload_json);
+                return {
+                  toolName: typeof item.toolName === "string" ? item.toolName : null,
+                  output: item.output,
+                };
+              }),
+            ),
+          ]),
+        ]),
         Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
       );
 
@@ -3992,17 +4019,21 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           ),
         ),
       getThreadAttachmentIds: (threadId) =>
-        service
-          .getThreadProjection(threadId)
-          .pipe(
-            Effect.map((projection) => [
-              ...new Set(
-                projection.messages.flatMap((message) =>
-                  message.attachments.map((attachment) => attachment.id),
+        service.getThreadProjection(threadId).pipe(
+          Effect.map((projection) => [
+            ...new Set([
+              ...projection.messages.flatMap((message) =>
+                message.attachments.map((attachment) => attachment.id),
+              ),
+              ...threadMcpAppAttachmentIds(
+                threadId,
+                projection.turnItems.flatMap((item) =>
+                  item.type === "dynamic_tool" ? [item] : [],
                 ),
               ),
             ]),
-          ),
+          ]),
+        ),
       getThreadRecords: (threadId, fields, filter) =>
         Effect.gen(function* () {
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);

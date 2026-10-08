@@ -82,7 +82,6 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { PullRequestEditButton } from "./PullRequestEditButton";
 import { Input } from "../ui/input";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   Menu,
   MenuItem,
@@ -96,6 +95,12 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
+import {
+  PullRequestChecksStatusLine,
+  PullRequestDetailHeaderBody,
+  PullRequestDetailTabBar,
+  PullRequestDetailTitleRow,
+} from "./PullRequestDetailLayout";
 import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
@@ -1777,72 +1782,74 @@ export function PullRequestDetailPanel({
             inert={condensed}
           >
             {detail ? (
-              <div className="col-span-2 mt-1 min-w-0 px-4 pb-4">
-                {titleDraft === null ? (
-                  <div className="group flex min-w-0 items-start gap-1">
-                    <h1 className="min-w-0 flex-1 text-base font-semibold leading-snug">
-                      {detail.title}
-                    </h1>
-                    {canEditPullRequestChangeRequest(detail) ? (
-                      <PullRequestEditButton
-                        aria-label="Edit title"
-                        onClick={() => setTitleScope({ pullRequestKey, text: detail.title })}
-                      />
-                    ) : null}
-                  </div>
-                ) : (
-                  // A title is one line of text, not markdown, so it takes an input rather than
-                  // the editor the description and the remarks share.
-                  <div className="space-y-2">
-                    <Input
-                      autoFocus
-                      size="sm"
-                      disabled={titleSaving}
-                      value={titleDraft}
-                      aria-label="Pull request title"
-                      onChange={(event) =>
-                        setTitleScope({ pullRequestKey, text: event.target.value })
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          void saveTitle(titleDraft);
-                        } else if (event.key === "Escape") {
-                          event.preventDefault();
-                          setTitleScope(null);
-                        }
-                      }}
-                    />
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        size="xs"
-                        variant="ghost"
+              <PullRequestDetailHeaderBody
+                title={
+                  titleDraft === null ? (
+                    <PullRequestDetailTitleRow className="group items-start gap-1">
+                      <h1 className="min-w-0 flex-1 text-base font-semibold leading-snug">
+                        {detail.title}
+                      </h1>
+                      {canEditPullRequestChangeRequest(detail) ? (
+                        <PullRequestEditButton
+                          aria-label="Edit title"
+                          onClick={() => setTitleScope({ pullRequestKey, text: detail.title })}
+                        />
+                      ) : null}
+                    </PullRequestDetailTitleRow>
+                  ) : (
+                    // A title is one line of text, not markdown, so it takes an input rather than
+                    // the editor the description and the remarks share.
+                    <div className="space-y-2">
+                      <Input
+                        autoFocus
+                        size="sm"
                         disabled={titleSaving}
-                        onClick={() => setTitleScope(null)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        disabled={titleSaving || titleDraft.trim().length === 0}
-                        onClick={() => void saveTitle(titleDraft)}
-                      >
-                        {titleSaving ? "Saving..." : "Save"}
-                      </Button>
+                        value={titleDraft}
+                        aria-label="Pull request title"
+                        onChange={(event) =>
+                          setTitleScope({ pullRequestKey, text: event.target.value })
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void saveTitle(titleDraft);
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            setTitleScope(null);
+                          }
+                        }}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          disabled={titleSaving}
+                          onClick={() => setTitleScope(null)}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={titleSaving || titleDraft.trim().length === 0}
+                          onClick={() => void saveTitle(titleDraft)}
+                        >
+                          {titleSaving ? "Saving..." : "Save"}
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                )}
-                <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                  <PullRequestMetaLine className="min-w-0 whitespace-nowrap">
-                    <PullRequestActorLabel
-                      actor={detail.author}
-                      profileUrl={authorProfileUrl}
-                      className="font-medium"
-                    />
-                    <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>
-                  </PullRequestMetaLine>
-                  {checkoutCommand ? (
+                  )
+                }
+                author={
+                  <PullRequestActorLabel
+                    actor={detail.author}
+                    profileUrl={authorProfileUrl}
+                    className="font-medium"
+                  />
+                }
+                updated={<span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>}
+                checkout={
+                  checkoutCommand ? (
                     <PullRequestCopyableCode
                       key={checkoutCommand}
                       value={checkoutCommand}
@@ -1859,11 +1866,10 @@ export function PullRequestDetailPanel({
                         })
                       }
                     />
-                  ) : null}
-                </div>
-
-                <div className="mt-4 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                  <span className="flex min-w-0 flex-1 items-center gap-1.5 font-mono text-xs text-muted-foreground/70">
+                  ) : null
+                }
+                base={
+                  <>
                     <Tooltip>
                       <TooltipTrigger
                         render={
@@ -1894,71 +1900,45 @@ export function PullRequestDetailPanel({
                         onUpdate={(method) => void perform("update-branch", undefined, method)}
                       />
                     ) : null}
-                    <ArrowLeftIcon
-                      aria-label="receives changes from"
-                      className="size-3.5 shrink-0 opacity-60"
-                    />
-                    <PullRequestCopyableCode
-                      key={detail.headBranch}
-                      value={detail.headBranch}
-                      target="branch name"
-                      copyLabel="Copy pull request branch"
-                      copiedLabel="Branch name copied"
-                    />
-                  </span>
-                  <span className="ml-auto inline-flex shrink-0 items-center justify-end gap-2">
-                    <span className="inline-flex items-center gap-1.5 tabular-nums">
-                      <FileDiffIcon className="size-3.5" />
-                      {detail.changedFiles.toLocaleString()}{" "}
-                      {detail.changedFiles === 1 ? "file" : "files"}
-                    </span>
-                    <PullRequestDiffStat
-                      additions={detail.additions}
-                      deletions={detail.deletions}
-                      className="shrink-0 font-mono text-xs"
-                    />
-                  </span>
-                </div>
-              </div>
+                  </>
+                }
+                head={
+                  <PullRequestCopyableCode
+                    key={detail.headBranch}
+                    value={detail.headBranch}
+                    target="branch name"
+                    copyLabel="Copy pull request branch"
+                    copiedLabel="Branch name copied"
+                  />
+                }
+                files={`${detail.changedFiles.toLocaleString()} ${detail.changedFiles === 1 ? "file" : "files"}`}
+                diffStat={
+                  <PullRequestDiffStat
+                    additions={detail.additions}
+                    deletions={detail.deletions}
+                    className="shrink-0 font-mono text-xs"
+                  />
+                }
+              />
             ) : null}
           </div>
         </div>
 
         {detail ? (
-          <nav
-            className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 border-t border-border/60 px-4 py-2"
-            aria-label="Pull request tabs"
-          >
-            <ToggleGroup
-              className="shrink-0"
-              size="segmented"
-              variant="segmented"
-              value={[tab]}
-              onValueChange={(next) => {
-                const nextTab = visibleTabs.find((item) => item.value === next[0])?.value;
-                if (nextTab) setTab(nextTab);
-              }}
-            >
-              {visibleTabs.map((item) => (
-                <Toggle key={item.value} value={item.value}>
-                  {item.label}
-                </Toggle>
-              ))}
-            </ToggleGroup>
+          <PullRequestDetailTabBar tabs={visibleTabs} value={tab} onValueChange={setTab}>
             {tab === "summary" ? (
-              <span className="ml-auto flex min-w-0 flex-1 items-center justify-end">
-                <span
-                  className="flex h-4 min-w-0 flex-wrap content-start items-center justify-end gap-x-1.5 overflow-hidden text-xs text-muted-foreground"
-                  aria-label={checksSummary ? `Checks: ${checksSummary}` : "Checks"}
-                >
-                  {checksState !== null ? (
+              <PullRequestChecksStatusLine
+                className="text-muted-foreground"
+                aria-label={checksSummary ? `Checks: ${checksSummary}` : "Checks"}
+                icon={
+                  checksState !== null ? (
                     <PullRequestChecksPopover checks={detail.checks} checksState={checksState} />
                   ) : (
                     <CircleDotIcon aria-hidden className="size-3.5" />
-                  )}
-                  <span className="whitespace-nowrap">{checksSummary}</span>
-                </span>
-              </span>
+                  )
+                }
+                label={checksSummary}
+              />
             ) : tab === "timeline" ? (
               <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
                 <PullRequestMetaLine
@@ -2033,7 +2013,7 @@ export function PullRequestDetailPanel({
                 </Button>
               </div>
             ) : null}
-          </nav>
+          </PullRequestDetailTabBar>
         ) : null}
       </div>
 

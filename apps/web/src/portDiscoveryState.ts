@@ -1,4 +1,5 @@
 import {
+  AuthTerminalReadScope,
   CONFIGURED_LOCAL_SERVER_URLS_MAX_ITEMS,
   PREVIEW_URL_MAX_LENGTH,
   type DiscoveredLocalServer,
@@ -17,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { previewEnvironment } from "./state/preview";
 import { useEnvironmentQuery } from "./state/query";
-import { usePreparedConnection } from "./state/session";
+import { useEnvironmentScope, usePreparedConnection } from "./state/session";
 import { terminalEnvironment } from "./state/terminal";
 
 const EMPTY_PORTS: ReadonlyArray<DiscoveredLocalServer> = Object.freeze([]);
@@ -160,8 +161,9 @@ export function useThreadEndpoints(input: {
   readonly declaredUrls?: ReadonlyArray<string> | undefined;
   readonly pinnedUrls?: ReadonlyArray<string> | undefined;
 }): ReadonlyArray<ThreadEndpoint> {
+  const canReadTerminals = useEnvironmentScope(input.environmentId, AuthTerminalReadScope);
   const metadata = useEnvironmentQuery(
-    input.environmentId === null
+    input.environmentId === null || !canReadTerminals
       ? null
       : terminalEnvironment.metadata({ environmentId: input.environmentId, input: null }),
   );

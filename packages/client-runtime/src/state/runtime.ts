@@ -1,4 +1,12 @@
-import { EnvironmentId, type EnvironmentId as EnvironmentIdType } from "@t3tools/contracts";
+import { createCommandPermissions } from "./commandPermissions.ts";
+import { runStreamInEnvironment, followStreamInEnvironment } from "./environmentStreams.ts";
+export { runStreamInEnvironment, followStreamInEnvironment } from "./environmentStreams.ts";
+import {
+  type ClientGuardedRpcTag,
+  type EnvironmentAuthorizationError,
+  EnvironmentId,
+  type EnvironmentId as EnvironmentIdType,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -10,6 +18,8 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import type { ConnectionAttemptError } from "../connection/model.ts";
 import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "../connection/registry.ts";
 import {
+  type EnvironmentRpcFailure,
+  type EnvironmentRpcSuccess,
   type EnvironmentRpcInput,
   type EnvironmentRpcStreamFailure,
   type EnvironmentRpcStreamValue,
@@ -18,7 +28,9 @@ import {
   type EnvironmentUnaryRpcTag,
   EnvironmentRpcUnavailableError,
   request,
-  runStream,
+  requestGuarded,
+  runStreamGuarded,
+  RpcPermissionGuard,
   subscribe,
 } from "../rpc/client.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
@@ -483,30 +495,6 @@ export function runInEnvironment<A, E, R>(
   );
 }
 
-export function runStreamInEnvironment<A, E, R>(
-  environmentId: EnvironmentIdType,
-  stream: Stream.Stream<A, E, R>,
-): Stream.Stream<
-  A,
-  E | EnvironmentNotRegisteredError,
-  EnvironmentRegistry | Exclude<R, EnvironmentSupervisor>
-> {
-  return Stream.unwrap(
-    EnvironmentRegistry.pipe(Effect.map((registry) => registry.runStream(environmentId, stream))),
-  );
-}
-
-export function followStreamInEnvironment<A, E, R>(
-  environmentId: EnvironmentIdType,
-  stream: Stream.Stream<A, E, R>,
-): Stream.Stream<A, E, EnvironmentRegistry | Exclude<R, EnvironmentSupervisor>> {
-  return Stream.unwrap(
-    EnvironmentRegistry.pipe(
-      Effect.map((registry) => registry.followStream(environmentId, stream)),
-    ),
-  );
-}
-
 export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
   options: EnvironmentQueryAtomOptions<Input, A, E, EnvironmentSupervisor | R>,
@@ -625,7 +613,11 @@ function createEnvironmentStreamCommand<R, ER, Input, A, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
   options: {
     readonly label: string;
-    readonly execute: (input: Input) => Stream.Stream<A, E, EnvironmentSupervisor | R>;
+    readonly execute: (
+      input: Input,
+      registry: AtomRegistry.AtomRegistry,
+      environmentId: EnvironmentIdType,
+    ) => Stream.Stream<A, E, EnvironmentSupervisor | R>;
     readonly scheduler?: AtomCommandScheduler;
     readonly concurrency?: AtomCommandConcurrency<{
       readonly environmentId: EnvironmentIdType;
@@ -637,14 +629,19 @@ function createEnvironmentStreamCommand<R, ER, Input, A, E>(
     label: options.label,
     ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
     ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
-    execute: (target) =>
-      runStreamInEnvironment(target.environmentId, options.execute(target.input)).pipe(
-        Stream.withSpan(options.label),
-      ),
+    execute: (target, registry) =>
+      runStreamInEnvironment(
+        target.environmentId,
+        options.execute(target.input, registry, target.environmentId),
+      ).pipe(Stream.withSpan(options.label)),
   });
 }
 
-export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends EnvironmentUnaryRpcTag>(
+export function createEnvironmentRpcQueryAtomFamily<
+  R,
+  ER,
+  TTag extends Exclude<EnvironmentUnaryRpcTag, ClientGuardedRpcTag>,
+>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
   options: {
     readonly label: string;
@@ -702,47 +699,73 @@ export function createEnvironmentRpcSubscriptionAtomFamily<
   });
 }
 
-export function createEnvironmentRpcCommand<R, ER, TTag extends EnvironmentUnaryRpcTag>(
+export function createEnvironmentRpcCommand<
+  R,
+  ER,
+  TTag extends EnvironmentUnaryRpcTag,
+  Input extends EnvironmentRpcInput<TTag> = EnvironmentRpcInput<TTag>,
+>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, ER>,
   options: {
     readonly label: string;
     readonly tag: TTag;
+    /** Replaces the plain request, e.g. to prepare input inside the command's lane. */
+    readonly execute?: (
+      input: Input,
+    ) => Effect.Effect<
+      EnvironmentRpcSuccess<TTag>,
+      EnvironmentRpcFailure<TTag> | EnvironmentRpcUnavailableError | EnvironmentAuthorizationError,
+      EnvironmentSupervisor | R
+    >;
     readonly scheduler?: AtomCommandScheduler;
     readonly concurrency?: AtomCommandConcurrency<{
       readonly environmentId: EnvironmentIdType;
-      readonly input: EnvironmentRpcInput<TTag>;
+      readonly input: NoInfer<Input>;
     }>;
     readonly onSuccess?: (
       target: {
         readonly environmentId: EnvironmentIdType;
-        readonly input: EnvironmentRpcInput<TTag>;
+        readonly input: NoInfer<Input>;
       },
       registry: AtomRegistry.AtomRegistry,
     ) => Effect.Effect<void, never, R>;
     readonly onSettled?: (
       target: {
         readonly environmentId: EnvironmentIdType;
-        readonly input: EnvironmentRpcInput<TTag>;
+        readonly input: NoInfer<Input>;
       },
       registry: AtomRegistry.AtomRegistry,
     ) => Effect.Effect<void, never, R>;
   },
 ) {
-  return createEnvironmentCommand(runtime, {
+  const permissions = createCommandPermissions(runtime, options.tag);
+  const command = createEnvironmentCommand(runtime, {
     label: options.label,
     ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
     ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
-    execute: (input: EnvironmentRpcInput<TTag>, registry, environmentId) => {
+    execute: (input: Input, registry, environmentId) => {
       const target = {
         environmentId,
         input,
       };
-      return request(options.tag, input).pipe(
+      // The transport check inside `requestGuarded` deliberately checks the
+      // destination again.
+      return permissions.authorize(registry, environmentId, input).pipe(
+        Effect.andThen(() => options.execute?.(input) ?? requestGuarded(options.tag, input)),
+        Effect.provideService(RpcPermissionGuard, {
+          authorize: (id, method, payload) =>
+            createCommandPermissions(runtime, method).authorize(registry, id, payload),
+        }),
         Effect.tap(() => options.onSuccess?.(target, registry) ?? Effect.void),
         Effect.ensuring(options.onSettled?.(target, registry) ?? Effect.void),
       );
     },
   });
+  return {
+    ...command,
+    requiredScopes: permissions.requiredScopes,
+    permissionAtom: permissions.permissionAtom,
+  };
 }
 
 export function createEnvironmentRpcStreamCommand<
@@ -761,10 +784,23 @@ export function createEnvironmentRpcStreamCommand<
     }>;
   },
 ) {
-  return createEnvironmentStreamCommand(runtime, {
+  const permissions = createCommandPermissions(runtime, options.tag);
+  const command = createEnvironmentStreamCommand(runtime, {
     label: options.label,
     ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
     ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
-    execute: (input: EnvironmentRpcInput<TTag>) => runStream(options.tag, input),
+    execute: (input: EnvironmentRpcInput<TTag>, registry, environmentId) =>
+      Stream.fromEffect(permissions.authorize(registry, environmentId, input)).pipe(
+        Stream.flatMap(() => runStreamGuarded(options.tag, input)),
+        Stream.provideService(RpcPermissionGuard, {
+          authorize: (id, method, payload) =>
+            createCommandPermissions(runtime, method).authorize(registry, id, payload),
+        }),
+      ),
   });
+  return {
+    ...command,
+    requiredScopes: permissions.requiredScopes,
+    permissionAtom: permissions.permissionAtom,
+  };
 }

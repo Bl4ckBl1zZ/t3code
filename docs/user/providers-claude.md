@@ -47,7 +47,15 @@ slider and this setting disagree, the smaller one applies. Leave the field empty
 thread's slider decide.
 
 You can also enter `/compact` in the message composer at any time to summarize the conversation
-so far.
+so far. On web and desktop, the context meter next to the send button offers **Compact context**,
+which does the same without touching your draft. The meter also shows the token count at which
+the thread compacts automatically.
+
+When you come back to a thread whose context holds 100,000 tokens or more after more than an hour, the
+send button changes to **Compact and send**: Enter summarizes the history first, then sends your
+message, so Claude does not re-read the whole conversation. To keep the full history for that
+message, open the menu next to the button and choose **Send with full history**. The offer goes
+away once the conversation has been compacted or used again.
 
 ## Where Claude Skills Are Loaded
 

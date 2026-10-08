@@ -1,8 +1,10 @@
+import { vi } from "vite-plus/test";
 import {
   EnvironmentId,
   ProjectId,
   PullRequestOperationError,
   WS_METHODS,
+  AuthSourceControlWriteScope,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -340,6 +342,26 @@ it.effect("keeps a close batch ordered and continues after a refused close", () 
       const results = yield* Effect.promise(() => Promise.all(batch));
       expect(results.map((result) => result._tag)).toEqual(["Success", "Failure", "Success"]);
       expect(calls).toEqual([6, 5, 4]);
+    }),
+  ),
+);
+
+// Transport fixtures have a source-control-only session; authorization edge cases
+// are exercised by commandPermissions.test.ts.
+vi.mock("./session.ts", () => ({
+  createEnvironmentSessionAtoms: () => ({ sessionStateAtom: grantedSessions }),
+}));
+const grantedSessions = Atom.family((_id: EnvironmentId) =>
+  Atom.make(
+    AsyncResult.success({
+      authenticated: true,
+      auth: {
+        policy: "remote-reachable" as const,
+        bootstrapMethods: [],
+        sessionMethods: [],
+        sessionCookieName: "test",
+      },
+      scopes: [AuthSourceControlWriteScope],
     }),
   ),
 );

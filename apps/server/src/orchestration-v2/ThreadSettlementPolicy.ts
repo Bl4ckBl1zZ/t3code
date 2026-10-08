@@ -91,6 +91,34 @@ export function isAutoSettlementCandidate(thread: SettlementThread, now: DateTim
   );
 }
 
+/**
+ * Whether a thread is parked on its snooze: its wake time is in the future and
+ * it has not raised its hand with a pending request, a fresh failure, or work
+ * that completed after the snooze. Server twin of the client's
+ * `effectiveSnoozed`, so agents and the sidebar agree on what is snoozed. One
+ * difference: a failure counts as fresh when its run completed after the
+ * snooze, like `isAutoSettlementCandidate`. The client compares the shell's
+ * update time, so a rename can wake a failed thread there but not here.
+ */
+export function isSnoozed(
+  thread: Pick<
+    OrchestrationV2ThreadShell,
+    "snoozedUntil" | "snoozedAt" | "latestRunCompletedAt" | "status" | "pendingRuntimeRequest"
+  >,
+  now: DateTime.Utc,
+): boolean {
+  if (millis(thread.snoozedUntil) <= DateTime.toEpochMillis(now)) return false;
+  if (thread.pendingRuntimeRequest !== null) return false;
+  const snoozedAt = millis(thread.snoozedAt);
+  const completedAt = millis(thread.latestRunCompletedAt);
+  const wokeOnError =
+    thread.status === "failed" && (thread.snoozedAt == null || completedAt > snoozedAt);
+  // Like the client, only a run that completed wakes it; an interrupt or cancel does not.
+  const wokeOnCompletion =
+    thread.status === "completed" && thread.snoozedAt != null && completedAt > snoozedAt;
+  return !wokeOnError && !wokeOnCompletion;
+}
+
 /** Terminal host timestamps prevent later PR metadata edits from settling resumed work. */
 export function resolveAutoSettlementAt(input: {
   readonly thread: SettlementThread;

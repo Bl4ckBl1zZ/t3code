@@ -8,7 +8,7 @@ import type {
 } from "@t3tools/contracts";
 
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
-import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
+import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import {
   PullRequestProviderError,
   type PullRequestProviderFailure,
@@ -99,7 +99,7 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
 
 /** The tags that mean GitHub is out of reach for this account, rather than one request failing. */
 export function gitHubProviderFailure(
-  error: GitHubPullRequestCli.GitHubPullRequestCliError,
+  error: GitHubPullRequestApi.GitHubPullRequestApiError,
 ): PullRequestProviderFailure {
   switch (error._tag) {
     case "GitHubCliMissingError":
@@ -194,9 +194,9 @@ const rendersEmpty = (body: string): boolean =>
   body.replace(/<!--[\s\S]*?-->/g, "").trim().length === 0;
 
 export const make = Effect.gen(function* () {
-  const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+  const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
-  const fail = (operation: string) => (error: GitHubPullRequestCli.GitHubPullRequestCliError) =>
+  const fail = (operation: string) => (error: GitHubPullRequestApi.GitHubPullRequestApiError) =>
     new PullRequestProviderError({
       provider: "github",
       operation,

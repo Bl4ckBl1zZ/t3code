@@ -1,5 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthAdministrativeScopes } from "@t3tools/contracts";
+import {
+  authScopeResponse,
+  AuthAdministrativeScopes,
+  AuthStandardClientScopes,
+} from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -110,13 +114,10 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
       );
 
       expect(verified.sessionId.length).toBeGreaterThan(0);
-      expect(verified.scopes).toEqual([
-        "orchestration:read",
-        "orchestration:operate",
-        "terminal:operate",
-        "review:write",
-        "relay:read",
-      ]);
+      expect(verified.scopes).toEqual(AuthStandardClientScopes);
+      // Old clients decode `scopes`; the exact grant travels as `permissions`.
+      expect(exchanged.response).toMatchObject(authScopeResponse(AuthStandardClientScopes));
+      expect(exchanged.response.scopes).not.toContain("filesystem:read");
       expect(verified.subject).toBe("one-time-token");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
@@ -172,12 +173,20 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
       const error = yield* serverAuth
         .exchangeBootstrapCredentialForAccessToken(
           pairingCredential.credential,
-          ["orchestration:read", "access:write"],
+          ["access:write"],
           requestMetadata,
         )
         .pipe(Effect.flip);
 
       expect(error._tag).toBe("ServerAuthScopeNotGrantedError");
+      const empty = yield* serverAuth
+        .exchangeBootstrapCredentialForAccessToken(
+          pairingCredential.credential,
+          [],
+          requestMetadata,
+        )
+        .pipe(Effect.flip);
+      expect(empty._tag).toBe("ServerAuthScopeNotGrantedError");
       expect((yield* serverAuth.listPairingLinks()).map((link) => link.id)).toContain(
         pairingCredential.id,
       );
@@ -210,7 +219,10 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
 
   it.effect.each([
     { label: "omits scope", requestedScopes: undefined },
-    { label: "requests no scopes", requestedScopes: [] },
+    {
+      label: "requests unsupported permissions alongside a granted one",
+      requestedScopes: ["orchestration:read", "access:write"] as const,
+    },
   ])("inherits a constrained pairing grant when token exchange $label", ({ requestedScopes }) =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -348,16 +360,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         makeCookieRequest(sessions.cookieName, exchanged.sessionToken),
       );
 
-      expect(verified.scopes).toEqual([
-        "orchestration:read",
-        "orchestration:operate",
-        "terminal:operate",
-        "review:write",
-        "relay:read",
-        "access:read",
-        "access:write",
-        "relay:write",
-      ]);
+      expect(verified.scopes).toEqual(AuthAdministrativeScopes);
       expect(verified.subject).toBe("administrative-bootstrap");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );

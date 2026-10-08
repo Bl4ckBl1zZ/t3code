@@ -4325,3 +4325,67 @@ it.effect.each([
       assert.deepStrictEqual(calls, [expected]);
     }),
 );
+
+it.effect("announces state a detail read sees first or newly", () =>
+  Effect.gen(function* () {
+    let detail = {
+      state: "open" as "open" | "closed" | "merged",
+      updatedAt: "2026-07-02T00:00:00Z",
+    };
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () =>
+            Effect.succeed({
+              ...changeRequest(1, detail.updatedAt),
+              url: "https://github.com/acme/web/pull/1",
+              state: detail.state,
+              body: "",
+              changedFiles: 0,
+              mergedAt: null,
+              closedAt: null,
+              reviewers: [],
+              checks: [],
+              mergeCapabilities: { merge: true, squash: true, rebase: true },
+              viewerPermissions: {
+                actions: ["merge"],
+                comment: true,
+                resolve: true,
+                verdicts: ["comment", "approve", "request-changes"],
+                requestReviewers: true,
+              },
+            }),
+        }),
+      ],
+    });
+    const announced: Array<string> = [];
+    yield* Stream.runForEach(yield* service.subscribeStateChanges, (key) =>
+      Effect.sync(() => announced.push(`${key.host}/${key.repository}#${key.number}`)),
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+    const readDetail = Effect.gen(function* () {
+      yield* service.invalidate({ reference });
+      yield* service.detail(reference);
+      yield* Effect.yieldNow;
+    });
+
+    // First sight announces; the same state again, even from a fresh read, does not.
+    yield* readDetail;
+    yield* readDetail;
+    assert.deepStrictEqual(announced, ["github.com/acme/web#1"]);
+
+    detail = { state: "closed", updatedAt: "2026-07-03T00:00:00Z" };
+    yield* readDetail;
+    assert.strictEqual(announced.length, 2);
+
+    detail = { state: "merged", updatedAt: "2026-07-04T00:00:00Z" };
+    yield* readDetail;
+    assert.strictEqual(announced.length, 3);
+
+    // Merged is final: a later read that says otherwise cannot announce a reopen.
+    detail = { state: "open", updatedAt: "2026-07-05T00:00:00Z" };
+    yield* readDetail;
+    assert.strictEqual(announced.length, 3);
+  }),
+);

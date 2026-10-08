@@ -84,6 +84,7 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import { ThreadLaunchService } from "../orchestration-v2/ThreadLaunchService.ts";
+import { isSnoozed } from "../orchestration-v2/ThreadSettlementPolicy.ts";
 import {
   isActiveRun,
   isTerminalRunStatus,
@@ -380,13 +381,16 @@ function delegatedTaskRun(
 }
 
 /** Runs the child started after the delegated one still owe the parent work. */
-function hasPendingChildRuns(
-  childProjection: OrchestrationV2ThreadProjection,
+export function hasPendingChildRuns(
+  childProjection: Pick<OrchestrationV2ThreadProjection, "runs">,
   delegatedRun: OrchestrationV2Run | undefined,
 ): boolean {
+  // Held queued runs wait for the user to resume the child (after Stop, a
+  // restart, or a provider failure); they are not work the task still owes.
   return childProjection.runs.some(
     (run) =>
       !isTerminalRunStatus(run.status) &&
+      !(run.status === "queued" && run.queueHeld === true) &&
       (delegatedRun === undefined || run.ordinal > delegatedRun.ordinal),
   );
 }
@@ -625,7 +629,22 @@ function threadSettlement(
   };
 }
 
-function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpThreadListItem {
+function threadSnooze(
+  thread: Parameters<typeof isSnoozed>[0],
+  now: DateTime.Utc,
+): Pick<OrchestratorMcpThreadListItem, "snoozed" | "snoozedUntil"> {
+  const snoozed = isSnoozed(thread, now);
+  return {
+    snoozed,
+    snoozedUntil:
+      snoozed && thread.snoozedUntil != null ? DateTime.formatIso(thread.snoozedUntil) : null,
+  };
+}
+
+function listItemFromShell(
+  shell: OrchestrationV2ThreadShell,
+  now: DateTime.Utc,
+): OrchestratorMcpThreadListItem {
   return {
     threadId: shell.id,
     title: shell.title,
@@ -639,6 +658,7 @@ function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpTh
     interactionMode: shell.interactionMode,
     linkedPullRequest: shell.linkedPullRequest ?? null,
     ...threadSettlement(shell),
+    ...threadSnooze(shell, now),
     parentThreadId: shell.lineage.parentThreadId,
     relationshipToParent: shell.lineage.relationshipToParent,
     itemCount: shell.visibleItemCount,
@@ -647,7 +667,11 @@ function listItemFromShell(shell: OrchestrationV2ThreadShell): OrchestratorMcpTh
   };
 }
 
-function threadDetail(projection: OrchestrationV2ThreadProjection): OrchestratorMcpThreadDetail {
+function threadDetail(
+  projection: OrchestrationV2ThreadProjection,
+  shell: OrchestrationV2ThreadShell | null,
+  now: DateTime.Utc,
+): OrchestratorMcpThreadDetail {
   const latest = latestRun(projection);
   const active = latestActiveRun(projection);
   return {
@@ -676,6 +700,8 @@ function threadDetail(projection: OrchestrationV2ThreadProjection): Orchestrator
     ).length,
     archived: projection.thread.archivedAt !== null,
     ...threadSettlement(projection.thread),
+    // From the shell, like the list, so read and list agree on snooze state.
+    ...(shell === null ? { snoozed: false, snoozedUntil: null } : threadSnooze(shell, now)),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.updatedAt),
   };
@@ -2281,6 +2307,7 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Unable to list threads: ${errorMessage(error)}`),
             ),
           );
+        const now = yield* DateTime.now;
         const statuses = input.statuses === undefined ? null : new Set(input.statuses);
         const titleContains = input.titleContains?.toLocaleLowerCase();
         const filtered = projectThreads
@@ -2288,6 +2315,9 @@ const make = Effect.gen(function* () {
           .filter(
             (thread) =>
               input.settled === undefined || threadSettlement(thread).settled === input.settled,
+          )
+          .filter(
+            (thread) => input.snoozed === undefined || isSnoozed(thread, now) === input.snoozed,
           )
           .filter(
             (thread) =>
@@ -2301,7 +2331,7 @@ const make = Effect.gen(function* () {
         return {
           projectId,
           currentThreadId: parent?.thread.id ?? null,
-          threads: page.map(listItemFromShell),
+          threads: page.map((shell) => listItemFromShell(shell, now)),
           nextCursor,
           total: filtered.length,
         } satisfies OrchestratorMcpThreadListResult;
@@ -2309,6 +2339,17 @@ const make = Effect.gen(function* () {
     readThread: (scope, input) =>
       Effect.gen(function* () {
         const { parent, target } = yield* loadScopedThread(scope, input.threadId);
+        // Snooze state comes from the shell, which carries the derived run status.
+        const shell = yield* threadManagement
+          .getThreadShell(target.thread.id)
+          .pipe(
+            Effect.mapError((error) =>
+              failure(
+                "orchestration_error",
+                `Unable to read thread ${target.thread.id}: ${errorMessage(error)}`,
+              ),
+            ),
+          );
         const view = input.view ?? "messages";
         const afterPosition = input.afterPosition ?? -1;
         const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
@@ -2363,7 +2404,7 @@ const make = Effect.gen(function* () {
           );
         }
         return {
-          thread: threadDetail(target),
+          thread: threadDetail(target, shell, yield* DateTime.now),
           recentRuns: target.runs
             .toSorted((left, right) => right.ordinal - left.ordinal)
             .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)

@@ -225,7 +225,12 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     workspaceRoot: string,
   ) {
     const faviconPath = yield* Cache.get(faviconCache, workspaceRoot);
-    yield* logFailure(workspaceRoot, "faviconPath", faviconPath);
+    // A moved or deleted checkout has no favicon to find, which is not worth a warning.
+    const isMissingWorkspaceRoot = Option.exists(
+      Exit.findErrorOption(faviconPath),
+      ProjectFaviconResolver.isMissingWorkspaceRoot,
+    );
+    if (!isMissingWorkspaceRoot) yield* logFailure(workspaceRoot, "faviconPath", faviconPath);
     if (Exit.isSuccess(faviconPath)) lastFaviconPath.set(workspaceRoot, faviconPath.value);
   });
 

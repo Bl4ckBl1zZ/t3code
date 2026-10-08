@@ -176,7 +176,9 @@ original read. Refreshing or changing a pull request clears those cached reads.
 Linked requests show who linked them, their latest known title and state, and checks and change
 counts when available. Requests in a stack appear in order, with each layer indented beneath
 its base. Requests connected by base branches appear as a branch chain. The server refreshes
-this information in the background and keeps it through restarts.
+this information in the background and keeps it through restarts. A settled thread's requests
+stop refreshing until you unsettle it, and a request you open whose state changed (for example,
+it just merged) updates its threads right away.
 
 Stack members found automatically can be dismissed from the thread. They stay dismissed during
 future refreshes; explicitly linking the same request adds it back. Unlinking or dismissing a

@@ -38,12 +38,17 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
-import type { ProviderAdapterV2Event, ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
+import type {
+  ProviderAdapterV2Event,
+  ProviderAdapterV2SessionRuntime,
+  ProviderAdapterV2TurnInput,
+} from "./ProviderAdapter.ts";
 import { ProviderEventIngestorV2 } from "./ProviderEventIngestor.ts";
 import { ProjectionStoreReadError } from "./ProjectionStore.ts";
 import {
@@ -62,6 +67,7 @@ const driver = ProviderDriverKind.make("codex");
 const RunExecutionTestLayer = runExecutionServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      McpAppModelContext.layerEmpty,
       Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
       Layer.mock(EventSinkV2)({}),
       idAllocatorLayer,
@@ -369,6 +375,96 @@ it.effect("rechecks run ownership immediately before calling the provider", () =
   }).pipe(Effect.provide(RunExecutionTestLayer)),
 );
 
+it.effect("passes the thread's MCP app context to the provider under a safe key", () =>
+  Effect.gen(function* () {
+    const runExecution = yield* RunExecutionServiceV2;
+    const started = yield* Deferred.make<ProviderAdapterV2TurnInput>();
+    const threadId = ThreadId.make("thread:run-execution-app-context");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const attemptId = RunAttemptId.make("attempt:run-execution-app-context");
+    const session = {
+      events: Stream.never,
+      startTurn: (input: ProviderAdapterV2TurnInput) => Deferred.succeed(started, input),
+    } as unknown as ProviderAdapterV2SessionRuntime;
+
+    yield* runExecution.startRootRun({
+      commandId: CommandId.make("command:run-execution-app-context"),
+      appThread: { id: threadId } as OrchestrationV2AppThread,
+      providerSessionId: ProviderSessionId.make("session:run-execution-app-context"),
+      session,
+      run: {
+        id: RunId.make("run:run-execution-app-context"),
+        threadId,
+        ordinal: 1,
+        providerInstanceId,
+      } as OrchestrationV2Run,
+      rootNode: {
+        id: NodeId.make("node:run-execution-app-context"),
+      } as OrchestrationV2ExecutionNode,
+      checkpointScope: {
+        id: CheckpointScopeId.make("checkpoint-scope:run-execution-app-context"),
+      } as OrchestrationV2CheckpointScope,
+      providerThread: {
+        id: ProviderThreadId.make("provider-thread:run-execution-app-context"),
+        driver,
+      } as OrchestrationV2ProviderThread,
+      attempt: { id: attemptId, providerTurnId: null } as OrchestrationV2RunAttempt,
+      attemptId,
+      providerTurnOrdinal: 1,
+      message: {
+        messageId: MessageId.make("message:run-execution-app-context"),
+        text: "What is on my list?",
+        attachments: [],
+        createdBy: "user",
+        creationSource: "web",
+      },
+      modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+      runtimePolicy: {
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+        approvalPolicy: "never",
+        sandboxPolicy: {
+          type: "readOnly",
+          access: { type: "fullAccess" },
+          networkAccess: false,
+        },
+      },
+    });
+
+    const input = yield* Deferred.await(started);
+    // Item ids carry colons, and server names are free text; neither reaches the key.
+    assert.deepEqual(input.appContext, [
+      { key: "mcp_app_turn-item_provider_codex_native-item_call-1", text: "2 overdue" },
+    ]);
+  }).pipe(
+    Effect.provide(
+      runExecutionServiceLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(McpAppModelContext.McpAppModelContext)({
+              forThread: () =>
+                Effect.succeed([
+                  {
+                    itemId: "turn-item:provider:codex:native-item:call-1",
+                    server: "my tools>",
+                    tool: "list",
+                    text: "2 overdue",
+                  },
+                ]),
+            }),
+            Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
+            Layer.mock(EventSinkV2)({}),
+            idAllocatorLayer,
+            Layer.mock(ProviderEventIngestorV2)({ ingestNormalized: () => Effect.succeed([]) }),
+            ServerSettingsService.layerTest(),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
 it.effect("fails the run when its ownership check cannot be read before calling the provider", () =>
   Effect.gen(function* () {
     const guardCalls = yield* Ref.make(0);
@@ -382,6 +478,7 @@ it.effect("fails the run when its ownership check cannot be read before calling 
     const testLayer = runExecutionServiceLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          McpAppModelContext.layerEmpty,
           Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
           Layer.mock(EventSinkV2)({
             writeIfRunCurrent: (input) =>
@@ -630,6 +727,7 @@ it.effect("skips Git baseline capture for projectless Hermes runs", () =>
     const testLayer = runExecutionServiceLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          McpAppModelContext.layerEmpty,
           Layer.mock(CheckpointServiceV2)({
             captureBaseline: () => Ref.update(captures, (count) => count + 1),
           }),
@@ -712,6 +810,7 @@ for (const scenario of ["failure", "interruption", "stale-attempt", "start-guard
       const testLayer = runExecutionServiceLayer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            McpAppModelContext.layerEmpty,
             Layer.mock(CheckpointServiceV2)({
               captureBaseline: () =>
                 scenario === "start-guard" ? Effect.void : Effect.die("not reached"),
@@ -873,6 +972,7 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
     const testLayer = runExecutionServiceLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          McpAppModelContext.layerEmpty,
           Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
           Layer.mock(EventSinkV2)({
             write: () => Effect.succeed([]),
@@ -1175,6 +1275,7 @@ it.effect(
       const testLayer = runExecutionServiceLayer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            McpAppModelContext.layerEmpty,
             Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
             Layer.mock(EventSinkV2)({
               write: () => Effect.succeed([]),
@@ -1546,6 +1647,7 @@ it.effect(
       const testLayer = runExecutionServiceLayer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            McpAppModelContext.layerEmpty,
             Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
             Layer.mock(EventSinkV2)({
               write: () => Effect.succeed([]),
@@ -2137,6 +2239,7 @@ function captureInterruptTerminalTurnItems(input: {
     const testLayer = runExecutionServiceLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          McpAppModelContext.layerEmpty,
           Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
           Layer.mock(EventSinkV2)({
             write: (payload) =>
@@ -2578,6 +2681,7 @@ function runBackgroundItemScenario(
     const testLayer = runExecutionServiceLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          McpAppModelContext.layerEmpty,
           Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
           Layer.mock(EventSinkV2)({
             write: () => Effect.succeed([]),

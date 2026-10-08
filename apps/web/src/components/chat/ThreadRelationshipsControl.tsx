@@ -39,7 +39,7 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { AgentOrb, type AgentOrbState } from "./AgentOrb";
-import { AgentElapsed, type AgentElapsedTiming } from "./AgentElapsed";
+import { AgentElapsed, hasAgentElapsed, type AgentElapsedTiming } from "./AgentElapsed";
 import { SubagentTooltipContent } from "./SubagentTooltipContent";
 import { shouldShowInstanceBadge } from "../../providerInstances";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
@@ -371,6 +371,18 @@ export function ThreadRelationshipsPanel(props: {
           const runSessionUrl = subagent?.runHandles?.sessionUrl;
           const hasRunHandles = runScriptPath !== undefined || runSessionUrl !== undefined;
           const canStop = canStopSubagent(subagent);
+          // Stop appears on hover in place of the trailing time; rows with a run
+          // menu or a merge action keep Stop in those controls instead.
+          const hoverStop = canStop && !hasRunHandles && !isMergeTarget;
+          const trailingVisibilityClass = hoverStop
+            ? "group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0 [@media(hover:none)]:opacity-0"
+            : undefined;
+          const failed = status === "failed" || status === "error";
+          const subagentTimingValue = subagent ? subagentTiming(subagent) : null;
+          const subagentElapsed =
+            subagentTimingValue !== null && !failed && hasAgentElapsed(subagentTimingValue)
+              ? subagentTimingValue
+              : null;
           const stopping = stoppingThreadId === threadId;
           const relationshipHint = node?.missing
             ? "This related thread is unavailable"
@@ -458,17 +470,43 @@ export function ThreadRelationshipsPanel(props: {
                   ) : null}
                 </span>
               ) : null}
-              <span
-                className="shrink-0 text-[11px] leading-4 text-muted-foreground"
-                data-thread-relationship-status
-              >
-                {relationshipStatusLabel(status)}
-              </span>
-              <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              {/* One trailing item keeps room for the title: the orb already carries
+                  status, so a subagent with a known time shows only that. */}
+              {subagentElapsed ? (
+                <span
+                  className={cn(
+                    "shrink-0 text-[11px] leading-4 tabular-nums text-muted-foreground",
+                    trailingVisibilityClass,
+                  )}
+                  data-thread-relationship-elapsed
+                >
+                  <AgentElapsed agent={subagentElapsed} compact />
+                </span>
+              ) : (
+                <span
+                  className={cn(
+                    "shrink-0 text-[11px] leading-4",
+                    failed ? "text-destructive" : "text-muted-foreground",
+                    trailingVisibilityClass,
+                  )}
+                  data-thread-relationship-status
+                >
+                  {relationshipStatusLabel(status)}
+                </span>
+              )}
+              {subagent ? null : (
+                <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              )}
             </>
           );
           return (
-            <li key={threadId} className="group flex h-8 items-center rounded-lg">
+            <li
+              key={threadId}
+              className={cn(
+                "group relative flex h-8 items-center rounded-lg",
+                hoverStop && THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
+              )}
+            >
               {isMergeTarget ? (
                 <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
                   <Tooltip>
@@ -582,32 +620,40 @@ export function ThreadRelationshipsPanel(props: {
                     </MenuPopup>
                   </Menu>
                 </div>
-              ) : canStop ? (
-                <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={node?.missing === true}
+                        onClick={() => openThread(threadId)}
+                        className={cn(
+                          THREAD_DETAILS_PANEL_LINK_ROW_CLASS,
+                          // The row's group tints the whole row, Stop included.
+                          hoverStop && "hover:!bg-transparent dark:hover:!bg-transparent",
+                        )}
+                      />
+                    }
+                  >
+                    {relationshipContent}
+                  </TooltipTrigger>
+                  <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
+                </Tooltip>
+              )}
+              {hoverStop ? (
+                <div className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
                   <Tooltip>
                     <TooltipTrigger
                       render={
                         <Button
-                          size="sm"
+                          size="icon-xs"
                           variant="ghost"
-                          className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
-                          disabled={node?.missing === true}
-                          onClick={() => openThread(threadId)}
-                        />
-                      }
-                    >
-                      {relationshipContent}
-                    </TooltipTrigger>
-                    <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
-                  </Tooltip>
-                  <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
+                          className={cn(
+                            THREAD_DETAILS_PANEL_ICON_ACTION_CLASS,
+                            "text-destructive hover:text-destructive",
+                          )}
                           aria-label={`Stop subagent ${threadTitle}`}
                           disabled={stoppingThreadId !== null}
                           onClick={() => void stopSubagent(threadId)}
@@ -623,24 +669,7 @@ export function ThreadRelationshipsPanel(props: {
                     <TooltipPopup side="left">Stop subagent</TooltipPopup>
                   </Tooltip>
                 </div>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={node?.missing === true}
-                        onClick={() => openThread(threadId)}
-                        className={THREAD_DETAILS_PANEL_LINK_ROW_CLASS}
-                      />
-                    }
-                  >
-                    {relationshipContent}
-                  </TooltipTrigger>
-                  <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
-                </Tooltip>
-              )}
+              ) : null}
             </li>
           );
         };

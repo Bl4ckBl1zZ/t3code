@@ -13,6 +13,7 @@ export interface ProjectScriptInput {
   readonly icon: ProjectScript["icon"];
   readonly runOnWorktreeCreate: ProjectScript["runOnWorktreeCreate"];
   readonly runOnWorktreeDelete: boolean;
+  readonly runOnSettle: boolean;
   readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
   readonly autoOpenPreview: boolean;
   readonly singleRun: boolean;
@@ -26,6 +27,7 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
     icon: input.icon,
     runOnWorktreeCreate: input.runOnWorktreeCreate,
     ...(input.runOnWorktreeDelete ? { runOnWorktreeDelete: true } : {}),
+    ...(input.runOnSettle ? { runOnSettle: true } : {}),
     ...(input.previewUrl === null
       ? {}
       : {
@@ -33,6 +35,26 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
           autoOpenPreview: input.autoOpenPreview,
         }),
     ...(input.singleRun ? { singleRun: true } : {}),
+  };
+}
+
+/**
+ * A project runs at most one setup, one teardown, and one settle script, so
+ * saving a script that claims a role takes it from the script that held it.
+ */
+export function releaseClaimedRoles(
+  script: ProjectScript,
+  saved: Pick<ProjectScriptInput, "runOnWorktreeCreate" | "runOnWorktreeDelete" | "runOnSettle">,
+): ProjectScript {
+  const releaseSetup = saved.runOnWorktreeCreate && script.runOnWorktreeCreate;
+  const releaseTeardown = saved.runOnWorktreeDelete && script.runOnWorktreeDelete === true;
+  const releaseSettle = saved.runOnSettle && script.runOnSettle === true;
+  if (!releaseSetup && !releaseTeardown && !releaseSettle) return script;
+  return {
+    ...script,
+    ...(releaseSetup ? { runOnWorktreeCreate: false } : {}),
+    ...(releaseTeardown ? { runOnWorktreeDelete: false } : {}),
+    ...(releaseSettle ? { runOnSettle: false } : {}),
   };
 }
 
@@ -90,7 +112,11 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
 
 export function primaryProjectScript(scripts: ReadonlyArray<ProjectScript>): ProjectScript | null {
   const regular = scripts.find(
-    (script) => !script.runOnWorktreeCreate && script.runOnWorktreeDelete !== true,
+    (script) =>
+      !script.runOnWorktreeCreate &&
+      script.runOnWorktreeDelete !== true &&
+      script.runOnSettle !== true,
   );
-  return regular ?? scripts[0] ?? null;
+  // Cleanup is never the one-click run button, even when it is all there is.
+  return regular ?? scripts.find((script) => script.runOnSettle !== true) ?? null;
 }

@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AuthAccessStreamError,
+  authScopeResponse,
   type AuthAccessStreamEvent,
   type ApplicationStoredEvent,
   AuthOrchestrationOperateScope,
@@ -105,6 +106,7 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ThreadFeedbackService from "./orchestration-v2/ThreadFeedbackService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
@@ -196,7 +198,7 @@ import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
-import * as GitHubCli from "./sourceControl/GitHubCli.ts";
+import * as GitHubRepositoryApi from "./sourceControl/GitHubRepositoryApi.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -497,7 +499,7 @@ function toAuthAccessStreamEvent(
         version: 1,
         revision,
         type: "pairingLinkUpserted",
-        payload: change.pairingLink,
+        payload: { ...change.pairingLink, ...authScopeResponse(change.pairingLink.scopes) },
       };
     case "pairingLinkRemoved":
       return {
@@ -513,6 +515,7 @@ function toAuthAccessStreamEvent(
         type: "clientUpserted",
         payload: {
           ...change.clientSession,
+          ...authScopeResponse(change.clientSession.scopes),
           current: change.clientSession.sessionId === currentSessionId,
         },
       };
@@ -625,6 +628,7 @@ const makeWsRpcLayer = (
       const providerInstallation = yield* makeProviderInstallation();
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+      const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const threadSearchQuery = yield* ThreadSearchQuery.ThreadSearchQuery;
@@ -1756,6 +1760,10 @@ const makeWsRpcLayer = (
             yield* usageLimitSources.refresh;
             return { providers };
           }),
+        [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
+        [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
+        [WS_METHODS.mcpAppsUpdateModelContext]: (input) => mcpAppRequests.updateModelContext(input),
+        [WS_METHODS.mcpAppsReadResource]: (input) => mcpAppRequests.readResource(input),
         [WS_METHODS.providerUploadFeedback]: (input) =>
           threadFeedback
             .upload({
@@ -2162,13 +2170,20 @@ const makeWsRpcLayer = (
             Effect.acquireRelease(
               terminalManager.attachStream(input, (event) => Queue.offer(queue, event)),
               (unsubscribe) => Effect.sync(unsubscribe),
-            ),
+            ).pipe(Effect.catchCause((cause) => Queue.failCause(queue, cause))),
           ),
         [WS_METHODS.terminalWrite]: (input) => terminalManager.write(input),
         [WS_METHODS.terminalResize]: (input) => terminalManager.resize(input),
         [WS_METHODS.terminalClear]: (input) => terminalManager.clear(input),
         [WS_METHODS.terminalRestart]: (input) => terminalManager.restart(input),
         [WS_METHODS.terminalClose]: (input) => terminalManager.close(input),
+        [WS_METHODS.terminalObserve]: (input) =>
+          Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
+            Effect.acquireRelease(
+              terminalManager.observeStream(input, (event) => Queue.offer(queue, event)),
+              (unsubscribe) => Effect.sync(unsubscribe),
+            ).pipe(Effect.catchCause((cause) => Queue.failCause(queue, cause))),
+          ),
         [WS_METHODS.subscribeTerminalEvents]: (_input) =>
           Stream.callback<TerminalEvent>((queue) =>
             Effect.acquireRelease(
@@ -2444,7 +2459,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                         Layer.mergeAll(
                           AzureDevOpsCli.layer,
                           BitbucketApi.layer,
-                          GitHubCli.layer,
+                          GitHubRepositoryApi.layer,
                           GitLabCli.layer,
                         ),
                       ),

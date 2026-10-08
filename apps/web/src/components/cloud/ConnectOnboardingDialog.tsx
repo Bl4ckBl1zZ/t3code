@@ -61,7 +61,7 @@ function ConfiguredConnectOnboardingDialog() {
   const currentSessionScopes = desktopBridge
     ? AuthAdministrativeScopes
     : primarySessionState.data?.authenticated
-      ? (primarySessionState.data.scopes ?? null)
+      ? (primarySessionState.data.permissions ?? primarySessionState.data.scopes ?? null)
       : null;
   const canManageRelay = currentSessionScopes?.includes(AuthRelayWriteScope) ?? false;
   // The publish step is only offered when we know the answer; opening the

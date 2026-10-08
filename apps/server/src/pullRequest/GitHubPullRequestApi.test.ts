@@ -8,9 +8,9 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
-import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
+import * as GitHubQuota from "../sourceControl/githubQuota.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
+import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -54,25 +54,21 @@ type ApiAnswer = Effect.Effect<GitHubApi.GitHubRestResponse, GitHubApi.GitHubApi
 const mockedExecute = vi.fn<(call: ApiCall) => ApiAnswer>();
 
 /**
- * A transport that answers from the mocks above but spends the real GraphQL budget, the way
- * GitHubApi does, so the reserve and pause behaviour is still the module's to prove.
+ * A transport that answers from the mocks above but spends the real GraphQL quota from each
+ * answer's headers, the way GitHubApi does, so the reserve behaviour is still the module's to prove.
  */
 const mockApi = Layer.effect(
   GitHubApi.GitHubApi,
   Effect.gen(function* () {
-    const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+    const quota = yield* GitHubQuota.GitHubQuota;
     return GitHubApi.GitHubApi.of({
       graphql: (input) =>
         Effect.gen(function* () {
           // An interactive caller may spend the reserve, the way the real transport reads it.
           const allowReserve = input.allowReserve ?? (yield* GitHubApi.AllowGitHubReserve);
-          const query = yield* budget.query(
-            input.host,
-            input.query,
-            allowReserve ? { allowReserve: true } : undefined,
-          );
-          const answer = yield* mockedExecute({ kind: "graphql", ...input, query });
-          yield* budget.observe(input.host, answer.body);
+          yield* quota.admit(input.host, "graphql", { allowReserve });
+          const answer = yield* mockedExecute({ kind: "graphql", ...input });
+          yield* quota.observe(input.host, answer.headers);
           return answer.body;
         }),
       rest: (input) => mockedExecute({ kind: "rest", ...input }),
@@ -82,9 +78,9 @@ const mockApi = Layer.effect(
 );
 
 const layer = it.layer(
-  GitHubPullRequestCli.layer.pipe(
+  GitHubPullRequestApi.layer.pipe(
     Layer.provideMerge(mockApi),
-    Layer.provideMerge(GitHubGraphQlBudget.layer),
+    Layer.provideMerge(GitHubQuota.layer),
     Layer.provide(VcsProcess.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   ),
 );
@@ -94,8 +90,19 @@ function output(
   body: string,
   truncated = false,
   invalidUtf8 = false,
+  headers: Readonly<Record<string, string>> = {},
 ): GitHubApi.GitHubRestResponse {
-  return { status: 200, headers: {}, body, truncated, invalidUtf8 };
+  return { status: 200, headers, body, truncated, invalidUtf8 };
+}
+
+/** GitHub's GraphQL quota headers, leaving `remaining` of 5,000 until `resetAt`. */
+function graphqlQuota(remaining: number, resetAt = "2099-08-13T14:00:00Z") {
+  return {
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": String(remaining),
+    "x-ratelimit-reset": String(Date.parse(resetAt) / 1000),
+  };
 }
 
 /**
@@ -439,7 +446,7 @@ afterEach(() => {
   mockedExecute.mockReset();
 });
 
-layer("GitHubPullRequestCli.layer", (it) => {
+layer("GitHubPullRequestApi.layer", (it) => {
   it.effect("reads the stack a pull request is in through the stacks preview, on its host", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
@@ -465,7 +472,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const stack = yield* cli.getPullRequestStack({
         cwd: "/w",
@@ -513,7 +520,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const stack = yield* cli.getPullRequestStack({
         cwd: "/w",
         repository: "acme/web",
@@ -533,7 +540,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("reads an empty stacks listing as not stacked", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const stack = yield* cli.getPullRequestStack({
         cwd: "/w",
@@ -556,7 +563,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           }),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const stack = yield* cli.getPullRequestStack({
         cwd: "/w",
@@ -579,7 +586,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           }),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestStack({
@@ -602,7 +609,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         status: 503,
       });
       mockedExecute.mockReturnValueOnce(Effect.fail(failure));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const error = yield* Effect.flip(
         cli.getPullRequestStack({
           cwd: "/w",
@@ -618,7 +625,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("reports a stacks answer it cannot read against the stack read", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output('[{"id":42}]')));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestStack({
@@ -638,7 +645,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("asks for one row more than the page, to probe for a next page", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(3, 1))));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -661,7 +668,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("reports truncation from the extra row, counted before decoding", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(11, 1))));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -678,6 +685,37 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("reports truncation when GitHub repeats a cursor before the page is full", () =>
+    Effect.gen(function* () {
+      // Two pages of 100 that hand back the same cursor, for a page of 250.
+      const repeating = output(
+        encodeJson({
+          data: {
+            search: {
+              pageInfo: { hasNextPage: true, endCursor: "same" },
+              nodes: rows(100, 1),
+            },
+          },
+        }),
+      );
+      mockedExecute.mockReturnValue(Effect.succeed(repeating));
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+
+      const batch = yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 250,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      assert.isTrue(batch.truncated);
+    }),
+  );
+
   it.effect("excludes merged pull requests from the Closed tab", () =>
     Effect.gen(function* () {
       mockedExecute.mockImplementation((call) =>
@@ -687,7 +725,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -713,7 +751,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -738,7 +776,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -759,7 +797,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("carries every repository and every qualifier into one search", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.searchPullRequests({
         cwd: "/w",
@@ -788,7 +826,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("narrows a search to the author, and to merged on the merged tab", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.searchPullRequests({
         cwd: "/w",
@@ -810,7 +848,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("keeps a searched-for qualifier inside the phrase", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.searchPullRequests({
         cwd: "/w",
@@ -833,7 +871,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
   it.effect("refuses to search for a repository GitHub cannot address", () =>
     Effect.gen(function* () {
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const failure = yield* Effect.flip(
         cli.searchPullRequests({
@@ -865,7 +903,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ]),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.searchPullRequests({
         cwd: "/w",
@@ -911,7 +949,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         .mockReturnValueOnce(
           Effect.succeed(searchPage([searchItem(1, "acme/web", "2026-07-03T00:00:00Z")], true)),
         );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const read = () =>
         cli.searchPullRequests({
           cwd: "/w",
@@ -947,7 +985,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           output(encodeJson({ data: { s0: { pullRequest: { additions: 4, deletions: 1 } } } })),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const stats = yield* cli.listPullRequestStats({
         cwd: "/w",
@@ -961,15 +999,14 @@ layer("GitHubPullRequestCli.layer", (it) => {
         { repository: "acme/web", number: 1, additions: 4, deletions: 1 },
         { repository: "acme/web", number: 26, additions: 4, deletions: 1 },
       ]);
-      const document = queryAt(0);
-      expect(document).toContain('s0: repository(owner: "acme", name: "web")');
-      expect(document).toContain("pullRequest(number: 25)");
+      expect(queryAt(0)).toContain("s0: repository(owner: $s0_owner, name: $s0_name)");
+      expect(varsAt(0)).toMatchObject({ s0_owner: "acme", s0_name: "web", s24_number: 25 });
     }),
   );
 
   it.effect("refuses to look up counts for a repository GitHub cannot address", () =>
     Effect.gen(function* () {
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const failure = yield* Effect.flip(
         cli.listPullRequestStats({
@@ -993,7 +1030,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1023,7 +1060,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1051,7 +1088,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1089,7 +1126,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1115,7 +1152,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1149,7 +1186,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             ),
           ),
         );
-        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
         const batch = yield* cli.listPullRequests({
           cwd: "/w",
@@ -1180,7 +1217,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(listedPullRequests(1, 1, () => ({ checks: "PENDING" })))),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -1207,7 +1244,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         mockedExecute.mockReturnValueOnce(
           Effect.succeed(output(listedPullRequests(2, 1, (number) => ({ isDraft: number === 1 })))),
         );
-        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
         const batch = yield* cli.listPullRequests({
           cwd: "/w",
@@ -1232,7 +1269,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("carries the further narrowings into a batched search", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.searchPullRequests({
         cwd: "/w",
@@ -1261,7 +1298,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1291,7 +1328,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1321,7 +1358,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1343,7 +1380,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("carries on from the instant the last slice ended on", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output(pullRequests(3, 1))));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -1371,7 +1408,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       // answer means the text matched nothing, and listing everything instead would fill the
       // page with rows the reader did not search for.
       mockedExecute.mockReturnValueOnce(Effect.succeed(emptySearch()));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -1396,7 +1433,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(listedPullRequests(3, 1, () => ({ state: "CLOSED" })))),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -1432,7 +1469,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -1468,7 +1505,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -1512,7 +1549,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         );
       });
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
@@ -1542,7 +1579,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -1587,7 +1624,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("updates a stale branch with a merge commit unless asked to rebase", () =>
     Effect.gen(function* () {
       route(["query PullRequestActionState", actionState()]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -1616,7 +1653,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("merges with the strategy it was asked for", () =>
     Effect.gen(function* () {
       route(["query PullRequestActionState", actionState()]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -1647,7 +1684,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ],
           ["query PullRequestActionState", actionState()],
         );
-        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
         yield* cli.runPullRequestAction({
           cwd: "/w",
           repository: "acme/web",
@@ -1691,7 +1728,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         ["query PullRequestMergeMessage", mergeMessage(body, queued)],
         ["query PullRequestActionState", actionState({ isMergeQueueEnabled: queued })],
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       yield* cli.runPullRequestAction({
         cwd: "/w",
         repository: "acme/web",
@@ -1717,7 +1754,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         ],
         ["query PullRequestActionState", actionState()],
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       yield* cli.runPullRequestAction({
         cwd: "/w",
         repository: "acme/web",
@@ -1742,7 +1779,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("does not fetch a message for rebase merges", () =>
     Effect.gen(function* () {
       route(["query PullRequestActionState", actionState()]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       yield* cli.runPullRequestAction({
         cwd: "/w",
         repository: "acme/web",
@@ -1765,7 +1802,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         ["query PullRequestMergeMessage", { data: { repository: { pullRequest: null } } }],
         ["query PullRequestActionState", actionState()],
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const result = yield* Effect.result(
         cli.runPullRequestAction({
           cwd: "/w",
@@ -1784,7 +1821,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("arms auto-merge with the same strategy a merge would have used", () =>
     Effect.gen(function* () {
       route(["query PullRequestActionState", actionState()]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -1814,7 +1851,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("merges at once when auto-merge is asked of a pull request that is ready now", () =>
     Effect.gen(function* () {
       route(["query PullRequestActionState", actionState({ mergeStateStatus: "CLEAN" })]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -1835,7 +1872,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("takes auto-merge back off without naming a strategy", () =>
     Effect.gen(function* () {
       route([NODE_ID_QUERY, nodeIdAnswer("PR_7")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -1853,7 +1890,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("opens a pull request that reverts a merged pull request", () =>
     Effect.gen(function* () {
       route([NODE_ID_QUERY, nodeIdAnswer("PR_7")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -1889,7 +1926,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -1906,7 +1943,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("finds and approves every workflow waiting on a maintainer", () =>
     Effect.gen(function* () {
       workflowApprovalRoutes(() => crossRepositoryDetail(), heads([7]), workflowRuns([10, 11]));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -1943,7 +1980,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         heads([7]),
         workflowRuns([10]),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.runPullRequestAction({
@@ -1979,7 +2016,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
               Effect.as(output(encodeJson(workflowRuns([10])))),
             ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const runs = yield* cli.listWorkflowRunsRequiringApproval({
         cwd: "/w",
@@ -1999,7 +2036,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("refuses workflow approval when one head belongs to several pull requests", () =>
     Effect.gen(function* () {
       workflowApprovalRoutes(() => crossRepositoryDetail(), heads([7, 8]), workflowRuns([]));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.listWorkflowRunsRequiringApproval({
@@ -2025,6 +2062,38 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("refuses workflow approval when the head list stops before its end", () =>
+    Effect.gen(function* () {
+      // GitHub hands the same cursor back, so the second page is never read past. #7 looks
+      // unique on what was read, and an unread page could still hold another head like it.
+      const repeating = heads([7]);
+      repeating.data.repository.pullRequests.pageInfo = {
+        hasNextPage: true,
+        endCursor: "same",
+      } as never;
+      workflowApprovalRoutes(() => crossRepositoryDetail(), repeating, workflowRuns([]));
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+
+      const error = yield* Effect.flip(
+        cli.listWorkflowRunsRequiringApproval({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          headSha: "abc123",
+          headBranch: "feat/page",
+          headRepositoryOwner: "octocat",
+          isCrossRepository: true,
+        }),
+      );
+
+      expect(error).toMatchObject({
+        _tag: "GitHubWorkflowApprovalRefusedError",
+        reason: "head-list-truncated",
+      });
+    }),
+  );
+
   it.effect("refuses workflow approval when GitHub omits the head repository", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
@@ -2047,7 +2116,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.runPullRequestAction({
@@ -2081,7 +2150,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         );
       });
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.listWorkflowRunsRequiringApproval({
@@ -2112,7 +2181,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("returns a pull request to draft by converting it", () =>
     Effect.gen(function* () {
       route([NODE_ID_QUERY, nodeIdAnswer("PR_7")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.runPullRequestAction({
         cwd: "/w",
@@ -2130,7 +2199,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("sends a comment body as a variable, never inside the document", () =>
     Effect.gen(function* () {
       route([NODE_ID_QUERY, nodeIdAnswer("PR_7")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.commentOnPullRequest({
         cwd: "/w",
@@ -2154,7 +2223,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             : emptySearch(),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listPullRequests({
         cwd: "/w",
@@ -2188,7 +2257,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.listReviewThreadComments({
         cwd: "/w",
@@ -2205,7 +2274,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("serves a diff GitHub hands over whole in one request, with no next slice", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("diff --git a/a b/a")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const diff = yield* cli.getPullRequestDiff({
         cwd: "/w",
@@ -2234,7 +2303,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       // GitHub answers 406 rather than a diff past 300 changed files.
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(2, 1))));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const diff = yield* cli.getPullRequestDiff({
         cwd: "/w",
@@ -2257,7 +2326,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(100, 0))));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const diff = yield* cli.getPullRequestDiff({
         cwd: "/w",
@@ -2277,7 +2346,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(100, 0))));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const target = { cwd: "/w", repository: "acme/web", host: "github.com", number: 7 };
 
       const first = yield* cli.getPullRequestDiff(target);
@@ -2295,7 +2364,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
   it.effect("refuses a cursor it never handed out rather than reading it into a request", () =>
     Effect.gen(function* () {
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestDiff({
@@ -2317,7 +2386,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(`{"files":${pullRequestFiles(2, 1)}}`)),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const diff = yield* cli.getPullRequestDiff({
         cwd: "/w",
@@ -2344,7 +2413,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(`{"files":${pullRequestFiles(100, 0)}}`)),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const target = {
         cwd: "/w",
         repository: "acme/web",
@@ -2368,7 +2437,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
   it.effect("refuses a commit that is not a sha rather than reading it into a request", () =>
     Effect.gen(function* () {
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestDiff({
@@ -2391,7 +2460,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         Effect.succeed(output(encodeJson({ sha: "a1b2c3d", parents: [] }))),
       );
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("root contents\n")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const contents = yield* cli.getPullRequestDiffFileContents({
         cwd: "/w",
@@ -2414,7 +2483,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("reports unusable diff revisions as a structured error", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("not-a-sha\tstill-not-a-sha\n")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestDiffFileContents({
@@ -2441,7 +2510,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestRefs)));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("partial", true)));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestDiffFileContents({
@@ -2469,7 +2538,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestRefs)));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("binary�contents", false, true)));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestDiffFileContents({
@@ -2495,7 +2564,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestRefs)));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("before�after")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const contents = yield* cli.getPullRequestDiffFileContents({
         cwd: "/w",
@@ -2514,7 +2583,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("ends the diff on a page with no files rather than asking for it again", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const diff = yield* cli.getPullRequestDiff({
         cwd: "/w",
@@ -2533,7 +2602,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("not json")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestDiff({
@@ -2550,7 +2619,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
   it.effect("skips the avatar lookup when a listing named nobody", () =>
     Effect.gen(function* () {
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const avatars = yield* cli.listActorAvatars({
         cwd: "/w",
@@ -2564,7 +2633,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("accounts for the avatar lookup in the GraphQL budget", () =>
+  it.effect("looks up avatars by node id in one GraphQL read", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
@@ -2572,18 +2641,12 @@ layer("GitHubPullRequestCli.layer", (it) => {
             encodeJson({
               data: {
                 nodes: [{ login: "octocat", avatarUrl: "https://avatars/octocat" }],
-                rateLimit: {
-                  cost: 1,
-                  limit: 5_000,
-                  remaining: 4_999,
-                  resetAt: "2099-08-13T14:00:00Z",
-                },
               },
             }),
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const avatars = yield* cli.listActorAvatars({
         cwd: "/w",
@@ -2593,7 +2656,6 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       expect(varsAt(0)).toEqual({ ids: ["MDQ6VXNlcjE="] });
-      expect(queryAt(0)).toContain("rateLimit { cost limit remaining resetAt }");
       expect(avatars.get("octocat")).toBe("https://avatars/octocat");
     }),
   );
@@ -2601,7 +2663,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("fails when the authenticated account has no login", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("  ")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(cli.getViewerLogin({ cwd: "/w", host: "github.com" }));
 
@@ -2614,7 +2676,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output('{"id":456,"login":"enterprise-user"}')),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const login = yield* cli.getViewerLogin({ cwd: "/w", host: "github.acme.com" });
 
@@ -2626,7 +2688,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("sends a whole review as one request", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.submitReview({
         cwd: "/w",
@@ -2657,7 +2719,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("sends a reply body as a variable, never inside the document", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.replyToReviewThread({
         cwd: "/w",
@@ -2677,7 +2739,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("resolves and unresolves through the mutation each one needs", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.setReviewThreadResolution({
         cwd: "/w",
@@ -2706,7 +2768,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("confirms a given subject belongs to the named pull request, then reacts to it", () =>
     Effect.gen(function* () {
       route([SUBJECT_SCOPE_QUERY, subjectScope("IC_1", "PR_kwDOA")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.setReaction({
         cwd: "/w",
@@ -2742,7 +2804,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.setReaction({
@@ -2765,7 +2827,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("looks up the pull request's own node id when no subject was given", () =>
     Effect.gen(function* () {
       route([NODE_ID_QUERY, nodeIdAnswer("PR_kwDOA")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       // Its own pull request: a node id looked up once is remembered for the life of the service.
       yield* cli.setReaction({
@@ -2786,7 +2848,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("takes a reaction back through the remove mutation", () =>
     Effect.gen(function* () {
       route([SUBJECT_SCOPE_QUERY, subjectScope("IC_1", "PR_kwDOA")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.setReaction({
         cwd: "/w",
@@ -2806,7 +2868,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("rewrites only the words a request named", () =>
     Effect.gen(function* () {
       route([NODE_ID_QUERY, nodeIdAnswer("PR_kwDOA")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const rewrite = (fields: { readonly title?: string; readonly body?: string }) =>
         cli.updatePullRequest({
           cwd: "/w",
@@ -2833,7 +2895,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("rewrites a remark through the mutation its kind needs", () =>
     Effect.gen(function* () {
       route([SUBJECT_SCOPE_QUERY, subjectScope("IC_1", "PR_kwDOA")]);
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const rewrite = (kind: "issue-comment" | "review-comment") =>
         cli.updateComment({
           cwd: "/w",
@@ -2875,7 +2937,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.updateComment({
@@ -2900,7 +2962,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("fails the read when gh returns something unreadable", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"message":"not found"}')));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestDetail({
@@ -2949,7 +3011,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const input = {
         cwd: "/w",
         repository: "acme/web",
@@ -3027,7 +3089,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const detail = yield* cli.getPullRequestDetail({
         cwd: "/w",
         repository: "acme/web",
@@ -3083,7 +3145,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const detail = yield* cli.getPullRequestDetail({
         cwd: "/w",
         repository: "acme/web",
@@ -3130,7 +3192,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const error = yield* Effect.flip(
         cli.getPullRequestDetail({
           cwd: "/w",
@@ -3147,24 +3209,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       const response = coreResponse();
       mockedExecute.mockReturnValue(
-        Effect.succeed(
-          output(
-            encodeJson({
-              ...response,
-              data: {
-                ...response.data,
-                rateLimit: {
-                  cost: 1,
-                  limit: 5000,
-                  remaining: 500,
-                  resetAt: "2099-08-13T14:00:00Z",
-                },
-              },
-            }),
-          ),
-        ),
+        Effect.succeed(output(encodeJson(response), false, false, graphqlQuota(499))),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const input = {
         cwd: "/w",
         repository: "acme/web",
@@ -3186,7 +3233,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(1, 1), true)));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getPullRequestDiff({
@@ -3211,7 +3258,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         Effect.succeed(output("diff --git a/a b/a\n@@ -1 +1 @@", true)),
       );
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(1, 1))));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const slice = yield* cli.getPullRequestDiff({
         cwd: "/w",
@@ -3236,7 +3283,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(reviewThreadsPage([thread("PRRT_2", "c2")], null))),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const conversation = yield* cli.listReviewThreadComments({
         cwd: "/w",
@@ -3266,7 +3313,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const conversation = yield* cli.listReviewThreadComments({
         cwd: "/w",
@@ -3293,7 +3340,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const conversation = yield* cli.listReviewThreadComments({
         cwd: "/w",
@@ -3318,7 +3365,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(threadCommentsPage(["c2", "c3"], null, 3))),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const page = yield* cli.getReviewThreadComments({
         cwd: "/w",
@@ -3347,7 +3394,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(threadCommentsPage(["foreign"], null, 1, "PR_8"))),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
         cli.getReviewThreadComments({
@@ -3385,7 +3432,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             ),
           ),
         );
-        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
         const access = yield* cli.getViewerAccess({
           cwd: "/w",
@@ -3420,18 +3467,15 @@ layer("GitHubPullRequestCli.layer", (it) => {
                   viewerPermission: "READ",
                   pullRequest: { viewerCanUpdate: true, viewerDidAuthor: true },
                 },
-                rateLimit: {
-                  cost: 1,
-                  limit: 5_000,
-                  remaining: 500,
-                  resetAt: "2099-08-13T14:00:00Z",
-                },
               },
             }),
+            false,
+            false,
+            graphqlQuota(499),
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const input = {
         cwd: "/w",
         repository: "acme/web",
@@ -3440,7 +3484,6 @@ layer("GitHubPullRequestCli.layer", (it) => {
       } as const;
 
       yield* cli.getViewerAccess(input);
-      expect(queryAt(0)).toContain("rateLimit { cost limit remaining resetAt }");
 
       const error = yield* Effect.flip(cli.getViewerAccess(input));
 
@@ -3468,14 +3511,11 @@ layer("GitHubPullRequestCli.layer", (it) => {
                     viewerPermission: "READ",
                     pullRequest: { viewerCanUpdate: true, viewerDidAuthor: true },
                   },
-                  rateLimit: {
-                    cost: 1,
-                    limit: 5_000,
-                    remaining: 500,
-                    resetAt: "2099-08-13T14:00:00Z",
-                  },
                 },
               }),
+              false,
+              false,
+              graphqlQuota(499),
             ),
           ),
         )
@@ -3496,7 +3536,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
             ),
           ),
         );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.getViewerAccess({
         cwd: "/w",
@@ -3526,7 +3566,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("asks GitHub to review, naming the collection a request is added to", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.setReviewerRequest({
         cwd: "/w",
@@ -3552,7 +3592,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("takes a request back by deleting from the same collection it was added to", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.setReviewerRequest({
         cwd: "/w",
@@ -3594,7 +3634,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const list = yield* cli.listReviewerCandidates({
         cwd: "/w",
@@ -3617,7 +3657,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("puts labels on by posting to the issue's own collection, all at once", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.setLabels({
         cwd: "/w",
@@ -3641,7 +3681,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("takes labels off one at a time, naming each in the path encoded", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       yield* cli.setLabels({
         cwd: "/w",
@@ -3680,7 +3720,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           Effect.succeed(output(encodeJson({ data: { w0: { pullRequest: node(1) } } }))),
         )
         .mockReturnValueOnce(Effect.succeed(output(encodeJson({ data: { w0: null } }))));
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const read = (number: number) =>
         cli.getPullRequestWatchFingerprint({
           cwd: "/w",
@@ -3691,8 +3731,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       expect((yield* read(7))?.remarks.startsWith("1 ")).toBe(true);
       expect(queryAt(0)).toContain(
-        'w0: repository(owner: "acme", name: "web") { pullRequest(number: 7)',
+        "w0: repository(owner: $w0_owner, name: $w0_name) { pullRequest(number: $w0_number)",
       );
+      expect(varsAt(0)).toMatchObject({ w0_owner: "acme", w0_name: "web", w0_number: 7 });
       // GitHub had no answer for #8, so its watch reads it in full.
       expect(yield* read(8)).toBeNull();
       // A selector GitHub cannot address is never sent.

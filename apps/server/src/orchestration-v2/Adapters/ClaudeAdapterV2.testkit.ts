@@ -28,7 +28,7 @@ import {
   ClaudeAdapterV2Driver,
   ClaudeAgentSdkQueryRunner,
   ClaudeAgentSdkQueryRunnerError,
-  claudePromptUuid,
+  makeClaudePromptUuid,
   makeClaudeUserMessage,
   makeClaudeQueryOptions,
   type ClaudeAgentSdkSessionForkInput,
@@ -1325,10 +1325,10 @@ async function recordClaudeStreamingQuery(input: {
   const iterator = queryRuntime[Symbol.asyncIterator]();
   try {
     for (const [index, prompt] of input.prompts.entries()) {
-      // Like the adapter, give each prompt a uuid Claude echoes on its turn.
+      // Like the adapter, give each prompt a fresh uuid Claude echoes on its turn.
       const message = makeClaudeUserMessage({
         text: prompt,
-        uuid: claudePromptUuid(`${input.sessionId}:prompt:${index + 1}`),
+        uuid: makeClaudePromptUuid(),
       });
       input.entries.push({
         type: "expect_outbound",

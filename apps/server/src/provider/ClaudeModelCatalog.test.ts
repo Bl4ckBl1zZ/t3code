@@ -48,7 +48,7 @@ describe("Claude manifest catalog", () => {
         bundled,
       ),
     ).toMatchObject({
-      apiModelId: "claude-fable-5-1[1m]",
+      apiModelId: "claude-fable-5-1",
       effort: "xhigh",
       settings: { ultracode: true },
       autoCompactWindow: 500_000,

@@ -40,6 +40,8 @@ export const ProjectScript = Schema.Struct({
    * Optional so peers that predate teardown scripts can still decode.
    */
   runOnWorktreeDelete: Schema.optional(Schema.Boolean),
+  /** Run in the thread's worktree each time the thread settles. */
+  runOnSettle: Schema.optional(Schema.Boolean),
   previewUrl: Schema.optional(TrimmedNonEmptyString),
   autoOpenPreview: Schema.optional(Schema.Boolean),
   /**

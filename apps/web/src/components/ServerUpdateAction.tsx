@@ -1,8 +1,13 @@
-import type {
-  EnvironmentId,
-  ServerInstallation,
-  ServerSelfUpdateCapability,
+import { useAtomValue } from "@effect/atom-react";
+import {
+  type AuthSessionState,
+  type EnvironmentId,
+  type ServerInstallation,
+  type ServerSelfUpdateCapability,
+  AuthEnvironmentMaintainScope,
+  sessionGrantsScope,
 } from "@t3tools/contracts";
+import type { AsyncResult } from "effect/unstable/reactivity";
 import type { ServerUpdateStage, ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import {
   isAtomCommandInterrupted,
@@ -12,6 +17,8 @@ import { CircleArrowUpIcon } from "lucide-react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { environmentSession } from "~/state/session";
 import { serverEnvironment, updateOutdatedServer } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { manualServerUpdateCommand } from "~/versionSkew";
@@ -31,6 +38,13 @@ const pendingUpdateEnvironmentIds = new Set<EnvironmentId>();
 
 export function serverUpdateStageLabel(stage: ServerUpdateStage): string {
   return UPDATE_STAGE_LABELS[stage];
+}
+
+function canUpdateServer(result: AsyncResult.AsyncResult<AuthSessionState, unknown>): boolean {
+  if (result._tag !== "Success" || !result.value.authenticated) return false;
+  // Self-update bridges authorization protocol changes: a server that predates
+  // environment:maintain still updates under orchestration:operate.
+  return sessionGrantsScope(result.value, AuthEnvironmentMaintainScope);
 }
 
 function updateFailureMessage(error: unknown): string {
@@ -100,6 +114,8 @@ export function ServerUpdateAction({
   readonly appearance?: "button" | "icon";
 }) {
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
+  const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
+  const canUpdate = canUpdateServer(useAtomValue(sessionStateAtom));
   const updateServer = useAtomCommand(serverEnvironment.updateServer, {
     reportFailure: false,
   });
@@ -126,7 +142,10 @@ export function ServerUpdateAction({
   });
 
   const handleUpdate = async () => {
-    if (pendingUpdateEnvironmentIds.has(environmentId)) {
+    if (
+      !canUpdateServer(appAtomRegistry.get(sessionStateAtom)) ||
+      pendingUpdateEnvironmentIds.has(environmentId)
+    ) {
       return;
     }
     if (isDesktopAppUpdate) {
@@ -141,7 +160,10 @@ export function ServerUpdateAction({
         return;
       }
     }
-    if (pendingUpdateEnvironmentIds.has(environmentId)) {
+    if (
+      !canUpdateServer(appAtomRegistry.get(sessionStateAtom)) ||
+      pendingUpdateEnvironmentIds.has(environmentId)
+    ) {
       return;
     }
     pendingUpdateEnvironmentIds.add(environmentId);
@@ -204,6 +226,7 @@ export function ServerUpdateAction({
               variant="ghost"
               className="text-muted-foreground hover:text-foreground"
               aria-label={`${actionLabel} for ${serverLabel}`}
+              disabled={manualCommand === null && !canUpdate}
               onClick={onClick}
             />
           }
@@ -216,7 +239,12 @@ export function ServerUpdateAction({
   }
 
   return (
-    <Button size="xs" variant={manualCommand === null ? "default" : "outline"} onClick={onClick}>
+    <Button
+      size="xs"
+      variant={manualCommand === null ? "default" : "outline"}
+      disabled={manualCommand === null && !canUpdate}
+      onClick={onClick}
+    >
       {actionLabel}
     </Button>
   );

@@ -11,6 +11,15 @@ import { HttpServerRequest } from "effect/unstable/http";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as AuthHttp from "./http.ts";
 
+it("drops retired and unknown token-exchange scopes but rejects a request left empty", () => {
+  expect(AuthHttp.parseRequestedGrantScopes(undefined)).toBeUndefined();
+  expect(AuthHttp.parseRequestedGrantScopes("orchestration:read review:write future:x")).toEqual([
+    "orchestration:read",
+  ]);
+  expect(AuthHttp.parseRequestedGrantScopes("review:write")).toBeNull();
+  expect(AuthHttp.parseRequestedGrantScopes("")).toBeNull();
+});
+
 it.effect("exports only verified T3 Connect requests", () =>
   Effect.gen(function* () {
     const productSpans: Array<string> = [];

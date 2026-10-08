@@ -53,6 +53,7 @@ import { layer as workspacePathsLayer } from "../../workspace/WorkspacePaths.ts"
 import { layer as providerTurnControlServiceLayer } from "../ProviderTurnControlService.ts";
 import { layer as providerTurnStartServiceLayer } from "../ProviderTurnStartService.ts";
 import { layer as runExecutionServiceLayer } from "../RunExecutionService.ts";
+import * as McpAppModelContext from "../../mcpApps/McpAppModelContext.ts";
 import { layer as runFinalizationServiceLayer } from "../RunFinalizationService.ts";
 import {
   layer as runtimePolicyLayer,
@@ -316,6 +317,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        McpAppModelContext.layerEmpty,
         checkpointServiceProvided,
         eventSinkProvided,
         idAllocatorLayer,

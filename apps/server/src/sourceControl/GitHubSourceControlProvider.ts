@@ -14,7 +14,7 @@ import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitHubApi from "./GitHubApi.ts";
-import * as GitHubCli from "./GitHubCli.ts";
+import * as GitHubRepositoryApi from "./GitHubRepositoryApi.ts";
 import {
   effectiveGitHubAccount,
   findAuthenticatedGitHubAccount,
@@ -33,7 +33,7 @@ import {
 } from "./SourceControlProviderDiscovery.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 
-function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeRequest {
+function toChangeRequest(summary: GitHubRepositoryApi.GitHubPullRequestSummary): ChangeRequest {
   return {
     provider: "github",
     number: summary.number,
@@ -259,7 +259,7 @@ export const makeDiscovery = Effect.gen(function* () {
 });
 
 export const make = Effect.gen(function* () {
-  const github = yield* GitHubCli.GitHubCli;
+  const github = yield* GitHubRepositoryApi.GitHubRepositoryApi;
 
   const listChangeRequests: SourceControlProvider.SourceControlProvider["Service"]["listChangeRequests"] =
     (input) => {

@@ -27,15 +27,24 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
+  AuthSettingsWriteScope,
+  AuthProvidersManageScope,
+  AuthEnvironmentMaintainScope,
+  AuthPreviewOperateScope,
+  AuthDiagnosticsReadScope,
+  AuthSourceControlWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
-  AuthReviewWriteScope,
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
   AuthStandardClientScopes,
   AuthTerminalOperateScope,
+  AuthTerminalReadScope,
   type AuthClientSession,
   type AuthEnvironmentScope,
+  type AuthGrantScope,
   type AuthPairingLink,
   type AdvertisedEndpoint,
   type DesktopDiscoveredSshHost,
@@ -69,6 +78,7 @@ import {
   isQrShareableEndpoint,
   isWslSettingsRowVisible,
   selectQrEndpointOption,
+  togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
 import {
   SettingsPageContainer,
@@ -206,20 +216,57 @@ function formatAccessTimestamp(value: string): string {
   return accessTimestampFormatter.format(parsed);
 }
 
+const EMPTY_SCOPES: ReadonlyArray<AuthEnvironmentScope> = [];
+
 const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
-  readonly scope: AuthEnvironmentScope;
+  readonly scope: AuthGrantScope;
   readonly title: string;
   readonly description: string;
 }> = [
   {
     scope: AuthOrchestrationReadScope,
     title: "View environment",
-    description: "Read threads, status, diffs, and configuration.",
+    description: "Read threads, status, checkpoints, and configuration.",
   },
   {
     scope: AuthOrchestrationOperateScope,
     title: "Operate tasks",
-    description: "Start tasks and perform changes in the environment.",
+    description: "Start, update, and stop tasks.",
+  },
+  {
+    scope: AuthSourceControlWriteScope,
+    title: "Change source control",
+    description: "Commit, push, manage branches and repositories, and change pull requests.",
+  },
+  {
+    scope: AuthSettingsWriteScope,
+    title: "Change environment settings",
+    description: "Edit environment preferences and keybindings.",
+  },
+  {
+    scope: AuthProvidersManageScope,
+    title: "Manage providers",
+    description: "Configure, install, sign in to, and update providers and usage sources.",
+  },
+  {
+    scope: AuthEnvironmentMaintainScope,
+    title: "Maintain environment",
+    description: "Update the server and control environment processes.",
+  },
+  {
+    scope: AuthPreviewOperateScope,
+    title: "Control previews",
+    description: "Open browser previews and host browser automation.",
+  },
+  {
+    scope: AuthDiagnosticsReadScope,
+    title: "View diagnostics and usage",
+    description: "Read process diagnostics, resource history, and usage totals.",
+  },
+  {
+    scope: AuthTerminalReadScope,
+    title: "View terminals",
+    description: "Read existing terminal output and status.",
   },
   {
     scope: AuthTerminalOperateScope,
@@ -227,9 +274,14 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     description: "Create terminals and send input to running shells.",
   },
   {
-    scope: AuthReviewWriteScope,
-    title: "Write reviews",
-    description: "Create comments while reviewing changes.",
+    scope: AuthFilesystemReadScope,
+    title: "Read files",
+    description: "Browse host files, search workspaces, and inspect local changes.",
+  },
+  {
+    scope: AuthFilesystemWriteScope,
+    title: "Write files",
+    description: "Edit workspace files and save plans to disk.",
   },
   {
     scope: AuthAccessReadScope,
@@ -460,6 +512,7 @@ function sortDesktopClientSessions(sessions: ReadonlyArray<ServerClientSessionRe
 function toDesktopPairingLinkRecord(pairingLink: AuthPairingLink): ServerPairingLinkRecord {
   return {
     ...pairingLink,
+    scopes: pairingLink.permissions ?? pairingLink.scopes,
     createdAt: DateTime.formatIso(pairingLink.createdAt),
     expiresAt: DateTime.formatIso(pairingLink.expiresAt),
   };
@@ -468,6 +521,7 @@ function toDesktopPairingLinkRecord(pairingLink: AuthPairingLink): ServerPairing
 function toDesktopClientSessionRecord(clientSession: AuthClientSession): ServerClientSessionRecord {
   return {
     ...clientSession,
+    scopes: clientSession.permissions ?? clientSession.scopes,
     issuedAt: DateTime.formatIso(clientSession.issuedAt),
     expiresAt: DateTime.formatIso(clientSession.expiresAt),
     lastConnectedAt:
@@ -1030,26 +1084,36 @@ type AuthorizedClientsHeaderActionProps = {
   clientSessions: ReadonlyArray<ServerClientSessionRecord>;
   isRevokingOtherClients: boolean;
   onRevokeOtherClients: () => void;
+  delegatableScopes: ReadonlyArray<AuthEnvironmentScope>;
 };
 
 const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderAction({
   clientSessions,
   isRevokingOtherClients,
   onRevokeOtherClients,
+  delegatableScopes,
 }: AuthorizedClientsHeaderActionProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pairingLabel, setPairingLabel] = useState("");
-  const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthEnvironmentScope>>([
+  // A client can only hand out permissions it holds; an older grant cannot
+  // delegate the newer, separated permissions.
+  const standardScopes = useMemo(
+    () => AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
+    [delegatableScopes],
+  );
+  const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthGrantScope>>([
     ...AuthStandardClientScopes,
   ]);
+  const selectedScopes = pairingScopes.filter((scope) => delegatableScopes.includes(scope));
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
   const handleCreatePairingLink = useCallback(async () => {
+    if (selectedScopes.length === 0) return;
     setIsCreatingPairingLink(true);
     try {
-      await createServerPairingCredential({ label: pairingLabel, scopes: pairingScopes });
+      await createServerPairingCredential({ label: pairingLabel, scopes: selectedScopes });
       setPairingLabel("");
-      setPairingScopes([...AuthStandardClientScopes]);
+      setPairingScopes(standardScopes);
       setDialogOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create pairing URL.";
@@ -1063,12 +1127,10 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     } finally {
       setIsCreatingPairingLink(false);
     }
-  }, [pairingLabel, pairingScopes]);
+  }, [pairingLabel, selectedScopes, standardScopes]);
 
-  const togglePairingScope = useCallback((scope: AuthEnvironmentScope, checked: boolean) => {
-    setPairingScopes((current) =>
-      checked ? [...current, scope] : current.filter((currentScope) => currentScope !== scope),
-    );
+  const togglePairingScope = useCallback((scope: AuthGrantScope, checked: boolean) => {
+    setPairingScopes((current) => togglePairingScopeSelection(current, scope, checked));
   }, []);
 
   return (
@@ -1089,7 +1151,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           setDialogOpen(open);
           if (!open) {
             setPairingLabel("");
-            setPairingScopes([...AuthStandardClientScopes]);
+            setPairingScopes(standardScopes);
           }
         }}
       >
@@ -1135,7 +1197,16 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                     size="xs"
                     variant="outline"
                     disabled={isCreatingPairingLink}
-                    onClick={() => setPairingScopes([AuthOrchestrationReadScope])}
+                    onClick={() =>
+                      setPairingScopes(
+                        [
+                          AuthOrchestrationReadScope,
+                          AuthFilesystemReadScope,
+                          AuthDiagnosticsReadScope,
+                          AuthTerminalReadScope,
+                        ].filter((scope) => delegatableScopes.includes(scope)),
+                      )
+                    }
                   >
                     Read only
                   </Button>
@@ -1143,36 +1214,38 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                     size="xs"
                     variant="outline"
                     disabled={isCreatingPairingLink}
-                    onClick={() => setPairingScopes([...AuthStandardClientScopes])}
+                    onClick={() => setPairingScopes(standardScopes)}
                   >
                     Standard
                   </Button>
                 </div>
               </div>
               <div className="divide-y divide-border/60 rounded-lg border border-input bg-muted/25">
-                {PAIRING_SCOPE_OPTIONS.map(({ scope, title, description }) => (
-                  <label
-                    key={scope}
-                    className="flex cursor-pointer items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
-                  >
-                    <Checkbox
-                      className="mt-0.5"
-                      checked={pairingScopes.includes(scope)}
-                      disabled={isCreatingPairingLink}
-                      onCheckedChange={(checked) => togglePairingScope(scope, checked === true)}
-                    />
-                    <span className="min-w-0">
-                      <span className="block text-xs font-medium text-foreground">{title}</span>
-                      <span className="block text-xs leading-snug text-muted-foreground">
-                        {description}
+                {PAIRING_SCOPE_OPTIONS.filter(({ scope }) => delegatableScopes.includes(scope)).map(
+                  ({ scope, title, description }) => (
+                    <label
+                      key={scope}
+                      className="flex cursor-pointer items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
+                    >
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={pairingScopes.includes(scope)}
+                        disabled={isCreatingPairingLink}
+                        onCheckedChange={(checked) => togglePairingScope(scope, checked === true)}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-xs font-medium text-foreground">{title}</span>
+                        <span className="block text-xs leading-snug text-muted-foreground">
+                          {description}
+                        </span>
                       </span>
-                    </span>
-                  </label>
-                ))}
+                    </label>
+                  ),
+                )}
               </div>
-              {pairingScopes.length === 0 ? (
+              {selectedScopes.length === 0 ? (
                 <p className="text-xs text-destructive">Select at least one permission.</p>
-              ) : pairingScopes.includes(AuthAccessWriteScope) ? (
+              ) : selectedScopes.includes(AuthAccessWriteScope) ? (
                 <p className="text-xs text-warning">
                   This client can create or revoke access for other devices.
                 </p>
@@ -1188,7 +1261,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
               Cancel
             </Button>
             <Button
-              disabled={isCreatingPairingLink || pairingScopes.length === 0}
+              disabled={isCreatingPairingLink || selectedScopes.length === 0}
               onClick={() => void handleCreatePairingLink()}
             >
               {isCreatingPairingLink ? "Creating…" : "Create link"}
@@ -1499,9 +1572,12 @@ function SavedBackendListRow({
   ) {
     setLastRelayHttpBaseUrl(discoveredRelayHttpBaseUrl);
   }
+  const prepared = usePreparedConnection(environmentId);
+  const connectedTarget = isConnected && prepared._tag === "Some" ? prepared.value.target : null;
   const mcpUrl = environmentMcpUrl({
     entry: environment.entry,
     relayHttpBaseUrl: discoveredRelayHttpBaseUrl ?? lastRelayHttpBaseUrl,
+    connectedTarget,
   });
   const resumingServerUpdate =
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
@@ -1513,11 +1589,10 @@ function SavedBackendListRow({
       : null;
   // A machine with several routes names the one in use, or its preferred one.
   const routes = connectionRoutes(environment.entry);
-  const prepared = usePreparedConnection(environmentId);
   const activeRoute =
-    routes.length > 1 && isConnected && prepared._tag === "Some"
+    routes.length > 1 && connectedTarget !== null
       ? routes.find(
-          (route) => connectionRouteId(route.target) === connectionRouteId(prepared.value.target),
+          (route) => connectionRouteId(route.target) === connectionRouteId(connectedTarget),
         )
       : undefined;
   const metadataBits = [
@@ -1976,7 +2051,7 @@ export function ConnectionsSettings() {
   const currentSessionScopes = desktopBridge
     ? AuthAdministrativeScopes
     : primarySessionState.data?.authenticated
-      ? (primarySessionState.data.scopes ?? null)
+      ? (primarySessionState.data.permissions ?? primarySessionState.data.scopes ?? null)
       : null;
   const currentAuthPolicy = desktopBridge ? null : (primarySessionState.data?.auth.policy ?? null);
   const savedEnvironments = useMemo(
@@ -3503,6 +3578,7 @@ export function ConnectionsSettings() {
                   clientSessions={desktopClientSessions}
                   isRevokingOtherClients={isRevokingOtherDesktopClients}
                   onRevokeOtherClients={handleRevokeOtherDesktopClients}
+                  delegatableScopes={currentSessionScopes ?? EMPTY_SCOPES}
                 />
               }
             >

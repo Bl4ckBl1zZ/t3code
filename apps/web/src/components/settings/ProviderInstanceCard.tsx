@@ -553,6 +553,18 @@ export function ProviderInstanceCard({
     enabled,
   );
   const updateCommand = versionAdvisory?.updateCommand ?? null;
+  const updateState = liveProvider?.updateState;
+  // The server reports each update step. `isUpdating` also covers the moment
+  // between the click and the server's first report.
+  const updateProgress = isUpdating
+    ? ((updateState?.status === "queued" || updateState?.status === "running"
+        ? updateState.message
+        : null) ?? "Starting update")
+    : null;
+  const updateProblem =
+    !isUpdating && (updateState?.status === "failed" || updateState?.status === "unchanged")
+      ? updateState.message
+      : null;
   const hasCompatibilityWarning =
     compatibility !== undefined &&
     compatibility.status !== "supported" &&
@@ -814,16 +826,24 @@ export function ProviderInstanceCard({
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate text-sm font-medium">{displayName}</span>
               {versionCodeNode}
-              {versionAdvisory ? (
+              {updateProgress ? (
+                <Spinner tone="muted" size="sm" aria-label="Updating" />
+              ) : versionAdvisory ? (
                 <VersionAdvisoryIcon
                   className="size-3 shrink-0 text-warning"
                   aria-label={versionAdvisory.title}
                 />
               ) : null}
             </span>
-            <span className="block truncate text-xs text-muted-foreground">
-              {summary.headline}
-              {inlineStatusDetail ? ` · ${inlineStatusDetail}` : ""}
+            <span aria-live="polite" className="block truncate text-xs text-muted-foreground">
+              {updateProgress ? (
+                `Updating · ${updateProgress}`
+              ) : (
+                <>
+                  {summary.headline}
+                  {inlineStatusDetail ? ` · ${inlineStatusDetail}` : ""}
+                </>
+              )}
             </span>
             {String(instanceId) !== String(instance.driver) ? (
               <code className="block truncate text-[10px] text-muted-foreground">{instanceId}</code>
@@ -875,15 +895,21 @@ export function ProviderInstanceCard({
                                   ? "text-warning hover:text-warning"
                                   : "text-update-foreground hover:text-update-foreground",
                               )}
-                              aria-label={`${versionAdvisory.title} — view details`}
+                              aria-label={`${updateProgress ? "Updating" : versionAdvisory.title} — view details`}
                             >
-                              <VersionAdvisoryIcon className="size-3.5" />
+                              {updateProgress ? (
+                                <Spinner tone="muted" size="sm" />
+                              ) : (
+                                <VersionAdvisoryIcon className="size-3.5" />
+                              )}
                             </Button>
                           }
                         />
                       }
                     />
-                    <TooltipPopup side="top">{versionAdvisory.title}</TooltipPopup>
+                    <TooltipPopup side="top">
+                      {updateProgress ? "Updating" : versionAdvisory.title}
+                    </TooltipPopup>
                   </Tooltip>
                   <PopoverPopup side="bottom" align="start" width="md">
                     <div className="grid min-w-0 gap-3">
@@ -918,6 +944,17 @@ export function ProviderInstanceCard({
                               ? `Install ${getProviderVersionLabel(versionAdvisory.targetVersion)}`
                               : "Update now"}
                         </Button>
+                      ) : null}
+                      {updateProgress || updateProblem ? (
+                        <p
+                          aria-live="polite"
+                          className={cn(
+                            "text-xs leading-snug [overflow-wrap:anywhere]",
+                            updateProblem ? "text-warning" : "text-muted-foreground",
+                          )}
+                        >
+                          {updateProgress ?? updateProblem}
+                        </p>
                       ) : null}
                       {onRunVersionAction && updateCommand ? (
                         <div className="flex items-center gap-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">

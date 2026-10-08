@@ -173,6 +173,64 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 
+  it.effect("never copies a settled thread's rows, and new events append after the source's", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-slice-" });
+      const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-slice-dest-" });
+      const source = yield* createFixtureSource(sourceDir);
+      const readSequences = Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        return yield* sql<{ name: string; seq: number }>`
+          SELECT name, seq FROM sqlite_sequence
+          WHERE name IN ('orchestration_events', 'orchestration_v2_events')
+          ORDER BY name`;
+      });
+      const sourceSequences = yield* withDatabase(source, readSequences);
+
+      // Keep every family, so only the copy can leave the settled one out.
+      const result = yield* runMigrateDevDb(
+        { baseDir: destDir, source, projects: 5, threadsPerProject: 100 },
+        { sharedHome: sourceDir },
+      );
+
+      const copied = yield* withDatabase(
+        result.databasePath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const [settledRows] = yield* sql<{ count: number }>`
+            SELECT
+              (SELECT COUNT(*) FROM orchestration_v2_projection_runs WHERE thread_id = 'settled-thread')
+              + (SELECT COUNT(*) FROM orchestration_v2_events WHERE thread_id = 'settled-thread')
+              AS count`;
+          return { settledRows: settledRows?.count, sequences: yield* readSequences };
+        }),
+      );
+      assert.equal(copied.settledRows, 0);
+      assert.equal(sourceSequences.length, 2);
+      assert.deepStrictEqual(copied.sequences, sourceSequences);
+    }),
+  );
+
+  it.effect("upgrades a source from before the V2 thread tables", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-v1-" });
+      const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-v1-dest-" });
+      const stateDir = path.join(sourceDir, "userdata");
+      const source = path.join(stateDir, "state.sqlite");
+      yield* fs.makeDirectory(stateDir, { recursive: true });
+      yield* withDatabase(source, runMigrations({ toMigrationInclusive: 35 }));
+
+      const result = yield* runMigrateDevDb(
+        { baseDir: destDir, source, projects: 5, threadsPerProject: 10 },
+        { sharedHome: sourceDir },
+      );
+      assert.include(result.executedMigrations, "36_OrchestrationV2");
+    }),
+  );
+
   it.effect("fails loudly on a migration slot collision", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

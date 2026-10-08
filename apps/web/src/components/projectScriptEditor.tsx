@@ -79,6 +79,8 @@ export interface NewProjectScriptInput {
   icon: ProjectScriptIcon;
   runOnWorktreeCreate: boolean;
   runOnWorktreeDelete: boolean;
+  /** Run in the thread's worktree each time the thread settles. */
+  runOnSettle: boolean;
   keybinding: string | null;
   /** Optional URL to open in the in-app preview when this script runs. */
   previewUrl: string | null;
@@ -96,6 +98,7 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
   icon: "play",
   runOnWorktreeCreate: false,
   runOnWorktreeDelete: false,
+  runOnSettle: false,
   keybinding: null,
   previewUrl: null,
   autoOpenPreview: false,
@@ -122,6 +125,7 @@ export function editorRequestForScript(
       icon: script.icon,
       runOnWorktreeCreate: script.runOnWorktreeCreate,
       runOnWorktreeDelete: script.runOnWorktreeDelete ?? false,
+      runOnSettle: script.runOnSettle ?? false,
       keybinding: keybindingValueForCommand(keybindings, commandForProjectScript(script.id)),
       previewUrl: script.previewUrl ?? null,
       autoOpenPreview: script.autoOpenPreview ?? false,
@@ -159,6 +163,7 @@ export function ProjectScriptEditorDialog({
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [runOnWorktreeCreate, setRunOnWorktreeCreate] = useState(false);
   const [runOnWorktreeDelete, setRunOnWorktreeDelete] = useState(false);
+  const [runOnSettle, setRunOnSettle] = useState(false);
   const [singleRun, setSingleRun] = useState(false);
   const [keybinding, setKeybinding] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
@@ -178,6 +183,7 @@ export function ProjectScriptEditorDialog({
     setIconPickerOpen(false);
     setRunOnWorktreeCreate(request.initial.runOnWorktreeCreate);
     setRunOnWorktreeDelete(request.initial.runOnWorktreeDelete);
+    setRunOnSettle(request.initial.runOnSettle);
     setSingleRun(request.initial.singleRun);
     setKeybinding(request.initial.keybinding ?? "");
     setPreviewUrl(request.initial.previewUrl ?? "");
@@ -231,6 +237,7 @@ export function ProjectScriptEditorDialog({
         icon,
         runOnWorktreeCreate,
         runOnWorktreeDelete,
+        runOnSettle,
         keybinding: keybindingRule?.key ?? null,
         previewUrl: trimmedPreviewUrl.length > 0 ? trimmedPreviewUrl : null,
         autoOpenPreview: trimmedPreviewUrl.length > 0 ? autoOpenPreview : false,
@@ -370,6 +377,13 @@ export function ProjectScriptEditorDialog({
                 <Switch
                   checked={runOnWorktreeDelete}
                   onCheckedChange={(checked) => setRunOnWorktreeDelete(Boolean(checked))}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+                <span>Run in the thread's worktree when the thread settles</span>
+                <Switch
+                  checked={runOnSettle}
+                  onCheckedChange={(checked) => setRunOnSettle(Boolean(checked))}
                 />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">

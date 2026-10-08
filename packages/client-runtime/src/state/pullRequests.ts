@@ -15,7 +15,6 @@ import { Atom } from "effect/unstable/reactivity";
 
 import {
   createAtomCommandScheduler,
-  createEnvironmentCommand,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentQueryAtomFamily,
@@ -23,7 +22,7 @@ import {
 import { PullRequestDiffLoader } from "./pullRequestDiffHttp.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import { request } from "../rpc/client.ts";
+import { request, requestGuarded } from "../rpc/client.ts";
 
 export {
   type PullRequestDiffLoadError,
@@ -195,7 +194,8 @@ export function createPullRequestEnvironmentAtoms<R, E>(
           ]),
       },
     }),
-    runAction: createEnvironmentCommand(runtime, {
+    runAction: createEnvironmentRpcCommand(runtime, {
+      tag: WS_METHODS.pullRequestsRunAction,
       label: "environment-data:pull-requests:run-action",
       // Preparation belongs to the write's lane: preparing outside it could let a later click
       // overtake this one.
@@ -207,7 +207,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
             actionInput.mergeMethod !== undefined ||
             prepareMerge === undefined
           ) {
-            return yield* request(WS_METHODS.pullRequestsRunAction, actionInput);
+            return yield* requestGuarded(WS_METHODS.pullRequestsRunAction, actionInput);
           }
           const { projectId, host, repository, number } = actionInput;
           const reference = {
@@ -238,7 +238,10 @@ export function createPullRequestEnvironmentAtoms<R, E>(
                 cause instanceof Error ? cause.message : "Could not choose a merge method.",
               ),
           });
-          return yield* request(WS_METHODS.pullRequestsRunAction, { ...actionInput, mergeMethod });
+          return yield* requestGuarded(WS_METHODS.pullRequestsRunAction, {
+            ...actionInput,
+            mergeMethod,
+          });
         }),
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,

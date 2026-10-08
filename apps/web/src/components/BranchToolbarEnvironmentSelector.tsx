@@ -4,13 +4,6 @@ import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { memo, useMemo } from "react";
 
 import type { EnvironmentOption } from "./BranchToolbar.logic";
-import { cn } from "../lib/utils";
-import {
-  THREAD_DETAILS_PANEL_ICON_CLASS,
-  THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
-  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
-  THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
-} from "./chat/threadDetailsPanelStyles";
 import {
   Select,
   SelectGroup,
@@ -29,7 +22,6 @@ interface BranchToolbarEnvironmentSelectorProps {
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
-  displayMode?: "toolbar" | "panel";
 }
 
 export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvironmentSelector({
@@ -39,7 +31,6 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   environmentId,
   availableEnvironments,
   onEnvironmentChange,
-  displayMode = "toolbar",
 }: BranchToolbarEnvironmentSelectorProps) {
   const activeEnvironment = useMemo(() => {
     return availableEnvironments.find((env) => env.environmentId === environmentId) ?? null;
@@ -66,17 +57,12 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         <TooltipTrigger
           render={
             <span
-              className={cn(
-                "inline-flex h-7 min-w-0 max-w-full items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs",
-                displayMode === "panel" && THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
-              )}
+              className="inline-flex h-7 min-w-0 max-w-full items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs"
               data-composer-context-control
             >
               <EnvironmentMachineIcon
                 kind={activeEnvironment?.machineKind ?? "server"}
-                className={
-                  displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
-                }
+                className="size-3 shrink-0"
               />
               <span
                 data-composer-label
@@ -111,11 +97,8 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           render={
             <SelectTrigger
               variant="ghost"
-              size={displayMode === "panel" ? "default" : "xs"}
-              className={cn(
-                "min-w-0 max-w-full font-medium",
-                displayMode === "panel" && THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
-              )}
+              size="xs"
+              className="min-w-0 max-w-full font-medium"
               aria-label="Run on"
               data-composer-context-control
             />
@@ -126,9 +109,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           ) : (
             <EnvironmentMachineIcon
               kind={activeEnvironment?.machineKind ?? "server"}
-              className={
-                displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
-              }
+              className="size-3 shrink-0"
             />
           )}
           <span
@@ -145,14 +126,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         </TooltipTrigger>
         <TooltipPopup>{autoEnvironmentLabel ?? activeEnvironment?.label ?? "Run on"}</TooltipPopup>
       </Tooltip>
-      <SelectPopup
-        alignItemWithTrigger={false}
-        {...(displayMode === "panel"
-          ? {
-              popupClassName: THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
-            }
-          : {})}
-      >
+      <SelectPopup alignItemWithTrigger={false}>
         <SelectGroup>
           <SelectGroupLabel>Run on</SelectGroupLabel>
           {onAutoEnvironment ? (

@@ -1,3 +1,5 @@
+import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
+import { vi } from "vite-plus/test";
 import { ClaudeSettings } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -11,6 +13,8 @@ import {
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
   probeClaudeCapabilities,
 } from "./ClaudeProvider.ts";
+
+vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
@@ -103,3 +107,25 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.effect("asks for usage without the local transcript scan", () =>
+  Effect.gen(function* () {
+    let usageOptions: unknown;
+    const query = vi.spyOn(ClaudeSdk, "query").mockImplementation(
+      () =>
+        ({
+          initializationResult: async () => ({
+            account: { email: "dev@example.com", subscriptionType: "max", tokenSource: "oauth" },
+            commands: [],
+          }),
+          usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async (options?: unknown) => {
+            usageOptions = options;
+            return { rate_limits_available: true, rate_limits: null };
+          },
+        }) as unknown as ReturnType<typeof ClaudeSdk.query>,
+    );
+    yield* Effect.addFinalizer(() => Effect.sync(() => query.mockRestore()));
+    yield* probeClaudeCapabilities(decodeClaudeSettings({ binaryPath: "claude" }));
+    assert.deepEqual(usageOptions, { skipBehaviors: true });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

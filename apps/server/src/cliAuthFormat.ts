@@ -77,7 +77,7 @@ export function formatPairingCredentialList(
       credentials.map((credential) => ({
         id: credential.id,
         ...(credential.label ? { label: credential.label } : {}),
-        scopes: credential.scopes,
+        scopes: credential.permissions ?? credential.scopes,
         createdAt: toIsoString(credential.createdAt),
         expiresAt: toIsoString(credential.expiresAt),
       })),
@@ -95,7 +95,7 @@ export function formatPairingCredentialList(
       .map((credential) =>
         [
           `${credential.id}${credential.label ? ` (${credential.label})` : ""}`,
-          `  scopes: ${credential.scopes.join(" ")}`,
+          `  scopes: ${(credential.permissions ?? credential.scopes).join(" ")}`,
           `  created: ${toIsoString(credential.createdAt)}`,
           `  expires: ${toIsoString(credential.expiresAt)}`,
         ].join(newline),
@@ -154,7 +154,7 @@ export function formatSessionList(
       sessions.map((session) => ({
         sessionId: session.sessionId,
         method: session.method,
-        scopes: session.scopes,
+        scopes: session.permissions ?? session.scopes,
         subject: session.subject,
         client: session.client,
         connected: session.connected,
@@ -176,7 +176,7 @@ export function formatSessionList(
       .map((session) =>
         [
           `${session.sessionId}${session.connected ? " connected" : ""}`,
-          `  scopes: ${session.scopes.join(" ")}`,
+          `  scopes: ${(session.permissions ?? session.scopes).join(" ")}`,
           `  method: ${session.method}`,
           `  subject: ${session.subject}`,
           `  client: ${formatClientMetadata(session.client)}`,

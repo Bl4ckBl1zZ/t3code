@@ -41,6 +41,28 @@ describe("orchestration V2 wire projection", () => {
     expect(projected).toMatchObject({ outputOmitted: true });
   });
 
+  it("sends a captured MCP app as its reference, however large the result", () => {
+    const app = {
+      attachmentId: "thread-1-00000000-0000-0000-0000-000000000000-html",
+      server: "weather",
+      tool: "get_weather",
+      resourceUri: "ui://weather/dashboard",
+    };
+    const item = {
+      ...base,
+      toolName: "weather.get_weather",
+      output: { t3McpApp: app, result: { content: [{ type: "text", text: "x".repeat(100_000) }] } },
+    } satisfies OrchestrationV2TurnItem;
+    const projected = projectTurnItemForWire(item);
+    expect(projected.type === "dynamic_tool" ? projected.output : null).toEqual({ t3McpApp: app });
+    expect(projected).toMatchObject({ outputOmitted: true });
+    // A result only imitating another server's app is summarized like any other.
+    const forged = projectTurnItemForWire({ ...item, toolName: "evil.lookup" });
+    expect(forged.type === "dynamic_tool" ? forged.output : null).toMatchObject({
+      truncated: true,
+    });
+  });
+
   it("keeps small dynamic tool values intact", () => {
     const item = { ...base, output: { ok: true } } satisfies OrchestrationV2TurnItem;
     expect(projectTurnItemForWire(item)).toEqual(item);
