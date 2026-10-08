@@ -18,9 +18,21 @@ struct NativeThreadDetailSync {
     private(set) var sequence: Int
     private var held: [(sequence: Int, event: OrchestrationV2ThreadEvent)] = []
 
+    /// A projection read back from the on-disk cache.
+    private var provisional = false
+
     init(snapshot: OrchestrationV2ThreadDetailSnapshot) {
-        live = OrchestrationV2LiveProjection(snapshot.projection)
-        sequence = snapshot.snapshotSequence
+        self.init(projection: snapshot.projection, sequence: snapshot.snapshotSequence)
+    }
+
+    /// `provisional` marks a cached projection: its sequence is only a resume
+    /// cursor, so the server's next snapshot replaces it even at a lower
+    /// sequence (the server's store may have been reset since it was cached).
+    /// The stream's first batch settles it either way.
+    init(projection: OrchestrationV2ThreadProjection, sequence: Int, provisional: Bool = false) {
+        live = OrchestrationV2LiveProjection(projection)
+        self.sequence = sequence
+        self.provisional = provisional
     }
 
     /// A thread whose projection has not arrived yet. Events wait for it.
@@ -30,6 +42,10 @@ struct NativeThreadDetailSync {
     }
 
     var projection: OrchestrationV2ThreadProjection? { live?.projection }
+
+    /// Whether the projection is still the cached one, not yet confirmed by
+    /// the server.
+    var isProvisional: Bool { provisional }
 
     /// Whether folding is paused until a snapshot arrives.
     var awaitingSnapshot: Bool { live == nil || !held.isEmpty }
@@ -57,6 +73,7 @@ struct NativeThreadDetailSync {
                 fold(sequence: sequence, event: event, into: &result)
             }
         }
+        if !items.isEmpty { provisional = false }
         return result
     }
 
@@ -73,7 +90,8 @@ struct NativeThreadDetailSync {
         _ snapshot: OrchestrationV2ThreadDetailSnapshot,
         into result: inout Result
     ) -> Bool {
-        guard live == nil || snapshot.snapshotSequence >= sequence else { return false }
+        guard live == nil || provisional || snapshot.snapshotSequence >= sequence else { return false }
+        provisional = false
         live = OrchestrationV2LiveProjection(snapshot.projection)
         sequence = snapshot.snapshotSequence
         result.changed = true

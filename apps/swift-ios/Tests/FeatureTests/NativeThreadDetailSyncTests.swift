@@ -38,6 +38,40 @@ struct NativeThreadDetailSyncTests {
         #expect(text(sync.projection) == "ten")
     }
 
+    @Test func aCachedProjectionTakesTheServersSnapshotEvenAtALowerSequence() {
+        let cached = snapshot(sequence: 10, text: "cached")
+        var sync = NativeThreadDetailSync(
+            projection: cached.projection,
+            sequence: 10,
+            provisional: true
+        )
+        #expect(sync.isProvisional)
+
+        // The server's store was reset: its snapshot is older than the cache.
+        _ = sync.receive([.snapshot(snapshot(sequence: 3, text: "server"))])
+
+        #expect(!sync.isProvisional)
+        #expect(sync.sequence == 3)
+        #expect(text(sync.projection) == "server")
+        // Confirmed now, so an older snapshot is a stale one again.
+        #expect(sync.adopt(snapshot(sequence: 2, text: "stale")) == nil)
+    }
+
+    @Test func aCachedProjectionIsConfirmedByAReplayedGap() {
+        let cached = snapshot(sequence: 10, text: "cached")
+        var sync = NativeThreadDetailSync(
+            projection: cached.projection,
+            sequence: 10,
+            provisional: true
+        )
+
+        _ = sync.receive([.event(sequence: 11, event: assistant("eleven"))])
+
+        #expect(!sync.isProvisional)
+        #expect(sync.sequence == 11)
+        #expect(sync.adopt(snapshot(sequence: 9, text: "older")) == nil)
+    }
+
     @Test func aSnapshotStillOlderThanTheUndecodableEventKeepsHolding() {
         var sync = NativeThreadDetailSync(snapshot: snapshot(sequence: 4, text: "four"))
         _ = sync.receive([

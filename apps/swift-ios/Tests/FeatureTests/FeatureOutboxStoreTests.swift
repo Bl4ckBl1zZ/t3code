@@ -142,4 +142,66 @@ struct FeatureOutboxStoreTests {
             ) == .wait
         )
     }
+
+    /// A transient reconnecting state (or rows painted from the cache) must
+    /// not hold delivery while the socket is open, but only a synchronized
+    /// snapshot may conclude a thread or project is gone.
+    @Test
+    func liveSocketSendsThroughReconnectingButNeverDiscards() {
+        let creation = FeatureQueuedSubmission(
+            environmentID: "environment-1",
+            identity: FeatureSubmissionIdentity(),
+            threadID: "thread-new",
+            text: "Create it",
+            selection: nil,
+            runtimeMode: .fullAccess,
+            interactionMode: .standard,
+            attachments: [],
+            creation: .init(
+                projectID: "project-1",
+                projectName: "Native",
+                workspaceMode: .local,
+                branch: nil,
+                worktreePath: nil,
+                startFromOrigin: false
+            )
+        )
+        var followUp = creation
+        followUp.creation = nil
+        followUp.threadID = "thread-existing"
+        let reconnecting = FeatureSnapshot(
+            connection: .init(state: .reconnecting),
+            environments: [
+                .init(
+                    id: "environment-1",
+                    name: "Studio",
+                    endpoint: "https://studio.example",
+                    isActive: true,
+                    connectionState: .reconnecting
+                ),
+            ],
+            projects: [
+                .init(id: "project-1", environmentID: "environment-1", name: "Native", path: "/native"),
+            ],
+            threads: [
+                FeatureThread(
+                    id: "thread-existing",
+                    projectID: "project-1",
+                    environmentID: "environment-1",
+                    title: "Existing"
+                ),
+            ]
+        )
+
+        #expect(FeatureOutboxPolicy.decision(for: creation, snapshot: reconnecting) == .wait)
+        #expect(FeatureOutboxPolicy.decision(for: creation, snapshot: reconnecting, socketIsLive: true) == .send)
+        #expect(FeatureOutboxPolicy.decision(for: followUp, snapshot: reconnecting) == .wait)
+        #expect(FeatureOutboxPolicy.decision(for: followUp, snapshot: reconnecting, socketIsLive: true) == .send)
+
+        var unknown = reconnecting
+        unknown.projects = []
+        unknown.threads = []
+        #expect(FeatureOutboxPolicy.decision(for: creation, snapshot: unknown, socketIsLive: true) == .wait)
+        #expect(FeatureOutboxPolicy.decision(for: followUp, snapshot: unknown, socketIsLive: true) == .wait)
+    }
 }
