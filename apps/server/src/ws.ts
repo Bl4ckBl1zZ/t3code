@@ -114,9 +114,11 @@ import { HermesDashboardClient } from "./hermes/HermesDashboardClient.ts";
 import { HermesWorkService } from "./hermes/HermesWorkService.ts";
 import { HermesWorkGroupsService } from "./hermes/HermesWorkGroupsService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as LiveThreadShells from "./orchestration-v2/LiveThreadShells.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
+  canChangeShell,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
@@ -628,6 +630,7 @@ const makeWsRpcLayer = (
       const providerInstallation = yield* makeProviderInstallation();
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+      const liveThreadShells = yield* LiveThreadShells.LiveThreadShells;
       const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
@@ -1032,6 +1035,26 @@ const makeWsRpcLayer = (
               resolvedRepositoryIdentityRoots: enriched.resolvedRepositoryIdentityRoots,
             };
           });
+          // A resuming client keeps its shell body and replays deltas, so the
+          // metadata frame it gets first needs project identities only, not a
+          // shell for every thread.
+          const loadResumeMetadata = Effect.fn("ws.orchestrationV2.loadShellResumeMetadata")(
+            function* (snapshotSequence: number) {
+              const enriched = yield* enrichProjectShells(
+                yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment(),
+              );
+              return {
+                snapshot: {
+                  schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+                  snapshotSequence,
+                  projects: enriched.projects,
+                  threads: [],
+                  archivedThreads: [],
+                } as OrchestrationV2ShellSnapshot,
+                resolvedRepositoryIdentityRoots: enriched.resolvedRepositoryIdentityRoots,
+              };
+            },
+          );
           const projectItem = Effect.fn("ws.orchestrationV2.projectShellItem")(function* (
             stored: Extract<ApplicationStoredEvent, { readonly aggregateKind: "project" }>,
           ) {
@@ -1062,7 +1085,8 @@ const makeWsRpcLayer = (
           // Coalescing makes each per-thread shell read represent every event
           // for that thread in the current window; reading only the affected
           // threads keeps the cost of a busy stream independent of how many
-          // threads exist overall.
+          // threads exist overall, and the shared reader keeps it independent
+          // of how many clients are subscribed.
           const projectShellItems = Effect.fn("ws.orchestrationV2.projectShellItems")(function* (
             events: ReadonlyArray<ApplicationStoredEvent>,
           ) {
@@ -1073,7 +1097,10 @@ const makeWsRpcLayer = (
                   if ("aggregateKind" in stored) {
                     return yield* projectItem(stored);
                   }
-                  const shell = yield* threadManagement.getThreadShell(stored.event.threadId);
+                  const shell = yield* liveThreadShells.read({
+                    threadId: stored.event.threadId,
+                    sequence: stored.sequence,
+                  });
                   return shellStreamItemFromThreadShell({ stored, shell });
                 }),
               { concurrency: 8 },
@@ -1082,6 +1109,7 @@ const makeWsRpcLayer = (
 
           const toShellStream = <E, R>(stream: Stream.Stream<ApplicationStoredEvent, E, R>) =>
             stream.pipe(
+              Stream.filter(canChangeShell),
               Stream.groupedWithin(512, Duration.millis(50)),
               Stream.mapEffect((events) => projectShellItems(Array.from(events))),
               Stream.flatMap(Stream.fromIterable),
@@ -1182,35 +1210,28 @@ const makeWsRpcLayer = (
             Stream.concat(completionMarker, liveFrom(afterSequence));
 
           const stream = yield* Effect.gen(function* () {
+            if (input.afterSequence !== undefined) {
+              const highWater = yield* applicationEvents.latestApplicationSequence;
+              const replayGap = highWater - input.afterSequence;
+              if (replayGap >= 0 && replayGap <= SHELL_RESUME_MAX_GAP) {
+                const replay = toShellStream(
+                  applicationEvents.readApplicationEvents({
+                    afterSequence: input.afterSequence,
+                    throughSequence: highWater,
+                  }),
+                );
+                return composeShellStreamWithEnrichment({
+                  initial: initialEnrichmentItems(yield* loadResumeMetadata(highWater)),
+                  tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
+                  enrichment: enrichmentRefreshes,
+                });
+              }
+              // Too far behind, or ahead of this server: replace the client's shell.
+            }
             const loaded = yield* loadSnapshot();
-            const initial = initialSnapshotItems(loaded);
-            if (input.afterSequence === undefined) {
-              return composeShellStreamWithEnrichment({
-                initial,
-                tail: completionThenLive(loaded.snapshot.snapshotSequence),
-                enrichment: enrichmentRefreshes,
-              });
-            }
-
-            const highWater = yield* applicationEvents.latestApplicationSequence;
-            const replayGap = highWater - input.afterSequence;
-            if (replayGap < 0 || replayGap > SHELL_RESUME_MAX_GAP) {
-              return composeShellStreamWithEnrichment({
-                initial,
-                tail: completionThenLive(loaded.snapshot.snapshotSequence),
-                enrichment: enrichmentRefreshes,
-              });
-            }
-
-            const replay = toShellStream(
-              applicationEvents.readApplicationEvents({
-                afterSequence: input.afterSequence,
-                throughSequence: highWater,
-              }),
-            );
             return composeShellStreamWithEnrichment({
-              initial: initialEnrichmentItems(loaded),
-              tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
+              initial: initialSnapshotItems(loaded),
+              tail: completionThenLive(loaded.snapshot.snapshotSequence),
               enrichment: enrichmentRefreshes,
             });
           }).pipe(
@@ -1271,13 +1292,14 @@ const makeWsRpcLayer = (
         const live = threadManagement
           .streamStoredEventsFrom({ afterSequence: snapshot.snapshotSequence })
           .pipe(
+            Stream.filter(canChangeShell),
             Stream.groupedWithin(512, Duration.millis(50)),
             Stream.mapEffect((events) =>
               Effect.forEach(
                 coalesceStoredThreadEvents(Array.from(events)),
                 (stored) =>
-                  threadManagement
-                    .getThreadShell(stored.event.threadId)
+                  liveThreadShells
+                    .read({ threadId: stored.event.threadId, sequence: stored.sequence })
                     .pipe(
                       Effect.map((shell) =>
                         archivedShellStreamItemFromThreadShell({ stored, shell }),

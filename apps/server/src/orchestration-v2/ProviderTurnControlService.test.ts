@@ -225,6 +225,7 @@ it.effect(
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
           getThreadShell: () => Effect.die("unused getThreadShell"),
+          listThreads: () => Effect.die("unused listThreads"),
           getPlan: () => Effect.die("unused getPlan"),
           getThreadProjection: () => Ref.get(projection),
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),

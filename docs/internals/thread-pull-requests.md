@@ -66,6 +66,9 @@ share the user role but do not move the anchor. The thread shell carries this st
 
 The worker captures the thread event sequence before reading its shell. `thread.settle.automatic`
 carries that sequence into the existing serialized V2 dispatch; changed threads are rejected.
+A thread's own `run.updated` and `thread.metadata-updated` events decide only that thread again;
+the minute sweep, settings changes, and merge notifications decide every candidate, which covers
+inactivity that came due in between.
 Automatic settlement records the last activity time and preserves pin metadata. Manual settlement
 keeps its existing semantics. A new user turn or explicit reopen uses the existing V2 wake path.
 

@@ -5,6 +5,7 @@ import {
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
 import type {
+  OrchestrationV2AppThread,
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
   OrchestrationV2LatestVisibleMessageSummary,
@@ -19,6 +20,7 @@ import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
   MessageId,
+  ProjectId,
   ProviderSessionId,
 } from "@t3tools/contracts";
 import {
@@ -139,6 +141,79 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "snoozedUntil"
 >;
 
+/**
+ * Which thread records a background sweep reads. Each kind filters on the thread row alone, with
+ * none of the shell's per-thread run, message, and item reads. It may return threads the sweep's
+ * own policy then skips, but never leaves out one that policy would act on. Every kind except
+ * `workspace-users` reads undeleted, unarchived threads.
+ */
+export type ProjectionThreadQuery =
+  | {
+      readonly kind: "active";
+      readonly threadIds?: ReadonlyArray<ThreadId> | undefined;
+      readonly projectIds?: ReadonlyArray<ProjectId> | undefined;
+    }
+  /** Not settled, not opted out of automatic settlement, and not the work inbox. */
+  | { readonly kind: "auto-settle-candidates"; readonly threadIds?: ReadonlyArray<ThreadId> }
+  /** Settled, unpinned, and in Settled since `settledBefore` or earlier. */
+  | {
+      readonly kind: "auto-delete-candidates";
+      readonly settledBefore: DateTime.Utc;
+      readonly threadIds?: ReadonlyArray<ThreadId>;
+    }
+  /** Carrying any pull request link, current or legacy. */
+  | { readonly kind: "pull-request-links" }
+  /** Undeleted threads, archived ones included, that may use a worktree or a project branch. */
+  | {
+      readonly kind: "workspace-users";
+      readonly worktreePath: string;
+      readonly projectId: ProjectId;
+      readonly branch: string | null;
+    };
+
+/** What `listThreads` returns for one thread; the SQL store applies the same terms in SQL. */
+export function threadMatchesQuery(
+  thread: OrchestrationV2AppThread,
+  query: ProjectionThreadQuery,
+): boolean {
+  if (thread.deletedAt !== null) return false;
+  if (query.kind === "workspace-users") {
+    return (
+      (thread.worktreePath !== null && thread.worktreePath.includes(query.worktreePath)) ||
+      (query.branch !== null &&
+        thread.projectId === query.projectId &&
+        thread.branch === query.branch)
+    );
+  }
+  if (thread.archivedAt !== null) return false;
+  if ("threadIds" in query && query.threadIds !== undefined && !query.threadIds.includes(thread.id))
+    return false;
+  switch (query.kind) {
+    case "active":
+      return query.projectIds === undefined || query.projectIds.includes(thread.projectId);
+    case "auto-settle-candidates":
+      return (
+        thread.settledOverride === null &&
+        thread.autoSettleDisabledAt == null &&
+        thread.workInboxRole !== "main"
+      );
+    case "auto-delete-candidates": {
+      if (thread.settledOverride !== "settled" || thread.pinnedAt != null) return false;
+      const since = thread.settledRecordedAt ?? thread.settledAt;
+      return (
+        since !== null &&
+        DateTime.toEpochMillis(since) <= DateTime.toEpochMillis(query.settledBefore)
+      );
+    }
+    case "pull-request-links":
+      return (
+        thread.pullRequests !== undefined ||
+        thread.linkedPullRequests !== undefined ||
+        thread.linkedPullRequest != null
+      );
+  }
+}
+
 /** Narrows a record read; each list filters only its own table. */
 export interface ProjectionRecordFilter {
   readonly messageRoles?: ReadonlyArray<OrchestrationV2ConversationMessage["role"]>;
@@ -190,6 +265,13 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, ProjectionStoreV2Error>;
+  /**
+   * Thread records for a background sweep, in shell order. One read of the thread table, so a
+   * sweep can find its few candidates without building a shell for every thread.
+   */
+  readonly listThreads: (
+    query: ProjectionThreadQuery,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationV2AppThread>, ProjectionStoreV2Error>;
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>;
@@ -2889,6 +2971,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             LIMIT 1
           )
           WHERE t.deleted_at IS NULL
+            -- Only a thread with a failed run can be limited. One index probe per thread
+            -- skips the latest-run and error lookups for every thread that never failed;
+            -- this sweep runs every few seconds.
+            AND EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_runs failed
+              WHERE failed.thread_id = t.thread_id AND failed.status = 'failed'
+            )
             AND json_extract(t.payload_json, '$.archivedAt') IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
@@ -3687,6 +3776,70 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
+    // Mirrors threadMatchesQuery term for term. The active terms match the shell query's, so
+    // a sweep sees exactly the threads the active shell would list.
+    const threadQueryTerms = (query: ProjectionThreadQuery) => {
+      if (query.kind === "workspace-users") {
+        return sql`(
+          instr(json_extract(t.payload_json, '$.worktreePath'), ${query.worktreePath}) > 0
+          OR (t.project_id = ${query.projectId}
+            AND json_extract(t.payload_json, '$.branch') = ${query.branch})
+        )`;
+      }
+      const ids =
+        "threadIds" in query && query.threadIds !== undefined
+          ? sql` AND t.thread_id IN ${sql.in(query.threadIds)}`
+          : sql``;
+      const active = sql`json_extract(t.payload_json, '$.archivedAt') IS NULL${ids}`;
+      switch (query.kind) {
+        case "active":
+          return query.projectIds === undefined
+            ? active
+            : sql`${active} AND t.project_id IN ${sql.in(query.projectIds)}`;
+        case "auto-settle-candidates":
+          return sql`${active}
+            AND json_extract(t.payload_json, '$.settledOverride') IS NULL
+            AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
+            AND json_extract(t.payload_json, '$.workInboxRole') IS NOT 'main'`;
+        case "auto-delete-candidates":
+          return sql`${active}
+            AND json_extract(t.payload_json, '$.settledOverride') = 'settled'
+            AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
+            AND julianday(COALESCE(
+              json_extract(t.payload_json, '$.settledRecordedAt'),
+              json_extract(t.payload_json, '$.settledAt')
+            )) <= julianday(${DateTime.formatIso(query.settledBefore)})`;
+        case "pull-request-links":
+          return sql`${active} AND (
+            json_extract(t.payload_json, '$.pullRequests') IS NOT NULL
+            OR json_extract(t.payload_json, '$.linkedPullRequests') IS NOT NULL
+            OR json_extract(t.payload_json, '$.linkedPullRequest') IS NOT NULL
+          )`;
+      }
+    };
+
+    const listThreads: ProjectionStoreV2Shape["listThreads"] = (query) =>
+      Effect.gen(function* () {
+        if (
+          ("threadIds" in query && query.threadIds?.length === 0) ||
+          (query.kind === "active" && query.projectIds?.length === 0)
+        ) {
+          return [];
+        }
+        const rows = yield* sql<PayloadRow>`
+          SELECT t.payload_json
+          FROM orchestration_v2_projection_threads t
+          WHERE t.deleted_at IS NULL AND ${threadQueryTerms(query)}
+          ORDER BY t.updated_at ASC, t.thread_id ASC
+        `;
+        return yield* Effect.forEach(rows, (row) => decodeThreadPayload(row.payload_json));
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectionStoreReadError({ threadId: ThreadId.make("thread:list"), cause }),
+        ),
+      );
+
     const getPlan: ProjectionStoreV2Shape["getPlan"] = (threadId, planId) =>
       Effect.gen(function* () {
         const rows = yield* sql<PayloadRow>`
@@ -3809,6 +3962,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       apply,
       getShellSnapshot,
       getThreadShell,
+      listThreads,
       getThreadProjection,
       getLimitRecoveryCandidates,
       getTurnStartContext,
@@ -3882,6 +4036,20 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .pipe(Effect.map(threadShellFromProjection));
           return shell.deletedAt === null ? shell : null;
         }),
+      listThreads: (query) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map((projection) => projection.thread)
+              .filter((thread) => threadMatchesQuery(thread, query))
+              .toSorted(
+                (left, right) =>
+                  DateTime.toEpochMillis(left.updatedAt) -
+                    DateTime.toEpochMillis(right.updatedAt) ||
+                  String(left.id).localeCompare(String(right.id)),
+              ),
+          ),
+        ),
       getThreadProjection: (threadId) =>
         Effect.gen(function* () {
           const existing = (yield* Ref.get(replayState)).projections;

@@ -171,6 +171,7 @@ import {
   ProjectServiceLayerLive,
   ProjectSetupScriptRunnerLayerLive,
 } from "./orchestration-v2/runtimeLayer.ts";
+import * as LiveThreadShells from "./orchestration-v2/LiveThreadShells.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
@@ -551,6 +552,8 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   ).pipe(Layer.provide(hermesWorkSyncServiceLayer)),
 ).pipe(
   // Core Services
+  // One per environment, so every shell subscription shares its thread shell reads.
+  Layer.provideMerge(LiveThreadShells.layer),
   Layer.provideMerge(hermesDashboardClientLayer),
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),

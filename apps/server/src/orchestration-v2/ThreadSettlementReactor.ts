@@ -1,7 +1,12 @@
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { canonicalRepositoryKey } from "@t3tools/shared/sourceControl";
 import { isAutoDeleteDue } from "@t3tools/shared/threadAutoDelete";
-import { CommandId, type OrchestrationV2ThreadShell, type Project } from "@t3tools/contracts";
+import {
+  CommandId,
+  type OrchestrationV2ThreadShell,
+  type Project,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequestChains";
 import * as Cause from "effect/Cause";
@@ -20,6 +25,7 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
 import { pullRequestMatchesProject } from "./ThreadPullRequestReactor.ts";
 import {
@@ -35,13 +41,20 @@ export class ThreadSettlementReactor extends Context.Service<
       readonly beforeSweep?: Effect.Effect<void>;
     }) => Effect.Effect<void, never, Scope.Scope>;
     readonly drain: Effect.Effect<void>;
+    /** Sweeps every candidate thread. */
     readonly requestSweep: Effect.Effect<void>;
   }
 >()("t3/orchestration-v2/ThreadSettlementReactor") {}
 
+/** Every candidate thread, or only the threads whose own events asked for a decision. */
+type SweepScope = "all" | ReadonlySet<ThreadId>;
+
+const DAY_MS = 86_400_000;
+
 /** @public Canonical Effect service construction. */
 export const make = Effect.gen(function* () {
   const engine = yield* ThreadManagementService;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const projects = yield* ProjectService.ProjectService;
   const git = yield* GitManager.GitManager;
@@ -112,12 +125,18 @@ export const make = Effect.gen(function* () {
     return candidate !== null && pullRequestMatchesProject(candidate, project) ? candidate : null;
   });
 
-  const settleSweep = Effect.fn("ThreadSettlementReactor.settleSweep")(function* () {
-    const snapshot = yield* engine.getShellSnapshot({ location: "active" });
+  // Candidates come from the thread table alone, and each one's shell is read on its own below,
+  // so a sweep never holds the database for a whole shell snapshot.
+  const settleSweep = Effect.fn("ThreadSettlementReactor.settleSweep")(function* (
+    scope: SweepScope,
+  ) {
+    const candidates = yield* projections.listThreads({
+      kind: "auto-settle-candidates",
+      ...(scope === "all" ? {} : { threadIds: [...scope] }),
+    });
+    if (candidates.length === 0) return;
     const projectSnapshot = yield* projects.snapshot;
     const projectById = new Map(projectSnapshot.projects.map((project) => [project.id, project]));
-    const now = yield* DateTime.now;
-    const candidates = snapshot.threads.filter((thread) => isAutoSettlementCandidate(thread, now));
     const settle = Effect.fn("ThreadSettlementReactor.settle")(function* (
       thread: OrchestrationV2ThreadShell,
       expectedSequence: number,
@@ -190,10 +209,12 @@ export const make = Effect.gen(function* () {
         (candidate) => candidate.id === thread.projectId,
       );
       if (project === undefined || worktreePath === project.workspaceRoot.trim()) return;
-      const remaining = yield* engine.getShellSnapshot();
-      const others = [...remaining.threads, ...remaining.archivedThreads].filter(
-        (other) => other.id !== thread.id && other.deletedAt === null,
-      );
+      const others = (yield* projections.listThreads({
+        kind: "workspace-users",
+        worktreePath,
+        projectId: thread.projectId,
+        branch: thread.branch,
+      })).filter((other) => other.id !== thread.id && other.deletedAt === null);
       if (others.some((other) => other.worktreePath?.trim() === worktreePath)) return;
       yield* gitWorkflow.removeWorktree({
         cwd: project.workspaceRoot,
@@ -225,10 +246,14 @@ export const make = Effect.gen(function* () {
 
   const autoDeleteSweep = Effect.fn("ThreadSettlementReactor.autoDeleteSweep")(function* (
     afterDays: number,
+    scope: SweepScope,
   ) {
-    const snapshot = yield* engine.getShellSnapshot({ location: "active" });
     const now = yield* DateTime.now;
-    const due = snapshot.threads.filter((thread) => isAutoDeleteDue(thread, afterDays, now));
+    const due = (yield* projections.listThreads({
+      kind: "auto-delete-candidates",
+      settledBefore: DateTime.subtract(now, { milliseconds: afterDays * DAY_MS }),
+      ...(scope === "all" ? {} : { threadIds: [...scope] }),
+    })).filter((thread) => isAutoDeleteDue(thread, afterDays, now));
     // One at a time: removals in the same repository contend for its Git lock.
     yield* Effect.forEach(
       due,
@@ -260,23 +285,33 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const sweep = Effect.fn("ThreadSettlementReactor.sweep")(function* () {
+  const sweep = Effect.fn("ThreadSettlementReactor.sweep")(function* (scope: SweepScope) {
     const settings = yield* settingsService.getSettings;
     if (settings.sidebarAutoSettleOnMerge || settings.sidebarAutoSettleAfterDays !== null) {
-      yield* settleSweep();
+      yield* settleSweep(scope);
     }
     if (settings.autoDeleteSettledAfterDays !== null) {
-      yield* autoDeleteSweep(settings.autoDeleteSettledAfterDays);
+      yield* autoDeleteSweep(settings.autoDeleteSettledAfterDays, scope);
     }
   });
   let beforeSweep: Effect.Effect<void> = Effect.void;
+  // Requests coalesce until the worker takes them. A thread's own events only need that thread
+  // decided again; the periodic, settings, and merge sweeps cover every thread, including those
+  // whose time-based settlement came due in between.
   let queued = false;
+  let fullSweepQueued = false;
+  const queuedThreadIds = new Set<ThreadId>();
+  const takeScope = (): SweepScope => {
+    queued = false;
+    const scope: SweepScope = fullSweepQueued ? "all" : new Set(queuedThreadIds);
+    fullSweepQueued = false;
+    queuedThreadIds.clear();
+    return scope;
+  };
   const worker = yield* makeDrainableWorker(() =>
-    Effect.sync(() => {
-      queued = false;
-    }).pipe(
-      Effect.andThen(Effect.suspend(() => beforeSweep)),
-      Effect.andThen(sweep()),
+    Effect.sync(takeScope).pipe(
+      Effect.tap(() => Effect.suspend(() => beforeSweep)),
+      Effect.flatMap(sweep),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
@@ -286,11 +321,15 @@ export const make = Effect.gen(function* () {
       ),
     ),
   );
-  const enqueue = Effect.suspend(() => {
-    if (queued) return Effect.void;
-    queued = true;
-    return worker.enqueue(undefined);
-  });
+  const enqueueScope = (threadId: ThreadId | null) =>
+    Effect.suspend(() => {
+      if (threadId === null) fullSweepQueued = true;
+      else queuedThreadIds.add(threadId);
+      if (queued) return Effect.void;
+      queued = true;
+      return worker.enqueue(undefined);
+    });
+  const enqueue = enqueueScope(null);
   const start = Effect.fn("ThreadSettlementReactor.start")(function* (options?: {
     readonly beforeSweep?: Effect.Effect<void>;
   }) {
@@ -317,9 +356,12 @@ export const make = Effect.gen(function* () {
               )
               .map((project) => [project.id, project]),
           );
-          const snapshot = yield* engine.getShellSnapshot({ location: "active" });
+          const threads = yield* projections.listThreads({
+            kind: "active",
+            projectIds: [...matchingProjects.keys()],
+          });
           const cwds = new Set<string>();
-          for (const thread of snapshot.threads) {
+          for (const thread of threads) {
             const project = matchingProjects.get(thread.projectId);
             if (project === undefined || thread.deletedAt !== null || thread.archivedAt !== null)
               continue;
@@ -353,7 +395,7 @@ export const make = Effect.gen(function* () {
     yield* forkParked(
       Stream.runForEach(engine.streamDomainEvents, (event) =>
         event.type === "thread.metadata-updated" || event.type === "run.updated"
-          ? enqueue
+          ? enqueueScope(event.threadId)
           : Effect.void,
       ),
     );

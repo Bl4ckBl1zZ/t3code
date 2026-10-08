@@ -1,8 +1,8 @@
 import {
   CommandId,
   MessageId,
+  type OrchestrationV2AppThread,
   type OrchestrationV2Notification,
-  type OrchestrationV2ThreadShell,
   type PullRequestActivity,
   type PullRequestComment,
   type PullRequestRef,
@@ -33,6 +33,7 @@ import {
 } from "../pullRequest/PullRequestProvider.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
 import { evaluatePullRequestWatch, pullRequestWatchMessage } from "./pullRequestWatch.ts";
 
@@ -75,7 +76,7 @@ const logFailure =
       : Effect.logWarning(message, { ...fields, cause });
 
 interface WatchTarget {
-  readonly thread: OrchestrationV2ThreadShell;
+  readonly thread: OrchestrationV2AppThread;
   readonly link: ThreadPullRequestLink;
   readonly watch: ThreadPullRequestWatch;
 }
@@ -236,6 +237,7 @@ export class PullRequestWatchReactor extends Context.Service<
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
   const bootedAt = yield* Clock.currentTimeMillis;
@@ -562,8 +564,8 @@ export const make = Effect.gen(function* () {
   });
 
   const sweep = Effect.gen(function* () {
-    const snapshot = yield* threads.getShellSnapshot({ location: "active" });
-    const targets = snapshot.threads.flatMap((thread) =>
+    const linked = yield* projections.listThreads({ kind: "pull-request-links" });
+    const targets = linked.flatMap((thread) =>
       thread.archivedAt !== null || thread.deletedAt !== null
         ? []
         : visibleThreadPullRequests(allThreadPullRequestsOf(thread)).flatMap((link) =>
