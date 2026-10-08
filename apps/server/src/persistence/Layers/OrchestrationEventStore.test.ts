@@ -352,6 +352,36 @@ it.effect("releases consumed project replay pages and supports repeatable limite
   }).pipe(Effect.provide(OrchestrationEventStoreLive.pipe(Layer.provide(SqlitePersistenceMemory)))),
 );
 
+// Captures the one statement an effect runs and returns its query plan, so
+// each read shape stays pinned to the index it names.
+const explainOnlyStatement = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  params: ReadonlyArray<unknown>,
+) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const statements: Array<string> = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        const end = span.end.bind(span);
+        span.end = (endTime, exit) => {
+          end(endTime, exit);
+          const query = span.attributes.get("db.query.text");
+          if (typeof query === "string") statements.push(query);
+        };
+        return span;
+      },
+    });
+    const result = yield* effect.pipe(Effect.withTracer(tracer));
+    assert.equal(statements.length, 1);
+    const plan = yield* sql.unsafe<{ readonly detail: string }>(
+      `EXPLAIN QUERY PLAN ${statements[0]}`,
+      params,
+    );
+    return { result, plan: plan.map((row) => row.detail).join("\n") };
+  });
+
 it.effect("replays a command's events through the command index, not the sequence range", () =>
   Effect.gen(function* () {
     const store = yield* OrchestrationEventStore;
@@ -372,35 +402,137 @@ it.effect("replays a command's events through the command index, not the sequenc
         '{}', 2
       FROM history
     `;
-    const statements: Array<string> = [];
-    const tracer = Tracer.make({
-      span(options) {
-        const span = new Tracer.NativeSpan(options);
-        const end = span.end.bind(span);
-        span.end = (endTime, exit) => {
-          end(endTime, exit);
-          const query = span.attributes.get("db.query.text");
-          if (typeof query === "string") statements.push(query);
-        };
-        return span;
-      },
-    });
-    const replayed = yield* store
-      .readAgentEvents({ commandId: CommandId.make("retried-command") })
-      .pipe(Stream.runCollect, Effect.withTracer(tracer));
+    // Parameters: command, sequence range, limit.
+    const { result, plan } = yield* explainOnlyStatement(
+      store
+        .readAgentEvents({ commandId: CommandId.make("retried-command") })
+        .pipe(Stream.runCollect),
+      ["retried-command", 0, Number.MAX_SAFE_INTEGER, 500],
+    );
     assert.deepEqual(
-      replayed.map((event) => event.sequence),
+      result.map((event) => event.sequence),
       [12, 24990],
     );
-    assert.equal(statements.length, 1);
-    // Parameters: sequence range, agent-only flag, thread filter (twice), command, limit.
-    const plan = yield* sql.unsafe<{ readonly detail: string }>(
-      `EXPLAIN QUERY PLAN ${statements[0]}`,
-      [0, Number.MAX_SAFE_INTEGER, 1, null, null, "retried-command", 500],
+    assert.match(
+      plan,
+      /SEARCH orchestration_events USING INDEX idx_orch_events_command_id \(command_id=\?/,
+    );
+  }).pipe(
+    Effect.provide(OrchestrationEventStoreLive.pipe(Layer.provideMerge(SqlitePersistenceMemory))),
+  ),
+);
+
+it.effect("reads each event range from the index that bounds it", () =>
+  Effect.gen(function* () {
+    const store = yield* OrchestrationEventStore;
+    const sql = yield* SqlClient.SqlClient;
+    const occurredAt = "2026-09-03T00:00:00.000Z";
+    // Two interleaved threads plus legacy V1 rows, so a read that walks the
+    // wrong index still has rows to skip.
+    yield* sql`
+      WITH RECURSIVE history(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM history WHERE n < 400
+      )
+      INSERT INTO orchestration_events (
+        event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at,
+        command_id, actor_kind, payload_json, metadata_json, application_event_version
+      )
+      SELECT 'history:' || n, 'thread',
+        CASE WHEN n % 4 = 0 THEN 'quiet-thread' ELSE 'busy-thread' END,
+        n, 'provider-session.detached', ${occurredAt}, 'command:' || n, 'server',
+        '{"providerSessionId":"session","detachedAt":"' || ${occurredAt} || '"}',
+        '{}', CASE WHEN n % 10 = 0 THEN 1 ELSE 2 END
+      FROM history
+    `;
+    const quietThread = ThreadId.make("quiet-thread");
+
+    // Parameters: thread, sequence range, limit.
+    const thread = yield* explainOnlyStatement(
+      store
+        .readAgentEvents({ threadId: quietThread, afterSequence: 100, limit: 129 })
+        .pipe(Stream.runCollect),
+      [quietThread, 100, Number.MAX_SAFE_INTEGER, 129],
+    );
+    assert.deepEqual(
+      thread.result.map((event) => event.sequence),
+      Array.from({ length: 75 }, (_, index) => 104 + index * 4).filter(
+        (sequence) => sequence % 10 !== 0,
+      ),
     );
     assert.match(
-      plan.map((row) => row.detail).join("\n"),
-      /SEARCH orchestration_events USING INDEX idx_orch_events_command_id \(command_id=\?/,
+      thread.plan,
+      /SEARCH orchestration_events USING INDEX idx_orch_events_stream_sequence \(aggregate_kind=\? AND stream_id=\? AND sequence>\? AND sequence<\?\)/,
+    );
+    assert.notMatch(thread.plan, /TEMP B-TREE/);
+
+    // Parameters: sequence range, limit.
+    const agent = yield* explainOnlyStatement(
+      store.readAgentEvents({ afterSequence: 390 }).pipe(Stream.runCollect),
+      [390, Number.MAX_SAFE_INTEGER, 1000],
+    );
+    assert.deepEqual(
+      agent.result.map((event) => event.sequence),
+      [391, 392, 393, 394, 395, 396, 397, 398, 399],
+    );
+    assert.match(
+      agent.plan,
+      /SEARCH orchestration_events USING INDEX idx_orchestration_events_application_sequence \(application_event_version=\? AND sequence>\? AND sequence<\?\)/,
+    );
+    assert.notMatch(agent.plan, /TEMP B-TREE/);
+
+    const projectId = ProjectId.make("plan-project");
+    yield* store.append({
+      type: "project.created",
+      eventId: EventId.make("plan-project-created"),
+      aggregateKind: "project",
+      aggregateId: projectId,
+      occurredAt,
+      commandId: CommandId.make("plan-project-command"),
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      payload: {
+        projectId,
+        title: "Plan",
+        workspaceRoot: "/tmp/plan",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: occurredAt,
+        updatedAt: occurredAt,
+      },
+    });
+    // Parameters: sequence range, limit.
+    const application = yield* explainOnlyStatement(
+      store
+        .readApplicationEvents({ afterSequence: 397, throughSequence: 401 })
+        .pipe(Stream.runCollect),
+      [397, 401, 500],
+    );
+    assert.deepEqual(
+      application.result.map((event) => [
+        event.sequence,
+        "aggregateKind" in event ? event.aggregateKind : "agent",
+      ]),
+      [
+        [398, "agent"],
+        [399, "agent"],
+        [401, "project"],
+      ],
+    );
+    assert.match(
+      application.plan,
+      /SEARCH orchestration_events USING INTEGER PRIMARY KEY \(rowid>\? AND rowid<\?\)/,
+    );
+    assert.notMatch(application.plan, /TEMP B-TREE/);
+
+    // Parameters: thread.
+    const latest = yield* explainOnlyStatement(store.latestAgentSequence(quietThread), [
+      quietThread,
+    ]);
+    assert.equal(latest.result, 396);
+    assert.match(
+      latest.plan,
+      /SEARCH orchestration_events USING INDEX idx_orch_events_stream_sequence \(aggregate_kind=\? AND stream_id=\?\)/,
     );
   }).pipe(
     Effect.provide(OrchestrationEventStoreLive.pipe(Layer.provideMerge(SqlitePersistenceMemory))),

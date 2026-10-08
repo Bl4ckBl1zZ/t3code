@@ -19,7 +19,9 @@ The v2 checks pin these invariants:
   run (an interrupt result is only visible next to its request).
 - Resume catch-up replays at most 128 thread events and 1 MiB of projected event JSON before
   replacing stale state with a current snapshot. The sequence gap alone is not enough: a handful of
-  large tool outputs outweighs a thousand small status updates.
+  large tool outputs outweighs a thousand small status updates. Nor is it a reason to snapshot:
+  sequences are global, so a thread that sat idle while others ran is far behind in sequence but
+  has nothing to replay. The catch-up read itself (129 rows on the thread's stream index) decides.
 - Oversized dynamic-tool results and detail strings are reduced only at the wire boundary; the
   persisted event remains complete.
 - Shell resume sends deltas plus compact repository-enrichment metadata, not another full project
@@ -33,6 +35,15 @@ The v2 checks pin these invariants:
   caller. The shell query stays index-driven per thread (a partial index for live background
   commands, a pinned join order for the last provider error) and carries only the latest message's
   preview. On a 760-thread store it went from ~2s to ~0.1s.
+- Reads of `orchestration_events` name their index (`INDEXED BY`) and never filter with
+  `? IS NULL OR column = ?`. Installs are not ANALYZEd, and without statistics SQLite reads one
+  thread's events through the `(application_event_version, sequence)` index, walking every V2 event
+  after the cursor: ~20s cold for an idle thread 836k events behind, against ~0.5ms on the stream
+  index. Pinning also keeps a future `ANALYZE` from flipping a plan. `OrchestrationEventStore.test.ts`
+  asserts each read shape's plan.
+- Thread mutations that decide from the thread row (visit, rename, pin, unarchive) read only that
+  row. The full thread projection decodes the transcript and every fork ancestor's, so the
+  orchestrator loads it only for the decisions that inspect runs, requests, sessions, or messages.
 
 When changing projection schemas, windowing, shell synchronization, or thread state, run this
 command alongside the focused package typechecks and a real-client pass on every affected surface.

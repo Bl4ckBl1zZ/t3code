@@ -1738,16 +1738,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
-    const projection = yield* projectionStore.getThreadProjection(command.threadId).pipe(
-      Effect.mapError(
-        (cause) =>
-          new OrchestratorProjectionError({
-            threadId: command.threadId,
-            cause,
-          }),
-      ),
+    const toProjectionError = (cause: unknown) =>
+      new OrchestratorProjectionError({ threadId: command.threadId, cause });
+    // Most of these mutations decide from the thread row alone (a visit, a
+    // rename, a pin). The full projection decodes the whole transcript and every
+    // fork ancestor's, so it loads once, on first use, only for the decisions
+    // that inspect runs, requests, sessions, or messages.
+    const loadProjection = yield* Effect.cached(
+      projectionStore
+        .getThreadProjection(command.threadId)
+        .pipe(Effect.mapError(toProjectionError)),
     );
-    const thread = projection.thread;
+    const { thread } = yield* projectionStore
+      .getThreadRecords(command.threadId, [])
+      .pipe(Effect.mapError(toProjectionError));
     if (command.type === "thread.metadata.update") {
       const edits = [
         command.linkedPullRequest,
@@ -1815,6 +1819,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       command.watching &&
       command.link?.source === "agent"
     ) {
+      const projection = yield* loadProjection;
       const latest = latestExecutedRun(projection.runs);
       if (latest !== null && stopReachedRun(projection, latest.id)) {
         return yield* new OrchestratorDispatchError({
@@ -1913,6 +1918,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     if (command.type === "thread.settle") {
+      const projection = yield* loadProjection;
       // Queued notification and delegated-completion runs only wake the agent.
       // They are not user messages and are hidden from the queue UI, so they
       // must not block settling; they are cancelled below instead.
@@ -1971,7 +1977,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             );
             return yield* providerSwitchService
               .plan({
-                projection,
+                projection: yield* loadProjection,
                 targetModelSelection: command.modelSelection,
               })
               .pipe(mapDispatchError(command));
@@ -2054,6 +2060,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Thread ${command.threadId} snooze wake time ${command.snoozedUntil} is not in the future.`,
         });
       }
+      const projection = yield* loadProjection;
       if (
         projection.runtimeRequests.some(
           (request) => request.status === "pending" && request.responseMode !== "message",
@@ -2088,7 +2095,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     let markUnreadVisitedAt: DateTime.Utc | null = null;
     if (command.type === "thread.mark-unread") {
-      const latestRunCompletedAt = projection.runs.at(-1)?.completedAt ?? null;
+      const latestRunCompletedAt = (yield* loadProjection).runs.at(-1)?.completedAt ?? null;
       if (latestRunCompletedAt === null) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -2422,6 +2429,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
     if (command.type === "thread.archive" || command.type === "thread.delete") {
+      const projection = yield* loadProjection;
       const emitEvent = emit(events, command);
       const activeRunIds = new Set(
         projection.runs
@@ -2546,25 +2554,35 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // runtime requests are pending, so this can never race a re-engagement
     // the way a separate post-settle stop command could. Only idle shells
     // close (below): a settled thread remains reachable and may be un-settled.
+    const worktreeChanged =
+      command.type === "thread.metadata.update" &&
+      command.worktreePath !== undefined &&
+      command.worktreePath !== thread.worktreePath;
+    const providerSessions =
+      command.type === "thread.archive" ||
+      command.type === "thread.delete" ||
+      command.type === "thread.settle" ||
+      command.type === "thread.runtime-mode.set" ||
+      worktreeChanged ||
+      providerSwitchPlan !== null
+        ? (yield* loadProjection).providerSessions
+        : [];
     const detachSessionIds = new Set(
       command.type === "thread.archive" ||
         command.type === "thread.delete" ||
-        command.type === "thread.settle"
-        ? projection.providerSessions.map((session) => session.id)
-        : command.type === "thread.metadata.update" &&
-            command.worktreePath !== undefined &&
-            command.worktreePath !== thread.worktreePath
-          ? projection.providerSessions.map((session) => session.id)
-          : command.type === "thread.runtime-mode.set"
-            ? projection.providerSessions
-                .filter(
-                  (session) => !session.capabilities.sessions.supportsRuntimeModeSwitchInSession,
-                )
-                .map((session) => session.id)
-            : (providerSwitchPlan?.releaseProviderSessionIds ?? []),
+        command.type === "thread.settle" ||
+        worktreeChanged
+        ? providerSessions.map((session) => session.id)
+        : command.type === "thread.runtime-mode.set"
+          ? providerSessions
+              .filter(
+                (session) => !session.capabilities.sessions.supportsRuntimeModeSwitchInSession,
+              )
+              .map((session) => session.id)
+          : (providerSwitchPlan?.releaseProviderSessionIds ?? []),
     );
     if (detachSessionIds.size > 0) {
-      const liveSessions = projection.providerSessions.filter(
+      const liveSessions = providerSessions.filter(
         (session) =>
           detachSessionIds.has(session.id) &&
           session.status !== "stopped" &&
@@ -2661,6 +2679,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
 
     if (command.type === "thread.delete") {
+      const projection = yield* loadProjection;
       const attachmentIds = Array.from(
         new Set(
           projection.messages.flatMap((message) => message.attachments.map((item) => item.id)),
