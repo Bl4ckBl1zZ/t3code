@@ -4,8 +4,8 @@ import {
   ProjectId,
   PullRequestOperationError,
   ThreadId,
+  type OrchestrationV2AppThread,
   type OrchestrationV2ThreadShell,
-  type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2DomainEvent,
   type PullRequestRef,
@@ -28,6 +28,7 @@ import {
   type PullRequestMergeEvent,
   PullRequestService,
 } from "../pullRequest/PullRequestService.ts";
+import { ProjectionStoreV2, threadMatchesQuery } from "./ProjectionStore.ts";
 import { make } from "./PullRequestSyncReactor.ts";
 
 const projectId = ProjectId.make("p");
@@ -108,15 +109,16 @@ function harness(
     }),
   );
   const layer = Layer.mergeAll(
+    Layer.mock(ProjectionStoreV2)({
+      listThreads: (query) =>
+        Effect.succeed(
+          shells.filter((thread) =>
+            threadMatchesQuery(thread as unknown as OrchestrationV2AppThread, query),
+          ) as unknown as ReadonlyArray<OrchestrationV2AppThread>,
+        ),
+    }),
     Layer.mock(ThreadManagementService)({
       streamDomainEvents: extra.domainEvents ?? Stream.empty,
-      getShellSnapshot: () =>
-        Effect.succeed({
-          threads: shells,
-          snapshotSequence: 1,
-          schemaVersion: 1,
-          archivedThreads: [],
-        } as OrchestrationV2ThreadShellSnapshot),
       getThreadShell: (id) => Effect.succeed(shells.find((thread) => thread.id === id) ?? null),
       dispatch,
     }),

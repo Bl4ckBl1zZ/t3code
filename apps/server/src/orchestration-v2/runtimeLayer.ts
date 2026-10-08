@@ -315,6 +315,8 @@ const mcpAppRequestsProvided = McpAppRequests.layer.pipe(
 
 export const OrchestrationV2LayerLive = Layer.mergeAll(
   providerAuthServiceProvided,
+  // Background sweeps read their candidate threads here instead of a full shell snapshot.
+  projectionStoreLayer,
   orchestratorProvided,
   mcpAppRequestsProvided,
   threadManagementProvided,

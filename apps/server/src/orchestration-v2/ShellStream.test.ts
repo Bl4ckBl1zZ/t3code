@@ -16,6 +16,7 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
+  canChangeShell,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
@@ -104,6 +105,25 @@ function storedThreadEvent(
 function shellFixture(overrides: Partial<OrchestrationV2ThreadShell>): OrchestrationV2ThreadShell {
   return { id: "thread-a", archivedAt: null, ...overrides } as OrchestrationV2ThreadShell;
 }
+
+describe("canChangeShell", () => {
+  it("skips checkpoint and provider-turn churn but keeps everything a shell reads", () => {
+    const kept = [
+      project(1, "project-a"),
+      storedThreadEvent(2, "thread-a", { type: "turn-item.updated" }),
+      storedThreadEvent(3, "thread-a", { type: "message.updated" }),
+      storedThreadEvent(4, "thread-a", { type: "run.updated" }),
+      storedThreadEvent(5, "thread-a", { type: "thread.metadata-updated" }),
+      storedThreadEvent(6, "thread-a", { type: "provider-session.updated" }),
+    ];
+    const skipped = [
+      storedThreadEvent(7, "thread-a", { type: "provider-turn.updated" }),
+      storedThreadEvent(8, "thread-a", { type: "checkpoint.captured" }),
+      storedThreadEvent(9, "thread-a", { type: "node.updated" }),
+    ];
+    expect([...kept, ...skipped].filter(canChangeShell)).toEqual(kept);
+  });
+});
 
 describe("coalesceStoredThreadEvents", () => {
   it("keeps the newest stored event per thread and preserves sequence order", () => {

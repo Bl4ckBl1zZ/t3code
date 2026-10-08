@@ -24,6 +24,7 @@ import * as GitManager from "../git/GitManager.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 
@@ -72,6 +73,7 @@ export function pullRequestMatchesProject(
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const engine = yield* ThreadManagementService;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const projectService = yield* ProjectService.ProjectService;
   const git = yield* GitManager.GitManager;
   const pullRequests = yield* PullRequestService.PullRequestService;
@@ -97,11 +99,17 @@ export const make = Effect.gen(function* () {
   const synchronize = Effect.fn("ThreadPullRequestReactor.synchronize")(function* (
     request: RefreshRequest,
   ) {
-    const snapshot = yield* engine.getShellSnapshot({ location: "active" });
+    // Thread records carry every field discovery reads. A request about one thread, which
+    // every checkpoint and finished run sends, reads only that thread.
+    const active = yield* projections.listThreads(
+      request.threadId === null
+        ? { kind: "active" }
+        : { kind: "active", threadIds: [request.threadId] },
+    );
     const projectSnapshot = yield* projectService.snapshot;
     const projects = new Map(projectSnapshot.projects.map((project) => [project.id, project]));
     if (request.backfill) {
-      for (const thread of snapshot.threads) {
+      for (const thread of active) {
         if (
           (thread.settledOverride === "settled" || thread.settledAt !== null) &&
           thread.branchPullRequest == null
@@ -110,11 +118,13 @@ export const make = Effect.gen(function* () {
         }
       }
     }
-    const threadIds = new Set(snapshot.threads.map((thread) => thread.id));
-    for (const threadId of pendingBackfill.keys()) {
-      if (!threadIds.has(threadId)) pendingBackfill.delete(threadId);
+    if (request.threadId === null) {
+      const threadIds = new Set(active.map((thread) => thread.id));
+      for (const threadId of pendingBackfill.keys()) {
+        if (!threadIds.has(threadId)) pendingBackfill.delete(threadId);
+      }
     }
-    const threads = snapshot.threads.filter(
+    const threads = active.filter(
       (thread) =>
         thread.archivedAt === null &&
         thread.deletedAt === null &&

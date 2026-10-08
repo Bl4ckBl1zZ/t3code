@@ -7,6 +7,7 @@ import {
   type ModelSelection,
   type OrchestrationV2ProviderThread,
   NodeId,
+  type OrchestrationV2AppThread,
   type OrchestrationV2PendingBackgroundTask,
   ProjectId,
   ProviderDriverKind,
@@ -30,9 +31,11 @@ import * as Statement from "effect/unstable/sql/Statement";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { SHELL_INERT_THREAD_EVENT_TYPES } from "./ShellStream.ts";
 import {
   isTurnItemAtOrBeforeRun,
   ProjectionStoreV2,
+  type ProjectionThreadQuery,
   layer as projectionStoreLayer,
   layerMemory,
   threadShellFromProjection,
@@ -193,6 +196,145 @@ const restartCancelledWorkSurvivesStaleRunUpdate = Effect.gen(function* () {
 
 it.effect("memory projection keeps restart-cancelled work through a stale run.updated", () =>
   restartCancelledWorkSurvivesStaleRunUpdate.pipe(Effect.provide(layerMemory)),
+);
+
+const sweepNow = DateTime.makeUnsafe("2026-09-01T00:00:00.000Z");
+const sweepDaysAgo = (days: number) => DateTime.subtract(sweepNow, { days });
+const sweepProject = ProjectId.make("project:sweep");
+const sweepThreadId = (name: string) => ThreadId.make(`thread:sweep:${name}`);
+const sweepWorktree = "/repo-worktrees/feature";
+
+/** One thread per term a background sweep narrows on. */
+const seedSweepThreads = Effect.gen(function* () {
+  const store = yield* ProjectionStoreV2;
+  const seed = (name: string, overrides: Partial<OrchestrationV2AppThread>) => {
+    const threadId = sweepThreadId(name);
+    return store.apply({
+      id: EventId.make(`event:sweep:${name}`),
+      type: "thread.created",
+      threadId,
+      occurredAt: sweepNow,
+      payload: {
+        createdBy: "user",
+        creationSource: "web",
+        id: threadId,
+        projectId: sweepProject,
+        title: `Sweep ${name}`,
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: sweepNow,
+        updatedAt: sweepNow,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+        ...overrides,
+      },
+    });
+  };
+  const settledLongAgo = { settledOverride: "settled", settledAt: sweepDaysAgo(40) } as const;
+  yield* seed("active", {});
+  yield* seed("archived", { archivedAt: sweepNow, worktreePath: sweepWorktree });
+  yield* seed("deleted", { deletedAt: sweepNow, branch: "feature" });
+  yield* seed("settled-long-ago", settledLongAgo);
+  yield* seed("settled-recently", { ...settledLongAgo, settledRecordedAt: sweepDaysAgo(1) });
+  yield* seed("settled-pinned", { ...settledLongAgo, pinnedAt: sweepNow });
+  yield* seed("kept-active", { autoSettleDisabledAt: sweepNow });
+  yield* seed("work-inbox", { workInboxRole: "main" });
+  yield* seed("linked", {
+    linkedPullRequest: {
+      projectId: sweepProject,
+      repository: "org/repo",
+      number: 1,
+      url: "https://github.com/org/repo/pull/1",
+    },
+  });
+  yield* seed("worktree", {
+    projectId: ProjectId.make("project:sweep-other"),
+    branch: "other",
+    worktreePath: `${sweepWorktree}/`,
+  });
+  yield* seed("branch", { branch: "feature" });
+});
+
+/** Which seeded threads each sweep query returns, by seed name. */
+const sweepSelections = Effect.gen(function* () {
+  const store = yield* ProjectionStoreV2;
+  const names = (query: ProjectionThreadQuery) =>
+    store.listThreads(query).pipe(
+      Effect.map((threads) =>
+        threads
+          .map((thread) => String(thread.id))
+          .filter((id) => id.startsWith("thread:sweep:"))
+          .map((id) => id.slice("thread:sweep:".length))
+          .toSorted(),
+      ),
+    );
+  return {
+    active: yield* names({ kind: "active" }),
+    otherProject: yield* names({
+      kind: "active",
+      projectIds: [ProjectId.make("project:sweep-other")],
+    }),
+    byId: yield* names({
+      kind: "active",
+      threadIds: ["active", "archived", "deleted"].map(sweepThreadId),
+    }),
+    noIds: yield* names({ kind: "active", threadIds: [] }),
+    autoSettle: yield* names({ kind: "auto-settle-candidates" }),
+    autoSettleById: yield* names({
+      kind: "auto-settle-candidates",
+      threadIds: ["active", "kept-active"].map(sweepThreadId),
+    }),
+    autoDelete: yield* names({
+      kind: "auto-delete-candidates",
+      settledBefore: sweepDaysAgo(30),
+    }),
+    pullRequestLinks: yield* names({ kind: "pull-request-links" }),
+    workspaceUsers: yield* names({
+      kind: "workspace-users",
+      worktreePath: sweepWorktree,
+      projectId: sweepProject,
+      branch: "feature",
+    }),
+  };
+});
+
+const expectedSweepSelections = {
+  active: [
+    "active",
+    "branch",
+    "kept-active",
+    "linked",
+    "settled-long-ago",
+    "settled-pinned",
+    "settled-recently",
+    "work-inbox",
+    "worktree",
+  ],
+  otherProject: ["worktree"],
+  byId: ["active"],
+  noIds: [],
+  autoSettle: ["active", "branch", "linked", "worktree"],
+  autoSettleById: ["active"],
+  autoDelete: ["settled-long-ago"],
+  pullRequestLinks: ["linked"],
+  workspaceUsers: ["archived", "branch", "worktree"],
+};
+
+it.effect("memory projection narrows sweep reads like the SQL store", () =>
+  Effect.gen(function* () {
+    yield* seedSweepThreads;
+    assert.deepEqual(yield* sweepSelections, expectedSweepSelections);
+  }).pipe(Effect.provide(layerMemory)),
 );
 
 it("includes imported runless history when selecting fork context through a run", () => {
@@ -3182,6 +3324,99 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       const turn = projection.providerTurns.find((candidate) => candidate.id === providerTurnId);
       assert.equal(turn?.status, "completed");
       assert.equal(turn?.tokenUsage?.usedTokens, 50_000);
+    }),
+  );
+
+  it.effect("narrows sweep reads to their candidates from the thread table alone", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seedSweepThreads;
+      const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const record: Statement.Transformer = (statement) =>
+        Effect.sync(() => {
+          queries.push(statement.compile());
+          return statement;
+        });
+      const selections = yield* sweepSelections.pipe(
+        Effect.provideService(Statement.CurrentTransformer, record),
+      );
+      assert.deepEqual(selections, expectedSweepSelections);
+      // The empty id list answers without a query.
+      assert.lengthOf(queries, Object.keys(expectedSweepSelections).length - 1);
+      for (const [query, params] of queries) {
+        const plan = yield* sql.unsafe<{ readonly detail: string }>(
+          `EXPLAIN QUERY PLAN ${query}`,
+          params,
+        );
+        // No run, message, or item lookups: those made the full shell cost seconds.
+        for (const row of plan) {
+          assert.match(row.detail, /^(SCAN t\b|SEARCH t\b|USE TEMP B-TREE\b)/);
+        }
+      }
+    }),
+  );
+
+  it.effect("keeps shells off the tables of events the shell streams skip", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const threadId = yield* addRolledBackRecoveryCandidate("inert-shell-tables");
+      // Where each skipped event writes; rollback requests write nothing.
+      const writtenTables: Record<string, ReadonlyArray<string>> = {
+        "run-attempt.created": ["run_attempts"],
+        "run-attempt.updated": ["run_attempts"],
+        "node.updated": ["nodes"],
+        "provider-turn.updated": ["provider_turns"],
+        "checkpoint-scope.created": ["checkpoint_scopes"],
+        "checkpoint.captured": ["checkpoints"],
+        "checkpoint.rollback-requested": [],
+        "context-handoff.updated": ["context_handoffs"],
+        "context-transfer.created": ["context_transfers"],
+        "context-transfer.updated": ["context_transfers"],
+      };
+      assert.sameMembers([...SHELL_INERT_THREAD_EVENT_TYPES], Object.keys(writtenTables));
+      const queries: Array<string> = [];
+      const record: Statement.Transformer = (statement) =>
+        Effect.sync(() => {
+          queries.push(statement.compile()[0]);
+          return statement;
+        });
+      yield* Effect.all([store.getThreadShell(threadId), store.getShellSnapshot()]).pipe(
+        Effect.provideService(Statement.CurrentTransformer, record),
+      );
+      const shellSql = queries.join("\n");
+      for (const table of Object.values(writtenTables).flat()) {
+        assert.notMatch(shellSql, new RegExp(`orchestration_v2_projection_${table}\\b`));
+      }
+    }),
+  );
+
+  it.effect("probes for a failed run before reading a thread's limit state", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const record: Statement.Transformer = (statement) =>
+        Effect.sync(() => {
+          queries.push(statement.compile());
+          return statement;
+        });
+      yield* store
+        .getLimitRecoveryCandidates({ now: sweepNow, autoResume: true, snooze: true })
+        .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+      const [query, params] = queries.find(([text]) => text.includes("failure_payload_json"))!;
+      const plan = yield* sql.unsafe<{ readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${query}`,
+        params,
+      );
+      assert.isTrue(
+        plan.some(
+          (row) =>
+            row.detail.startsWith("SEARCH failed") &&
+            row.detail.includes(
+              "orchestration_v2_projection_runs_thread_status_idx (thread_id=? AND status=?)",
+            ),
+        ),
+      );
     }),
   );
 });
