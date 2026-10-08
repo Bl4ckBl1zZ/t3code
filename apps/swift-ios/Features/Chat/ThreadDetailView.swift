@@ -54,6 +54,7 @@ public struct ThreadDetailView: View {
     /// Drives the subtitle's working duration, which only moves by minutes.
     @State private var subtitleNow = Date()
     @State private var isConfirmingUnpin = false
+    @State private var isPickingCustomSnooze = false
     @State private var pullRequestPreview: PullRequestLinkTarget?
     /// The provider's answer to `/feedback`: the id it filed the report under,
     /// which is the only handle the reader has for quoting it later.
@@ -162,6 +163,11 @@ public struct ThreadDetailView: View {
         .confirmationDialog("Unpin this thread?", isPresented: $isConfirmingUnpin, titleVisibility: .visible) {
             Button("Unpin", role: .destructive) { setPinned(false) }
         }
+        .sheet(isPresented: $isPickingCustomSnooze) {
+            CustomSnoozeSheet(threadCount: 1) { until in
+                Task { await model.setSnoozed(thread.id, until: until) }
+            }
+        }
         .sheet(item: $pullRequestPreview) { target in
             if let context = pullRequestContext {
                 PullRequestLinkPreview(target: target, context: context)
@@ -216,6 +222,7 @@ public struct ThreadDetailView: View {
         .onChange(of: currentThread.state == .failed) { _, failed in
             if failed { PlatformHapticEngine.shared.play(.error) }
         }
+        .threadVisitTracking(currentThread, model: model)
         .onChange(of: hasFailedDelivery) { _, failed in
             if failed { PlatformHapticEngine.shared.play(.error) }
         }
@@ -508,12 +515,14 @@ public struct ThreadDetailView: View {
                 }
             }
             Section {
-                if currentThread.supportsSnooze != false,
-                   let until = currentThread.snoozedUntil, until > .now {
-                    Button("Unsnooze", systemImage: "moon.zzz") {
-                        Task { _ = await model.setSnoozed(thread.id, until: nil) }
-                    }
-                }
+                ThreadChatLifecycleActions(
+                    thread: currentThread,
+                    model: model,
+                    offersParking: !isChatConversation,
+                    onCustomSnooze: { isPickingCustomSnooze = true }
+                )
+            }
+            Section {
                 Button("Reload", systemImage: "arrow.clockwise") {
                     Task { _ = await model.detail(for: thread.id, force: true) }
                 }

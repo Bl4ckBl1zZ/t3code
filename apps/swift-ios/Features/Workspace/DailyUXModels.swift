@@ -317,7 +317,7 @@ struct DailyUXSidebarIndex {
         // work sits at the top of the inbox indefinitely.
         pinned = available
             .filter { $0.pinnedAt != nil && !isSettled($0) }
-            .sorted(by: Self.activeOrder)
+            .sorted(by: Self.pinnedOrder)
 
         // Working beta: only inbox threads fold away. Pins and Work's Main
         // thread stay put; snoozed and settled threads keep their shelves.
@@ -600,6 +600,11 @@ enum HomeThreadStatus: String, Sendable, Equatable {
     /// server, do not count (``FeatureThread/backgroundWorkHoldsThread``).
     case background
     case failed
+    /// Failed on a provider usage limit: waiting on quota, not broken.
+    case limited
+    /// A snoozed thread woke and has not been visited since.
+    case woke
+    /// A finished run the user has not seen (``FeatureThread/hasUnseenCompletion``).
     case done
     case ready
 }
@@ -609,6 +614,7 @@ enum WorkInboxBadge: String, Sendable, Equatable, CaseIterable {
     case needsYou
     case working
     case failed
+    case limited
     case done
 
     var label: String {
@@ -616,6 +622,7 @@ enum WorkInboxBadge: String, Sendable, Equatable, CaseIterable {
         case .needsYou: "Needs you"
         case .working: "Working"
         case .failed: "Failed"
+        case .limited: "Limited"
         case .done: "Done"
         }
     }
@@ -653,6 +660,12 @@ extension FeatureThread {
     }
 
     var homeStatus: HomeThreadStatus {
+        homeStatus(at: .now)
+    }
+
+    /// `now` only matters for Woke, which a snooze timer passing can produce
+    /// with no server event behind it.
+    func homeStatus(at now: Date) -> HomeThreadStatus {
         switch state {
         case .queued, .working:
             .working
@@ -661,14 +674,18 @@ extension FeatureThread {
         case .waitingForInput:
             .input
         case .failed:
-            .failed
-        case .completed:
-            .done
-        case .idle:
-            // Ranked under Done, matching the web sidebar: a result the reader
-            // has not seen yet outranks work that is still going. A dev server
-            // left running does not hold the thread; it reads as ready.
-            backgroundWorkHoldsThread ? .background : .ready
+            isUsageLimited ? .limited : .failed
+        case .completed, .idle:
+            // Ranked as on the web sidebar: Woke, then an unseen result, then
+            // work that is still going. A dev server left running does not
+            // hold the thread; it reads as ready.
+            if isWoke(at: now) {
+                .woke
+            } else if hasUnseenCompletion {
+                .done
+            } else {
+                backgroundWorkHoldsThread ? .background : .ready
+            }
         }
     }
 
@@ -694,7 +711,7 @@ extension FeatureThread {
             true
         case .background:
             !(interactionMode == .plan && hasActionableProposedPlan == true)
-        case .approval, .input, .failed, .done, .ready:
+        case .approval, .input, .failed, .limited, .woke, .done, .ready:
             false
         }
     }
@@ -705,7 +722,10 @@ extension FeatureThread {
         // Background work reads as working in the inbox: the row is not yours yet.
         case .working, .background: .working
         case .failed: .failed
+        case .limited: .limited
         case .done: .done
+        // Web's inbox has no Woke lozenge; an unseen result under it still counts.
+        case .woke: hasUnseenCompletion ? .done : nil
         case .ready: nil
         }
     }
@@ -717,6 +737,8 @@ extension FeatureThread {
         case .working: "Working"
         case .background: "Background"
         case .failed: "Failed"
+        case .limited: "Limited"
+        case .woke: "Woke"
         case .done: "Done"
         case .ready: nil
         }
@@ -1081,15 +1103,23 @@ enum ThreadActiveOrder {
         return String(midpoint(Array(a), Array(b)))
     }
 
-    static func assignments(ordered: [FeatureThread], movedID: String, retained: [FeatureThread]) -> [(String, String)] {
+    /// `key` picks the run being arranged: the active shelf by default, or
+    /// `\.pinOrderKey` for the pinned run, which shares the key alphabet.
+    static func assignments(
+        ordered: [FeatureThread],
+        movedID: String,
+        retained: [FeatureThread],
+        key orderKey: KeyPath<FeatureThread, String?> = \.activeOrderKey
+    ) -> [(String, String)] {
         guard let index = ordered.firstIndex(where: { $0.id == movedID }) else { return [] }
         let before = index > 0 ? ordered[index - 1] : nil
         let after = index + 1 < ordered.count ? ordered[index + 1] : nil
         let visible = Set(ordered.map(\.id))
-        let reserved = Set(retained.filter { !visible.contains($0.id) }.compactMap(\.activeOrderKey))
-        if (before == nil || before?.activeOrderKey != nil), (after == nil || after?.activeOrderKey != nil) {
-            var key = between(before?.activeOrderKey, after?.activeOrderKey)
-            while let value = key, reserved.contains(value) { key = between(value, after?.activeOrderKey) }
+        let reserved = Set(retained.filter { !visible.contains($0.id) }.compactMap { $0[keyPath: orderKey] })
+        let beforeKey = before?[keyPath: orderKey], afterKey = after?[keyPath: orderKey]
+        if before == nil || beforeKey != nil, after == nil || afterKey != nil {
+            var key = between(beforeKey, afterKey)
+            while let value = key, reserved.contains(value) { key = between(value, afterKey) }
             if let key { return [(movedID, key)] }
         }
         // Even spacing keeps initial materialization bounded, including large lists.

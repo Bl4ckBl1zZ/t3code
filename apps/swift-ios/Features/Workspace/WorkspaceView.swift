@@ -336,9 +336,12 @@ public struct WorkspaceView: View {
             ? emptyState(for: tab)
             : nil
         // The Working beta orders the inbox by time, so the saved arrangement
-        // is kept but has nothing to arrange until the beta is off.
-        let canArrange = tab != .chat && !isWorkingSectionEnabled
-            && presentation.active.contains { $0.supportsActiveOrder == true }
+        // is kept but has nothing to arrange until the beta is off. Pins keep
+        // their arranged order either way.
+        let canArrange = tab != .chat && (
+            (!isWorkingSectionEnabled && presentation.active.contains { $0.supportsActiveOrder == true })
+                || presentation.pinned.count { $0.supportsPinReorder == true } > 1
+        )
 
         return HomeThreadCollectionView(
             presentation: presentation,
@@ -394,6 +397,11 @@ public struct WorkspaceView: View {
             onSnoozeRequest: { snoozeRequestThread = $0 },
             onSetAutoSettle: { thread, enabled in
                 Task { await model.setAutoSettle(thread.id, enabled: enabled) }
+            },
+            onSetRead: { thread, read in
+                Task {
+                    if read { await model.markThreadRead(thread.id) } else { await model.markThreadUnread(thread.id) }
+                }
             },
             contentMatches: isSearchingHere ? currentContentMatches : [:],
             isSearchingContent: isSearchingHere && isSearchingContent,
@@ -739,6 +747,27 @@ public struct WorkspaceView: View {
             }
             .disabled(!availability.canArchive)
             Spacer()
+            // Like Pin and Unpin: Read takes the slot once nothing selected
+            // is left to mark unread.
+            if availability.supportsReadState {
+                if availability.canMarkUnread || !availability.canMarkRead {
+                    Button {
+                        markSelection(read: false)
+                    } label: {
+                        Label("Mark as Unread", systemImage: "envelope.badge")
+                    }
+                    .disabled(!availability.canMarkUnread)
+                    .accessibilityIdentifier("workspace-batch-unread")
+                } else {
+                    Button {
+                        markSelection(read: true)
+                    } label: {
+                        Label("Mark as Read", systemImage: "envelope.open")
+                    }
+                    .accessibilityIdentifier("workspace-batch-read")
+                }
+                Spacer()
+            }
             if availability.canPin || !availability.canUnpin {
                 Button {
                     runBatch { await model.setPinned($0, pinned: true) }
@@ -847,6 +876,22 @@ public struct WorkspaceView: View {
         runBatch(failureMessage: "Threads that aren't snoozed, or failed to update, remain selected.") { id in
             guard snoozed.contains(id) else { return false }
             return await model.setSnoozed(id, until: nil)
+        }
+    }
+
+    /// Threads already in the requested state, or on servers without read
+    /// state, stay selected.
+    private func markSelection(read: Bool) {
+        let now = Date.now
+        let eligible = Set(model.snapshot.threads.filter {
+            read ? $0.canMarkRead(at: now) : $0.canMarkUnread
+        }.map(\.id))
+        runBatch(failureMessage: read
+            ? "Threads with nothing unread, or that failed to update, remain selected."
+            : "Threads with nothing to mark unread, or that failed to update, remain selected."
+        ) { id in
+            guard eligible.contains(id) else { return false }
+            return read ? await model.markThreadRead(id) : await model.markThreadUnread(id)
         }
     }
 
@@ -971,7 +1016,12 @@ public struct WorkspaceView: View {
                 SettingsView(model: model, initialRoute: settingsInitialRoute)
             }
             .sheet(isPresented: $showingArrangement) {
-                ActiveThreadArrangementSheet(model: model, workspace: workspace, projectID: activeProjectFilterID)
+                ActiveThreadArrangementSheet(
+                    model: model,
+                    workspace: workspace,
+                    projectID: activeProjectFilterID,
+                    arrangesActive: !isWorkingSectionEnabled
+                )
             }
     }
 
@@ -2217,7 +2267,7 @@ struct FeatureThreadRow: View, Equatable {
             Text(thread.title)
                 .font(T3Typography.homeTitle)
                 .tracking(-0.14)
-                .foregroundStyle(T3Colors.textPrimary)
+                .foregroundStyle(titleColor)
                 .lineLimit(allowsMultilineTitle ? 2 : 1)
                 .padding(.top, 4)
 
@@ -2363,6 +2413,13 @@ struct FeatureThreadRow: View, Equatable {
     private func conversationRow(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // Messages' unread dot: a reply the user has not seen.
+                if thread.homeStatus(at: now) == .done {
+                    Circle()
+                        .fill(T3Colors.accent)
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                }
                 if thread.pinnedAt != nil {
                     Image(systemName: "pin.fill")
                         .imageScale(.small)
@@ -2440,7 +2497,7 @@ struct FeatureThreadRow: View, Equatable {
             Text(thread.title)
                 .font(T3Typography.homeTitle)
                 .tracking(-0.14)
-                .foregroundStyle(T3Colors.textPrimary)
+                .foregroundStyle(titleColor)
                 .lineLimit(allowsMultilineTitle ? 2 : 1)
                 .padding(.top, 3)
 
@@ -2581,6 +2638,12 @@ struct FeatureThreadRow: View, Equatable {
         return snoozedUntil
     }
 
+    /// Read rows recede so unread, woken and failed ones stand out, as on
+    /// web. The selected row keeps full weight.
+    private var titleColor: Color {
+        !isSelected && thread.homeRecedes(at: now) ? T3Colors.textSecondary : T3Colors.textPrimary
+    }
+
     private var statusIcon: String? {
         switch thread.homeStatus {
         case .working, .background: "circle.dotted"
@@ -2588,6 +2651,8 @@ struct FeatureThreadRow: View, Equatable {
         case .input: "questionmark.bubble"
         case .done: "checkmark.circle"
         case .failed: "exclamationmark.circle"
+        case .limited: "hourglass"
+        case .woke: "bell"
         case .ready: nil
         }
     }
@@ -2601,6 +2666,9 @@ struct FeatureThreadRow: View, Equatable {
         case .approval: T3Colors.warning
         case .input: T3Colors.statusInput
         case .failed: T3Colors.danger
+        // Waiting on quota and a woken snooze want the user, but nothing is
+        // broken: amber, as web.
+        case .limited, .woke: T3Colors.warning
         case .done: T3Colors.success
         case .ready: T3Colors.textTertiary
         }
@@ -2687,6 +2755,8 @@ struct FeatureThreadRow: View, Equatable {
         case .conversation:
             if thread.homeStatus == .working {
                 values.append("Responding")
+            } else if thread.homeStatus(at: now) == .done {
+                values.append("Unread")
             }
             if let preview = thread.preview, !preview.isEmpty {
                 values.append(thread.previewIsFromUser ? "You said: \(preview)" : preview)
@@ -2812,6 +2882,7 @@ private struct ActiveThreadArrangementSheet: View {
     @Bindable var model: FeatureRootModel
     let workspace: MobileWorkspace
     let projectID: String?
+    var arrangesActive = true
     @State private var rows: [FeatureThread] = []
     @State private var contexts: [String: HomeThreadRowContext] = [:]
     @State private var saving = false
@@ -2832,45 +2903,65 @@ private struct ActiveThreadArrangementSheet: View {
         presentation.active.filter { $0.supportsActiveOrder == true }
     }
 
+    private var pinned: [FeatureThread] {
+        presentation.pinned.filter { $0.supportsPinReorder == true }
+    }
+
     var body: some View {
+        // Built once: each read of `pinned` rebuilds the presentation.
+        let pinned = self.pinned
         NavigationStack {
             List {
                 if let error {
                     Section { SettingsErrorBanner(message: error) }
                 }
-                Section {
-                    ForEach(rows) { thread in
-                        ArrangementRow(
-                            thread: thread,
-                            context: contexts[thread.id] ?? .fallback,
-                            showsProject: workspace == .code
-                        )
-                        .accessibilityAction(named: "Move Up") { move(thread.id, offset: -1) }
-                        .accessibilityAction(named: "Move Down") { move(thread.id, offset: 1) }
-                    }
-                    .onMove { source, destination in
-                        guard !saving, let index = source.first else { return }
-                        let id = rows[index].id
-                        rows.move(fromOffsets: source, toOffset: destination)
-                        save(movedID: id)
-                    }
-                    .moveDisabled(saving)
-                } footer: {
-                    Text("Drag threads into the order you want to work through them.")
+                if pinned.count > 1 {
+                    PinnedThreadArrangementSection(
+                        model: model,
+                        pinned: pinned,
+                        contexts: contexts,
+                        showsProject: workspace == .code,
+                        saving: $saving,
+                        error: $error
+                    )
                 }
-                Section {
-                    Button("Reset to Newest First", action: reset)
-                        .disabled(saving || !rows.contains { $0.activeOrderKey != nil })
+                if arrangesActive {
+                    Section {
+                        ForEach(rows) { thread in
+                            ArrangementRow(
+                                thread: thread,
+                                context: contexts[thread.id] ?? .fallback,
+                                showsProject: workspace == .code
+                            )
+                            .accessibilityAction(named: "Move Up") { move(thread.id, offset: -1) }
+                            .accessibilityAction(named: "Move Down") { move(thread.id, offset: 1) }
+                        }
+                        .onMove { source, destination in
+                            guard !saving, let index = source.first else { return }
+                            let id = rows[index].id
+                            rows.move(fromOffsets: source, toOffset: destination)
+                            save(movedID: id)
+                        }
+                        .moveDisabled(saving)
+                    } header: {
+                        if pinned.count > 1 { Text("Active") }
+                    } footer: {
+                        Text("Drag threads into the order you want to work through them.")
+                    }
+                    Section {
+                        Button("Reset to Newest First", action: reset)
+                            .disabled(saving || !rows.contains { $0.activeOrderKey != nil })
+                    }
                 }
             }
             .environment(\.editMode, .constant(.active))
             .t3GroupedListBackground()
             .overlay {
-                if rows.isEmpty {
+                if (rows.isEmpty || !arrangesActive) && pinned.count < 2 {
                     ContentUnavailableView(
                         "Nothing to Arrange",
                         systemImage: "arrow.up.arrow.down",
-                        description: Text("Active threads you can reorder show up here.")
+                        description: Text("Pinned and active threads you can reorder show up here.")
                     )
                 }
             }
@@ -2945,7 +3036,7 @@ private struct ActiveThreadArrangementSheet: View {
 
 /// One thread in the arrangement sheet: enough to tell rows apart while
 /// dragging, without the full Home row.
-private struct ArrangementRow: View {
+struct ArrangementRow: View {
     let thread: FeatureThread
     let context: HomeThreadRowContext
     let showsProject: Bool

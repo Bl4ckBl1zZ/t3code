@@ -58,6 +58,10 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
     public let isGeneratingHandoffScript: Bool
     /// When a snoozed row wakes, shown under Unsnooze.
     public let snoozedUntil: Date?
+    /// Read state: one of the pair at most, and neither on servers without
+    /// visited tracking (``FeatureThread/canMarkUnread``).
+    public let canMarkUnread: Bool
+    public let canMarkRead: Bool
 
     public init(
         isArchived: Bool = false,
@@ -78,7 +82,9 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         isRegeneratingTitle: Bool = false,
         canArchive: Bool = true,
         isGeneratingHandoffScript: Bool = false,
-        snoozedUntil: Date? = nil
+        snoozedUntil: Date? = nil,
+        canMarkUnread: Bool = false,
+        canMarkRead: Bool = false
     ) {
         self.isArchived = isArchived
         self.canTogglePin = canTogglePin
@@ -99,6 +105,8 @@ public struct ThreadRowMenuContext: Equatable, Sendable {
         self.canArchive = canArchive
         self.isGeneratingHandoffScript = isGeneratingHandoffScript
         self.snoozedUntil = snoozedUntil
+        self.canMarkUnread = canMarkUnread
+        self.canMarkRead = canMarkRead
     }
 }
 
@@ -112,6 +120,8 @@ public enum ThreadRowMenuActions {
     public static let unsettleActionID = "unsettle"
     public static let snoozeActionID = "snooze"
     public static let unsnoozeActionID = "unsnooze"
+    public static let markUnreadActionID = "mark-unread"
+    public static let markReadActionID = "mark-read"
     public static let autoSettleActionID = "auto-settle"
     public static let autoSettleEnabledActionID = "auto-settle:enabled"
     public static let autoSettleDisabledActionID = "auto-settle:disabled"
@@ -170,6 +180,19 @@ public enum ThreadRowMenuActions {
             separatorBefore: true,
             children: children
         )
+    }
+
+    /// Mark as Unread, or its way back once the row is unread. Mail's words
+    /// and envelopes, since that is the read state iOS users already know.
+    static func readStateAction(_ context: ThreadRowMenuContext) -> ThreadRowMenuAction? {
+        guard !context.isArchived else { return nil }
+        if context.canMarkRead {
+            return ThreadRowMenuAction(id: markReadActionID, title: "Mark as Read", symbol: "envelope.open")
+        }
+        if context.canMarkUnread {
+            return ThreadRowMenuAction(id: markUnreadActionID, title: "Mark as Unread", symbol: "envelope.badge")
+        }
+        return nil
     }
 
     /// The Home row's long-press menu.
@@ -256,6 +279,10 @@ public enum ThreadRowMenuActions {
             regenerating: context.isRegeneratingTitle,
             after: renameActionID
         )
+        // With the naming entries, where web keeps Mark unread.
+        if let readState = readStateAction(context) {
+            actions.append(readState)
+        }
 
         // A setting rather than a verb, so it sits with the naming section
         // instead of beside Settle, with the current choice checked. Disabled

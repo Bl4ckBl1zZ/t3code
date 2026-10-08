@@ -1637,6 +1637,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refresh(client: route.client)
     }
 
+    func setPinOrder(id: String, key: String) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(
+            threadID: route.wireID, fields: ["pinOrderKey": .string(key)]))
+    }
+
+    // Read state rides the shell stream's `thread.visited` / `thread.marked-unread`
+    // echo; no refresh, since visits fire every time an open thread moves.
+    func visitThread(id: String, visitedAt: Date) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(
+            OrchestrationCommands.visit(threadID: route.wireID, visitedAt: visitedAt))
+    }
+
+    func markThreadUnread(id: String) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(OrchestrationCommands.markUnread(threadID: route.wireID))
+    }
+
     func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest? {
         try await changeThreadLinkedPullRequest(threadID: threadID, number: number, adding: true)
     }
@@ -5695,6 +5714,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             interactionMode: mapInteractionMode(thread.interactionMode)
         )
         mapped.timelineClearedAt = thread.timelineClearedAt.flatMap(parseValidDate)
+        mapped.lastVisitedAt = thread.lastVisitedAt.flatMap(parseValidDate)
+        mapped.supportsVisitedTracking = environment.descriptor?.capabilities.threadVisitedTracking
+        mapped.supportsPinReorder = environment.descriptor?.capabilities.threadPinReorder
+        // The projection carries no failure class; the shell does. Read only
+        // for a failed run, so streaming rebuilds skip the lookup.
+        if latestRun?.status == "failed" {
+            mapped.lastErrorClass = shellsByEnvironmentID[environment.id]?.threads
+                .first(where: { $0.id == thread.id })?.lastErrorClass
+        }
         return mapped
     }
 
@@ -5889,6 +5917,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             archiveBlockedByLiveRun: !ThreadArchive.canArchive(shell: thread)
         )
         mapped.timelineClearedAt = clearedAt
+        mapped.lastVisitedAt = thread.lastVisitedAt.flatMap(parseValidDate)
+        mapped.supportsVisitedTracking = environment.descriptor?.capabilities.threadVisitedTracking
+        mapped.lastErrorClass = thread.lastErrorClass
+        mapped.supportsPinReorder = environment.descriptor?.capabilities.threadPinReorder
         return mapped
     }
 

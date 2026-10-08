@@ -29,8 +29,10 @@ final class BackgroundWorkStatusTests: XCTestCase {
         XCTAssertFalse(devServer.isHomeWorking)
         XCTAssertNil(devServer.workInboxBadge)
 
-        // Its finished turn still reads as done, like any other.
-        let finished = thread(state: .completed, count: 1, tasks: devServer.pendingBackgroundTasks)
+        // Its finished turn still reads as done until seen, like any other.
+        var finished = thread(state: .completed, count: 1, tasks: devServer.pendingBackgroundTasks)
+        finished.latestTurnCompletedAt = Date(timeIntervalSince1970: 200)
+        finished.lastVisitedAt = Date(timeIntervalSince1970: 100)
         XCTAssertEqual(finished.homeStatus, .done)
         XCTAssertEqual(finished.workInboxBadge, .done)
     }

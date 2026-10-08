@@ -6,6 +6,15 @@ import Testing
 struct HomeThreadMetadataTests {
     private let now = Date(timeIntervalSince1970: 10_000)
 
+    /// Done means a completion the user has not seen yet.
+    private func unseenIfCompleted(_ thread: FeatureThread) -> FeatureThread {
+        guard thread.state == .completed else { return thread }
+        var unseen = thread
+        unseen.latestTurnCompletedAt = now
+        unseen.lastVisitedAt = now.addingTimeInterval(-60)
+        return unseen
+    }
+
     @Test
     func statusLabelsFollowTheWebV2RowVocabulary() {
         let expected: [(FeatureThreadState, HomeThreadStatus, String?)] = [
@@ -19,12 +28,12 @@ struct HomeThreadMetadataTests {
         ]
 
         for (state, status, label) in expected {
-            let thread = FeatureThread(
+            let thread = unseenIfCompleted(FeatureThread(
                 id: state.rawValue,
                 projectID: "project",
                 title: "Task",
                 state: state
-            )
+            ))
             #expect(thread.homeStatus == status)
             #expect(thread.homeStatusLabel == label)
         }
@@ -46,12 +55,12 @@ struct HomeThreadMetadataTests {
         ]
 
         for (state, badge) in expected {
-            let thread = FeatureThread(
+            let thread = unseenIfCompleted(FeatureThread(
                 id: state.rawValue,
                 projectID: "project",
                 title: "Task",
                 state: state
-            )
+            ))
             #expect(thread.workInboxBadge == badge)
         }
     }

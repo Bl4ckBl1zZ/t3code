@@ -1530,6 +1530,9 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     /// `idle` or a run status.
     public var status: String
     public var lastError: String?
+    /// `OrchestrationV2ProviderFailureClass` of the failed run. Absent on
+    /// servers that predate it, where every failure reads as Failed.
+    public var lastErrorClass: String? = nil
     public var pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary?
     public var latestVisibleMessage: OrchestrationV2LatestVisibleMessageSummary?
     public var latestUserMessageAt: OrchestrationV2Timestamp?
