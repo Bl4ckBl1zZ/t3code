@@ -5229,6 +5229,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             providerSubagentStatus: ProviderSubagentStatus.resolve(
                 nodes: projection.nodes,
                 parseDate: parseValidDate
+            ),
+            contextWindow: ThreadContextWindow.latest(
+                providerTurns: projection.providerTurns,
+                providerThread: projection.providerThreads.first { $0.id == projection.thread.activeProviderThreadId },
+                items: projection.visibleTurnItems.map(\.item),
+                parseDate: parseValidDate
             )
         )
     }

@@ -1041,7 +1041,7 @@ public struct ThreadDetailView: View {
             isWorking: detail.thread.state == .working || detail.thread.state == .queued,
             workingStatus: workingStatus,
             focused: $composerFocused,
-            onSend: send,
+            onSend: { send() },
             onStop: {
                 Task { await model.cancelTurn(threadID: thread.id) }
             },
@@ -1065,6 +1065,8 @@ public struct ThreadDetailView: View {
                 if model.pendingThreadFileDrops[thread.id]?.id == id { model.pendingThreadFileDrops[thread.id] = nil }
             },
             draftLoaded: didRestoreDraft,
+            compactBeforeSendTokens: resumeCompactionTokens(detail),
+            onSendWithFullHistory: { send(keepFullHistory: true) },
             onApprovalDecision: { id, decision in
                 Task { await model.resolveApproval(id, decision: decision) }
             },
@@ -1582,13 +1584,38 @@ public struct ThreadDetailView: View {
         onStartNewThread?(projectID)
     }
 
-    private func send() {
+    /// The tokens a stale Claude session would re-read on its next turn, while
+    /// Send should compact first. See ``ClaudeResumeCompaction``.
+    private func resumeCompactionTokens(_ detail: FeatureThreadDetail) -> Int? {
+        let provider = threadProviders.first { $0.id == currentSelection?.providerID }
+        let state = detail.thread.state
+        return ClaudeResumeCompaction.tokens(.init(
+            driver: provider?.driver,
+            providerAvailable: provider?.isAvailable == true,
+            contextWindow: detail.workflow.contextWindow,
+            isIdle: (state == .idle || state == .completed || state == .failed)
+                && detail.approvals.isEmpty && detail.userInputs.isEmpty
+                && queueState.activeRun == nil && !isSending,
+            items: detail.timelineItems,
+            now: .now
+        ))
+    }
+
+    /// `keepFullHistory` is "Send with Full History": it skips the compaction
+    /// a stale Claude session would otherwise run first.
+    private func send(keepFullHistory: Bool = false) {
         let message = draft
         let pendingAttachments = attachments
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !pendingAttachments.isEmpty else {
             return
         }
+        // A stale Claude session compacts before this message so the turn does
+        // not re-read the old history. The message then waits behind the
+        // /compact run: the server queues a send that meets an active run.
+        let compactFirst = !keepFullHistory
+            && detail.flatMap(resumeCompactionTokens) != nil
+            && !ClaudeResumeCompaction.isCompactCommand(message)
         if pendingAttachments.isEmpty,
            ["/new", "/reset"].contains(message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()),
            let providerID = currentThread.providerID,
@@ -1612,14 +1639,22 @@ public struct ThreadDetailView: View {
         attachments = []
         composerFocused = false
         Task {
-            let sent = await submitMessage(
-                FeatureMessageSubmission(
-                threadID: thread.id,
-                text: message,
-                selection: currentSelection,
-                attachments: pendingAttachments
+            var sent = true
+            if compactFirst {
+                sent = await submitMessage(
+                    FeatureMessageSubmission(threadID: thread.id, text: "/compact", selection: currentSelection)
                 )
-            )
+            }
+            if sent {
+                sent = await submitMessage(
+                    FeatureMessageSubmission(
+                    threadID: thread.id,
+                    text: message,
+                    selection: currentSelection,
+                    attachments: pendingAttachments
+                    )
+                )
+            }
             if sent {
                 let followUpDraft = composerDraft
                 if followUpDraft.text.isEmpty && followUpDraft.attachments.isEmpty {
