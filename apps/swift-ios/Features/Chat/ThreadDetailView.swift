@@ -786,6 +786,10 @@ public struct ThreadDetailView: View {
                     composerFocused = true
                 },
                 mcpApps: mcpApps,
+                threadLinks: ThreadLinkResolver(
+                    threads: model.snapshot.threads,
+                    environmentID: currentThread.environmentID ?? threadEnvironment?.id
+                ),
                 navigationRequest: turnNavigationRequest,
                 scrollToLatestRequest: scrollToLatestRequest,
                 onReadingHistoryChanged: { reading in
@@ -2293,6 +2297,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
     var mcpApps: ThreadMcpApps? = nil
+    /// Resolves `t3-thread://` links in messages against this thread's environment.
+    var threadLinks: ThreadLinkResolver? = nil
     var navigationRequest: Int = 0
     var scrollToLatestRequest: Int = 0
     var onReadingHistoryChanged: (Bool) -> Void = { _ in }
@@ -2368,7 +2374,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onOpenCitation: onOpenCitation,
                 citationContext: citationContext,
                 onUseTemplate: onUseTemplate,
-                mcpApps: mcpApps
+                mcpApps: mcpApps,
+                threadLinks: threadLinks
             ),
             onLoadEarlier: onLoadEarlier,
             in: collectionView
@@ -2441,6 +2448,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
             var mcpApps: ThreadMcpApps?
+            var threadLinks: ThreadLinkResolver?
         }
 
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
@@ -2629,7 +2637,13 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.threadMcpApps, context.mcpApps)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
+                    .environment(\.threadLinkResolver, context.threadLinks)
                     .environment(\.openURL, OpenURLAction { url in
+                        // A thread link names a thread in this transcript's environment.
+                        if let linkID = ThreadLinks.threadID(href: url.absoluteString) {
+                            context.onOpenThread(context.threadLinks?.openID(forLinkID: linkID) ?? linkID)
+                            return .handled
+                        }
                         if let citation = AssistantCitation.parse(url.absoluteString) {
                             context.onOpenCitation(citation)
                             return .handled
@@ -3439,6 +3453,7 @@ private struct FeatureLocalAttachmentThumbnail: View {
 
 struct FeatureMessageView: View {
     let message: FeatureMessage
+    @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
     /// The line under a user bubble. A message still waiting on its echo reads
     /// as sending even before the outbox has said more.
     var caption: ThreadMessageCaption? = nil
@@ -3478,7 +3493,7 @@ struct FeatureMessageView: View {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
                         if !message.text.isEmpty {
                             ReviewContextMessageText(
-                                source: message.text,
+                                source: displayText,
                                 isStreaming: message.state == .streaming
                             )
                         }
@@ -3507,7 +3522,7 @@ struct FeatureMessageView: View {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
                         if !message.text.isEmpty {
                             ReviewContextMessageText(
-                                source: message.text,
+                                source: displayText,
                                 isStreaming: message.state == .streaming
                             )
                         }
@@ -3543,7 +3558,7 @@ struct FeatureMessageView: View {
                 FeatureMessageAttachmentsView(attachments: message.attachments)
                 if !message.text.isEmpty {
                     MarkdownMessageView(
-                        message.text,
+                        displayText,
                         isStreaming: message.state == .streaming,
                         citationMessageID: message.wireMessageID,
                         timestamp: message.createdAt
@@ -3578,6 +3593,11 @@ struct FeatureMessageView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .accessibilityIdentifier("message-\(message.id)")
         }
+    }
+
+    /// The text with each thread link labeled by its thread's current title.
+    private var displayText: String {
+        threadLinks?.relabel(message.text) ?? message.text
     }
 
     private var accessibilityValue: String {
