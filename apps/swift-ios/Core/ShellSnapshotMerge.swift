@@ -67,6 +67,23 @@ enum ShellSnapshotMerge {
         return merged
     }
 
+    /// Folds a shell read over HTTP into the shell the client holds, or
+    /// returns nil when the read is older than it.
+    ///
+    /// An HTTP read races the live shell stream. A response built before
+    /// deltas the client has since applied would roll those rows back, and the
+    /// stream never sends them again because the client already acknowledged
+    /// their sequence.
+    static func mergeFetched(
+        previous: OrchestrationV2ShellSnapshot?,
+        fetched: OrchestrationV2ShellSnapshot
+    ) -> OrchestrationV2ShellSnapshot? {
+        if let previous, previous.snapshotSequence > fetched.snapshotSequence {
+            return nil
+        }
+        return merge(previous: previous, next: fetched, resolvedRepositoryIdentityRoots: nil)
+    }
+
     private static func index(
         _ projects: [OrchestrationProject]
     ) -> [String: OrchestrationProject] {
