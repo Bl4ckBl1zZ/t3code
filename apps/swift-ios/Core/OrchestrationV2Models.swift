@@ -1073,6 +1073,9 @@ public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiabl
     /// When the task's first run started. Null while it is still pending; Stop
     /// is offered only once there is a run to interrupt.
     public var startedAt: OrchestrationV2Timestamp? = nil
+    /// When the task settled. Lineage shows a finished agent's elapsed time
+    /// from the two; absent from older servers, which keeps the status word.
+    public var completedAt: OrchestrationV2Timestamp? = nil
 }
 
 public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {

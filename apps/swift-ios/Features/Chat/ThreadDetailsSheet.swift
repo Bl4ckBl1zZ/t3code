@@ -971,6 +971,10 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         let availability = relationships.availability(for: row.threadID)
         let isArchived = ThreadDetailsLineageSection.isArchived(availability: availability)
         let status = row.edge.kind == .subagent ? WorkRowStatus(agentStatus: row.edge.status) : nil
+        // A finished agent with a known time shows that instead of "Done".
+        let elapsed = row.edge.kind == .subagent
+            ? relationships.subagent(for: row.threadID)?.settledElapsed(status: row.edge.status)
+            : nil
         let relationshipLabel = ThreadRelationships.label(row.edge, currentThreadID: relationships.currentThreadID)
         let metadata = relationships.subagent(for: row.threadID).flatMap { subagentMetadata[$0.id] }
         return Button {
@@ -980,6 +984,10 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                 LabeledContent {
                     if let availability {
                         Text(availability)
+                    } else if let elapsed {
+                        Text(verbatim: elapsed)
+                            .monospacedDigit()
+                            .accessibilityLabel("Finished in \(elapsed)")
                     } else if row.edge.kind == .subagent {
                         Text(status?.accessibilityLabel ?? "Done")
                             .foregroundStyle(status == .failed ? T3Colors.danger : T3Colors.textSecondary)
