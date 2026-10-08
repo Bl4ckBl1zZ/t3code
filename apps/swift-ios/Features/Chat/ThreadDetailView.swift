@@ -1116,6 +1116,10 @@ public struct ThreadDetailView: View {
                 // this the keyboard closes the moment the finger drifts on the
                 // mic, mid-recording.
                 guard !VoiceComposerCoordinator.shared.ownsActiveTouch() else { return }
+                // A drag that starts above the pill is the suggestion popover
+                // scrolling back up its list; closing the keyboard would move
+                // the list out from under the finger.
+                guard value.startLocation.y >= 0 else { return }
                 guard composerFocused,
                       value.translation.height > 8,
                       value.translation.height > abs(value.translation.width) else {
