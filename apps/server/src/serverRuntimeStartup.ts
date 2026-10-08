@@ -62,10 +62,10 @@ import {
   issueHeadlessServeAccessInfo,
 } from "./startupAccess.ts";
 
-// Slow enough that the scan it costs stays invisible next to the superseded
-// rows it collects, frequent enough that a host left running for weeks never
-// carries a full boot-to-now backlog.
-const EVENT_STORE_COMPACTION_INTERVAL = "6 hours";
+// Each run only reads events appended since the last one, in short chunks, so
+// it can run often. Superseded streaming snapshots become collectable an hour
+// after their successor; this keeps them from outliving that by much more.
+const EVENT_STORE_COMPACTION_INTERVAL = "30 minutes";
 
 export class ServerRuntimeStartupError extends Schema.TaggedErrorClass<ServerRuntimeStartupError>()(
   "ServerRuntimeStartupError",
@@ -655,12 +655,9 @@ export const make = (options?: StartupOptions) =>
       // superseded-event and legacy-v1 backlog (potentially millions of rows,
       // paced in small batches), and nothing at boot depends on it.
       //
-      // Then on a slow repeat, because a long-lived server is exactly where
-      // the backlog rebuilds: compaction used to run only at boot, so a host
-      // left up for weeks accumulated every superseded copy until someone
-      // restarted it. The interval is long because each run costs a couple of
-      // seconds of scanning on the synchronous driver — often enough to keep
-      // the store bounded, rare enough not to become its own source of jank.
+      // Then on a repeat, because a long-lived server is exactly where the
+      // backlog rebuilds. Each run walks only the events appended since the
+      // previous one, in short transactions that yield between them.
       yield* forkParked(
         projectionMaintenance.compactEventStore().pipe(
           Effect.tap((summary) =>
@@ -669,9 +666,11 @@ export const make = (options?: StartupOptions) =>
               : Effect.logInfo("Compacted orchestration event store", summary),
           ),
           Effect.tap((summary) =>
-            // Freed pages are reused, so the file stops growing regardless; only
-            // an offline VACUUM shrinks it, which is not safe to run on the
-            // synchronous sqlite connection while serving.
+            // Freed pages are reused, so the file stops growing regardless.
+            // Databases created before incremental auto-vacuum keep their size
+            // until an offline VACUUM (docs/operations/database-maintenance.md),
+            // which is not safe to run on the synchronous connection while
+            // serving.
             summary.reclaimableBytes >= 512 * 1024 * 1024
               ? Effect.logInfo(
                   "state.sqlite has substantial reclaimable free space; an offline VACUUM would shrink the file",

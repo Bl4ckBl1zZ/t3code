@@ -85,6 +85,14 @@ A durable record of a command's result, used to make retries idempotent. It comm
 
 Side-effect intent committed with the events, such as starting a provider turn or capturing a checkpoint. See [EventSink.ts][28].
 
+#### Event-store compaction
+
+Deleting events that a newer event of the same entity fully supersedes: streaming snapshots an hour
+after their successor, thread-state events after seven days. The newest version of each entity is
+always kept, so catch-up and rebuild give the same result. It runs in bounded ranges from a
+persisted cursor. See [ProjectionMaintenance.ts][31] and
+[Performance regressions](./performance-regressions.md#event-store-growth-and-compaction).
+
 #### Effect worker
 
 The worker that runs outbox effects after commit and feeds their results back as commands. Tests drain it (`OrchestrationEffectWorkerV2.drain`) instead of sleeping. See [EffectWorker.ts][30].
@@ -210,3 +218,4 @@ desktop ships T3 Code already matching it.
 [28]: ../../apps/server/src/orchestration-v2/EventSink.ts
 [29]: ../../apps/server/src/orchestration-v2/ProjectionStore.ts
 [30]: ../../apps/server/src/orchestration-v2/EffectWorker.ts
+[31]: ../../apps/server/src/orchestration-v2/ProjectionMaintenance.ts

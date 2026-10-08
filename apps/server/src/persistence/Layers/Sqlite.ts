@@ -39,6 +39,12 @@ const setup = Layer.effectDiscard(
     // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
     yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
+    // Lets event-store compaction hand freed pages back to the filesystem in
+    // small steps (`PRAGMA incremental_vacuum`). It only takes effect on a
+    // database that has no tables yet, so it must precede journal_mode, which
+    // writes the header; on an existing database it is a no-op, and only an
+    // offline VACUUM converts it.
+    yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
     // WAL defaults to `synchronous = FULL`, which fsyncs on every commit. The
     // orchestration event stream commits continuously while a run is
@@ -55,6 +61,15 @@ const setup = Layer.effectDiscard(
     // largest size until the last connection closes.
     yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
     yield* runMigrations();
+    // SQLite's recommended pattern for long-lived connections: refresh planner
+    // statistics on open, and periodically after (event-store compaction does).
+    // Without sqlite_stat1 the planner guesses row counts and can pick an
+    // index that scans most of a multi-GB table. analysis_limit samples each
+    // index instead of reading it whole. The first run on a 6.6 GB store took
+    // ~1s warm and ~12s from a cold disk cache, once; with statistics present
+    // it takes under 1ms.
+    yield* sql`PRAGMA analysis_limit = 400;`;
+    yield* sql`PRAGMA optimize = 0x10002;`;
   }),
 );
 
