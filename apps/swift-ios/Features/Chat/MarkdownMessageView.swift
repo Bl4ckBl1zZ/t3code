@@ -25,6 +25,7 @@ struct MarkdownMessageView: View {
     @SwiftUI.Environment(\.markdownPullRequestContext) private var pullRequestContext
     @SwiftUI.Environment(\.markdownTranscriptContext) private var transcript
     @SwiftUI.Environment(\.openURL) private var openURL
+    @SwiftUI.Environment(\.messageMenuExtras) private var menuExtras
 
     init(_ source: String, isStreaming: Bool = false, citationMessageID: String? = nil, timestamp: Date? = nil) {
         self.source = source
@@ -76,15 +77,20 @@ struct MarkdownMessageView: View {
             Section {
                 Button("Copy", systemImage: "doc.on.doc", action: copySource)
                 Button("Select Text…", systemImage: "text.cursor") { isSelectingText = true }
-                ShareLink(item: source) {
+                ShareLink(item: menuText) {
                     Label("Share…", systemImage: "square.and.arrow.up")
                 }
                 if citationMessageID != nil, citationContext != nil, !isStreaming {
                     Button("Cite Text", systemImage: "quote.bubble") { isCiting = true }
                 }
             } header: {
-                if let timestamp { Text(verbatim: Self.menuTitle(timestamp)) }
+                if let timestamp {
+                    Text(verbatim: Self.menuTitle(timestamp))
+                } else if let title = menuExtras?.title {
+                    Text(verbatim: title)
+                }
             }
+            MessageMenuActionsSection(actions: menuExtras?.actions ?? [])
             if pullRequestContext != nil {
                 Section {
                     ForEach(PullRequestLinkTarget.links(in: source)) { target in
@@ -98,7 +104,7 @@ struct MarkdownMessageView: View {
             }
         }
         .sheet(isPresented: $isSelectingText) {
-            MarkdownSelectTextSheet(text: source)
+            MarkdownSelectTextSheet(text: menuText)
         }
         .sheet(isPresented: $isCiting) {
             if let citationContext, let citationMessageID {
@@ -139,8 +145,12 @@ struct MarkdownMessageView: View {
         }
     }
 
+    /// What Copy, Share and Select hand over: the enclosing message's text when
+    /// it supplies one, so a bubble split into segments copies whole.
+    private var menuText: String { menuExtras?.copyText ?? source }
+
     private func copySource() {
-        UIPasteboard.general.string = source
+        UIPasteboard.general.string = menuText
         T3HUD.show("Copied", systemImage: "doc.on.doc")
     }
 
@@ -261,7 +271,7 @@ private final class StreamingMarkdownRenderer {
 /// "Select Text…" from the long-press menu: the message as plain, selectable
 /// text. A sheet rather than a mode, because a selection mode on the row
 /// competes with the long-press that opened it.
-private struct MarkdownSelectTextSheet: View {
+struct MarkdownSelectTextSheet: View {
     let text: String
 
     var body: some View {

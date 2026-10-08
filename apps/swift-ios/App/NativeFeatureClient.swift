@@ -1401,6 +1401,27 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await route.client.handoffScript(threadID: route.wireID).script
     }
 
+    func forkThread(
+        threadID: String,
+        sourceThreadID: String,
+        runID: String,
+        latestOnly: Bool,
+        title: String?
+    ) async throws -> String {
+        // The open thread routes; the fork lands on the same server.
+        let route = try threadRoute(for: threadID)
+        let targetWireID = UUID().uuidString
+        _ = try await route.client.forkThread(
+            sourceThreadID: sourceThreadID,
+            targetThreadID: targetWireID,
+            runID: runID,
+            latestOnly: latestOnly,
+            title: title
+        )
+        try? await refresh(client: route.client)
+        return FeatureScopedID.thread(environmentID: route.environmentID, wireID: targetWireID)
+    }
+
     func mergeThreadBack(
         sourceThreadID: String,
         targetThreadID: String,
@@ -4895,6 +4916,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs),
             page: incoming.page,
             timelineItems: incoming.timelineItems,
+            checkpoints: incoming.checkpoints,
             timelineRuns: incoming.timelineRuns,
             itemSupport: incoming.itemSupport,
             subagentChildThreadIDs: incoming.subagentChildThreadIDs,
@@ -5210,7 +5232,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         // detail streams took turns publishing.
         let clearedAt = mappedThread.timelineClearedAt
         if let latestVisible = messages.last(where: { !ThreadTimelineClear.hides($0.createdAt, clearedAt: clearedAt) }) {
-            mappedThread.preview = previewText(latestVisible.text)
+            mappedThread.preview = previewText(latestVisible.role == .user ? UserMessageContent.previewText(latestVisible.text) : latestVisible.text)
             mappedThread.previewIsFromUser = latestVisible.role == .user
         } else if clearedAt != nil {
             mappedThread.preview = nil
@@ -5235,6 +5257,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             userInputs: userInputs,
             page: page,
             timelineItems: timelineItems,
+            checkpoints: projection.checkpoints,
             timelineRuns: projection.runs.map(Self.timelineRun),
             itemSupport: itemSupport,
             subagentChildThreadIDs: subagentChildThreadIDs,
@@ -5779,7 +5802,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             preview: ThreadTimelineClear.hides(
                 thread.latestVisibleMessage.flatMap { parseValidDate($0.updatedAt) },
                 clearedAt: clearedAt
-            ) ? nil : previewText(thread.latestVisibleMessage?.text),
+            ) ? nil : previewText(thread.latestVisibleMessage.map { $0.role == "user" ? UserMessageContent.previewText($0.text) : $0.text }),
             previewIsFromUser: thread.latestVisibleMessage?.role == "user",
             branch: thread.branch,
             worktreePath: thread.worktreePath,
@@ -7119,7 +7142,8 @@ private struct ProjectionItemSupportIndex {
                 ThreadActivityItemSupport.ProviderSession(
                     status: $0.status,
                     model: $0.model,
-                    cwd: $0.cwd ?? ""
+                    cwd: $0.cwd ?? "",
+                    fork: ThreadForkCapabilities($0.capabilities)
                 )
             },
             providerThread: providerThread.map {

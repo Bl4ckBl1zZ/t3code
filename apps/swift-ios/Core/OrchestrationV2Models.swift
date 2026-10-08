@@ -310,15 +310,27 @@ public struct OrchestrationV2TurnCapabilities: Codable, Equatable, Sendable {
     }
 }
 
-/// The provider capability descriptor, narrowed to the `turns` group.
+/// The provider capability descriptor, narrowed to the `turns` group and the
+/// three groups that decide whether a response can be forked.
 ///
 /// The contract carries eleven groups; the rest are modeled when a feature
 /// needs them. Unmodeled groups decode away rather than failing.
 public struct OrchestrationV2ProviderCapabilities: Codable, Equatable, Sendable {
     public let turns: OrchestrationV2TurnCapabilities?
+    public var threads: OrchestrationV2ThreadForkCapabilities? = nil
+    public var identity: OrchestrationV2IdentityCapabilities? = nil
+    public var context: OrchestrationV2ContextHandoffCapabilities? = nil
 
-    public init(turns: OrchestrationV2TurnCapabilities? = nil) {
+    public init(
+        turns: OrchestrationV2TurnCapabilities? = nil,
+        threads: OrchestrationV2ThreadForkCapabilities? = nil,
+        identity: OrchestrationV2IdentityCapabilities? = nil,
+        context: OrchestrationV2ContextHandoffCapabilities? = nil
+    ) {
         self.turns = turns
+        self.threads = threads
+        self.identity = identity
+        self.context = context
     }
 }
 
@@ -1074,6 +1086,13 @@ public struct OrchestrationV2Checkpoint: Codable, Equatable, Sendable, Identifia
     public let scopeId: String
     public let status: String
     public let files: [OrchestrationV2CheckpointFileSummary]
+    /// The run that captured it, and that run's ordinal. Both null on a scope's
+    /// baseline (`ordinalWithinScope` 0), which is the state before any turn.
+    /// "Restore to this message" resolves its target through these.
+    public var runId: String? = nil
+    public var ordinalWithinScope: Int? = nil
+    public var appRunOrdinal: Int? = nil
+    public var capturedAt: OrchestrationV2Timestamp? = nil
 }
 
 public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiable {

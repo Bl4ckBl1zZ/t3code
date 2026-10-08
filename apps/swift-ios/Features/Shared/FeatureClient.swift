@@ -149,6 +149,17 @@ public protocol FeatureClient: AnyObject {
     /// Generated server side, so it can take a moment and can come back either
     /// AI-written or from the deterministic fallback.
     func generateHandoffScript(threadID: String) async throws -> String
+    /// Forks the open thread `threadID` from a response: `sourceThreadID` is the
+    /// response's wire source thread (an inherited row names its parent) and
+    /// the fork ends with `runID`, or at the latest stable point when
+    /// `latestOnly`. Returns the new thread's feature-scoped id.
+    func forkThread(
+        threadID: String,
+        sourceThreadID: String,
+        runID: String,
+        latestOnly: Bool,
+        title: String?
+    ) async throws -> String
     /// Folds a fork's work back into the thread it came from, at `runID`.
     func mergeThreadBack(
         sourceThreadID: String,
@@ -331,6 +342,9 @@ public extension FeatureClient {
     func disconnect() async {}
     func addProject(path: String) async throws {}
     func ensureScratchProject(environmentID: String) async throws -> String { throw FeatureCapabilityUnavailable("Threads without a project") }
+    func forkThread(threadID: String, sourceThreadID: String, runID: String, latestOnly: Bool, title: String?) async throws -> String {
+        throw FeatureCapabilityUnavailable("Forking")
+    }
     func releaseThread(id: String) {}
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws {
         guard attachments.isEmpty && !dismiss else { throw FeatureCapabilityUnavailable("Question actions") }

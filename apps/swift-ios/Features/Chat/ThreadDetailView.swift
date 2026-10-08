@@ -70,6 +70,8 @@ public struct ThreadDetailView: View {
     /// A pending checkpoint restore, previewed in a sheet before it commits.
     @State private var restoreRequest: CheckpointRestoreRequest?
     @State private var isShowingPlan = false
+    /// Per-message meta, expansion, and the restore and fork actions.
+    @State private var messageActions = ThreadMessageActionsStore()
     /// The queued run a reorder, edit or cancel is in flight for. One at a time:
     /// two overlapping reorders would race for the same positions.
     @State private var queueBusyRunID: String?
@@ -230,6 +232,26 @@ public struct ThreadDetailView: View {
         .alert("Quote Unavailable", isPresented: Binding(get: { citationError != nil }, set: { if !$0 { citationError = nil } })) {
             Button("OK") { citationError = nil }
         } message: { Text(citationError ?? "") }
+        .threadMessageActions(
+            messageActions,
+            threadID: thread.id,
+            isReachable: threadConnectionState.map { $0 == .connected } ?? true
+        ) {
+            ThreadMessageActionsStore.Handlers(
+                restore: { restoreRequest = $0 },
+                fork: { [model, thread] point in
+                    try await model.client.forkThread(
+                        threadID: thread.id,
+                        sourceThreadID: point.sourceThreadID,
+                        runID: point.runID,
+                        latestOnly: point.latestOnly,
+                        title: "\(model.details[thread.id]?.thread.title ?? thread.title) fork"
+                    )
+                },
+                isThreadReady: { [model] id in model.snapshot.threads.contains { $0.id == id } },
+                openThread: { onOpenRelatedThread($0, false) }
+            )
+        }
         .sheet(item: $restoreRequest) { request in
             CheckpointRestoreSheet(
                 request: request,
@@ -745,6 +767,7 @@ public struct ThreadDetailView: View {
                     client: model.client
                 ),
                 pullRequests: pullRequestContext,
+                messageActions: messageActions,
                 onRollback: { target in
                     // Preview first, never fire-and-forget: the sheet
                     // shows the computed blast radius, owns progress, and
@@ -2415,6 +2438,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     /// Resolves assistant markdown media against this thread's environment.
     let markdownMedia: MarkdownMediaContext?
     var pullRequests: MarkdownPullRequestContext? = nil
+    var messageActions: ThreadMessageActionsStore? = nil
     let onRollback: (ThreadActivityRollbackTarget) -> Void
     /// The whole detail rather than its rows: building the feed costs O(window),
     /// so it happens inside the coordinator once the revision guard has proved
@@ -2510,6 +2534,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         context.coordinator.onReadingHistoryChanged = onReadingHistoryChanged
         context.coordinator.onActivityBelowChanged = onActivityBelowChanged
         context.coordinator.turnItemDetails.loader = loadTurnItem
+        context.coordinator.attach(messageActions, to: collectionView)
         context.coordinator.update(
             threadID: threadID,
             detail: detail,
@@ -2792,6 +2817,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 let highlight = citationHighlight
                 let toolHistory = workLogHistory
                 let toolDetails = turnItemDetails
+                let messageActions = messageActions
                 cell.contentConfiguration = UIHostingConfiguration {
                     ThreadTimelineEntryView(
                         entry: entry,
@@ -2820,6 +2846,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.assistantCitationHighlight, highlight)
                     .environment(\.threadWorkLogHistory, toolHistory)
                     .environment(\.threadTurnItemDetails, toolDetails)
+                    .environment(\.threadMessageActions, messageActions)
                     .environment(\.threadMcpApps, context.mcpApps)
                     .environment(\.proposedPlanWorkspaceSaver, context.planSaver)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
@@ -2926,6 +2953,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             // messages cannot say which rows moved, and applying it would leave
             // stale groups on screen instead of failing loudly.
             if threadChanged { expandedRunIDs = []; hiddenCitationRunIDs = [:] }
+            messageActions?.apply(detail)
             let fullEntries = ThreadTimelineFeed.entries(for: detail)
             let folded = ThreadTimelineFoldPresentation.apply(entries: fullEntries, detail: detail,
                 expandedRunIDs: expandedRunIDs, alwaysExpand: alwaysExpandActivity)
@@ -3060,6 +3088,33 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private struct VisibleAnchor {
             let id: String
             let offsetFromViewportTop: CGFloat
+        }
+
+        private weak var messageActions: ThreadMessageActionsStore?
+
+        /// Rows read the store from their environment; expanding or collapsing
+        /// a long message keeps its top where the reader left it, and a
+        /// collapse whose top had scrolled away brings it back under the bar.
+        func attach(_ store: ThreadMessageActionsStore?, to collectionView: UICollectionView) {
+            messageActions = store
+            store?.keepTop = { [weak self, weak collectionView] messageID, collapsing, change in
+                guard let self, let collectionView, let dataSource = self.dataSource,
+                      let path = dataSource.indexPath(for: "message:\(messageID)"),
+                      let frame = collectionView.layoutAttributesForItem(at: path)?.frame else {
+                    change()
+                    return
+                }
+                let top = frame.minY - collectionView.contentOffset.y
+                let anchor = VisibleAnchor(
+                    id: "message:\(messageID)",
+                    offsetFromViewportTop: collapsing ? max(top, collectionView.adjustedContentInset.top) : top
+                )
+                change()
+                DispatchQueue.main.async { [weak self, weak collectionView] in
+                    guard let self, let collectionView else { return }
+                    self.restore(anchor, in: collectionView, dataSource: dataSource)
+                }
+            }
         }
 
         private func visibleAnchor(
@@ -3716,42 +3771,11 @@ struct FeatureMessageView: View {
             .accessibilityValue(accessibilityValue)
             .accessibilityIdentifier("message-\(message.id)")
         case .user:
-            HStack {
-                Spacer(minLength: 44)
-                VStack(alignment: .trailing, spacing: 4) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        FeatureMessageAttachmentsView(attachments: message.attachments)
-                        if !message.text.isEmpty {
-                            ReviewContextMessageText(
-                                source: displayText,
-                                isStreaming: message.state == .streaming
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                    .frame(maxWidth: T3Metrics.readingWidth * 0.88, alignment: .leading)
-                    .background(
-                        T3Colors.subtleStrong,
-                        in: UnevenRoundedRectangle(
-                            topLeadingRadius: 16,
-                            bottomLeadingRadius: 16,
-                            bottomTrailingRadius: 4,
-                            topTrailingRadius: 16,
-                            style: .continuous
-                        )
-                    )
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("You")
-                    .accessibilityValue(accessibilityValue)
-
-                    if let resolvedCaption {
-                        ThreadMessageCaptionView(caption: resolvedCaption, onRetry: onRetrySend)
-                    }
-                }
+            // Context chips, the collapsible body, and the status and time
+            // under the bubble live in UserMessageViews.swift.
+            UserMessageBubble(message: message, caption: resolvedCaption, onRetrySend: onRetrySend) {
+                FeatureMessageAttachmentsView(attachments: $0)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("message-\(message.id)")
         case .assistant:
             // No "Working" line over a streaming reply: the composer band and
             // the subtitle already say it, and neither scrolls away.
@@ -3766,7 +3790,9 @@ struct FeatureMessageView: View {
                     )
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                ThreadAssistantMessageFooter(messageID: message.id)
             }
+            .threadAssistantMessageActions(messageID: message.id)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Assistant")
