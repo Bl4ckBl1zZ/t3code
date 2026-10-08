@@ -134,6 +134,7 @@ final class WorkspaceContractTests: XCTestCase {
             "orchestration.getArchivedShellSnapshot"
         )
         XCTAssertEqual(RPCMethod.terminalAttach.rawValue, "terminal.attach")
+        XCTAssertEqual(RPCMethod.terminalObserve.rawValue, "terminal.observe")
         XCTAssertEqual(RPCMethod.subscribeTerminalEvents.rawValue, "subscribeTerminalEvents")
     }
 }

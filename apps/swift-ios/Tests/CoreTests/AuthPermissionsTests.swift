@@ -102,6 +102,17 @@ final class AuthPermissionsTests: XCTestCase {
         }
     }
 
+    func testOnlyAReportedReadWithoutOperateGrantWatchesTerminals() {
+        XCTAssertTrue(session(permissions: ["orchestration:read", "terminal:read"]).observesTerminalsOnly)
+        XCTAssertFalse(session(permissions: ["terminal:read", "terminal:operate"]).observesTerminalsOnly)
+        // Without terminal:read there is nothing to watch either.
+        XCTAssertFalse(session(permissions: ["orchestration:read"]).observesTerminalsOnly)
+        // An older server reports no permissions and has no terminal.observe.
+        XCTAssertFalse(session(scopes: ["terminal:operate"]).observesTerminalsOnly)
+        XCTAssertFalse(session(scopes: ["orchestration:read"]).observesTerminalsOnly)
+        XCTAssertFalse(session(authenticated: false, permissions: ["terminal:read"]).observesTerminalsOnly)
+    }
+
     func testLegacyPermissionNoticeRecognizesOldGrantsOnAnUpgradedServer() {
         for scope in ["orchestration:read", "orchestration:operate", "terminal:operate"] {
             XCTAssertTrue(session(permissions: [scope]).hasLegacyPermissions, scope)

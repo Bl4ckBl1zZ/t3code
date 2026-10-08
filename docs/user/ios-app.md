@@ -86,6 +86,9 @@ sheets use the system glass material.
 - **Opening.** Details opens at half height.
 - **Tools.** **Files**, **Review**, **Source Control**, **Terminal** and linked pull requests open
   inside it and expand it to full height. Tap back to return to the details.
+- **Watching terminals.** When a device's pairing lets it see terminals but not control them,
+  **Terminal** shows a running terminal's output with **View Only** along the bottom. There is no
+  keyboard, and starting, clearing or closing terminals and running actions are unavailable.
 - **Actions.** The project's actions run with one tap. An action's name says when it also runs on
   its own: **(setup)** when a worktree is created, **(teardown)** before one is removed, and
   **(on settle)** each time a worktree thread settles.

@@ -2960,14 +2960,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
             let task = Task { [weak self] in
                 do {
-                    let events = try await client.attachTerminal(
-                        threadID: wireThreadID,
-                        terminalID: terminalID,
-                        cwd: context.cwd,
-                        worktreePath: context.worktreePath,
-                        columns: 80,
-                        rows: 24
-                    )
+                    // A read-only grant watches the session instead: attaching
+                    // would start or resize it, which only operators may do.
+                    let events: AsyncThrowingStream<TerminalEvent, Error>
+                    if await self?.observesTerminalsOnly(client) == true {
+                        events = await client.observeTerminal(threadID: wireThreadID, terminalID: terminalID)
+                    } else {
+                        events = try await client.attachTerminal(
+                            threadID: wireThreadID,
+                            terminalID: terminalID,
+                            cwd: context.cwd,
+                            worktreePath: context.worktreePath,
+                            columns: 80,
+                            rows: 24
+                        )
+                    }
                     for try await event in events {
                         guard !Task.isCancelled else { break }
                         guard let self else { break }
@@ -3082,6 +3089,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
             continuation.onTermination = { @Sendable _ in task.cancel() }
         }
+    }
+
+    func terminalIsReadOnly(threadID: String) async -> Bool {
+        guard let route = try? threadRoute(for: threadID) else { return false }
+        return await observesTerminalsOnly(route.client)
+    }
+
+    /// Whether this connection only watches terminals. A session that cannot
+    /// be read keeps the old behavior, and the server decides.
+    private func observesTerminalsOnly(_ client: T3Client) async -> Bool {
+        (try? await authSession(for: client))?.observesTerminalsOnly == true
     }
 
     func performProjectScript(threadID: String, script: ProjectScript) async throws -> String? {

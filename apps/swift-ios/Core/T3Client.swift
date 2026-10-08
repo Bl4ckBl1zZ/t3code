@@ -1885,6 +1885,19 @@ public actor T3Client {
         )
     }
 
+    /// Streams an existing terminal's snapshot and output without starting,
+    /// resizing or writing to it: what a `terminal:read` grant may do.
+    public func observeTerminal(
+        threadID: String,
+        terminalID: String
+    ) async -> AsyncThrowingStream<TerminalEvent, Error> {
+        await rpc.subscribe(
+            RPCMethod.terminalObserve.rawValue,
+            payload: terminalIdentity(threadID: threadID, terminalID: terminalID),
+            as: TerminalEvent.self
+        )
+    }
+
     public func terminalEvents() async -> AsyncThrowingStream<TerminalEvent, Error> {
         await rpc.subscribe(
             RPCMethod.subscribeTerminalEvents.rawValue,
@@ -2731,6 +2744,7 @@ public enum RPCMethod: String, Sendable {
     case reviewDiffFileContents = "review.getDiffFileContents"
     case terminalOpen = "terminal.open"
     case terminalAttach = "terminal.attach"
+    case terminalObserve = "terminal.observe"
     case terminalWrite = "terminal.write"
     case terminalResize = "terminal.resize"
     case terminalClear = "terminal.clear"

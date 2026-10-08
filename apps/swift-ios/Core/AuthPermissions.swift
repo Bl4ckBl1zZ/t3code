@@ -74,6 +74,14 @@ public extension AuthSessionState {
         return scopes?.contains(parent) == true
     }
 
+    /// A connection that may watch terminals (`terminal.observe`) but not type
+    /// into, start, resize or close them. Only a server that reports
+    /// `permissions` is judged: those are the servers with `terminal.observe`,
+    /// and older ones keep attaching as before.
+    var observesTerminalsOnly: Bool {
+        permissions != nil && grants(AuthScope.terminalRead) && !grants(AuthScope.terminalOperate)
+    }
+
     /// A grant from before the split, on a server that has split: only broad
     /// scopes, which no longer include the features moved to their own
     /// permissions. Pairing again issues the current grant.
