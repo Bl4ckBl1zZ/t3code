@@ -9,6 +9,8 @@ struct AgentSetupView: View {
     var onFinished: (() -> Void)?
     @State private var path: [AgentSetupPage] = []
     @State private var selectedComputers = Set<String>()
+    /// Every computer this setup has listed, so adding one selects only it.
+    @State private var offeredComputers = Set<String>()
     @State private var scans: [String: AgentSessionScanResult] = [:]
     @State private var scanErrors: [String: String] = [:]
     @State private var scanning = Set<String>()
@@ -47,9 +49,7 @@ struct AgentSetupView: View {
                     case .agents: agentsPage
                     case .projects: projectsPage
                     case .addComputer:
-                        ConnectionOnboardingView(model: model, onConnected: {
-                            selectedComputers.formUnion(model.snapshot.environments.map(\.id))
-                        })
+                        ConnectionOnboardingView(model: model, onConnected: selectAddedComputers)
                     }
                 }
         }
@@ -58,6 +58,7 @@ struct AgentSetupView: View {
             if selectedComputers.isEmpty {
                 selectedComputers = Set(model.snapshot.environments.filter { !$0.isUnreachable }.map(\.id))
             }
+            offeredComputers.formUnion(model.snapshot.environments.map(\.id))
         }
         .onDisappear {
             generation = UUID()
@@ -74,6 +75,14 @@ struct AgentSetupView: View {
     }
 
     // MARK: - Step 1: computers
+
+    /// Selects the computer just added. The others keep the reader's choice,
+    /// so one they left out, or one that could not be reached, stays out.
+    private func selectAddedComputers() {
+        let added = model.snapshot.environments.map(\.id).filter { !offeredComputers.contains($0) }
+        offeredComputers.formUnion(added)
+        selectedComputers.formUnion(added)
+    }
 
     private var computersPage: some View {
         List {
