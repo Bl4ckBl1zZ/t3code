@@ -762,7 +762,8 @@ public final class FeatureRootModel {
         // Behind a running turn the server queues the message, and the strip
         // above the composer shows it; the transcript gets it when its run
         // starts. The local row is only for a send the server hasn't taken.
-        let waitsInServerQueue = queuesBehindRunningTurn(submission.threadID)
+        // A steer joins the running turn, so it shows in the transcript at once.
+        let waitsInServerQueue = submission.steer == nil && queuesBehindRunningTurn(submission.threadID)
         let optimistic = FeatureMessage(
             id: identity.messageID,
             role: .user,
@@ -800,7 +801,8 @@ public final class FeatureRootModel {
                 text: trimmed,
                 selection: submission.selection,
                 attachments: uploads,
-                identity: identity
+                identity: identity,
+                steer: submission.steer
             )
             if !(await completeQueuedSubmission(queued)) {
                 scheduleOutboxRetry()

@@ -103,11 +103,15 @@ struct FeatureComposerView: View {
     /// a surface with no thread behind it — a compose sheet has nothing running.
     private let workingStatus: ThreadWorkingStatus?
     private let focused: FocusState<Bool>.Binding
-    private let contextUsage: Double?
+    private let contextMeter: ComposerContextMeter?
     private let forceExpanded: Bool
     private let readingHistory: Bool
     private let pendingApprovals: [FeatureApproval]
     private let pendingUserInputs: [FeatureUserInput]
+    private let pendingSecretRequests: [PendingSecretRequest]
+    private let onSecretRequestAnswer: ((PendingSecretRequest, SecretRequestAnswer) async throws -> Void)?
+    /// Offered while a turn runs and the provider can take a steer.
+    private let steering: ComposerSteering?
     private let isResolvingRequest: Bool
     private let powerFeatures: FeatureComposerPowerFeatures
     private let sendBlocker: FeatureComposerSendBlocker?
@@ -151,11 +155,14 @@ struct FeatureComposerView: View {
         focused: FocusState<Bool>.Binding,
         onSend: @escaping () -> Void,
         onStop: @escaping () -> Void,
-        contextUsage: Double? = nil,
+        contextMeter: ComposerContextMeter? = nil,
         forceExpanded: Bool = false,
         readingHistory: Bool = false,
         pendingApprovals: [FeatureApproval] = [],
         pendingUserInputs: [FeatureUserInput] = [],
+        pendingSecretRequests: [PendingSecretRequest] = [],
+        onSecretRequestAnswer: ((PendingSecretRequest, SecretRequestAnswer) async throws -> Void)? = nil,
+        steering: ComposerSteering? = nil,
         isResolvingRequest: Bool = false,
         powerFeatures: FeatureComposerPowerFeatures = .disabled,
         sendBlocker: FeatureComposerSendBlocker? = nil,
@@ -186,11 +193,14 @@ struct FeatureComposerView: View {
         self.focused = focused
         self.onSend = onSend
         self.onStop = onStop
-        self.contextUsage = contextUsage
+        self.contextMeter = contextMeter
         self.forceExpanded = forceExpanded
         self.readingHistory = readingHistory
         self.pendingApprovals = pendingApprovals
         self.pendingUserInputs = pendingUserInputs
+        self.pendingSecretRequests = pendingSecretRequests
+        self.onSecretRequestAnswer = onSecretRequestAnswer
+        self.steering = steering
         self.isResolvingRequest = isResolvingRequest
         self.powerFeatures = powerFeatures
         self.sendBlocker = sendBlocker
@@ -483,6 +493,13 @@ struct FeatureComposerView: View {
                         T3HUD.show("Moved your answer to the draft", systemImage: "text.insert")
                     }
                 )
+            } else if let request = pendingSecretRequests.first, let onSecretRequestAnswer {
+                FeatureComposerSecretRequestPanel(
+                    request: request,
+                    position: 1,
+                    total: pendingSecretRequests.count,
+                    onAnswer: { answer in try await onSecretRequestAnswer(request, answer) }
+                )
             } else {
                 editor
             }
@@ -626,7 +643,7 @@ struct FeatureComposerView: View {
 
     private var inputRow: some View {
         TextField(
-            isWorking ? "Message to queue…" : "Ask anything…",
+            ComposerFollowUp.placeholder(isWorking: isWorking, defaultSteers: steering?.defaultsToSteer == true),
             text: textBinding,
             axis: .vertical
         )
@@ -653,6 +670,12 @@ struct FeatureComposerView: View {
             if press.modifiers == .command {
                 guard !showsStop, canSend else { return .ignored }
                 performPrimaryAction()
+                return .handled
+            }
+            // ⇧⌘↩ takes the other of steer and queue while a turn runs.
+            if press.modifiers == [.command, .shift], steering != nil {
+                guard !showsStop, canSend else { return .ignored }
+                sendFollowUp(alternate: true)
                 return .handled
             }
             guard press.modifiers.isEmpty, showsCommandMenu else { return .ignored }
@@ -715,10 +738,10 @@ struct FeatureComposerView: View {
 
             Spacer(minLength: 0)
 
-            // The ring is a readout, not a setting; it gives way at
-            // accessibility sizes, where the model name needs the room.
-            if let contextUsage, !dynamicTypeSize.isAccessibilitySize {
-                FeatureContextMeter(usage: contextUsage)
+            // The ring keeps a fixed 32pt at every text size: it is also the
+            // only way to Compact Now, so it stays when the model chip shrinks.
+            if let contextMeter {
+                ContextWindowMeterButton(meter: contextMeter)
                     .fixedSize()
                     .opacity(voice.state.isBusy ? 0.4 : 1)
             }
@@ -816,11 +839,29 @@ struct FeatureComposerView: View {
                         .disabled(submitDisabled)
                 }
             }
+            if offersFollowUpChoice {
+                Section("While the agent works") {
+                    Button("Steer Now", systemImage: "arrow.turn.down.right") {
+                        sendFollowUp(steer: true)
+                    }
+                    Button("Queue for Next Turn", systemImage: "text.append") {
+                        sendFollowUp(steer: false)
+                    }
+                }
+                .disabled(submitDisabled)
+            }
         }
-        .accessibilityLabel(showsStop ? "Stop agent" : compactsOnSend ? "Compact and send" : "Send")
+        .accessibilityLabel(showsStop ? "Stop agent" : compactsOnSend ? "Compact and send" : offersFollowUpChoice ? (steering?.defaultsToSteer == true ? "Steer" : "Queue message") : "Send")
         .accessibilityActions {
             if compactsOnSend, let onSendWithFullHistory, !submitDisabled {
                 Button("Send with full history", action: onSendWithFullHistory)
+            }
+            if offersFollowUpChoice, !submitDisabled {
+                if steering?.defaultsToSteer == true {
+                    Button("Queue for next turn") { sendFollowUp(steer: false) }
+                } else {
+                    Button("Steer now") { sendFollowUp(steer: true) }
+                }
             }
         }
         .accessibilityIdentifier(showsStop ? "thread-stop" : "message-send")
@@ -861,6 +902,28 @@ struct FeatureComposerView: View {
             onStop()
         } else if FeatureComposerSubmissionPolicy.allowsSend(for: .explicitButton),
                   canSend {
+            sendFollowUp(alternate: false)
+        }
+    }
+
+    /// A send while the turn runs offers both steer and queue; the button's
+    /// default follows the user's preference.
+    private var offersFollowUpChoice: Bool {
+        steering != nil && isWorking && !showsStop
+    }
+
+    private func sendFollowUp(alternate: Bool) {
+        let steers = ComposerFollowUp.steers(defaultSteers: steering?.defaultsToSteer == true, alternate: alternate)
+        sendFollowUp(steer: steers)
+    }
+
+    /// Without a steer on offer every send is an ordinary one, which the
+    /// server queues behind a running turn.
+    private func sendFollowUp(steer: Bool) {
+        guard canSend, !isSending else { return }
+        if steer, offersFollowUpChoice, let steering {
+            steering.onSteer()
+        } else {
             onSend()
         }
     }
@@ -1519,58 +1582,5 @@ enum FeatureComposerSubmissionIntent: Equatable {
 enum FeatureComposerSubmissionPolicy {
     static func allowsSend(for intent: FeatureComposerSubmissionIntent) -> Bool {
         intent == .explicitButton
-    }
-}
-
-/// How full the model's context window is. A readout rather than a setting:
-/// tapping it shows the exact figure, and it turns the warning color once
-/// the thread is close to the point where the provider starts compacting.
-private struct FeatureContextMeter: View {
-    let usage: Double
-
-    @State private var showsDetail = false
-
-    var body: some View {
-        Button {
-            showsDetail = true
-        } label: {
-            ZStack {
-                Circle()
-                    .stroke(T3Colors.border, lineWidth: 2)
-                Circle()
-                    .trim(from: 0, to: clampedUsage)
-                    .stroke(
-                        isNearlyFull ? T3Colors.warning : T3Colors.textSecondary,
-                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-            }
-            .frame(width: 18, height: 18)
-            .frame(width: 32, height: T3Metrics.minimumTapTarget)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showsDetail) {
-            Text("\(percent)% of context used")
-                .font(T3Typography.control)
-                .foregroundStyle(T3Colors.textPrimary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .presentationCompactAdaptation(.popover)
-        }
-        .accessibilityLabel("Context used")
-        .accessibilityValue("\(percent) percent")
-    }
-
-    private var clampedUsage: Double {
-        min(max(usage, 0), 1)
-    }
-
-    private var percent: Int {
-        Int((clampedUsage * 100).rounded())
-    }
-
-    private var isNearlyFull: Bool {
-        clampedUsage > 0.85
     }
 }
