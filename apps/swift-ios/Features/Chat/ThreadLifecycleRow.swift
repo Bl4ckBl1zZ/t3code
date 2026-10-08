@@ -272,18 +272,30 @@ struct ThreadLifecycleRowGroup: View {
     var onOpenThread: (String) -> Void = { _ in }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            ForEach(rows, id: \.id) { row in
-                ThreadLifecycleRow(
-                    row: row,
-                    runs: runs,
-                    liveChildThreadID: liveChildThreadIDs[row.id],
-                    subagentMetadata: subagentMetadata[row.id],
-                    grouped: true,
-                    onOpenThread: onOpenThread
-                )
+        // A fan-out made only of subagents folds into one card.
+        if rows.count > 1, let summary = SubagentGroupSummary(rows: rows) {
+            SubagentGroupCard(
+                summary: summary,
+                rows: rows,
+                runs: runs,
+                liveChildThreadIDs: liveChildThreadIDs,
+                subagentMetadata: subagentMetadata,
+                onOpenThread: onOpenThread
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(rows, id: \.id) { row in
+                    ThreadLifecycleRow(
+                        row: row,
+                        runs: runs,
+                        liveChildThreadID: liveChildThreadIDs[row.id],
+                        subagentMetadata: subagentMetadata[row.id],
+                        grouped: true,
+                        onOpenThread: onOpenThread
+                    )
+                }
             }
+            .padding(.bottom, ChatTimelineStyle.entrySpacing)
         }
-        .padding(.bottom, ChatTimelineStyle.entrySpacing)
     }
 }

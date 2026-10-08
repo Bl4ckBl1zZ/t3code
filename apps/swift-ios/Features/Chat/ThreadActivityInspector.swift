@@ -244,6 +244,9 @@ public struct ThreadActivityItemSupport: Equatable, Sendable {
     public let subagent: Subagent?
     public let contextHandoff: ContextHandoff?
     public let contextTransfer: ContextTransfer?
+    /// The attempt that produced this item, resolved through its execution
+    /// node. Nil when the item has no node or the projection lacks the join.
+    public var attempt: ThreadTimelineAttempt? = nil
 
     public init(
         run: Run? = nil,
