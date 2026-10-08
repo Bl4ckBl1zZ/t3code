@@ -17,6 +17,21 @@ The v2 checks pin these invariants:
   dropped in `truncatedVisibleItemCount` so the client can offer to load the rest.
 - The window never splits a run across its edge, because turn-item visibility pairs items within a
   run (an interrupt result is only visible next to its request).
+- The window is cut in SQL, not after a full read. The server reads every turn item's key (id,
+  run, type, ordinal, and the two small fields visibility needs) to find the edge, then reads and
+  decodes payloads only for the kept runs. A fork source contributes keys plus the inherited items
+  the window keeps, never its whole projection. The full snapshot behind "load earlier" is the same
+  read with no window. Turn items come off `(thread_id, run_id)` and the
+  primary key, messages off `(thread_id, run_id)`; the tests pin those plans, prove dropped payloads
+  are never read, and compare every window size against `windowOrchestrationV2ThreadProjection` on
+  the wire. A 4,400-item, 13 MB thread went from ~600 ms to ~100 ms (200-row window).
+- Snapshot reads take a deferred `BEGIN`, not the `BEGIN IMMEDIATE` writers use: one WAL snapshot
+  across their queries, without holding the write lock for the length of the read.
+- Runs, attempts, nodes, provider turns, runtime requests, and checkpoints still go whole, as the
+  in-memory window always sent them. Nodes are the largest of these (about one per tool call,
+  roughly 1 KB each), so they are the next thing to bound. Trimming them needs keep rules for
+  runless and still-running rows and a "load earlier" merge that brings them back, including on
+  clients already shipped.
 - Resume catch-up replays at most 128 thread events and 1 MiB of projected event JSON before
   replacing stale state with a current snapshot. The sequence gap alone is not enough: a handful of
   large tool outputs outweighs a thousand small status updates. Nor is it a reason to snapshot:

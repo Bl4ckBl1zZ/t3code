@@ -90,7 +90,6 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { windowOrchestrationV2ThreadProjection } from "@t3tools/shared/orchestrationV2Window";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -866,27 +865,25 @@ const makeWsRpcLayer = (
 
           const loadSnapshotItem = Effect.fn("ws.orchestrationV2.loadThreadSnapshotItem")(
             function* () {
-              const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationV2GetThreadProjectionError({
-                      threadId: input.threadId,
-                      message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                      cause,
-                    }),
-                ),
-              );
-              const windowed =
-                input.snapshotMaxVisibleItems === undefined
-                  ? snapshot.projection
-                  : windowOrchestrationV2ThreadProjection(
-                      snapshot.projection,
-                      input.snapshotMaxVisibleItems,
-                    );
+              // Windowed in SQL: only the kept runs' rows are read and decoded.
+              const snapshot = yield* threadManagement
+                .getThreadSnapshot(input.threadId, {
+                  maxVisibleItems: input.snapshotMaxVisibleItems,
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationV2GetThreadProjectionError({
+                        threadId: input.threadId,
+                        message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                        cause,
+                      }),
+                  ),
+                );
               return {
                 kind: "snapshot" as const,
                 snapshotSequence: snapshot.snapshotSequence,
-                projection: projectThreadProjectionForWire(windowed),
+                projection: projectThreadProjectionForWire(snapshot.projection),
               };
             },
           );
