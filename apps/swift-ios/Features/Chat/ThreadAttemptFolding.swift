@@ -200,7 +200,7 @@ enum ThreadAttemptFolding {
                 return nil
             }
             return shared(lifecycle.rows.map { detail.itemSupport[$0.id]?.attempt })
-        case .turnFold, .mcpApp, .dayDivider, .structural:
+        case .turnFold, .mcpApp, .dayDivider, .structural, .proposedPlan:
             return nil
         }
     }
