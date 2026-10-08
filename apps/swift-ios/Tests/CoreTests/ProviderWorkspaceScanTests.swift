@@ -19,12 +19,23 @@ final class ProviderWorkspaceScanTests: XCTestCase {
         XCTAssertEqual(pending.slashCommands.map(\.name), ["deploy"])
     }
 
+    /// The fixture's "/work/app" entry was checked at 2026-10-05T00:01:00Z.
+    private let scannedAt = ISO8601DateFormatter().date(from: "2026-10-05T00:01:00Z")!
+
     func testScansUnscannedAndPendingWorkspacesOfAnInstalledInstance() throws {
         let provider = try fixture()
-        XCTAssertFalse(ProviderWorkspaceScan.needsScan(provider, cwd: "/work/app"))
-        XCTAssertTrue(ProviderWorkspaceScan.needsScan(provider, cwd: "/work/app-feature"))
-        XCTAssertTrue(ProviderWorkspaceScan.needsScan(provider, cwd: "/work/other"))
-        XCTAssertFalse(ProviderWorkspaceScan.needsScan(nil, cwd: "/work/other"))
+        XCTAssertFalse(ProviderWorkspaceScan.needsScan(provider, cwd: "/work/app", now: scannedAt))
+        XCTAssertTrue(ProviderWorkspaceScan.needsScan(provider, cwd: "/work/app-feature", now: scannedAt))
+        XCTAssertTrue(ProviderWorkspaceScan.needsScan(provider, cwd: "/work/other", now: scannedAt))
+        XCTAssertFalse(ProviderWorkspaceScan.needsScan(nil, cwd: "/work/other", now: scannedAt))
+    }
+
+    func testScansAgainOnceAScanIsFiveMinutesOld() throws {
+        let provider = try fixture()
+        let lifetime = ProviderWorkspaceScan.snapshotLifetime
+        XCTAssertEqual(lifetime, 300)
+        XCTAssertFalse(ProviderWorkspaceScan.needsScan(provider, cwd: "/work/app", now: scannedAt + lifetime - 1))
+        XCTAssertTrue(ProviderWorkspaceScan.needsScan(provider, cwd: "/work/app", now: scannedAt + lifetime))
     }
 
     func testDoesNotScanAMissingOrDisabledInstance() throws {

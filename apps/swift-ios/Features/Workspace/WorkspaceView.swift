@@ -430,7 +430,9 @@ public struct WorkspaceView: View {
         .t3Searchable(
             text: $searchText,
             isPresented: searchPresentedBinding(for: tab),
-            placement: .navigationBarDrawer(displayMode: .automatic),
+            // The iPad sidebar keeps its search field in view, as Mail's does;
+            // the phone tucks it under the title until a pull reveals it.
+            placement: .navigationBarDrawer(displayMode: horizontalSizeClass == .regular ? .always : .automatic),
             prompt: Text(listWorkspace.searchPrompt)
         )
         .searchScopes($searchScope, activation: .onSearchPresentation) {

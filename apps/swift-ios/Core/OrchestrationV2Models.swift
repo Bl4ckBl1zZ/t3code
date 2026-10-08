@@ -1013,6 +1013,25 @@ public struct OrchestrationV2ProviderThread: Codable, Equatable, Sendable, Ident
     /// The provider driver behind this thread (`codex`, `claudeAgent`, ...).
     /// Optional so a hand-built thread without it still decodes.
     public var driver: String? = nil
+    /// The provider's standing report of how full the context window is.
+    /// Absent from older servers and drivers that never report it.
+    public var contextUsage: OrchestrationV2ContextUsage? = nil
+    public var updatedAt: OrchestrationV2Timestamp? = nil
+}
+
+/// `ThreadTokenUsageSnapshot`, narrowed to what the client reads.
+public struct OrchestrationV2ContextUsage: Codable, Equatable, Sendable {
+    public let usedTokens: Int
+    public var maxTokens: Int? = nil
+    public var autoCompactThreshold: Int? = nil
+}
+
+/// A provider's live usage report for one turn.
+public struct OrchestrationV2ProviderTurnTokenUsage: Codable, Equatable, Sendable {
+    public let usedTokens: Int
+    public var maxTokens: Int? = nil
+    /// ISO timestamp of the report.
+    public let updatedAt: String
 }
 
 public struct OrchestrationV2ProviderTurn: Codable, Equatable, Sendable, Identifiable {
@@ -1022,6 +1041,8 @@ public struct OrchestrationV2ProviderTurn: Codable, Equatable, Sendable, Identif
     /// state cannot be resolved without it.
     public let runAttemptId: String?
     public let status: String
+    /// The provider's live context usage for this turn, when it reports one.
+    public var tokenUsage: OrchestrationV2ProviderTurnTokenUsage? = nil
 }
 
 public struct OrchestrationV2ResponseCapability: Codable, Equatable, Sendable {
@@ -1073,6 +1094,9 @@ public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiabl
     /// When the task's first run started. Null while it is still pending; Stop
     /// is offered only once there is a run to interrupt.
     public var startedAt: OrchestrationV2Timestamp? = nil
+    /// When the task settled. Lineage shows a finished agent's elapsed time
+    /// from the two; absent from older servers, which keeps the status word.
+    public var completedAt: OrchestrationV2Timestamp? = nil
 }
 
 public struct OrchestrationV2ContextHandoff: Codable, Equatable, Sendable, Identifiable {

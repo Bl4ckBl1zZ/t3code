@@ -109,6 +109,9 @@ public struct FeatureTerminalView: View {
     /// re-runs `loadAndOpen`, and re-sending the command there would replay it
     /// into a terminal the reader deliberately switched to.
     @State private var didSendInitialCommand = false
+    /// The connection may watch terminals but not type into, start or close
+    /// them (`terminal:read` without `terminal:operate`).
+    @State private var isReadOnly = false
 
     public init(client: any FeatureClient, threadID: String, initialCommand: String? = nil, initialTerminalID: String? = nil) {
         self.client = client
@@ -126,15 +129,19 @@ public struct FeatureTerminalView: View {
                 buffer: terminal?.buffer ?? "",
                 outputCursor: terminal?.outputCursor,
                 fontSize: CGFloat(fontSize),
-                isRunning: isRunning,
+                // A watcher has no keyboard: the surface takes input only
+                // while it believes the shell is running.
+                isRunning: isRunning && !isReadOnly,
                 focusRequest: focusRequest,
                 onInput: { data in
+                    guard !isReadOnly else { return }
                     Task { await write(data) }
                 },
                 onResize: { nextColumns, nextRows in
                     updateGrid(columns: nextColumns, rows: nextRows)
                 },
                 onClear: {
+                    guard !isReadOnly else { return }
                     Task { await clear() }
                 },
                 onFontSizeStep: { direction in
@@ -149,6 +156,12 @@ public struct FeatureTerminalView: View {
                 ProgressView("Opening terminal…")
             } else if let errorMessage, terminal == nil {
                 unavailable(errorMessage)
+            } else if isReadOnly, !canObserveActive, terminal?.buffer.isEmpty ?? true {
+                ContentUnavailableView(
+                    "No Running Terminal",
+                    systemImage: "terminal",
+                    description: Text("A terminal started on this computer appears here, and you can watch its output.")
+                )
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -171,6 +184,7 @@ public struct FeatureTerminalView: View {
         // sheet away while someone is working in the shell.
         .interactiveDismissDisabled(isTerminalFocused)
         .task {
+            isReadOnly = await client.terminalIsReadOnly(threadID: threadID)
             var attempt = 0
             while !Task.isCancelled {
                 let attachedAt = ContinuousClock.now
@@ -215,6 +229,9 @@ public struct FeatureTerminalView: View {
     /// Streams the active terminal's output, attaching again whenever the
     /// stream ends while the terminal is still on screen.
     private func followOutput(terminalID: String) async {
+        // Watching needs a live session; `terminalTaskID` restarts this once
+        // one is.
+        guard !isReadOnly || canObserveActive else { return }
         var attempt = 0
         while !Task.isCancelled {
             let attachedAt = ContinuousClock.now
@@ -237,7 +254,7 @@ public struct FeatureTerminalView: View {
 
     private func apply(_ update: FeatureTerminalSnapshot, terminalID: String) {
         isReconnecting = false
-        let shouldSyncGrid = !isRunning
+        let shouldSyncGrid = !isRunning && !isReadOnly
             && (update.state == .running || update.state == .starting)
         if let currentBuffer = terminal?.buffer,
            !update.buffer.hasPrefix(currentBuffer) {
@@ -287,12 +304,14 @@ public struct FeatureTerminalView: View {
         }
         .pickerStyle(.inline)
 
-        Button {
-            openNewTerminal()
-        } label: {
-            Label("New Terminal", systemImage: "plus")
+        if !isReadOnly {
+            Button {
+                openNewTerminal()
+            } label: {
+                Label("New Terminal", systemImage: "plus")
+            }
+            .keyboardShortcut("t", modifiers: .command)
         }
-        .keyboardShortcut("t", modifiers: .command)
     }
 
     private var actionsMenu: some View {
@@ -327,32 +346,41 @@ public struct FeatureTerminalView: View {
                 Label("Text Size · \(formattedFontSize(fontSize)) pt", systemImage: "textformat.size")
             }
 
-            Button {
-                Task { await clear() }
-            } label: {
-                Label("Clear", systemImage: "eraser")
-            }
-            .disabled(terminal == nil)
-            .keyboardShortcut("k", modifiers: .command)
-
-            Section {
-                if isRunning {
-                    Button(role: .destructive) {
-                        isConfirmingStop = true
-                    } label: {
-                        Label("Close Terminal…", systemImage: "xmark.circle")
-                    }
-                } else {
-                    Button {
-                        Task { await open() }
-                    } label: {
-                        Label(terminal?.state == .exited ? "Restart Terminal" : "Start Terminal", systemImage: "play")
-                    }
-                    .disabled(isLoading || isOpening)
-                }
+            if !isReadOnly {
+                operatorActions
             }
         } label: {
             Label("Terminal Options", systemImage: "ellipsis")
+        }
+    }
+
+    /// Clearing, closing and starting change the shell, which a read-only
+    /// connection may not do.
+    @ViewBuilder
+    private var operatorActions: some View {
+        Button {
+            Task { await clear() }
+        } label: {
+            Label("Clear", systemImage: "eraser")
+        }
+        .disabled(terminal == nil)
+        .keyboardShortcut("k", modifiers: .command)
+
+        Section {
+            if isRunning {
+                Button(role: .destructive) {
+                    isConfirmingStop = true
+                } label: {
+                    Label("Close Terminal…", systemImage: "xmark.circle")
+                }
+            } else {
+                Button {
+                    Task { await open() }
+                } label: {
+                    Label(terminal?.state == .exited ? "Restart Terminal" : "Start Terminal", systemImage: "play")
+                }
+                .disabled(isLoading || isOpening)
+            }
         }
     }
 
@@ -392,6 +420,15 @@ public struct FeatureTerminalView: View {
             ) {
                 Button("Retry", action: retry)
                     .t3SecondaryButtonStyle()
+            }
+        } else if isReadOnly {
+            TerminalStatusBar(
+                systemImage: "eye",
+                tint: T3Colors.textSecondary,
+                title: "View Only",
+                message: "This connection can watch terminals but not type in them."
+            ) {
+                EmptyView()
             }
         } else if let terminal, !isRunning, !isLoading {
             TerminalStatusBar(
@@ -459,7 +496,15 @@ public struct FeatureTerminalView: View {
     }
 
     private var terminalTaskID: String {
-        "\(sessionsResolved):\(activeTerminalID):\(attachGeneration)"
+        "\(sessionsResolved):\(activeTerminalID):\(attachGeneration):\(isReadOnly && !canObserveActive)"
+    }
+
+    /// Whether the active session has a shell to watch. A watcher cannot
+    /// start one, so it waits for a session that is running.
+    private var canObserveActive: Bool {
+        sessions.contains {
+            $0.terminalID == activeTerminalID && ($0.state == .running || $0.state == .starting)
+        }
     }
 
     private var menuSessions: [FeatureTerminalSnapshot] {
@@ -546,7 +591,7 @@ public struct FeatureTerminalView: View {
         guard nextColumns != columns || nextRows != rows else { return }
         columns = nextColumns
         rows = nextRows
-        guard isRunning else { return }
+        guard isRunning, !isReadOnly else { return }
         Task {
             try? await client.resizeTerminal(
                 threadID: threadID,
@@ -568,7 +613,7 @@ public struct FeatureTerminalView: View {
             )
             guard terminalID == activeTerminalID else { return }
             terminal = snapshot
-            if snapshot.state == .stopped || snapshot.state == .exited {
+            if !isReadOnly, snapshot.state == .stopped || snapshot.state == .exited {
                 try await openTerminal(terminalID: terminalID)
             }
             errorMessage = nil
@@ -584,7 +629,7 @@ public struct FeatureTerminalView: View {
     /// would report a write error over the open error that actually explains
     /// what went wrong.
     private func sendInitialCommandIfNeeded() async {
-        guard !didSendInitialCommand,
+        guard !didSendInitialCommand, !isReadOnly,
               let initialCommand,
               !initialCommand.isEmpty,
               terminal != nil else { return }

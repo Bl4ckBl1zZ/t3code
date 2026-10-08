@@ -18,6 +18,8 @@ public struct ThreadDetailView: View {
     /// Opens a new task in this thread's project, for Cmd+Option+Return.
     let onStartNewThread: ((_ projectID: String) -> Void)?
     @State private var nativeToolIcons = NativeAppToolIconStore()
+    /// Shared by this screen's MCP App rows; nil when the client cannot host apps.
+    @State private var mcpApps: ThreadMcpApps?
     @State private var isSwappingDraft = false
     private let draftStore: FeatureComposerDraftStore
 
@@ -87,6 +89,9 @@ public struct ThreadDetailView: View {
         self.onStartNewThread = onStartNewThread
         self.onOpenRelatedThread = onOpenRelatedThread
         self.draftStore = draftStore
+        _mcpApps = State(initialValue: (model.client as? any FeatureMcpAppHosting).map {
+            ThreadMcpApps(client: $0, threadID: thread.id)
+        })
     }
 
     private var nativeToolIconContext: NativeAppToolIconContext? {
@@ -97,6 +102,11 @@ public struct ThreadDetailView: View {
 
     public var body: some View {
         threadContent
+        .modifier(ThreadMcpAppsModifier(
+            apps: mcpApps,
+            threadID: thread.id,
+            awaitingUser: detail.map { !$0.approvals.isEmpty || !$0.userInputs.isEmpty } ?? false
+        ))
         .onChange(of: model.pendingPullRequestPrompts[thread.id]?.id) { consumePullRequestPrompt() }
         .alert("Pull request checkout", isPresented: Binding(get: { pullRequestCheckoutWarning != nil }, set: { if !$0 { pullRequestCheckoutWarning = nil } })) {
             Button("OK") { pullRequestCheckoutWarning = nil }
@@ -359,7 +369,8 @@ public struct ThreadDetailView: View {
             isPreparingWorkspace: queueState.activeRun?.status == "preparing",
             activityText: detail.workflow.providerSession.flatMap { session in
                 ["stopped", "error"].contains(session.status) ? nil : session.activityText
-            }
+            },
+            threadLinks: threadLinks
         )
     }
 
@@ -775,6 +786,15 @@ public struct ThreadDetailView: View {
                     }
                     composerFocused = true
                 },
+                mcpApps: mcpApps,
+                threadLinks: threadLinks,
+                statusLine: ThreadStatusLine.resolve(currentThread, now: .now),
+                onStatusLineAction: { [model, threadID = thread.id] kind in
+                    switch kind {
+                    case .snoozed: _ = await model.setSnoozed(threadID, until: nil)
+                    case .settled: _ = await model.setSettled(threadID, settled: false)
+                    }
+                },
                 navigationRequest: turnNavigationRequest,
                 scrollToLatestRequest: scrollToLatestRequest,
                 onReadingHistoryChanged: { reading in
@@ -1021,7 +1041,7 @@ public struct ThreadDetailView: View {
             isWorking: detail.thread.state == .working || detail.thread.state == .queued,
             workingStatus: workingStatus,
             focused: $composerFocused,
-            onSend: send,
+            onSend: { send() },
             onStop: {
                 Task { await model.cancelTurn(threadID: thread.id) }
             },
@@ -1045,6 +1065,8 @@ public struct ThreadDetailView: View {
                 if model.pendingThreadFileDrops[thread.id]?.id == id { model.pendingThreadFileDrops[thread.id] = nil }
             },
             draftLoaded: didRestoreDraft,
+            compactBeforeSendTokens: resumeCompactionTokens(detail),
+            onSendWithFullHistory: { send(keepFullHistory: true) },
             onApprovalDecision: { id, decision in
                 Task { await model.resolveApproval(id, decision: decision) }
             },
@@ -1094,6 +1116,10 @@ public struct ThreadDetailView: View {
                 // this the keyboard closes the moment the finger drifts on the
                 // mic, mid-recording.
                 guard !VoiceComposerCoordinator.shared.ownsActiveTouch() else { return }
+                // A drag that starts above the pill is the suggestion popover
+                // scrolling back up its list; closing the keyboard would move
+                // the list out from under the finger.
+                guard value.startLocation.y >= 0 else { return }
                 guard composerFocused,
                       value.translation.height > 8,
                       value.translation.height > abs(value.translation.width) else {
@@ -1146,6 +1172,14 @@ public struct ThreadDetailView: View {
 
     private var threadProject: FeatureProject? {
         model.snapshot.projects.first { $0.id == currentThread.projectID }
+    }
+
+    /// Thread links and thread reads resolve in this thread's environment.
+    private var threadLinks: ThreadLinkResolver {
+        ThreadLinkResolver(
+            threads: model.snapshot.threads,
+            environmentID: currentThread.environmentID ?? threadEnvironment?.id
+        )
     }
 
     private var threadEnvironment: FeatureEnvironment? {
@@ -1554,13 +1588,38 @@ public struct ThreadDetailView: View {
         onStartNewThread?(projectID)
     }
 
-    private func send() {
+    /// The tokens a stale Claude session would re-read on its next turn, while
+    /// Send should compact first. See ``ClaudeResumeCompaction``.
+    private func resumeCompactionTokens(_ detail: FeatureThreadDetail) -> Int? {
+        let provider = threadProviders.first { $0.id == currentSelection?.providerID }
+        let state = detail.thread.state
+        return ClaudeResumeCompaction.tokens(.init(
+            driver: provider?.driver,
+            providerAvailable: provider?.isAvailable == true,
+            contextWindow: detail.workflow.contextWindow,
+            isIdle: (state == .idle || state == .completed || state == .failed)
+                && detail.approvals.isEmpty && detail.userInputs.isEmpty
+                && queueState.activeRun == nil && !isSending,
+            items: detail.timelineItems,
+            now: .now
+        ))
+    }
+
+    /// `keepFullHistory` is "Send with Full History": it skips the compaction
+    /// a stale Claude session would otherwise run first.
+    private func send(keepFullHistory: Bool = false) {
         let message = draft
         let pendingAttachments = attachments
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !pendingAttachments.isEmpty else {
             return
         }
+        // A stale Claude session compacts before this message so the turn does
+        // not re-read the old history. The message then waits behind the
+        // /compact run: the server queues a send that meets an active run.
+        let compactFirst = !keepFullHistory
+            && detail.flatMap(resumeCompactionTokens) != nil
+            && !ClaudeResumeCompaction.isCompactCommand(message)
         if pendingAttachments.isEmpty,
            ["/new", "/reset"].contains(message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()),
            let providerID = currentThread.providerID,
@@ -1584,14 +1643,22 @@ public struct ThreadDetailView: View {
         attachments = []
         composerFocused = false
         Task {
-            let sent = await submitMessage(
-                FeatureMessageSubmission(
-                threadID: thread.id,
-                text: message,
-                selection: currentSelection,
-                attachments: pendingAttachments
+            var sent = true
+            if compactFirst {
+                sent = await submitMessage(
+                    FeatureMessageSubmission(threadID: thread.id, text: "/compact", selection: currentSelection)
                 )
-            )
+            }
+            if sent {
+                sent = await submitMessage(
+                    FeatureMessageSubmission(
+                    threadID: thread.id,
+                    text: message,
+                    selection: currentSelection,
+                    attachments: pendingAttachments
+                    )
+                )
+            }
             if sent {
                 let followUpDraft = composerDraft
                 if followUpDraft.text.isEmpty && followUpDraft.attachments.isEmpty {
@@ -1817,6 +1884,8 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     case turnFold(ThreadTurnFold)
     case lifecycle(Lifecycle)
     case workLog(WorkLog)
+    /// An MCP App a completed tool call captured, hosted where the call happened.
+    case mcpApp(McpApp)
     case dayDivider(id: String, date: Date)
 
     struct Lifecycle: Equatable {
@@ -1833,6 +1902,17 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         /// Projected-item id to what that subagent runs on and where.
         var subagentMetadata: [String: SubagentRowMetadata] = [:]
         let date: Date?
+    }
+
+    struct McpApp: Equatable {
+        let presentation: McpAppPresentation
+        /// Folds group by run; an app is never folded away.
+        let runID: String?
+        /// The plain tool row, shown when the app cannot be hosted.
+        let fallbackRow: ThreadWorkLogRow
+        let date: Date?
+
+        var id: String { presentation.id }
     }
 
     struct WorkLog: Equatable {
@@ -1854,6 +1934,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .turnFold(fold): fold.id
         case let .lifecycle(lifecycle): lifecycle.id
         case let .workLog(workLog): workLog.id
+        case let .mcpApp(app): app.id
         case let .dayDivider(id, _): id
         }
     }
@@ -1866,6 +1947,7 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .turnFold(fold): fold.date
         case let .lifecycle(lifecycle): lifecycle.date
         case let .workLog(workLog): workLog.date
+        case let .mcpApp(app): app.date
         case let .dayDivider(_, date): date
         }
     }
@@ -1999,6 +2081,23 @@ enum ThreadTimelineFeed {
                 closeWork()
                 closeLifecycle()
                 entries.append(.message(message, caption: ThreadMessageCaption.origin(of: item)))
+                continue
+            }
+            if let app = McpAppReference.from(item) {
+                closeWork()
+                closeLifecycle()
+                entries.append(.mcpApp(ThreadTimelineEntry.McpApp(
+                    presentation: McpAppPresentation(
+                        id: "mcp-app:\(projected.id)",
+                        app: app,
+                        sourceThreadID: projected.sourceThreadId,
+                        itemID: projected.sourceItemId,
+                        revision: ThreadTurnItemDetail.revision(item)
+                    ),
+                    runID: item.base.runId,
+                    fallbackRow: ThreadWorkLogRow.make(projected, liveRun: liveRun),
+                    date: itemDate(item)
+                )))
                 continue
             }
             if ThreadLifecycle.isLifecycleTimelineItem(item) {
@@ -2169,6 +2268,25 @@ private struct ThreadTimelineEntryView: View {
             // The log already ends on 12pt of its own.
             .padding(.bottom, ChatTimelineStyle.entrySpacing - 12)
 
+        case let .mcpApp(app):
+            ThreadMcpAppRow(presentation: app.presentation) {
+                ThreadWorkLog(
+                    rows: [app.fallbackRow],
+                    currentThreadID: currentThreadID,
+                    currentWireThreadID: currentWireThreadID,
+                    workspaceRoot: workspaceRoot,
+                    onOpenThread: onOpenThread,
+                    onOpenFile: onOpenFile,
+                    onOpenURL: onOpenURL,
+                    onOpenDiff: onOpenDiff,
+                    onRollback: onRollback,
+                    alwaysExpandActivity: alwaysExpandActivity
+                )
+                .padding(.bottom, -12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, ChatTimelineStyle.entrySpacing)
+
         case let .dayDivider(_, date):
             TimelineDayDivider(date: date)
         }
@@ -2180,6 +2298,9 @@ private struct ThreadTimelineEntryView: View {
 private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     @SwiftUI.Environment(\.nativeAppToolIconContext) private var nativeAppIcons
     private static let loadEarlierID = "__t3-load-earlier__"
+    /// The settled or snoozed line after the last message. Its id carries the
+    /// line's content, so a change is a new row rather than a reconfigure.
+    private static let statusLinePrefix = "__t3-status-line__:"
 
     private enum Section: Hashable {
         case transcript
@@ -2230,6 +2351,12 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var onOpenCitation: (AssistantCitation) -> Void = { _ in }
     var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
+    var mcpApps: ThreadMcpApps? = nil
+    /// Resolves `t3-thread://` links in messages against this thread's environment.
+    var threadLinks: ThreadLinkResolver? = nil
+    /// Settled or snoozed, said once after the last message, with its way out.
+    var statusLine: ThreadStatusLine? = nil
+    var onStatusLineAction: (ThreadStatusLine.Kind) async -> Void = { _ in }
     var navigationRequest: Int = 0
     var scrollToLatestRequest: Int = 0
     var onReadingHistoryChanged: (Bool) -> Void = { _ in }
@@ -2286,6 +2413,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             isLoadingEarlier: isLoadingEarlier,
             alwaysExpandActivity: alwaysExpandActivity,
             outboxCaptions: outboxCaptions,
+            statusLine: statusLine,
             rowContext: Coordinator.RowContext(
                 currentThreadID: threadID,
                 currentWireThreadID: wireThreadID,
@@ -2304,7 +2432,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onRetrySetup: onRetrySetup,
                 onOpenCitation: onOpenCitation,
                 citationContext: citationContext,
-                onUseTemplate: onUseTemplate
+                onUseTemplate: onUseTemplate,
+                mcpApps: mcpApps,
+                threadLinks: threadLinks,
+                onStatusLineAction: onStatusLineAction
             ),
             onLoadEarlier: onLoadEarlier,
             in: collectionView
@@ -2376,6 +2507,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenCitation: (AssistantCitation) -> Void = { _ in }
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
+            var mcpApps: ThreadMcpApps?
+            var threadLinks: ThreadLinkResolver?
+            var onStatusLineAction: (ThreadStatusLine.Kind) async -> Void = { _ in }
         }
 
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
@@ -2493,6 +2627,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentCanLoadEarlier = false
         private var currentIsLoadingEarlier = false
         private var currentOutboxCaptions: [String: ThreadMessageCaption] = [:]
+        private var currentStatusLine: ThreadStatusLine?
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
         private var rowContext = RowContext()
         private var onLoadEarlier: (() -> Void)?
@@ -2522,6 +2657,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .margins(.all, 0)
                     cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
                     cell.accessibilityIdentifier = "load-earlier-turns"
+                    return
+                }
+                if entryID.hasPrefix(FeatureTranscriptCollectionView.statusLinePrefix) {
+                    guard let self, let line = currentStatusLine else {
+                        cell.contentConfiguration = nil
+                        return
+                    }
+                    let action = rowContext.onStatusLineAction
+                    cell.contentConfiguration = UIHostingConfiguration {
+                        ThreadStatusLineView(line: line) { await action(line.kind) }
+                            .padding(.bottom, ChatTimelineStyle.entrySpacing)
+                    }
+                    .margins(.all, 0)
+                    cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
                     return
                 }
                 guard let self, let entry = entriesByID[entryID] else {
@@ -2561,9 +2710,16 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.assistantCitationHighlight, highlight)
                     .environment(\.threadWorkLogHistory, toolHistory)
                     .environment(\.threadTurnItemDetails, toolDetails)
+                    .environment(\.threadMcpApps, context.mcpApps)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
+                    .environment(\.threadLinkResolver, context.threadLinks)
                     .environment(\.openURL, OpenURLAction { url in
+                        // A thread link names a thread in this transcript's environment.
+                        if let linkID = ThreadLinks.threadID(href: url.absoluteString) {
+                            context.onOpenThread(context.threadLinks?.openID(forLinkID: linkID) ?? linkID)
+                            return .handled
+                        }
                         if let citation = AssistantCitation.parse(url.absoluteString) {
                             context.onOpenCitation(citation)
                             return .handled
@@ -2616,6 +2772,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             isLoadingEarlier: Bool,
             alwaysExpandActivity: Bool,
             outboxCaptions: [String: ThreadMessageCaption],
+            statusLine: ThreadStatusLine?,
             rowContext: RowContext,
             onLoadEarlier: @escaping () -> Void,
             in collectionView: UICollectionView
@@ -2630,7 +2787,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 self.update(threadID: threadID, detail: detail, renderUpdate: renderUpdate,
                     dynamicTypeSize: dynamicTypeSize, canLoadEarlier: canLoadEarlier,
                     isLoadingEarlier: isLoadingEarlier, alwaysExpandActivity: alwaysExpandActivity,
-                    outboxCaptions: outboxCaptions, rowContext: rowContext,
+                    outboxCaptions: outboxCaptions, statusLine: statusLine, rowContext: rowContext,
                     onLoadEarlier: onLoadEarlier, in: collectionView)
             }
             let foldChoiceChanged = renderedFoldChoiceRevision != foldChoiceRevision
@@ -2645,10 +2802,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
             let outboxChanged = currentOutboxCaptions != outboxCaptions
+            let statusLineChanged = currentStatusLine != statusLine
             if currentIsLoadingEarlier, !isLoadingEarlier { requestedEarlierTurns = false }
             guard threadChanged || typeSizeChanged || expansionPreferenceChanged
                 || revisionChanged || loadEarlierChanged || foldChoiceChanged
-                || outboxChanged else { return }
+                || outboxChanged || statusLineChanged else { return }
 
             // Always the whole feed. An item's shape depends on its neighbours —
             // a new tool call joins the work group above it, a subagent card
@@ -2679,8 +2837,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             currentCanLoadEarlier = canLoadEarlier
             currentIsLoadingEarlier = isLoadingEarlier
             currentOutboxCaptions = outboxCaptions
+            let previousStatusLineID = currentStatusLine.map { FeatureTranscriptCollectionView.statusLinePrefix + $0.id }
+            currentStatusLine = statusLine
             guard threadChanged || idsChanged || !changedIDs.isEmpty
-                || loadEarlierChanged else { return }
+                || loadEarlierChanged || statusLineChanged else { return }
 
             if threadChanged {
                 cancelAllMarkdownPrefetches()
@@ -2744,6 +2904,13 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     )
                 }
                 snapshot.appendItems(newIDs, toSection: .transcript)
+            }
+            // The status line always closes the transcript, after any appended rows.
+            if let previousStatusLineID, snapshot.indexOfItem(previousStatusLineID) != nil {
+                snapshot.deleteItems([previousStatusLineID])
+            }
+            if let statusLine {
+                snapshot.appendItems([FeatureTranscriptCollectionView.statusLinePrefix + statusLine.id], toSection: .transcript)
             }
             let appendedIDSet = Set(state.appendedIDs)
             var reconfiguredIDs = changedIDs.filter { !appendedIDSet.contains($0) }
@@ -3373,6 +3540,7 @@ private struct FeatureLocalAttachmentThumbnail: View {
 
 struct FeatureMessageView: View {
     let message: FeatureMessage
+    @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
     /// The line under a user bubble. A message still waiting on its echo reads
     /// as sending even before the outbox has said more.
     var caption: ThreadMessageCaption? = nil
@@ -3412,7 +3580,7 @@ struct FeatureMessageView: View {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
                         if !message.text.isEmpty {
                             ReviewContextMessageText(
-                                source: message.text,
+                                source: displayText,
                                 isStreaming: message.state == .streaming
                             )
                         }
@@ -3441,7 +3609,7 @@ struct FeatureMessageView: View {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
                         if !message.text.isEmpty {
                             ReviewContextMessageText(
-                                source: message.text,
+                                source: displayText,
                                 isStreaming: message.state == .streaming
                             )
                         }
@@ -3477,7 +3645,7 @@ struct FeatureMessageView: View {
                 FeatureMessageAttachmentsView(attachments: message.attachments)
                 if !message.text.isEmpty {
                     MarkdownMessageView(
-                        message.text,
+                        displayText,
                         isStreaming: message.state == .streaming,
                         citationMessageID: message.wireMessageID,
                         timestamp: message.createdAt
@@ -3512,6 +3680,11 @@ struct FeatureMessageView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .accessibilityIdentifier("message-\(message.id)")
         }
+    }
+
+    /// The text with each thread link labeled by its thread's current title.
+    private var displayText: String {
+        threadLinks?.relabel(message.text) ?? message.text
     }
 
     private var accessibilityValue: String {
@@ -3708,5 +3881,31 @@ private struct FeatureMessageAttachmentsView: View {
             countStyle: .file
         )
         return "\(attachment.name), \(size)"
+    }
+}
+
+/// Keeps the screen's MCP App state on the thread shown, and presents the app
+/// that asked for full screen over it.
+private struct ThreadMcpAppsModifier: ViewModifier {
+    let apps: ThreadMcpApps?
+    let threadID: String
+    let awaitingUser: Bool
+
+    func body(content: Content) -> some View {
+        if let apps {
+            content
+                .onChange(of: threadID, initial: true) {
+                    guard apps.threadID != threadID else { return }
+                    apps.threadID = threadID
+                    apps.fullscreen = nil
+                    apps.unsupported = false
+                }
+                .onChange(of: awaitingUser, initial: true) { apps.awaitingUser = awaitingUser }
+                .fullScreenCover(item: Binding(get: { apps.fullscreen }, set: { apps.fullscreen = $0 })) { presentation in
+                    McpAppFullscreenView(presentation: presentation, apps: apps)
+                }
+        } else {
+            content
+        }
     }
 }

@@ -1819,6 +1819,16 @@ public actor T3Client {
         ).item
     }
 
+    /// A unary request for protocol mirrors kept in their own files
+    /// (`McpApps.swift`), which cannot reach the private socket client.
+    func rpcRequest<Result: Decodable & Sendable>(
+        _ tag: String,
+        payload: JSONValue,
+        as type: Result.Type
+    ) async throws -> Result {
+        try await rpc.request(tag, payload: payload, as: type)
+    }
+
     // MARK: Terminal
 
     public func openTerminal(
@@ -1871,6 +1881,19 @@ public actor T3Client {
         return await rpc.subscribe(
             RPCMethod.terminalAttach.rawValue,
             payload: .object(payload),
+            as: TerminalEvent.self
+        )
+    }
+
+    /// Streams an existing terminal's snapshot and output without starting,
+    /// resizing or writing to it: what a `terminal:read` grant may do.
+    public func observeTerminal(
+        threadID: String,
+        terminalID: String
+    ) async -> AsyncThrowingStream<TerminalEvent, Error> {
+        await rpc.subscribe(
+            RPCMethod.terminalObserve.rawValue,
+            payload: terminalIdentity(threadID: threadID, terminalID: terminalID),
             as: TerminalEvent.self
         )
     }
@@ -2678,6 +2701,10 @@ public enum RPCMethod: String, Sendable {
     case getFullThreadDiff = "orchestration.getFullThreadDiff"
     case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
     case getTurnItem = "orchestration.getTurnItem"
+    case mcpAppsCallTool = "mcpApps.callTool"
+    case mcpAppsToolInfo = "mcpApps.toolInfo"
+    case mcpAppsReadResource = "mcpApps.readResource"
+    case mcpAppsUpdateModelContext = "mcpApps.updateModelContext"
     case searchThreads = "orchestration.searchThreads"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"
@@ -2717,6 +2744,7 @@ public enum RPCMethod: String, Sendable {
     case reviewDiffFileContents = "review.getDiffFileContents"
     case terminalOpen = "terminal.open"
     case terminalAttach = "terminal.attach"
+    case terminalObserve = "terminal.observe"
     case terminalWrite = "terminal.write"
     case terminalResize = "terminal.resize"
     case terminalClear = "terminal.clear"

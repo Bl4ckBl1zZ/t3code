@@ -782,7 +782,16 @@ public actor WebSocketRPCClient {
     }
 
     private func remoteError(_ exit: RPCResponseEnvelope.Exit) -> RPCError {
+        // Effect RPC answers a method it does not know with this defect.
+        let unknownTag = "Unknown request tag: "
+        if let defect = exit.cause?.first?.defect?.stringValue, defect.hasPrefix(unknownTag) {
+            return .unsupportedMethod(String(defect.dropFirst(unknownTag.count)))
+        }
         let value = exit.cause?.first?.error
+        // Tagged errors without a wire message carry a reason the client words.
+        if value?["_tag"]?.stringValue == "McpAppRequestError", let reason = value?["reason"]?.stringValue {
+            return .remote(McpAppRequestErrorReason.message(for: reason))
+        }
         // A missing split-off permission says how to get it instead of naming it.
         let message = value?["requiredPermission"]?.stringValue
             .flatMap(AuthPermissionRequired.init)?.errorDescription

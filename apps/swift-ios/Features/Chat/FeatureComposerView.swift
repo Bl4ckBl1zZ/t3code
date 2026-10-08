@@ -129,6 +129,10 @@ struct FeatureComposerView: View {
     @State private var historyError: ComposerHistoryError?
     private let onSend: () -> Void
     private let onStop: () -> Void
+    /// Set while a stale Claude session would re-read this many tokens: Send
+    /// compacts first, and holding it offers to send with the full history.
+    private let compactBeforeSendTokens: Int?
+    private let onSendWithFullHistory: (() -> Void)?
     private let onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)?
     private let onUserInputSubmit: ((String, [String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void)?
 
@@ -163,6 +167,8 @@ struct FeatureComposerView: View {
         externalFileDrop: ThreadFileDropBatch? = nil,
         onExternalFileDropConsumed: @escaping (UUID) -> Void = { _ in },
         draftLoaded: Bool = true,
+        compactBeforeSendTokens: Int? = nil,
+        onSendWithFullHistory: (() -> Void)? = nil,
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
         onUserInputSubmit: ((String, [String: FeatureInputAnswer], [String: [FeatureUploadAttachment]], Bool) -> Void)? = nil
     ) {
@@ -196,6 +202,8 @@ struct FeatureComposerView: View {
         self.externalFileDrop = externalFileDrop
         self.onExternalFileDropConsumed = onExternalFileDropConsumed
         self.draftLoaded = draftLoaded
+        self.compactBeforeSendTokens = compactBeforeSendTokens
+        self.onSendWithFullHistory = onSendWithFullHistory
         self.onApprovalDecision = onApprovalDecision
         self.onUserInputSubmit = onUserInputSubmit
     }
@@ -779,7 +787,9 @@ struct FeatureComposerView: View {
                         .controlSize(.small)
                         .tint(T3Colors.primaryActionForeground)
                 } else {
-                    Image(systemName: showsStop ? "stop.fill" : "arrow.up")
+                    // Same image, new symbol: the slot never swaps views, which
+                    // is what keeps the mic's push-to-talk gesture alive.
+                    Image(systemName: showsStop ? "stop.fill" : compactsOnSend ? "arrow.down.right.and.arrow.up.left" : "arrow.up")
                         .font(showsStop ? .footnote.weight(.bold) : .body.weight(.bold))
                         .foregroundStyle(T3Colors.primaryActionForeground)
                         .contentTransition(
@@ -795,8 +805,30 @@ struct FeatureComposerView: View {
         .disabled(submitDisabled)
         .opacity(sendDimmed ? 0.35 : 1)
         .animation(reduceMotion ? nil : .snappy, value: showsStop)
-        .accessibilityLabel(showsStop ? "Stop agent" : "Send")
+        .contextMenu {
+            if compactsOnSend, let tokens = compactBeforeSendTokens, let onSendWithFullHistory {
+                Section("Compacts \(ClaudeResumeCompaction.formatted(tokens)) tokens of idle history first") {
+                    Button("Compact and Send", systemImage: "arrow.down.right.and.arrow.up.left") {
+                        performPrimaryAction()
+                    }
+                    .disabled(submitDisabled)
+                    Button("Send with Full History", systemImage: "arrow.up", action: onSendWithFullHistory)
+                        .disabled(submitDisabled)
+                }
+            }
+        }
+        .accessibilityLabel(showsStop ? "Stop agent" : compactsOnSend ? "Compact and send" : "Send")
+        .accessibilityActions {
+            if compactsOnSend, let onSendWithFullHistory, !submitDisabled {
+                Button("Send with full history", action: onSendWithFullHistory)
+            }
+        }
         .accessibilityIdentifier(showsStop ? "thread-stop" : "message-send")
+    }
+
+    /// Send compacts a stale Claude session first.
+    private var compactsOnSend: Bool {
+        compactBeforeSendTokens != nil && !showsStop
     }
 
     private var hasDraftContent: Bool {

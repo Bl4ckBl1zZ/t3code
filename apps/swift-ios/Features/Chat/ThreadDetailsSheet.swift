@@ -102,6 +102,8 @@ struct ThreadDetailsSheet<ToolView: View>: View {
 
     @State private var liveScriptIDs: Set<String> = []
     @State private var runningScriptID: String?
+    /// Actions type into a terminal, which a read-only connection may not do.
+    @State private var terminalIsReadOnly = false
     @State private var automations: [FeatureScheduledTask] = []
     @State private var automationsFailedToLoad = false
 
@@ -188,6 +190,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         .task { await loadAutomations() }
         .task(id: thread.id) {
             guard !scripts.isEmpty, !isHermesConversation else { return }
+            terminalIsReadOnly = await client.terminalIsReadOnly(threadID: thread.id)
             for await sessions in client.terminalSessions(threadID: thread.id) {
                 liveScriptIDs = Set(sessions.filter { $0.hasRunningSubprocess }.compactMap(\.activeScriptID))
             }
@@ -413,9 +416,15 @@ struct ThreadDetailsSheet<ToolView: View>: View {
     @ViewBuilder
     private var actionsSection: some View {
         if !isChatConversation, !scripts.isEmpty {
-            Section("Actions") {
+            Section {
                 ForEach(scripts) { script in
                     scriptRow(script)
+                }
+            } header: {
+                Text("Actions")
+            } footer: {
+                if terminalIsReadOnly {
+                    Text("This connection can watch terminals but not run actions.")
                 }
             }
             .t3GroupedRow()
@@ -444,7 +453,7 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                 }
             }
         }
-        .disabled(onRunScript == nil || runningScriptID != nil)
+        .disabled(onRunScript == nil || runningScriptID != nil || terminalIsReadOnly)
     }
 
     private func run(_ script: ProjectScript) {
@@ -971,6 +980,10 @@ struct ThreadDetailsSheet<ToolView: View>: View {
         let availability = relationships.availability(for: row.threadID)
         let isArchived = ThreadDetailsLineageSection.isArchived(availability: availability)
         let status = row.edge.kind == .subagent ? WorkRowStatus(agentStatus: row.edge.status) : nil
+        // A finished agent with a known time shows that instead of "Done".
+        let elapsed = row.edge.kind == .subagent
+            ? relationships.subagent(for: row.threadID)?.settledElapsed(status: row.edge.status)
+            : nil
         let relationshipLabel = ThreadRelationships.label(row.edge, currentThreadID: relationships.currentThreadID)
         let metadata = relationships.subagent(for: row.threadID).flatMap { subagentMetadata[$0.id] }
         return Button {
@@ -980,6 +993,10 @@ struct ThreadDetailsSheet<ToolView: View>: View {
                 LabeledContent {
                     if let availability {
                         Text(availability)
+                    } else if let elapsed {
+                        Text(verbatim: elapsed)
+                            .monospacedDigit()
+                            .accessibilityLabel("Finished in \(elapsed)")
                     } else if row.edge.kind == .subagent {
                         Text(status?.accessibilityLabel ?? "Done")
                             .foregroundStyle(status == .failed ? T3Colors.danger : T3Colors.textSecondary)

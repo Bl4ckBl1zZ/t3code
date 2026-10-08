@@ -23,7 +23,9 @@ file” asks for both an inline preview and the saved deliverable.
 When an agent mentions another thread, it can link it. On web and desktop the
 link shows that thread's project icon and its current title, so a renamed
 thread never shows a stale name, and clicking it opens the thread in the app.
-A link to a thread this device cannot see shows the name the agent wrote.
+In the iOS app the link shows the thread's current title too, and tapping it
+opens the thread; Back returns to the message. A link to a thread this device
+cannot see shows the name the agent wrote.
 
 ## Choosing a format
 

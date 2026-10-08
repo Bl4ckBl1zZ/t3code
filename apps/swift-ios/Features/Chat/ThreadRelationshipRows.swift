@@ -109,6 +109,8 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
     public let origin: String?
     /// When the task's first run started; nil while it is still pending.
     public let startedAt: String?
+    /// When the task settled; nil while it runs or when the server predates it.
+    public let completedAt: String?
 
     public init(
         id: String,
@@ -118,7 +120,8 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
         workflow: AgentWorkflowProgress? = nil,
         usage: AgentTaskUsage? = nil,
         origin: String? = nil,
-        startedAt: String? = nil
+        startedAt: String? = nil,
+        completedAt: String? = nil
     ) {
         self.id = id
         self.childThreadID = childThreadID
@@ -128,6 +131,14 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
         self.usage = usage
         self.origin = origin
         self.startedAt = startedAt
+        self.completedAt = completedAt
+    }
+
+    /// A finished agent's elapsed time ("2m", "1.5h"), standing in for the
+    /// status word on lineage rows. Nil while it runs, when it failed, or when
+    /// either time is unknown.
+    public func settledElapsed(status: String?) -> String? {
+        AgentElapsed.settledLabel(status: status ?? self.status, startedAt: startedAt, completedAt: completedAt)
     }
 
     /// The projection's own subagent row: the authoritative link, carrying the
@@ -147,7 +158,8 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
             workflow: subagent.workflow.map(Self.workflow(_:)),
             usage: subagent.usage.map(Self.usage(_:)),
             origin: subagent.origin,
-            startedAt: subagent.startedAt
+            startedAt: subagent.startedAt,
+            completedAt: subagent.completedAt
         )
     }
 
@@ -205,7 +217,8 @@ public struct ThreadRelationshipSubagentLink: Equatable, Hashable, Sendable, Ide
             workflow: workflow,
             usage: usage,
             origin: origin,
-            startedAt: startedAt
+            startedAt: startedAt,
+            completedAt: completedAt
         )
     }
 

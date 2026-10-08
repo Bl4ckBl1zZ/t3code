@@ -986,6 +986,8 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
     /// The thread's runless root turn, which only a provider-native subagent
     /// has. Its bar reads this in place of a composer; nil until it arrives.
     public var providerSubagentStatus: ProviderSubagentStatus?
+    /// How full the context window is, for the stale-Claude compaction offer.
+    public var contextWindow: ThreadContextWindow?
 
     public init(
         backgroundWorkStopRunID: String? = nil,
@@ -1000,7 +1002,8 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
         thread: ThreadRelationshipShell? = nil,
         subagents: [ThreadRelationshipSubagentLink] = [],
         transfers: [ThreadRelationshipTransferLink] = [],
-        providerSubagentStatus: ProviderSubagentStatus? = nil
+        providerSubagentStatus: ProviderSubagentStatus? = nil,
+        contextWindow: ThreadContextWindow? = nil
     ) {
         self.backgroundWorkStopRunID = backgroundWorkStopRunID
         self.appThreadID = appThreadID
@@ -1015,6 +1018,7 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
         self.subagents = subagents
         self.transfers = transfers
         self.providerSubagentStatus = providerSubagentStatus
+        self.contextWindow = contextWindow
     }
 
     /// What a client that cannot supply the projection reports: no queue, no

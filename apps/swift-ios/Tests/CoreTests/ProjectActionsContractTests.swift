@@ -16,6 +16,7 @@ struct ProjectActionsContractTests {
         #expect(defaults.first?.runOnWorktreeCreate == true)
         #expect(defaults.first?.runOnWorktreeDelete == true)
         #expect(defaults.first?.singleRun == true)
+        #expect(defaults.first?.runOnSettle == true)
         #expect(fixture.capabilities.projectActionDefaults == true)
         #expect(ServerSettingsPatchInput(defaultProjectScripts: defaults, projectScriptOverrides: ["reset": nil, "empty": []]).json == fixture.patch)
         let legacy = [ProjectScript(id: "legacy", name: "Legacy", command: "echo legacy", icon: "play", runOnWorktreeCreate: false)]

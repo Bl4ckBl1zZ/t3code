@@ -207,13 +207,27 @@ public enum ProviderWorkspaceScan {
     /// re-run for as long as a thread stays open.
     public static let maxPendingRetries = 6
 
+    /// How long a scan stays current, mirroring `PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS`.
+    /// Nothing watches skill directories, so an older entry is scanned again and
+    /// a skill added since shows up; the server answers inside the window from
+    /// its cache.
+    public static let snapshotLifetime: TimeInterval = 5 * 60
+
     /// Whether `cwd` should be scanned: the instance is enabled and installed
-    /// (the server scans nothing else), and the cwd has no entry yet or its
-    /// commands are pending.
-    public static func needsScan(_ provider: ServerProviderSnapshot?, cwd: String) -> Bool {
+    /// (the server scans nothing else), and the cwd has no entry yet, its entry
+    /// is older than `snapshotLifetime`, or its commands are pending.
+    public static func needsScan(_ provider: ServerProviderSnapshot?, cwd: String, now: Date = .now) -> Bool {
         guard let provider, provider.enabled, provider.installed else { return false }
         guard let workspace = provider.workspaceSnapshots?.first(where: { $0.cwd == cwd }) else { return true }
-        return workspace.slashCommandsPending == true
+        return workspace.slashCommandsPending == true || !isCurrent(workspace, now: now)
+    }
+
+    /// Ports `isProviderWorkspaceSnapshotCurrent`. An unreadable `checkedAt`
+    /// is stale, as `Date.parse` yielding NaN is on the web.
+    public static func isCurrent(_ workspace: ServerProviderWorkspaceSnapshot, now: Date = .now) -> Bool {
+        guard let checkedAt = (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(workspace.checkedAt))
+            ?? (try? Date.ISO8601FormatStyle().parse(workspace.checkedAt)) else { return false }
+        return now.timeIntervalSince(checkedAt) < snapshotLifetime
     }
 
     /// Whether a scan's result asks for another try after the cooldown. A scan

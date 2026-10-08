@@ -20,8 +20,9 @@ sheets use the system glass material.
 - **Settings.** The **T3** button at the top left opens Settings.
   - A red dot means an environment is unreachable, and an amber dot means one is reconnecting.
   - While a dot shows, the button opens **Settings → Servers**.
-- **Search.** Tap the magnifying glass, or press `Cmd+F`. Search fields throughout the app don't
-  autocorrect or capitalize, so names, branches and paths stay as you type them.
+- **Search.** Tap the magnifying glass, or press `Cmd+F`. On iPad the search field stays at the top
+  of the thread list. Search fields throughout the app don't autocorrect or capitalize, so names,
+  branches and paths stay as you type them.
 - **More.** The **⋯** menu holds:
   - the project filter and **Change Project Icon…**;
   - **Select Threads** and **Arrange Threads**;
@@ -43,6 +44,9 @@ sheets use the system glass material.
     reload and archive.
 - **Scrolling.** When you scroll up, a round button above the composer jumps back to the latest
   message.
+- **Settled and snoozed.** A settled or snoozed thread says so in one quiet line after its last
+  message, such as **Settled 2d ago · Un-settle** or **Snoozed, in 3h · Wake now**. Sending a
+  message clears either one too.
 - **Failed messages.** A message that could not be sent shows **Not sent · Try Again** underneath.
   Tap it to retry. Above the composer, a notice says why the message was not sent, with **Retry**
   and a close button. It stays with the thread until you dismiss it, send again, or the message
@@ -56,6 +60,16 @@ sheets use the system glass material.
   and its project, branch or folder when they differ from the thread's, with up to three lines of
   its latest progress or result. Tap it to open the agent's thread; Back returns to the thread that
   started it.
+- **MCP apps.** A tool call that returns an [MCP app](mcp-apps.md) shows the app in the thread.
+  It asks before running a tool that changes something, sending a message, opening a link or
+  saving a file. An app can open full screen; close it to return to the thread.
+  started it. In the thread's lineage, a finished agent shows how long it ran, such as **2m** or
+  **1.5h**, and a failed one says **Failed**.
+- **Live activity.** While the agent works, the activity row under its turn shows the first sentence
+  of its latest thought above what it is doing now. Expand the row to see every step.
+- **Thread reads.** When an agent reads another thread, its activity names that thread by its
+  current title, such as **Read thread “Fix login”**. Touch and hold the row and choose **Open
+  Thread** to go there.
 - **Hardware keyboard shortcuts:**
 
   | Shortcut                            | Action                                  |
@@ -72,6 +86,12 @@ sheets use the system glass material.
 - **Opening.** Details opens at half height.
 - **Tools.** **Files**, **Review**, **Source Control**, **Terminal** and linked pull requests open
   inside it and expand it to full height. Tap back to return to the details.
+- **Watching terminals.** When a device's pairing lets it see terminals but not control them,
+  **Terminal** shows a running terminal's output with **View Only** along the bottom. There is no
+  keyboard, and starting, clearing or closing terminals and running actions are unavailable.
+- **Actions.** The project's actions run with one tap. An action's name says when it also runs on
+  its own: **(setup)** when a worktree is created, **(teardown)** before one is removed, and
+  **(on settle)** each time a worktree thread settles.
 - **Review.** Review opens on **Changes**: everything on the branch since it left its base,
   including what is not committed yet. Switch to **Uncommitted** from its **⋯** menu.
 - **Watching pull requests.** In **Linked Pull Requests**, an open pull request's menu offers

@@ -267,6 +267,9 @@ public protocol FeatureClient: AnyObject {
     func terminalSnapshot(threadID: String, terminalID: String) async throws -> FeatureTerminalSnapshot
     func terminalEvents(threadID: String, terminalID: String) -> AsyncStream<FeatureTerminalSnapshot>
     func terminalSessions(threadID: String) -> AsyncStream<[FeatureTerminalSnapshot]>
+    /// True when this connection may watch the thread's terminals but not type
+    /// into, start or close them. False whenever the server has not said so.
+    func terminalIsReadOnly(threadID: String) async -> Bool
     func openTerminal(threadID: String, terminalID: String, columns: Int, rows: Int) async throws
     func writeTerminal(threadID: String, terminalID: String, data: String) async throws
     func resizeTerminal(
@@ -635,6 +638,8 @@ public extension FeatureClient {
     func terminalSessions(threadID _: String) -> AsyncStream<[FeatureTerminalSnapshot]> {
         AsyncStream { $0.finish() }
     }
+
+    func terminalIsReadOnly(threadID _: String) async -> Bool { false }
 
     func openTerminal(
         threadID: String,

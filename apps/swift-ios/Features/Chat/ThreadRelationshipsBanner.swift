@@ -350,6 +350,9 @@ struct ThreadRelationshipsBanner: View {
         let subagent = model.subagent(for: row.threadID)
         let metadata = subagent.flatMap { subagentMetadata[$0.id] }
         let status = row.edge.kind == .subagent ? WorkRowStatus(agentStatus: row.edge.status) : nil
+        // The orb already carries status, so a finished agent with a known
+        // time shows only that; a failed one keeps "Failed".
+        let elapsed = row.edge.kind == .subagent ? subagent?.settledElapsed(status: row.edge.status) : nil
         let relationshipLabel = ThreadRelationships.label(row.edge, currentThreadID: model.currentThreadID)
 
         return Button {
@@ -394,7 +397,12 @@ struct ThreadRelationshipsBanner: View {
                         .font(T3Typography.supporting)
                         .foregroundStyle(T3Colors.textTertiary)
                 } else {
-                    if let status {
+                    if let elapsed {
+                        Text(verbatim: elapsed)
+                            .font(T3Typography.supporting)
+                            .monospacedDigit()
+                            .foregroundStyle(T3Colors.textTertiary)
+                    } else if let status {
                         Text(status.accessibilityLabel)
                             .font(T3Typography.supporting)
                             .foregroundStyle(status == .failed ? T3Colors.danger : T3Colors.textTertiary)
@@ -414,7 +422,7 @@ struct ThreadRelationshipsBanner: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
-        .accessibilityValue(status?.accessibilityLabel ?? availability ?? "")
+        .accessibilityValue(availability ?? elapsed.map { "Finished in \($0)" } ?? status?.accessibilityLabel ?? "")
     }
 
     private var doneGroupHeader: some View {

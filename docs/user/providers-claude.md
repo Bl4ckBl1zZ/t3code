@@ -55,7 +55,9 @@ When you come back to a thread whose context holds 100,000 tokens or more after 
 send button changes to **Compact and send**: Enter summarizes the history first, then sends your
 message, so Claude does not re-read the whole conversation. To keep the full history for that
 message, open the menu next to the button and choose **Send with full history**. The offer goes
-away once the conversation has been compacted or used again.
+away once the conversation has been compacted or used again. In the iOS app the send arrow turns
+into a compact symbol; tap it to compact and send, or touch and hold it and choose **Send with Full
+History**.
 
 ## Where Claude Skills Are Loaded
 

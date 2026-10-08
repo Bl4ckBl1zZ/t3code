@@ -233,6 +233,20 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         )
     }
 
+    /// The thread a `t3_thread_read` row read, when this client can see it and
+    /// it is not archived; such a row names it and can open it.
+    func readThread(in resolver: ThreadLinkResolver?) -> FeatureThread? {
+        guard let resolver, let id = T3McpToolPresentation.threadReadTargetID(for: item),
+              let thread = resolver.thread(forLinkID: id), !thread.isArchived else { return nil }
+        return thread
+    }
+
+    /// The summary as shown: a thread read names the thread's live title.
+    func displaySummary(threadLinks resolver: ThreadLinkResolver?) -> String {
+        guard let thread = readThread(in: resolver) else { return summary }
+        return T3McpToolPresentation.namingReadThread(summary, title: thread.title) ?? summary
+    }
+
     /// Long-press copies the row: what it says, what it previewed, and the raw
     /// item behind both.
     public func copyText(structuredDetails: String) -> String {
@@ -298,6 +312,31 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
 
 public enum ThreadWorkLogPresentation {
     static let maxVisibleEntries = 1
+
+    /// Plain-text line for the latest thought in the live activity row. A
+    /// bold-only opening line (the Codex summary heading) wins; otherwise this
+    /// is the first sentence of the reasoning text. Ported from
+    /// `liveThoughtLine` in packages/client-runtime/src/work-log/presentation.ts.
+    static func liveThoughtLine(_ markdown: String) -> String {
+        func replacing(_ text: String, _ pattern: String, with template: String, options: NSRegularExpression.Options = []) -> String {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return text }
+            return regex.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: template)
+        }
+        let source = markdown as NSString
+        let heading = (try? NSRegularExpression(pattern: #"^\s*\*\*([^*\r\n]+)\*\*[ \t]*\r?(?:\n|$)"#))?
+            .firstMatch(in: markdown, range: NSRange(location: 0, length: source.length))
+            .map { source.substring(with: $0.range(at: 1)) }
+        var text = heading ?? markdown
+        text = replacing(text, #"!?\[([^\]]*)\]\([^)]*\)"#, with: "$1")
+        text = replacing(text, #"^[ \t]*(?:#{1,6}|[-*+]|\d+\.)[ \t]+"#, with: "", options: .anchorsMatchLines)
+        text = replacing(text, #"`+|\*\*|~~"#, with: "")
+        text = replacing(text, #"(^|[^A-Za-z0-9_*])[*_]([^*_\n]+)[*_](?![A-Za-z0-9_*])"#, with: "$1$2")
+        text = replacing(text, #"\s+"#, with: " ").trimmingCharacters(in: .whitespaces)
+        if heading != nil { return text }
+        // Cut after the first . ? or ! (plus a closing quote or paren) that a space follows.
+        guard let end = text.range(of: #"[.?!]["'”’)]?(?=\s)"#, options: .regularExpression) else { return text }
+        return String(text[..<end.upperBound])
+    }
 
     public static func isToolLike(_ item: OrchestrationV2TurnItem) -> Bool {
         switch item.type {
@@ -618,6 +657,26 @@ public enum T3McpToolPresentation {
             target = "PR #\(number)"
         } else { target = detail }
         return "\(verb) \(target)"
+    }
+
+    /// The trimmed thread id a `t3_thread_read` call targets; nil for any other item.
+    static func threadReadTargetID(for item: OrchestrationV2TurnItem) -> String? {
+        guard case let .dynamicTool(toolName, input, _) = item.payload,
+              [toolName, item.base.title].compactMap({ $0 }).compactMap(resolveToolName).first == "t3_thread_read",
+              let threadID = input?["threadId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadID.isEmpty else { return nil }
+        return threadID
+    }
+
+    private static let threadReadObject = " a T3 thread"
+
+    /// Names the read thread in place of the generic object: "Read a T3 thread"
+    /// becomes `Read thread “Title”`, keeping the label's tense. Nil keeps the
+    /// generic label, which is also what an untitled thread gets.
+    static func namingReadThread(_ label: String, title: String?) -> String? {
+        guard label.hasSuffix(threadReadObject),
+              let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+        return "\(label.dropLast(threadReadObject.count)) thread “\(title)”"
     }
 
     static func historicalAction(for item: OrchestrationV2TurnItem) -> ThreadHistoricalWorkItem.Action? {
@@ -1031,6 +1090,7 @@ struct ThreadWorkLog: View {
     /// `nil` until the reader touches the fold, so the preference decides it.
     @SwiftUI.Environment(\.threadWorkLogHistory) private var sharedHistory
     @SwiftUI.Environment(\.threadTurnItemDetails) private var turnItemDetails
+    @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
     @State private var localHistory = ThreadWorkLogHistoryStore()
     private var history: ThreadWorkLogHistory {
         (sharedHistory ?? localHistory).entry("\(currentThreadID):\(rows.first?.id ?? "empty")")
@@ -1102,17 +1162,65 @@ struct ThreadWorkLog: View {
         }
     }
 
+    /// The latest thought in the live group, while a turn works. A finding
+    /// stays readable while the next tool call runs.
+    private var liveThought: (row: ThreadWorkLogRow, line: String)? {
+        guard liveEntryID != nil,
+              let row = visibleCandidates.last(where: { row in
+                  guard case let .reasoning(text, _) = row.item.payload else { return false }
+                  return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              }),
+              case let .reasoning(text, _) = row.item.payload else { return nil }
+        let line = ThreadWorkLogPresentation.liveThoughtLine(text)
+        return line.isEmpty ? nil : (row, line)
+    }
+
     /// The live row: what the agent is doing now, in the running tint. Its
     /// symbol bounces once when the step changes; nothing on it loops.
+    ///
+    /// Collapsed, the latest thought's first sentence sits above it; the
+    /// expanded history already lists the thought, so the preview steps aside.
     private func focusRow(_ focus: ThreadWorkLogRow) -> some View {
         let count = ThreadWorkLogRow.stepCount(visibleCandidates.count)
-        return Button { toggleGroup() } label: {
+        let thought = isExpanded ? nil : liveThought
+        // While the thought itself is the focus, the status line just says so.
+        let thoughtIsFocus = thought?.row.id == focus.id
+        let focusLabel = focus.isRunning ? "Thinking" : "Thought"
+        return VStack(alignment: .leading, spacing: 2) {
+            if let thought {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "brain")
+                        .font(ChatTimelineStyle.small)
+                        .frame(width: 20)
+                        .accessibilityHidden(true)
+                    Text(verbatim: thought.line)
+                        .font(ChatTimelineStyle.small)
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .foregroundStyle(T3Colors.textSecondary)
+                .padding(.top, 6)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Latest thought: \(thought.line)")
+            }
+            focusButton(focus, count: count, label: thoughtIsFocus ? focusLabel : nil)
+        }
+    }
+
+    private func focusButton(_ focus: ThreadWorkLogRow, count: String, label: String?) -> some View {
+        Button { toggleGroup() } label: {
             HStack(spacing: 8) {
                 ThreadToolActivityIcon(icon: focus.activityIcon, fallback: focus.icon.symbolName)
                     .foregroundStyle(focus.isRunning ? T3Colors.statusRunning : T3Colors.textTertiary)
                     .symbolEffect(.bounce, value: liveEntryID)
                     .frame(width: 20)
-                WorkLogRowText(row: focus, workspaceRoot: workspaceRoot)
+                Group {
+                    if let label {
+                        Text(verbatim: label).font(ChatTimelineStyle.bodyStrong).foregroundStyle(T3Colors.textPrimary)
+                    } else {
+                        WorkLogRowText(row: focus, workspaceRoot: workspaceRoot)
+                    }
+                }
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1128,7 +1236,7 @@ struct ThreadWorkLog: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(focus.summary), \(count)")
+        .accessibilityLabel("\(label ?? focus.displaySummary(threadLinks: threadLinks)), \(count)")
         .accessibilityAddTraits(.isButton)
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
     }
@@ -1174,7 +1282,8 @@ struct ThreadWorkLog: View {
                     isExpanded: isExpanded,
                     canExpand: canExpand,
                     onToggle: { toggleRow(row.id) },
-                    onCopy: { copy(row) }
+                    onCopy: { copy(row) },
+                    onOpenReadThread: row.readThread(in: threadLinks).map { thread in { onOpenThread(thread.id) } }
                 )
 
                 if isExpanded {
@@ -1262,6 +1371,7 @@ struct ThreadWorkLog: View {
 private struct WorkLogRowText: View {
     let row: ThreadWorkLogRow
     let workspaceRoot: String?
+    @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
 
     private var detail: String? { ThreadWorkLogPresentation.compactDetail(row.detail) }
 
@@ -1304,7 +1414,7 @@ private struct WorkLogRowText: View {
                 .font(ChatTimelineStyle.bodyMono)
                 .foregroundStyle(T3Colors.textSecondary)
         } else {
-            (Text(verbatim: row.summary)
+            (Text(verbatim: row.displaySummary(threadLinks: threadLinks))
                 .font(ChatTimelineStyle.bodyStrong)
                 .foregroundStyle(isDestructive ? T3Colors.danger : T3Colors.textPrimary)
                 + Text(verbatim: detail.map { " \($0)" } ?? "")
@@ -1360,6 +1470,9 @@ private struct WorkLogRowButton: View {
     let canExpand: Bool
     let onToggle: () -> Void
     let onCopy: () -> Void
+    /// Opens the thread a thread-read row read; nil on every other row.
+    var onOpenReadThread: (() -> Void)? = nil
+    @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
 
     private var isDestructive: Bool { row.icon == .alert || row.icon == .warning }
 
@@ -1385,14 +1498,15 @@ private struct WorkLogRowButton: View {
         let summary = switch row.waiting {
         case .approval: "Waiting for approval"
         case .input: "Waiting for your answer"
-        case nil: row.summary
+        case nil: row.displaySummary(threadLinks: threadLinks)
         }
         return detail.map { "\(summary) \($0)" } ?? summary
     }
 
     var body: some View {
         // Still a button without detail: long-press copy works on every row.
-        Button { if canExpand { onToggle() } } label: {
+        // A row with nothing to open opens the thread it read instead.
+        Button { if canExpand { onToggle() } else { onOpenReadThread?() } } label: {
             HStack(spacing: 8) {
                 ThreadToolActivityIcon(icon: row.waiting == nil ? row.activityIcon : nil, fallback: symbolName)
                     .font(ChatTimelineStyle.bodyStrong)
@@ -1423,6 +1537,9 @@ private struct WorkLogRowButton: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            if let onOpenReadThread {
+                Button("Open Thread", systemImage: "bubble.left.and.text.bubble.right", action: onOpenReadThread)
+            }
             Button {
                 onCopy()
             } label: {
@@ -1434,6 +1551,9 @@ private struct WorkLogRowButton: View {
         .accessibilityRemoveTraits(canExpand ? [] : .isButton)
         .accessibilityHint(canExpand ? "Double tap to show full details." : "")
         .accessibilityAction(named: "Copy details", onCopy)
+        .accessibilityActions {
+            if let onOpenReadThread { Button("Open thread", action: onOpenReadThread) }
+        }
     }
 }
 
