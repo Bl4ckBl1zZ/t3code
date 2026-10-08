@@ -76,7 +76,14 @@ public struct OrchestrationV2ThreadEvent: Decodable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        type = try container.decode(String.self, forKey: .type)
+        guard let type = try? container.decode(String.self, forKey: .type) else {
+            self.type = ""
+            threadId = ""
+            occurredAt = ""
+            change = .unknown
+            return
+        }
+        self.type = type
         guard let threadId = try? container.decode(String.self, forKey: .threadId),
               let occurredAt = try? container.decode(String.self, forKey: .occurredAt) else {
             self.threadId = ""
