@@ -702,8 +702,15 @@ public enum ThreadDetailsWorkspace {
         worktreePath == nil ? "Project Folder" : "Worktree"
     }
 
+    /// Ports `projectScriptMenuLabel`: the name, then the lifecycle roles the
+    /// script runs in, e.g. "Clean (on settle)".
     public static func scriptLabel(_ script: ProjectScript) -> String {
-        script.runOnWorktreeCreate ? "\(script.name) (setup)" : script.name
+        let roles = [
+            script.runOnWorktreeCreate ? "setup" : nil,
+            script.runOnWorktreeDelete == true ? "teardown" : nil,
+            script.runOnSettle == true ? "on settle" : nil,
+        ].compactMap { $0 }
+        return roles.isEmpty ? script.name : "\(script.name) (\(roles.joined(separator: ", ")))"
     }
 
     public static func scriptIcon(_ icon: String) -> String {

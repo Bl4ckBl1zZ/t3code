@@ -93,6 +93,10 @@ final class ThreadDetailsSectionsTests: XCTestCase {
             "Install (setup)"
         )
         XCTAssertEqual(ThreadDetailsWorkspace.scriptLabel(script(name: "Dev")), "Dev")
+        XCTAssertEqual(
+            ThreadDetailsWorkspace.scriptLabel(script(name: "Clean", runOnWorktreeDelete: true, runOnSettle: true)),
+            "Clean (teardown, on settle)"
+        )
 
         let expected = [
             "test": "flask",
@@ -723,7 +727,9 @@ final class ThreadDetailsSectionsTests: XCTestCase {
         id: String = "script-1",
         name: String,
         icon: String = "run",
-        runOnWorktreeCreate: Bool = false
+        runOnWorktreeCreate: Bool = false,
+        runOnWorktreeDelete: Bool? = nil,
+        runOnSettle: Bool? = nil
     ) -> ProjectScript {
         ProjectScript(
             id: id,
@@ -731,6 +737,8 @@ final class ThreadDetailsSectionsTests: XCTestCase {
             command: "pnpm \(name.lowercased())",
             icon: icon,
             runOnWorktreeCreate: runOnWorktreeCreate,
+            runOnWorktreeDelete: runOnWorktreeDelete,
+            runOnSettle: runOnSettle,
             previewUrl: nil,
             autoOpenPreview: nil
         )

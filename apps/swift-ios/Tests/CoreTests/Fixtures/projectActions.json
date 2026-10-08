@@ -8,6 +8,7 @@
         "icon": "configure",
         "runOnWorktreeCreate": true,
         "runOnWorktreeDelete": true,
+        "runOnSettle": true,
         "singleRun": true
       }
     ],
@@ -37,6 +38,7 @@
         "icon": "configure",
         "runOnWorktreeCreate": true,
         "runOnWorktreeDelete": true,
+        "runOnSettle": true,
         "singleRun": true
       }
     ],

@@ -511,19 +511,23 @@ public struct ProjectScript: Codable, Identifiable, Equatable, Sendable {
     public let icon: String
     public let runOnWorktreeCreate: Bool
     public let runOnWorktreeDelete: Bool?
+    /// Runs in the thread's worktree each time the thread settles. Absent on
+    /// servers that predate settle actions.
+    public let runOnSettle: Bool?
     public let previewUrl: String?
     public let autoOpenPreview: Bool?
     public let singleRun: Bool?
 
-    public init(id: String, name: String, command: String, icon: String, runOnWorktreeCreate: Bool, runOnWorktreeDelete: Bool? = nil, previewUrl: String? = nil, autoOpenPreview: Bool? = nil, singleRun: Bool? = nil) {
+    public init(id: String, name: String, command: String, icon: String, runOnWorktreeCreate: Bool, runOnWorktreeDelete: Bool? = nil, runOnSettle: Bool? = nil, previewUrl: String? = nil, autoOpenPreview: Bool? = nil, singleRun: Bool? = nil) {
         self.id = id; self.name = name; self.command = command; self.icon = icon
-        self.runOnWorktreeCreate = runOnWorktreeCreate; self.runOnWorktreeDelete = runOnWorktreeDelete
+        self.runOnWorktreeCreate = runOnWorktreeCreate; self.runOnWorktreeDelete = runOnWorktreeDelete; self.runOnSettle = runOnSettle
         self.previewUrl = previewUrl; self.autoOpenPreview = autoOpenPreview; self.singleRun = singleRun
     }
 
     public var json: JSONValue {
         var fields: [String: JSONValue] = ["id": .string(id), "name": .string(name), "command": .string(command), "icon": .string(icon), "runOnWorktreeCreate": .bool(runOnWorktreeCreate)]
         if let runOnWorktreeDelete { fields["runOnWorktreeDelete"] = .bool(runOnWorktreeDelete) }
+        if let runOnSettle { fields["runOnSettle"] = .bool(runOnSettle) }
         if let previewUrl { fields["previewUrl"] = .string(previewUrl) }
         if let autoOpenPreview { fields["autoOpenPreview"] = .bool(autoOpenPreview) }
         if let singleRun { fields["singleRun"] = .bool(singleRun) }

@@ -86,6 +86,9 @@ sheets use the system glass material.
 - **Opening.** Details opens at half height.
 - **Tools.** **Files**, **Review**, **Source Control**, **Terminal** and linked pull requests open
   inside it and expand it to full height. Tap back to return to the details.
+- **Actions.** The project's actions run with one tap. An action's name says when it also runs on
+  its own: **(setup)** when a worktree is created, **(teardown)** before one is removed, and
+  **(on settle)** each time a worktree thread settles.
 - **Review.** Review opens on **Changes**: everything on the branch since it left its base,
   including what is not committed yet. Switch to **Uncommitted** from its **⋯** menu.
 - **Watching pull requests.** In **Linked Pull Requests**, an open pull request's menu offers

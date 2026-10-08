@@ -1631,6 +1631,7 @@ const actionDefaults = [
     icon: "configure",
     runOnWorktreeCreate: true,
     runOnWorktreeDelete: true,
+    runOnSettle: true,
     singleRun: true,
   },
 ] as const;
