@@ -284,6 +284,50 @@ final class ThreadWorkLogTests: XCTestCase {
         XCTAssertNil(T3McpToolPresentation.displayName(for: "Bash"))
     }
 
+    /// Mirrors the web "thread-read labels" tests (upstream a9fb6a8063).
+    func testThreadReadRowsNameTheLiveThreadInEveryTense() {
+        let child = FeatureThread(
+            id: FeatureScopedID.thread(environmentID: "env", wireID: "thread-child"),
+            wireID: "thread-child", projectID: "p", environmentID: "env", title: " Review auth flow "
+        )
+        let resolver = ThreadLinkResolver(threads: [child], environmentID: "env")
+        for (status, label) in [
+            ("running", "Reading thread “Review auth flow”"),
+            ("completed", "Read thread “Review auth flow”"),
+            ("failed", "Failed to read thread “Review auth flow”"),
+            ("cancelled", "Stopped reading thread “Review auth flow”"),
+        ] {
+            let item = V2Fixture.turnItem(id: "read", type: "dynamic_tool", status: status, extra: [
+                "toolName": .string("t3-code.t3_thread_read"),
+                "input": .object(["threadId": .string(" thread-child "), "view": .string("activity")]),
+            ])
+            XCTAssertEqual(row(item).displaySummary(threadLinks: resolver), label)
+            XCTAssertEqual(row(item).readThread(in: resolver)?.id, child.id)
+        }
+    }
+
+    func testThreadReadRowsKeepTheGenericLabelWithoutALiveTitle() {
+        func read(_ threadID: JSONValue?) -> ThreadWorkLogRow {
+            row(V2Fixture.turnItem(id: "read", type: "dynamic_tool", status: "completed", extra: [
+                "toolName": .string("mcp__t3-code__t3_thread_read"),
+                "input": threadID.map { .object(["threadId": $0]) } ?? .null,
+            ]))
+        }
+        let archived = FeatureThread(id: "a", wireID: "archived", projectID: "p", environmentID: "env", title: "Old", isArchived: true)
+        let untitled = FeatureThread(id: "u", wireID: "untitled", projectID: "p", environmentID: "env", title: "  ")
+        let resolver = ThreadLinkResolver(threads: [archived, untitled], environmentID: "env")
+        XCTAssertEqual(read(.string("archived")).displaySummary(threadLinks: resolver), "Read a T3 thread")
+        XCTAssertEqual(read(.string("untitled")).displaySummary(threadLinks: resolver), "Read a T3 thread")
+        XCTAssertEqual(read(.string("deleted")).displaySummary(threadLinks: resolver), "Read a T3 thread")
+        XCTAssertNil(read(.string("  ")).readThread(in: resolver))
+        XCTAssertNil(read(nil).readThread(in: resolver))
+        let wait = row(V2Fixture.turnItem(id: "wait", type: "dynamic_tool", extra: [
+            "toolName": .string("t3-code.t3_thread_wait"), "input": .object(["threadId": .string("untitled")]),
+        ]))
+        XCTAssertNil(T3McpToolPresentation.threadReadTargetID(for: wait.item))
+        XCTAssertNil(T3McpToolPresentation.namingReadThread("Read a file", title: "Title"))
+    }
+
     func testPullRequestToolIntentUsesStateAndURLBeforeNumber() {
         for (status, label) in [("running", "Linking PR #42"), ("completed", "Linked PR #42"), ("failed", "Failed to link PR #42"), ("cancelled", "Stopped linking PR #42")] {
             let item = V2Fixture.turnItem(id: "pr", type: "dynamic_tool", status: status,

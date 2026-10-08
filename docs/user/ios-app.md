@@ -59,6 +59,9 @@ sheets use the system glass material.
 - **MCP apps.** A tool call that returns an [MCP app](mcp-apps.md) shows the app in the thread.
   It asks before running a tool that changes something, sending a message, opening a link or
   saving a file. An app can open full screen; close it to return to the thread.
+- **Thread reads.** When an agent reads another thread, its activity names that thread by its
+  current title, such as **Read thread “Fix login”**. Touch and hold the row and choose **Open
+  Thread** to go there.
 - **Hardware keyboard shortcuts:**
 
   | Shortcut                            | Action                                  |

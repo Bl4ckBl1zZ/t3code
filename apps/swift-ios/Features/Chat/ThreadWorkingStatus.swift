@@ -39,7 +39,8 @@ struct ThreadWorkingStatus: Equatable, Sendable {
         timelineItems: [OrchestrationV2ProjectedTurnItem],
         activeRunID: String?,
         isPreparingWorkspace: Bool = false,
-        activityText: String? = nil
+        activityText: String? = nil,
+        threadLinks: ThreadLinkResolver? = nil
     ) -> ThreadWorkingStatus? {
         switch state {
         case .idle, .waitingForApproval, .waitingForInput, .failed, .completed:
@@ -65,7 +66,7 @@ struct ThreadWorkingStatus: Equatable, Sendable {
                 )
             }
             return ThreadWorkingStatus(
-                headline: headline(for: live),
+                headline: headline(for: live, threadLinks: threadLinks),
                 symbolName: symbolName(for: live),
                 startedAt: workingStartedAt
             )
@@ -90,9 +91,9 @@ struct ThreadWorkingStatus: Equatable, Sendable {
         }
     }
 
-    private static func headline(for projected: OrchestrationV2ProjectedTurnItem) -> String {
+    private static func headline(for projected: OrchestrationV2ProjectedTurnItem, threadLinks: ThreadLinkResolver?) -> String {
         guard projected.item.type != "assistant_message" else { return "Writing a reply" }
-        return ThreadWorkLogRow.make(projected).summary
+        return ThreadWorkLogRow.make(projected).displaySummary(threadLinks: threadLinks)
     }
 
     private static func symbolName(for projected: OrchestrationV2ProjectedTurnItem) -> String {

@@ -233,6 +233,20 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
         )
     }
 
+    /// The thread a `t3_thread_read` row read, when this client can see it and
+    /// it is not archived; such a row names it and can open it.
+    func readThread(in resolver: ThreadLinkResolver?) -> FeatureThread? {
+        guard let resolver, let id = T3McpToolPresentation.threadReadTargetID(for: item),
+              let thread = resolver.thread(forLinkID: id), !thread.isArchived else { return nil }
+        return thread
+    }
+
+    /// The summary as shown: a thread read names the thread's live title.
+    func displaySummary(threadLinks resolver: ThreadLinkResolver?) -> String {
+        guard let thread = readThread(in: resolver) else { return summary }
+        return T3McpToolPresentation.namingReadThread(summary, title: thread.title) ?? summary
+    }
+
     /// Long-press copies the row: what it says, what it previewed, and the raw
     /// item behind both.
     public func copyText(structuredDetails: String) -> String {
@@ -618,6 +632,26 @@ public enum T3McpToolPresentation {
             target = "PR #\(number)"
         } else { target = detail }
         return "\(verb) \(target)"
+    }
+
+    /// The trimmed thread id a `t3_thread_read` call targets; nil for any other item.
+    static func threadReadTargetID(for item: OrchestrationV2TurnItem) -> String? {
+        guard case let .dynamicTool(toolName, input, _) = item.payload,
+              [toolName, item.base.title].compactMap({ $0 }).compactMap(resolveToolName).first == "t3_thread_read",
+              let threadID = input?["threadId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadID.isEmpty else { return nil }
+        return threadID
+    }
+
+    private static let threadReadObject = " a T3 thread"
+
+    /// Names the read thread in place of the generic object: "Read a T3 thread"
+    /// becomes `Read thread “Title”`, keeping the label's tense. Nil keeps the
+    /// generic label, which is also what an untitled thread gets.
+    static func namingReadThread(_ label: String, title: String?) -> String? {
+        guard label.hasSuffix(threadReadObject),
+              let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+        return "\(label.dropLast(threadReadObject.count)) thread “\(title)”"
     }
 
     static func historicalAction(for item: OrchestrationV2TurnItem) -> ThreadHistoricalWorkItem.Action? {
@@ -1031,6 +1065,7 @@ struct ThreadWorkLog: View {
     /// `nil` until the reader touches the fold, so the preference decides it.
     @SwiftUI.Environment(\.threadWorkLogHistory) private var sharedHistory
     @SwiftUI.Environment(\.threadTurnItemDetails) private var turnItemDetails
+    @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
     @State private var localHistory = ThreadWorkLogHistoryStore()
     private var history: ThreadWorkLogHistory {
         (sharedHistory ?? localHistory).entry("\(currentThreadID):\(rows.first?.id ?? "empty")")
@@ -1128,7 +1163,7 @@ struct ThreadWorkLog: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(focus.summary), \(count)")
+        .accessibilityLabel("\(focus.displaySummary(threadLinks: threadLinks)), \(count)")
         .accessibilityAddTraits(.isButton)
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
     }
@@ -1174,7 +1209,8 @@ struct ThreadWorkLog: View {
                     isExpanded: isExpanded,
                     canExpand: canExpand,
                     onToggle: { toggleRow(row.id) },
-                    onCopy: { copy(row) }
+                    onCopy: { copy(row) },
+                    onOpenReadThread: row.readThread(in: threadLinks).map { thread in { onOpenThread(thread.id) } }
                 )
 
                 if isExpanded {
@@ -1262,6 +1298,7 @@ struct ThreadWorkLog: View {
 private struct WorkLogRowText: View {
     let row: ThreadWorkLogRow
     let workspaceRoot: String?
+    @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
 
     private var detail: String? { ThreadWorkLogPresentation.compactDetail(row.detail) }
 
@@ -1304,7 +1341,7 @@ private struct WorkLogRowText: View {
                 .font(ChatTimelineStyle.bodyMono)
                 .foregroundStyle(T3Colors.textSecondary)
         } else {
-            (Text(verbatim: row.summary)
+            (Text(verbatim: row.displaySummary(threadLinks: threadLinks))
                 .font(ChatTimelineStyle.bodyStrong)
                 .foregroundStyle(isDestructive ? T3Colors.danger : T3Colors.textPrimary)
                 + Text(verbatim: detail.map { " \($0)" } ?? "")
@@ -1360,6 +1397,9 @@ private struct WorkLogRowButton: View {
     let canExpand: Bool
     let onToggle: () -> Void
     let onCopy: () -> Void
+    /// Opens the thread a thread-read row read; nil on every other row.
+    var onOpenReadThread: (() -> Void)? = nil
+    @SwiftUI.Environment(\.threadLinkResolver) private var threadLinks
 
     private var isDestructive: Bool { row.icon == .alert || row.icon == .warning }
 
@@ -1385,14 +1425,15 @@ private struct WorkLogRowButton: View {
         let summary = switch row.waiting {
         case .approval: "Waiting for approval"
         case .input: "Waiting for your answer"
-        case nil: row.summary
+        case nil: row.displaySummary(threadLinks: threadLinks)
         }
         return detail.map { "\(summary) \($0)" } ?? summary
     }
 
     var body: some View {
         // Still a button without detail: long-press copy works on every row.
-        Button { if canExpand { onToggle() } } label: {
+        // A row with nothing to open opens the thread it read instead.
+        Button { if canExpand { onToggle() } else { onOpenReadThread?() } } label: {
             HStack(spacing: 8) {
                 ThreadToolActivityIcon(icon: row.waiting == nil ? row.activityIcon : nil, fallback: symbolName)
                     .font(ChatTimelineStyle.bodyStrong)
@@ -1423,6 +1464,9 @@ private struct WorkLogRowButton: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            if let onOpenReadThread {
+                Button("Open Thread", systemImage: "bubble.left.and.text.bubble.right", action: onOpenReadThread)
+            }
             Button {
                 onCopy()
             } label: {
@@ -1434,6 +1478,9 @@ private struct WorkLogRowButton: View {
         .accessibilityRemoveTraits(canExpand ? [] : .isButton)
         .accessibilityHint(canExpand ? "Double tap to show full details." : "")
         .accessibilityAction(named: "Copy details", onCopy)
+        .accessibilityActions {
+            if let onOpenReadThread { Button("Open thread", action: onOpenReadThread) }
+        }
     }
 }
 

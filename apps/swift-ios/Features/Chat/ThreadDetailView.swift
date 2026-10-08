@@ -369,7 +369,8 @@ public struct ThreadDetailView: View {
             isPreparingWorkspace: queueState.activeRun?.status == "preparing",
             activityText: detail.workflow.providerSession.flatMap { session in
                 ["stopped", "error"].contains(session.status) ? nil : session.activityText
-            }
+            },
+            threadLinks: threadLinks
         )
     }
 
@@ -786,10 +787,7 @@ public struct ThreadDetailView: View {
                     composerFocused = true
                 },
                 mcpApps: mcpApps,
-                threadLinks: ThreadLinkResolver(
-                    threads: model.snapshot.threads,
-                    environmentID: currentThread.environmentID ?? threadEnvironment?.id
-                ),
+                threadLinks: threadLinks,
                 navigationRequest: turnNavigationRequest,
                 scrollToLatestRequest: scrollToLatestRequest,
                 onReadingHistoryChanged: { reading in
@@ -1161,6 +1159,14 @@ public struct ThreadDetailView: View {
 
     private var threadProject: FeatureProject? {
         model.snapshot.projects.first { $0.id == currentThread.projectID }
+    }
+
+    /// Thread links and thread reads resolve in this thread's environment.
+    private var threadLinks: ThreadLinkResolver {
+        ThreadLinkResolver(
+            threads: model.snapshot.threads,
+            environmentID: currentThread.environmentID ?? threadEnvironment?.id
+        )
     }
 
     private var threadEnvironment: FeatureEnvironment? {
