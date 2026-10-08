@@ -280,6 +280,8 @@ private struct FeatureFileDirectoryView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            // Pull-to-refresh runs the search again and holds until it lands.
+            .refreshable { await searchWorkspace() }
         }
     }
 
