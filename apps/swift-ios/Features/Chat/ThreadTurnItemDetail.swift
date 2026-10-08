@@ -65,6 +65,8 @@ public enum ThreadTurnItemDetail {
             return !message.isBlank
         case .checkpointRollback, .threadCreated, .userMessage, .assistantMessage, .unknown:
             return false
+        case .secretRequest:
+            return false
         }
     }
 

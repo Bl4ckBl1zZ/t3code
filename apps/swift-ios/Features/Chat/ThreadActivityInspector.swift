@@ -160,11 +160,15 @@ public struct ThreadActivityItemSupport: Equatable, Sendable {
         public let status: String
         public let model: String?
         public let cwd: String
+        /// Nil when the session carries no capability descriptor, which keeps
+        /// the server-side fork on offer.
+        public let fork: ThreadForkCapabilities?
 
-        public init(status: String, model: String?, cwd: String) {
+        public init(status: String, model: String?, cwd: String, fork: ThreadForkCapabilities? = nil) {
             self.status = status
             self.model = model
             self.cwd = cwd
+            self.fork = fork
         }
     }
 
@@ -244,6 +248,9 @@ public struct ThreadActivityItemSupport: Equatable, Sendable {
     public let subagent: Subagent?
     public let contextHandoff: ContextHandoff?
     public let contextTransfer: ContextTransfer?
+    /// The attempt that produced this item, resolved through its execution
+    /// node. Nil when the item has no node or the projection lacks the join.
+    public var attempt: ThreadTimelineAttempt? = nil
 
     public init(
         run: Run? = nil,
@@ -517,6 +524,9 @@ public enum ThreadActivityInspector {
         // creations, and chat messages have nothing beyond the common fields.
         case .checkpoint, .checkpointRollback, .fork, .threadCreated, .userMessage,
             .assistantMessage, .unknown:
+            break
+        // Its one line says everything; the value never reaches the client.
+        case .secretRequest:
             break
         }
 

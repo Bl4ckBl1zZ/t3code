@@ -135,12 +135,15 @@ public struct OrchestrationV2ProviderFailure: Codable, Equatable, Sendable {
     public let message: String
     public let code: String?
     public let retryable: Bool?
+    /// When a usage limit resets, if the provider named a time. Absent on
+    /// other failures and on servers that predate it.
+    public var resetAt: OrchestrationV2Timestamp? = nil
 
     // `class` is a Swift keyword, so the wire key is remapped rather than
     // escaped at every use site.
     private enum CodingKeys: String, CodingKey {
         case failureClass = "class"
-        case message, code, retryable
+        case message, code, retryable, resetAt
     }
 }
 
@@ -310,15 +313,27 @@ public struct OrchestrationV2TurnCapabilities: Codable, Equatable, Sendable {
     }
 }
 
-/// The provider capability descriptor, narrowed to the `turns` group.
+/// The provider capability descriptor, narrowed to the `turns` group and the
+/// three groups that decide whether a response can be forked.
 ///
 /// The contract carries eleven groups; the rest are modeled when a feature
 /// needs them. Unmodeled groups decode away rather than failing.
 public struct OrchestrationV2ProviderCapabilities: Codable, Equatable, Sendable {
     public let turns: OrchestrationV2TurnCapabilities?
+    public var threads: OrchestrationV2ThreadForkCapabilities? = nil
+    public var identity: OrchestrationV2IdentityCapabilities? = nil
+    public var context: OrchestrationV2ContextHandoffCapabilities? = nil
 
-    public init(turns: OrchestrationV2TurnCapabilities? = nil) {
+    public init(
+        turns: OrchestrationV2TurnCapabilities? = nil,
+        threads: OrchestrationV2ThreadForkCapabilities? = nil,
+        identity: OrchestrationV2IdentityCapabilities? = nil,
+        context: OrchestrationV2ContextHandoffCapabilities? = nil
+    ) {
         self.turns = turns
+        self.threads = threads
+        self.identity = identity
+        self.context = context
     }
 }
 
@@ -521,6 +536,9 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
     /// with `orchestration.getTurnItem`. Older servers never set it, so their
     /// rows keep whatever output they shipped inline.
     public var outputOmitted: Bool = false
+    /// On a `user_message` another agent sent: that agent's thread, as a wire
+    /// id in this environment. Absent on older servers and on the user's own.
+    public var senderThreadId: String? = nil
 
     public init(type: String, base: OrchestrationV2TurnItemBase, payload: Payload) {
         self.type = type
@@ -555,6 +573,9 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case threadCreated(targetThreadID: String, targetRunID: String?, targetProviderInstanceID: String, targetModel: String)
         case subagent(subagentID: String, origin: String, driver: String, providerInstanceID: String, childThreadID: String?, prompt: String, progress: String?, result: String?)
         case dynamicTool(toolName: String?, input: JSONValue?, output: JSONValue?)
+        /// A secret an agent asked the user for. Only what was asked and how it
+        /// was answered: the value never passes through orchestration.
+        case secretRequest(label: String, reason: String, placeholder: String?, status: OrchestrationV2SecretRequestStatus)
         /// A type this build does not know. Retained so ordinals and counts stay
         /// correct and the row can render as a neutral placeholder.
         case unknown(type: String)
@@ -581,6 +602,8 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
         case targetRunId, targetProviderInstanceId, targetModel
         case subagentId, origin, providerInstanceId, childThreadId, progress, result
         case toolName, toolSurface, toolIcon, toolSource
+        case senderThreadId
+        case label, reason, placeholder, secretStatus
     }
 
     public init(from decoder: any Decoder) throws {
@@ -599,6 +622,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
 
         switch type {
         case "user_message":
+            senderThreadId = try container.decodeIfPresent(String.self, forKey: .senderThreadId)
             payload = .userMessage(
                 messageID: try container.decode(String.self, forKey: .messageId),
                 intent: try container.decode(OrchestrationV2UserMessageInputIntent.self, forKey: .inputIntent),
@@ -743,6 +767,15 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
                 input: try container.decodeIfPresent(JSONValue.self, forKey: .input),
                 output: try container.decodeIfPresent(JSONValue.self, forKey: .output)
             )
+        case "secret_request":
+            payload = .secretRequest(
+                label: try container.decodeIfPresent(String.self, forKey: .label) ?? "Secret",
+                reason: try container.decodeIfPresent(String.self, forKey: .reason) ?? "",
+                placeholder: try container.decodeIfPresent(String.self, forKey: .placeholder),
+                status: try container.decodeIfPresent(
+                    OrchestrationV2SecretRequestStatus.self, forKey: .secretStatus
+                ) ?? .unknown
+            )
         default:
             payload = .unknown(type: type)
         }
@@ -763,6 +796,7 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
 
         switch payload {
         case let .userMessage(messageID, intent, text, attachments):
+            try container.encodeIfPresent(senderThreadId, forKey: .senderThreadId)
             try container.encode(messageID, forKey: .messageId)
             try container.encode(intent.rawValue, forKey: .inputIntent)
             try container.encode(text, forKey: .text)
@@ -859,6 +893,11 @@ public struct OrchestrationV2TurnItem: Codable, Equatable, Sendable, Identifiabl
             try container.encodeIfPresent(toolName, forKey: .toolName)
             try container.encodeIfPresent(input, forKey: .input)
             try container.encodeIfPresent(output, forKey: .output)
+        case let .secretRequest(label, reason, placeholder, status):
+            try container.encode(label, forKey: .label)
+            try container.encode(reason, forKey: .reason)
+            try container.encodeIfPresent(placeholder, forKey: .placeholder)
+            try container.encode(status, forKey: .secretStatus)
         case .unknown:
             break
         }
@@ -954,6 +993,9 @@ public struct OrchestrationV2AppThread: Codable, Equatable, Sendable, Identifiab
     public let lastVisitedAt: OrchestrationV2Timestamp?
     public let titleRegeneration: OrchestrationV2TitleRegeneration?
     public let deletedAt: OrchestrationV2Timestamp?
+    /// The user's choice about continuing after a usage-limit stop. Absent
+    /// until one is made, and on servers that predate limit recovery.
+    public var limitRecovery: OrchestrationV2LimitRecovery? = nil
 }
 
 // MARK: - Projection
@@ -974,6 +1016,9 @@ public struct OrchestrationV2RunAttempt: Codable, Equatable, Sendable, Identifia
     public let attemptOrdinal: Int
     public let status: String
     public let reason: String?
+    /// The execution node the attempt started from; an item belongs to the
+    /// attempt whose root node its own node descends from.
+    public var rootNodeId: String? = nil
 }
 
 public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identifiable {
@@ -986,6 +1031,8 @@ public struct OrchestrationV2ExecutionNode: Codable, Equatable, Sendable, Identi
     public let runtimeRequestId: String?
     public let startedAt: OrchestrationV2Timestamp?
     public let completedAt: OrchestrationV2Timestamp?
+    public var parentNodeId: String? = nil
+    public var rootNodeId: String? = nil
 }
 
 public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Identifiable {
@@ -999,6 +1046,9 @@ public struct OrchestrationV2ProviderSession: Codable, Equatable, Sendable, Iden
     /// server predates the descriptor, which reads as "no capability evidence"
     /// rather than as a denial-by-default at every call site.
     public let capabilities: OrchestrationV2ProviderCapabilities?
+    public var providerInstanceId: String? = nil
+    /// The session's own failure, which supersedes a turn's classification.
+    public var lastError: String? = nil
 }
 
 public struct OrchestrationV2ProviderThread: Codable, Equatable, Sendable, Identifiable {
@@ -1024,6 +1074,8 @@ public struct OrchestrationV2ContextUsage: Codable, Equatable, Sendable {
     public let usedTokens: Int
     public var maxTokens: Int? = nil
     public var autoCompactThreshold: Int? = nil
+    public var totalProcessedTokens: Int? = nil
+    public var compactsAutomatically: Bool? = nil
 }
 
 /// A provider's live usage report for one turn.
@@ -1063,6 +1115,13 @@ public struct OrchestrationV2Checkpoint: Codable, Equatable, Sendable, Identifia
     public let scopeId: String
     public let status: String
     public let files: [OrchestrationV2CheckpointFileSummary]
+    /// The run that captured it, and that run's ordinal. Both null on a scope's
+    /// baseline (`ordinalWithinScope` 0), which is the state before any turn.
+    /// "Restore to this message" resolves its target through these.
+    public var runId: String? = nil
+    public var ordinalWithinScope: Int? = nil
+    public var appRunOrdinal: Int? = nil
+    public var capturedAt: OrchestrationV2Timestamp? = nil
 }
 
 public struct OrchestrationV2Subagent: Codable, Equatable, Sendable, Identifiable {
@@ -1163,6 +1222,9 @@ public struct OrchestrationV2Run: Codable, Equatable, Sendable, Identifiable {
     /// How a launch prepares this run's workspace; `prepared-run.retry`
     /// repeats it. Older servers never record it, so they never offer the retry.
     public var workspacePreparation: OrchestrationV2WorkspacePreparation? = nil
+    /// The run's own execution node; a failure on any other node belongs to a
+    /// subagent, not to the run.
+    public var rootNodeId: String? = nil
 }
 
 /// `OrchestrationV2ThreadLaunchWorkspaceStrategy`: where a launched run works.
@@ -1500,6 +1562,9 @@ public struct OrchestrationV2ThreadShell: Codable, Equatable, Sendable, Identifi
     /// `idle` or a run status.
     public var status: String
     public var lastError: String?
+    /// `OrchestrationV2ProviderFailureClass` of the failed run. Absent on
+    /// servers that predate it, where every failure reads as Failed.
+    public var lastErrorClass: String? = nil
     public var pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary?
     public var latestVisibleMessage: OrchestrationV2LatestVisibleMessageSummary?
     public var latestUserMessageAt: OrchestrationV2Timestamp?

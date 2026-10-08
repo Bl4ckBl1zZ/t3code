@@ -335,11 +335,23 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var hasActionableProposedPlan: Bool?
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
+    /// The server's read watermark, shared by every device on the
+    /// environment. See ``hasUnseenCompletion``.
+    public var lastVisitedAt: Date? = nil
+    /// Whether the environment tracks read state at all. Absent means no
+    /// Done-until-seen and no Mark Read/Unread, as on the other mobile client.
+    public var supportsVisitedTracking: Bool? = nil
+    /// The failed run's failure class from the shell; `usage_limit` reads as
+    /// Limited rather than Failed. Nil on detail-only rows and older servers.
+    public var lastErrorClass: String? = nil
     public var pinnedAt: Date?
     /// Where the thread sits in the user-arranged pinned run, as the web
     /// client orders it. Kept so undoing an unpin restores the same slot.
     public var pinOrderKey: String?
     public var supportsPinning: Bool?
+    /// Whether the environment accepts `pinOrderKey` writes, so the pinned
+    /// run can be arranged and fresh pins land on top.
+    public var supportsPinReorder: Bool? = nil
     public var activeOrderKey: String?
     public var supportsActiveOrder: Bool?
     /// Whether the thread's environment supports the settled lifecycle at all.
@@ -357,6 +369,9 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// main line of work. Absent means an ordinary thread. The inbox's Main
     /// section does not exist without this.
     public var workInboxRole: String?
+    /// The user cleared the chat here: everything up to it stays out of the
+    /// transcript and the row preview. Set by T3 Work's `/clear`.
+    public var timelineClearedAt: Date? = nil
     /// `fork`, `subagent`, or nil for a root thread. Subagent threads are
     /// excluded from both workspaces: they are steps inside their parent, not
     /// work of their own.
@@ -648,6 +663,9 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
     /// another agent sent into this thread, which renders as agent-sent rather
     /// than as the reader's own bubble.
     public var createdBy: String?
+    /// Feature-scoped id of the thread whose agent sent this message, so its
+    /// byline can open that thread. Nil for the user's own messages.
+    public var senderThreadID: String? = nil
 
     public init(
         id: String,
@@ -882,6 +900,9 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
 
     /// The projection's visible turn items, in position order.
     public var timelineItems: [OrchestrationV2ProjectedTurnItem] = []
+    /// The projection's checkpoint table, which "Restore to this message"
+    /// resolves its target in.
+    public var checkpoints: [OrchestrationV2Checkpoint] = []
     /// The thread's runs, narrowed to what handoff rows read to recover which
     /// model was speaking before the handoff.
     public var timelineRuns: [LifecycleTimelineRun] = []
@@ -911,6 +932,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         userInputs: [FeatureUserInput] = [],
         page: FeatureThreadPage? = nil,
         timelineItems: [OrchestrationV2ProjectedTurnItem] = [],
+        checkpoints: [OrchestrationV2Checkpoint] = [],
         timelineRuns: [LifecycleTimelineRun] = [],
         itemSupport: [String: ThreadActivityItemSupport] = [:],
         subagentChildThreadIDs: [String: String] = [:],
@@ -923,6 +945,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         self.userInputs = userInputs
         self.page = page
         self.timelineItems = timelineItems
+        self.checkpoints = checkpoints
         self.timelineRuns = timelineRuns
         self.itemSupport = itemSupport
         self.subagentChildThreadIDs = subagentChildThreadIDs
@@ -988,6 +1011,9 @@ public struct FeatureThreadWorkflow: Sendable, Equatable {
     public var providerSubagentStatus: ProviderSubagentStatus?
     /// How full the context window is, for the stale-Claude compaction offer.
     public var contextWindow: ThreadContextWindow?
+    /// Set while the thread is stopped on a usage limit; drives the recovery
+    /// banner above the composer.
+    public var usageLimit: ThreadUsageLimit? = nil
 
     public init(
         backgroundWorkStopRunID: String? = nil,

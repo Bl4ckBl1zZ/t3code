@@ -1401,6 +1401,27 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await route.client.handoffScript(threadID: route.wireID).script
     }
 
+    func forkThread(
+        threadID: String,
+        sourceThreadID: String,
+        runID: String,
+        latestOnly: Bool,
+        title: String?
+    ) async throws -> String {
+        // The open thread routes; the fork lands on the same server.
+        let route = try threadRoute(for: threadID)
+        let targetWireID = UUID().uuidString
+        _ = try await route.client.forkThread(
+            sourceThreadID: sourceThreadID,
+            targetThreadID: targetWireID,
+            runID: runID,
+            latestOnly: latestOnly,
+            title: title
+        )
+        try? await refresh(client: route.client)
+        return FeatureScopedID.thread(environmentID: route.environmentID, wireID: targetWireID)
+    }
+
     func mergeThreadBack(
         sourceThreadID: String,
         targetThreadID: String,
@@ -1614,6 +1635,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let route = try threadRoute(for: id)
         _ = try await route.client.pin(threadID: route.wireID, pinned: pinned, orderKey: orderKey)
         try? await refresh(client: route.client)
+    }
+
+    func setPinOrder(id: String, key: String) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(
+            threadID: route.wireID, fields: ["pinOrderKey": .string(key)]))
+    }
+
+    // Read state rides the shell stream's `thread.visited` / `thread.marked-unread`
+    // echo; no refresh, since visits fire every time an open thread moves.
+    func visitThread(id: String, visitedAt: Date) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(
+            OrchestrationCommands.visit(threadID: route.wireID, visitedAt: visitedAt))
+    }
+
+    func markThreadUnread(id: String) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(OrchestrationCommands.markUnread(threadID: route.wireID))
     }
 
     func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest? {
@@ -1954,12 +1994,140 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
     }
 
+    func implementProposedPlan(_ implementation: FeatureProposedPlanImplementation) async throws {
+        let route = try threadRoute(for: implementation.threadID)
+        let client = route.client
+        let generation = environmentGeneration
+        // Web persists the mode before starting the turn, so a failed switch
+        // never leaves an implementation running under Plan.
+        _ = try await client.setInteractionMode(threadID: route.wireID, mode: coreInteractionMode(.standard))
+        try await sendPlanImplementation(
+            implementation,
+            threadID: route.wireID,
+            sourceThreadID: route.wireID,
+            client: client,
+            environmentID: route.environmentID,
+            generation: generation
+        )
+        try? await refreshThread(id: route.uiID, client: client)
+        try? await refresh(client: client)
+    }
+
+    func implementProposedPlanInNewThread(
+        _ implementation: FeatureProposedPlanImplementation
+    ) async throws -> FeatureThread {
+        let source = try threadRoute(for: implementation.threadID)
+        let client = source.client
+        let environment = client.environment
+        let generation = environmentGeneration
+        guard let sourceThread = shellsByEnvironmentID[source.environmentID]?.threads
+            .first(where: { $0.id == source.wireID }) else {
+            throw NativeFeatureClientError.threadNotFound
+        }
+        let model = modelSelection(
+            implementation.selection,
+            projectID: sourceThread.projectId,
+            environmentID: environment.id,
+            shell: shellsByEnvironmentID[environment.id]
+        )
+        let threadID = UUID().uuidString
+        _ = try await client.createThread(
+            threadID: threadID,
+            projectID: sourceThread.projectId,
+            title: implementation.newThreadTitle,
+            model: model,
+            runtimeMode: .fullAccess,
+            interactionMode: .default,
+            branch: sourceThread.branch,
+            worktreePath: sourceThread.worktreePath
+        )
+        do {
+            try await sendPlanImplementation(
+                implementation,
+                threadID: threadID,
+                sourceThreadID: source.wireID,
+                client: client,
+                environmentID: environment.id,
+                generation: generation
+            )
+        } catch {
+            // Web's cleanup: an implementation thread that never started is noise.
+            _ = try? await client.delete(threadID: threadID)
+            throw error
+        }
+        registerProvisionalThread(wireID: threadID, environmentID: environment.id)
+        try? await refresh(client: client)
+        let uiID = FeatureScopedID.thread(environmentID: environment.id, wireID: threadID)
+        return latestSnapshot?.threads.first { $0.id == uiID } ?? FeatureThread(
+            id: uiID,
+            wireID: threadID,
+            projectID: FeatureScopedID.project(environmentID: environment.id, wireID: sourceThread.projectId),
+            environmentID: environment.id,
+            environmentName: environment.label,
+            title: implementation.newThreadTitle,
+            providerID: model.instanceId,
+            providerName: providerDisplayName(model.instanceId),
+            modelID: model.model
+        )
+    }
+
+    /// The implementation turn, carrying the plan and naming it as its source.
+    /// A failure the server committed anyway is a success, as for any send.
+    private func sendPlanImplementation(
+        _ implementation: FeatureProposedPlanImplementation,
+        threadID: String,
+        sourceThreadID: String,
+        client: T3Client,
+        environmentID: String,
+        generation: Int
+    ) async throws {
+        let messageID = UUID().uuidString
+        do {
+            _ = try await client.sendTurn(
+                threadID: threadID,
+                text: implementation.prompt,
+                model: implementation.selection.map(coreModelSelection),
+                sourcePlan: OrchestrationSourcePlanRef(threadID: sourceThreadID, planID: implementation.planID),
+                messageID: messageID
+            )
+        } catch {
+            guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
+                throw CancellationError()
+            }
+            guard await messageWasCommitted(client: client, threadID: threadID, messageID: messageID) else {
+                throw error
+            }
+        }
+        guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
+            throw CancellationError()
+        }
+    }
+
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity,
+        steer: FeatureSteerTarget?
+    ) async throws {
+        try await sendMessageResolved(
+            threadID: threadID,
+            text: text,
+            selection: selection,
+            attachments: attachments,
+            submissionIdentity: identity,
+            steer: steer
+        )
+    }
+
     private func sendMessageResolved(
         threadID: String,
         text: String,
         selection: FeatureSelection?,
         attachments: [FeatureUploadAttachment],
-        submissionIdentity: FeatureSubmissionIdentity?
+        submissionIdentity: FeatureSubmissionIdentity?,
+        steer: FeatureSteerTarget? = nil
     ) async throws {
         let route = try threadRoute(for: threadID)
         let client = route.client
@@ -2007,6 +2175,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 text: text,
                 model: model,
                 attachments: uploads,
+                // The shell is live, so a steer whose run just ended goes out
+                // as an ordinary send instead of being rejected.
+                dispatchMode: ComposerFollowUp.dispatchMode(steer: steer, liveActiveRunID: shellThread.activeRunId),
                 commandID: pending.identity.commandID,
                 messageID: pending.identity.messageID
             )
@@ -2098,6 +2269,41 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
         approvalRoutes[id] = nil
         removeCachedApproval(id: id, threadID: route.uiID)
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    func answerSecretRequest(
+        threadID: String,
+        sourceThreadID: String,
+        turnItemID: String,
+        answer: SecretRequestAnswer
+    ) async throws {
+        let route = try threadRoute(for: threadID)
+        do {
+            try await requireScope(AuthScope.orchestrationOperate, client: route.client)
+        } catch {
+            throw SecretRequestPermissionMissing()
+        }
+        try await route.client.answerSecretRequest(threadID: sourceThreadID, turnItemID: turnItemID, answer: answer)
+        try? await refreshThread(id: route.uiID, client: route.client)
+    }
+
+    func updateLimitRecovery(
+        threadID: String,
+        runID: String,
+        resetAt: String,
+        autoResume: Bool?,
+        snooze: Bool?
+    ) async throws {
+        let route = try threadRoute(for: threadID)
+        try await requireScope(AuthScope.orchestrationOperate, client: route.client)
+        try await route.client.dispatch(OrchestrationCommands.updateLimitRecovery(
+            threadID: route.wireID,
+            runID: runID,
+            resetAt: resetAt,
+            autoResume: autoResume,
+            snooze: snooze
+        ))
         try? await refreshThread(id: route.uiID, client: route.client)
     }
 
@@ -2242,6 +2448,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             isTruncated: result.truncated,
             totalBytes: result.byteLength
         )
+    }
+
+    func writeThreadFile(threadID: String, path: String, contents: String) async throws -> String {
+        let route = try threadRoute(for: threadID)
+        let context = try workspaceContext(route: route)
+        try await requireScope(AuthScope.filesystemWrite, client: route.client)
+        return try await route.client.writeProjectFile(cwd: context.cwd, relativePath: path, contents: contents).relativePath
     }
 
     func loadReview(threadID: String) async throws -> FeatureReview {
@@ -4779,6 +4992,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs),
             page: incoming.page,
             timelineItems: incoming.timelineItems,
+            checkpoints: incoming.checkpoints,
             timelineRuns: incoming.timelineRuns,
             itemSupport: incoming.itemSupport,
             subagentChildThreadIDs: incoming.subagentChildThreadIDs,
@@ -5092,10 +5306,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         // `preview` — leaving them lossy here made the open thread alternate
         // between two shapes (and sometimes two shelves) as the shell and
         // detail streams took turns publishing.
-        if let latestVisible = messages.last {
-            mappedThread.preview = previewText(latestVisible.text)
+        let clearedAt = mappedThread.timelineClearedAt
+        if let latestVisible = messages.last(where: { !ThreadTimelineClear.hides($0.createdAt, clearedAt: clearedAt) }) {
+            mappedThread.preview = previewText(latestVisible.role == .user ? UserMessageContent.previewText(latestVisible.text) : latestVisible.text)
             mappedThread.previewIsFromUser = latestVisible.role == .user
+        } else if clearedAt != nil {
+            mappedThread.preview = nil
         }
+        // The projection's thread carries no plan state; the shell's verdict
+        // keeps the plan banner from flickering as the two streams alternate.
+        mappedThread.hasActionableProposedPlan = shellsByEnvironmentID[environment.id]?.threads
+            .first(where: { $0.id == projection.thread.id })?.hasActionableProposedPlan
         // Same formula as `lastActivityDate`: real activity wins; the mapper's
         // own value (run completion, else the `updatedAt` floor) is the
         // fallback.
@@ -5112,6 +5333,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             userInputs: userInputs,
             page: page,
             timelineItems: timelineItems,
+            checkpoints: projection.checkpoints,
             timelineRuns: projection.runs.map(Self.timelineRun),
             itemSupport: itemSupport,
             subagentChildThreadIDs: subagentChildThreadIDs,
@@ -5231,7 +5453,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             )
         }
 
-        return FeatureThreadWorkflow(
+        var workflow = FeatureThreadWorkflow(
             backgroundWorkStopRunID: projection.backgroundWorkStopRunID,
             appThreadID: projection.thread.id,
             activeProviderThreadID: projection.thread.activeProviderThreadId,
@@ -5255,6 +5477,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 parseDate: parseValidDate
             )
         )
+        workflow.usageLimit = ThreadUsageLimits.resolve(projection)
+        return workflow
     }
 
     /// The open thread as the relationship graph reads it.
@@ -5341,7 +5565,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
         switch item.payload {
         case let .userMessage(_, _, text, attachments):
-            return FeatureMessage(
+            var mapped = FeatureMessage(
                 id: item.id,
                 role: .user,
                 text: text,
@@ -5361,6 +5585,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 // from the reader's own, matching the RN feed.
                 createdBy: item.base.createdBy
             )
+            mapped.senderThreadID = item.senderThreadId.map {
+                FeatureScopedID.thread(environmentID: environmentID, wireID: $0)
+            }
+            return mapped
 
         case let .assistantMessage(messageID, text, streaming):
             return message(.assistant, text, state: streaming ? .streaming : .complete, wireMessageID: messageID)
@@ -5451,7 +5679,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             // than leaving a hole in the transcript.
             return message(.system, "", tool: type.replacingOccurrences(of: "_", with: " "))
 
-        case .approvalRequest, .userInputRequest:
+        case .approvalRequest, .userInputRequest, .secretRequest:
             // Rendered as cards above the composer, not as transcript rows.
             return nil
         }
@@ -5466,7 +5694,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environment: Environment
     ) -> FeatureThread {
         let isRunning = latestRun.map { $0.completedAt == nil } ?? false
-        return FeatureThread(
+        var mapped = FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -5544,6 +5772,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode)
         )
+        mapped.timelineClearedAt = thread.timelineClearedAt.flatMap(parseValidDate)
+        mapped.lastVisitedAt = thread.lastVisitedAt.flatMap(parseValidDate)
+        mapped.supportsVisitedTracking = environment.descriptor?.capabilities.threadVisitedTracking
+        mapped.supportsPinReorder = environment.descriptor?.capabilities.threadPinReorder
+        // The projection carries no failure class; the shell does. Read only
+        // for a failed run, so streaming rebuilds skip the lookup.
+        if latestRun?.status == "failed" {
+            mapped.lastErrorClass = shellsByEnvironmentID[environment.id]?.threads
+                .first(where: { $0.id == thread.id })?.lastErrorClass
+        }
+        return mapped
     }
 
     /// The wire's project id is environment-local; every other project
@@ -5635,7 +5874,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationV2ThreadShell,
         environment: Environment
     ) -> FeatureThread {
-        FeatureThread(
+        let clearedAt = thread.timelineClearedAt.flatMap(parseValidDate)
+        var mapped = FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -5645,7 +5885,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environmentID: environment.id,
             environmentName: environment.label,
             title: thread.title,
-            preview: previewText(thread.latestVisibleMessage?.text),
+            // A message from before a clear is not what the chat says now.
+            preview: ThreadTimelineClear.hides(
+                thread.latestVisibleMessage.flatMap { parseValidDate($0.updatedAt) },
+                clearedAt: clearedAt
+            ) ? nil : previewText(thread.latestVisibleMessage.map { $0.role == "user" ? UserMessageContent.previewText($0.text) : $0.text }),
             previewIsFromUser: thread.latestVisibleMessage?.role == "user",
             branch: thread.branch,
             worktreePath: thread.worktreePath,
@@ -5731,6 +5975,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             interactionMode: mapInteractionMode(thread.interactionMode),
             archiveBlockedByLiveRun: !ThreadArchive.canArchive(shell: thread)
         )
+        mapped.timelineClearedAt = clearedAt
+        mapped.lastVisitedAt = thread.lastVisitedAt.flatMap(parseValidDate)
+        mapped.supportsVisitedTracking = environment.descriptor?.capabilities.threadVisitedTracking
+        mapped.lastErrorClass = thread.lastErrorClass
+        mapped.supportsPinReorder = environment.descriptor?.capabilities.threadPinReorder
+        return mapped
     }
 
 
@@ -6905,6 +7155,7 @@ private struct CommandIdentity: Equatable {
 private struct ProjectionItemSupportIndex {
     private let runs: [String: OrchestrationV2Run]
     private let attemptsByRunID: [String: [OrchestrationV2RunAttempt]]
+    private let attemptResolver: ThreadTimelineAttemptResolver
     private let nodes: [String: OrchestrationV2ExecutionNode]
     private let providerSessions: [String: OrchestrationV2ProviderSession]
     private let providerThreads: [String: OrchestrationV2ProviderThread]
@@ -6920,6 +7171,7 @@ private struct ProjectionItemSupportIndex {
         // occurrence matches `Array.find`, which is what the RN client does.
         runs = Self.index(projection.runs)
         attemptsByRunID = Dictionary(grouping: projection.attempts, by: \.runId)
+        attemptResolver = ThreadTimelineAttemptResolver(attempts: projection.attempts, nodes: projection.nodes)
         nodes = Self.index(projection.nodes)
         providerSessions = Self.index(projection.providerSessions)
         providerThreads = Self.index(projection.providerThreads)
@@ -6961,7 +7213,7 @@ private struct ProjectionItemSupportIndex {
         }
         let contextTransfer = contextHandoff?.transferId.flatMap { contextTransfers[$0] }
 
-        return ThreadActivityItemSupport(
+        var support = ThreadActivityItemSupport(
             run: item.base.runId
                 .flatMap { runs[$0] }
                 .map { ThreadActivityItemSupport.Run(status: $0.status) },
@@ -6981,7 +7233,8 @@ private struct ProjectionItemSupportIndex {
                 ThreadActivityItemSupport.ProviderSession(
                     status: $0.status,
                     model: $0.model,
-                    cwd: $0.cwd ?? ""
+                    cwd: $0.cwd ?? "",
+                    fork: ThreadForkCapabilities($0.capabilities)
                 )
             },
             providerThread: providerThread.map {
@@ -7031,6 +7284,8 @@ private struct ProjectionItemSupportIndex {
                 )
             }
         )
+        support.attempt = attemptResolver.attempt(for: item)
+        return support
     }
 
     private static func index<Row: Identifiable>(

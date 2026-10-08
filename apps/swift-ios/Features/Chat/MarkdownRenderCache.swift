@@ -41,6 +41,7 @@ enum MarkdownInlineStyle: String, Hashable, Sendable {
     case heading4
     case tableHeader
     case tableCell
+    case detailsSummary
 
     var font: Font {
         switch self {
@@ -49,7 +50,7 @@ enum MarkdownInlineStyle: String, Hashable, Sendable {
         case .heading2: T3Typography.threadHeading2
         case .heading3: T3Typography.threadHeading3
         case .heading4: T3Typography.threadHeading4
-        case .tableHeader: T3Typography.threadBody.weight(.semibold)
+        case .tableHeader, .detailsSummary: T3Typography.threadBody.weight(.semibold)
         case .tableCell: T3Typography.threadBody
         }
     }
@@ -68,10 +69,28 @@ enum MarkdownInlineStyle: String, Hashable, Sendable {
 final class MarkdownRenderedInline: @unchecked Sendable {
     let attributedText: AttributedString
     let style: MarkdownInlineStyle
+    /// This run with skill chips, for the catalog it was last styled for; a
+    /// nil value means it names no skill. Read and written on the main actor.
+    private var skillChipMemo: (catalog: MarkdownSkillCatalog, value: MarkdownRenderedInline?)?
 
     init(attributedText: AttributedString, style: MarkdownInlineStyle) {
         self.attributedText = attributedText
         self.style = style
+    }
+
+    /// The same styled run on every call for one catalog, so equatable rows
+    /// holding it still skip their body.
+    @MainActor
+    func skillChips(
+        for catalog: MarkdownSkillCatalog,
+        make: (AttributedString) -> AttributedString?
+    ) -> MarkdownRenderedInline {
+        if let memo = skillChipMemo, memo.catalog === catalog { return memo.value ?? self }
+        let value = attributedText.characters.contains("$")
+            ? make(attributedText).map { MarkdownRenderedInline(attributedText: $0, style: style) }
+            : nil
+        skillChipMemo = (catalog, value)
+        return value ?? self
     }
 }
 
@@ -96,10 +115,14 @@ struct MarkdownRenderedTable: Equatable, @unchecked Sendable {
     /// Estimated per-column widths, computed once on the render task so the
     /// table view never measures cell text on the main thread.
     let columnWidths: [CGFloat]
+    /// The cells as written, for Copy as Markdown. Nil where a table is built
+    /// without its source.
+    var source: MarkdownTable? = nil
 
     static func estimatedColumnWidths(
         header: [MarkdownRenderedInline],
-        rows: [[MarkdownRenderedInline]]
+        rows: [[MarkdownRenderedInline]],
+        maximum: CGFloat = 300
     ) -> [CGFloat] {
         let cells = [header] + rows
         return header.indices.map { columnIndex in
@@ -116,8 +139,26 @@ struct MarkdownRenderedTable: Equatable, @unchecked Sendable {
             // Deliberately an estimate rather than text measurement. Exact
             // widths would require laying every cell out twice. The floor is
             // low so a column of "Yes"/"No" doesn't push the table off screen.
-            return min(300, max(72, CGFloat(longestLine) * 8.25))
+            return min(maximum, max(72, CGFloat(longestLine) * 8.25))
         }
+    }
+}
+
+struct MarkdownRenderedDetails: Equatable, @unchecked Sendable {
+    let summary: MarkdownRenderedInline
+    let isOpen: Bool
+    let blocks: [MarkdownRenderedBlock]
+    let terminated: Bool
+    /// Position among the message's sections in document order. Streaming
+    /// only appends, so it names the same section across revisions.
+    let ordinal: Int
+
+    func replacingBlocks(_ blocks: [MarkdownRenderedBlock]) -> Self {
+        Self(summary: summary, isOpen: isOpen, blocks: blocks, terminated: terminated, ordinal: ordinal)
+    }
+
+    func replacingSummary(_ summary: MarkdownRenderedInline) -> Self {
+        Self(summary: summary, isOpen: isOpen, blocks: blocks, terminated: terminated, ordinal: ordinal)
     }
 }
 
@@ -135,7 +176,13 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     /// posted in, which this render task does not know, and loading happens on
     /// the main actor once the block is on screen.
     case image(MarkdownInlineImage)
-    case codeBlock(language: String?, code: String, citationRange: NSRange? = nil)
+    case codeBlock(
+        language: String?,
+        code: String,
+        citationRange: NSRange? = nil,
+        title: String? = nil,
+        terminated: Bool = true
+    )
     /// Carried through unrendered: the embed's document is assembled on the
     /// main actor from the current colour scheme, which this render task does
     /// not know and must not capture.
@@ -144,6 +191,7 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
     /// assembled on the main actor for the current colour scheme.
     case mermaid(source: String, terminated: Bool, citationRange: NSRange? = nil)
     case artifactTemplate(CodexArtifactTemplate)
+    case details(MarkdownRenderedDetails)
     case thematicBreak
 }
 
@@ -151,10 +199,14 @@ indirect enum MarkdownRenderedBlock: Equatable, @unchecked Sendable {
 final class MarkdownRenderedDocument: @unchecked Sendable {
     let revision: MarkdownContentRevision
     let blocks: [MarkdownRenderedBlock]
+    /// Whether any text could name a skill; most messages never pay for the
+    /// skill-chip pass.
+    let mayContainSkills: Bool
 
     init(revision: MarkdownContentRevision, blocks: [MarkdownRenderedBlock]) {
         self.revision = revision
         self.blocks = blocks
+        mayContainSkills = revision.source.utf8.contains(UInt8(ascii: "$"))
     }
 }
 
@@ -424,14 +476,17 @@ final class MarkdownRenderCache: @unchecked Sendable {
     private func renderDocument(_ revision: MarkdownContentRevision) -> MarkdownRenderedDocument? {
         guard !Task.isCancelled else { return nil }
         let document = MarkdownDocument(parsing: revision.source)
-        guard !Task.isCancelled, let blocks = renderBlocks(document.blocks) else { return nil }
+        var detailsCount = 0
+        guard !Task.isCancelled, let blocks = renderBlocks(document.blocks, detailsCount: &detailsCount) else { return nil }
         return MarkdownRenderedDocument(
             revision: revision,
             blocks: blocks
         )
     }
 
-    private func renderBlocks(_ blocks: [MarkdownBlock]) -> [MarkdownRenderedBlock]? {
+    /// `detailsCount` numbers `<details>` sections in document order across
+    /// the whole message, nested ones included.
+    private func renderBlocks(_ blocks: [MarkdownBlock], detailsCount: inout Int) -> [MarkdownRenderedBlock]? {
         var renderedBlocks: [MarkdownRenderedBlock] = []
         renderedBlocks.reserveCapacity(blocks.count)
         for block in blocks {
@@ -452,19 +507,19 @@ final class MarkdownRenderCache: @unchecked Sendable {
                 )
 
             case let .unorderedList(items):
-                guard let items = renderItems(items) else { return nil }
+                guard let items = renderItems(items, detailsCount: &detailsCount) else { return nil }
                 rendered = .unorderedList(items)
 
             case let .orderedList(start, items):
-                guard let items = renderItems(items) else { return nil }
+                guard let items = renderItems(items, detailsCount: &detailsCount) else { return nil }
                 rendered = .orderedList(start: start, items: items)
 
             case let .blockquote(document):
-                guard let blocks = renderBlocks(document.blocks) else { return nil }
+                guard let blocks = renderBlocks(document.blocks, detailsCount: &detailsCount) else { return nil }
                 rendered = .blockquote(blocks)
 
             case let .githubAlert(kind, document):
-                guard let blocks = renderBlocks(document.blocks) else { return nil }
+                guard let blocks = renderBlocks(document.blocks, detailsCount: &detailsCount) else { return nil }
                 rendered = .githubAlert(kind: kind, blocks: blocks)
 
             case let .table(table):
@@ -474,9 +529,9 @@ final class MarkdownRenderCache: @unchecked Sendable {
             case let .image(image):
                 rendered = .image(image)
 
-            case let .codeBlock(language, code):
+            case let .codeBlock(language, code, title, terminated):
                 prepareCodeHighlight(language: language, code: code)
-                rendered = .codeBlock(language: language, code: code)
+                rendered = .codeBlock(language: language, code: code, title: title, terminated: terminated)
 
             case let .htmlEmbed(html, terminated):
                 rendered = .htmlEmbed(html: html, terminated: terminated)
@@ -486,6 +541,19 @@ final class MarkdownRenderCache: @unchecked Sendable {
 
             case let .artifactTemplate(template):
                 rendered = .artifactTemplate(template)
+
+            case let .details(details):
+                let ordinal = detailsCount
+                detailsCount += 1
+                guard let summary = renderInline(details.summary ?? "Details", style: .detailsSummary),
+                      let blocks = renderBlocks(details.content.blocks, detailsCount: &detailsCount) else { return nil }
+                rendered = .details(MarkdownRenderedDetails(
+                    summary: summary,
+                    isOpen: details.isOpen,
+                    blocks: blocks,
+                    terminated: details.terminated,
+                    ordinal: ordinal
+                ))
 
             case .thematicBreak:
                 rendered = .thematicBreak
@@ -523,15 +591,16 @@ final class MarkdownRenderCache: @unchecked Sendable {
             columnWidths: MarkdownRenderedTable.estimatedColumnWidths(
                 header: header,
                 rows: rows
-            )
+            ),
+            source: table
         )
     }
 
-    private func renderItems(_ items: [MarkdownListItem]) -> [MarkdownRenderedListItem]? {
+    private func renderItems(_ items: [MarkdownListItem], detailsCount: inout Int) -> [MarkdownRenderedListItem]? {
         var renderedItems: [MarkdownRenderedListItem] = []
         renderedItems.reserveCapacity(items.count)
         for item in items {
-            guard !Task.isCancelled, let blocks = renderBlocks(item.blocks) else { return nil }
+            guard !Task.isCancelled, let blocks = renderBlocks(item.blocks, detailsCount: &detailsCount) else { return nil }
             renderedItems.append(MarkdownRenderedListItem(task: item.task, blocks: blocks))
         }
         return renderedItems

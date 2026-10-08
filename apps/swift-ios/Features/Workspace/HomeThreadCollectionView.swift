@@ -58,6 +58,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     /// The row's Auto-settle behavior choice: true returns the thread to the
     /// usual settlement rules, false keeps it out of Settled.
     var onSetAutoSettle: (FeatureThread, Bool) -> Void = { _, _ in }
+    /// Mark as Read (true) or Mark as Unread (false), from the menu or swipe.
+    var onSetRead: (FeatureThread, Bool) -> Void = { _, _ in }
     /// Message-content matches for the current query, by thread id. Title
     /// matching already happened in `presentation`; these add the excerpt.
     var contentMatches: [String: FeatureThreadSearchMatch] = [:]
@@ -451,6 +453,19 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 snooze.backgroundColor = .systemIndigo
                 actions.append(snooze)
             }
+            // Mail's Unread swipe, innermost so a full swipe still pins.
+            let now = Date.now
+            if thread.canMarkRead(at: now) || thread.canMarkUnread {
+                let markRead = thread.canMarkRead(at: now)
+                let read = UIContextualAction(style: .normal, title: markRead ? "Read" : "Unread") {
+                    [weak self] _, _, finish in
+                    self?.parent.onSetRead(thread, markRead)
+                    finish(true)
+                }
+                read.image = UIImage(systemName: markRead ? "envelope.open.fill" : "envelope.badge.fill")
+                read.backgroundColor = .systemBlue
+                actions.append(read)
+            }
             guard !actions.isEmpty else { return nil }
             let configuration = UISwipeActionsConfiguration(actions: actions)
             configuration.performsFirstActionWithFullSwipe = true
@@ -711,29 +726,12 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         private func menuActions(for thread: FeatureThread, isArchived: Bool) -> [UIMenuElement] {
             let now = Date.now
             let context = ThreadRowMenuContext(
+                thread: thread,
                 isArchived: isArchived,
-                canTogglePin: thread.canTogglePin,
-                isPinned: thread.pinnedAt != nil,
-                isSettled: thread.canShelveSettled && thread.isEffectivelySettled(
-                    at: now,
-                    changeRequest: parent.changeRequests[thread.id]
-                ),
-                isSnoozed: thread.canShelveSnoozed && thread.isEffectivelySnoozed(at: now),
-                canSnooze: thread.state != .queued
-                    && thread.state != .waitingForApproval
-                    && thread.state != .waitingForInput,
                 offersParking: parent.workspace != .chat,
-                settlementSupported: thread.canShelveSettled,
-                snoozeSupported: thread.canShelveSnoozed,
-                autoSettleSupported: thread.supportsAutoSettleOptOut == true,
-                autoSettleEnabled: thread.autoSettleDisabledAt == nil,
-                hasWorktreePath: ThreadCopy.value(for: .path, on: thread) != nil,
-                hasBranch: ThreadCopy.value(for: .branch, on: thread) != nil,
-                titleRegenerationSupported: thread.canRegenerateTitle,
-                isRegeneratingTitle: thread.isRegeneratingTitle,
-                canArchive: thread.canArchive,
-                isGeneratingHandoffScript: parent.generatingHandoffIDs.contains(thread.id),
-                snoozedUntil: thread.snoozedUntil
+                now: now,
+                changeRequest: parent.changeRequests[thread.id],
+                isGeneratingHandoffScript: parent.generatingHandoffIDs.contains(thread.id)
             )
 
             // One inline `UIMenu` per section, so the separators the menu data
@@ -849,6 +847,10 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 parent.onSetAutoSettle(thread, true)
             case ThreadRowMenuActions.autoSettleDisabledActionID:
                 parent.onSetAutoSettle(thread, false)
+            case ThreadRowMenuActions.markReadActionID:
+                parent.onSetRead(thread, true)
+            case ThreadRowMenuActions.markUnreadActionID:
+                parent.onSetRead(thread, false)
             case ThreadRowMenuActions.copyHandoffScriptActionID:
                 parent.onCopyHandoffScript(thread)
             case ThreadRowMenu.regenerateTitleActionID:

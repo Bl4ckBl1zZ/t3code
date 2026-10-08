@@ -193,7 +193,14 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         /// automatic settlement off (or back on) for one thread.
         public var threadAutoSettleOptOut: Bool? = nil
         public let threadSnooze: Bool?
+        /// Whether the server takes `thread.visit` / `thread.mark-unread` and
+        /// projects `lastVisitedAt` on shells. Absent means no read state: the
+        /// client never sends either command.
+        public var threadVisitedTracking: Bool? = nil
         public let threadPinning: Bool?
+        /// Whether `thread.metadata.update` accepts `pinOrderKey`, arranging
+        /// the pinned run. Older servers keep fresh pins keyless.
+        public var threadPinReorder: Bool? = nil
         public let threadActiveOrderV2: Bool?
         public let threadQuestionActionsV2: Bool?
         public let threadTitleRegeneration: Bool?
@@ -239,7 +246,9 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case threadAutoSettleOptOut
             case threadSettlement
             case threadSnooze
+            case threadVisitedTracking
             case threadPinning, threadActiveOrderV2, threadQuestionActionsV2
+            case threadPinReorder
             case threadTitleRegeneration
             case threadPullRequestLinking
             case threadPullRequestsV2
@@ -274,7 +283,9 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             threadAutoSettleOptOut = try container.decodeIfPresent(Bool.self, forKey: .threadAutoSettleOptOut)
             threadSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadSettlement)
             threadSnooze = try container.decodeIfPresent(Bool.self, forKey: .threadSnooze)
+            threadVisitedTracking = try container.decodeIfPresent(Bool.self, forKey: .threadVisitedTracking)
             threadPinning = try container.decodeIfPresent(Bool.self, forKey: .threadPinning)
+            threadPinReorder = try container.decodeIfPresent(Bool.self, forKey: .threadPinReorder)
             threadQuestionActionsV2 = try container.decodeIfPresent(Bool.self, forKey: .threadQuestionActionsV2)
             threadActiveOrderV2 = try container.decodeIfPresent(Bool.self, forKey: .threadActiveOrderV2)
             threadTitleRegeneration = try container.decodeIfPresent(

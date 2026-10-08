@@ -792,6 +792,9 @@ public actor WebSocketRPCClient {
         if value?["_tag"]?.stringValue == "McpAppRequestError", let reason = value?["reason"]?.stringValue {
             return .remote(McpAppRequestErrorReason.message(for: reason))
         }
+        if value?["_tag"]?.stringValue == "SecretRequestError", let reason = value?["reason"]?.stringValue {
+            return .remote(SecretRequestFailure.message(for: reason))
+        }
         // A missing split-off permission says how to get it instead of naming it.
         let message = value?["requiredPermission"]?.stringValue
             .flatMap(AuthPermissionRequired.init)?.errorDescription

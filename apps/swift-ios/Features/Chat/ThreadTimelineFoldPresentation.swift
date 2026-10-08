@@ -8,9 +8,14 @@ enum ThreadTimelineFoldPresentation {
         let hiddenCitationRunIDs: [String: String]
     }
 
+    /// - Parameter expandedRunIDs: Open turn folds by run id, and open
+    ///   superseded-attempt folds by `ThreadAttemptFold.expansionKey`.
     static func apply(entries: [ThreadTimelineEntry], detail: FeatureThreadDetail,
                       expandedRunIDs: Set<String>, alwaysExpand: Bool) -> Result {
-        guard !alwaysExpand else { return Result(entries: entries, hiddenCitationRunIDs: [:]) }
+        // Superseded attempts fold even when activity is always expanded.
+        let attempts = ThreadAttemptFolding.apply(entries: entries, detail: detail, expandedKeys: expandedRunIDs)
+        let entries = attempts.entries
+        guard !alwaysExpand else { return Result(entries: entries, hiddenCitationRunIDs: attempts.hiddenCitationKeys) }
         var itemsByID: [String: OrchestrationV2TurnItem] = [:]
         var interruptedRunIDs = Set<String>()
         for projected in detail.timelineItems {
@@ -32,8 +37,13 @@ enum ThreadTimelineFoldPresentation {
             case let .mcpApp(app):
                 // Grouped with its run so the fold counts around it, never hidden.
                 return ThreadTurnFoldItem(id: entry.id, runID: app.runID, kind: .persistent, date: entry.date)
+            case let .proposedPlan(plan):
+                // Like an app: counted with its run, never folded away.
+                return ThreadTurnFoldItem(id: entry.id, runID: plan.plan.runID, kind: .persistent, date: entry.date)
             case .lifecycle, .dayDivider, .turnFold:
                 return ThreadTurnFoldItem(id: entry.id, runID: nil, kind: .persistent, date: entry.date)
+            case let .structural(row):
+                return row.turnFoldItem(entryID: entry.id, date: entry.date)
             }
         }
         let runs = detail.workflow.runs.map { run in
@@ -46,7 +56,7 @@ enum ThreadTimelineFoldPresentation {
         var foldsByHiddenID: [String: ThreadTurnFold] = [:]
         for fold in folds { for id in fold.hiddenIDs { foldsByHiddenID[id] = fold } }
         var result: [ThreadTimelineEntry] = []
-        var hiddenCitationRunIDs: [String: String] = [:]
+        var hiddenCitationRunIDs = attempts.hiddenCitationKeys
         var pendingDivider: ThreadTimelineEntry?
         func append(_ entry: ThreadTimelineEntry) {
             if let divider = pendingDivider { result.append(divider); pendingDivider = nil }

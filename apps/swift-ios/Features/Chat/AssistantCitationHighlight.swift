@@ -75,9 +75,13 @@ enum MarkdownCitationHighlight {
                 case .table(let table):
                     let header = cells(table.header)
                     let rows = table.rows.map { row in offset += 1; return cells(row) }
-                    return .table(MarkdownRenderedTable(header: header, alignments: table.alignments, rows: rows, columnWidths: table.columnWidths))
-                case .codeBlock(let language, let code, _):
-                    return .codeBlock(language: language, code: code, citationRange: localRange(code))
+                    return .table(MarkdownRenderedTable(header: header, alignments: table.alignments, rows: rows, columnWidths: table.columnWidths, source: table.source))
+                case .codeBlock(let language, let code, _, let title, let terminated):
+                    return .codeBlock(language: language, code: code, citationRange: localRange(code), title: title, terminated: terminated)
+                case .details(let details):
+                    let summary = inline(details.summary)
+                    offset += 1
+                    return .details(details.replacingSummary(summary).replacingBlocks(walk(details.blocks)))
                 case .mermaid(let source, let terminated, _):
                     return .mermaid(source: source, terminated: terminated, citationRange: localRange(source))
                 case .image, .htmlEmbed, .artifactTemplate, .thematicBreak: return block

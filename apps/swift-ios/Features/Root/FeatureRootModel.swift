@@ -84,6 +84,8 @@ public final class FeatureRootModel {
     /// The Undo notice for archive, settle, snooze and unpin. Every entry
     /// point goes through the setters below, so each one gets it.
     let threadUndo = ThreadUndoCenter()
+    /// Which read watermarks the open thread already sent. See ``ThreadVisitTracker``.
+    let threadVisits = ThreadVisitTracker()
 
     let client: any FeatureClient
     private let outboxStore: FeatureOutboxStore
@@ -558,6 +560,7 @@ public final class FeatureRootModel {
     @discardableResult
     public func setPinned(_ id: String, pinned: Bool, orderKey: String? = nil) async -> Bool {
         let environment = currentEnvironmentIdentity
+        let orderKey = orderKey ?? freshPinOrderKey(id, pinned: pinned)
         let previousOrderKey = pinned ? nil : snapshot.threads.first(where: { $0.id == id })?.pinOrderKey
         let claim = pinned ? nil : threadUndo.begin(.pin, threadID: id)
         if pinned { threadUndo.invalidate(.pin, threadID: id) }
@@ -762,7 +765,8 @@ public final class FeatureRootModel {
         // Behind a running turn the server queues the message, and the strip
         // above the composer shows it; the transcript gets it when its run
         // starts. The local row is only for a send the server hasn't taken.
-        let waitsInServerQueue = queuesBehindRunningTurn(submission.threadID)
+        // A steer joins the running turn, so it shows in the transcript at once.
+        let waitsInServerQueue = submission.steer == nil && queuesBehindRunningTurn(submission.threadID)
         let optimistic = FeatureMessage(
             id: identity.messageID,
             role: .user,
@@ -800,7 +804,8 @@ public final class FeatureRootModel {
                 text: trimmed,
                 selection: submission.selection,
                 attachments: uploads,
-                identity: identity
+                identity: identity,
+                steer: submission.steer
             )
             if !(await completeQueuedSubmission(queued)) {
                 scheduleOutboxRetry()
@@ -901,7 +906,7 @@ public final class FeatureRootModel {
     }
 
     @discardableResult
-    private func perform(
+    func perform(
         reportError: Bool = true,
         failureTitle: String? = nil,
         _ operation: () async throws -> Void
@@ -933,7 +938,7 @@ public final class FeatureRootModel {
         return message == "cancelled" || message == "canceled"
     }
 
-    private var currentEnvironmentIdentity: String {
+    var currentEnvironmentIdentity: String {
         let active = snapshot.environments.first(where: \.isActive)
         return [
             active?.id,
@@ -1044,7 +1049,7 @@ public final class FeatureRootModel {
         }
     }
 
-    private func mutateThread(
+    func mutateThread(
         id: String,
         _ mutation: (inout FeatureThread) -> Void
     ) {
@@ -1083,6 +1088,7 @@ public final class FeatureRootModel {
                 page: prepared.page
             )
             merged.timelineItems = prepared.timelineItems
+            merged.checkpoints = prepared.checkpoints
             merged.timelineRuns = prepared.timelineRuns
             merged.itemSupport = prepared.itemSupport
             merged.subagentChildThreadIDs = prepared.subagentChildThreadIDs

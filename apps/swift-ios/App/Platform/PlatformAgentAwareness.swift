@@ -134,6 +134,8 @@ enum PlatformAgentAwarenessProjection {
             guard !thread.isArchived else { return false }
             if isActive(thread.state) { return true }
             guard thread.state == .completed || thread.state == .failed else { return false }
+            // A result the user already looked at is not news.
+            if thread.state == .completed, thread.hasSeenLatestCompletion { return false }
             return now.timeIntervalSince(thread.updatedAt) <= terminalVisibilityWindow
         }
         let rows = eligible.compactMap { thread -> T3RelayAgentActivityAggregateRow? in
@@ -152,7 +154,7 @@ enum PlatformAgentAwarenessProjection {
                     snapshot: snapshot
                 ),
                 phase: phase,
-                status: status(for: thread.state),
+                status: thread.isUsageLimited ? "Limited" : status(for: thread.state),
                 updatedAt: thread.updatedAt.ISO8601Format(),
                 deepLink: PlatformRoute.thread(
                     environmentID: environmentID,

@@ -284,6 +284,19 @@ final class CoreContractTests: XCTestCase {
 
         let withoutModel = try OrchestrationCommands.sendTurn(threadID: "thread-1", text: "Go")
         XCTAssertNil(withoutModel["modelSelection"])
+        XCTAssertNil(withoutModel["sourcePlanRef"])
+    }
+
+    func testSendTurnNamesThePlanItImplements() throws {
+        let command = try OrchestrationCommands.sendTurn(
+            threadID: "thread-2",
+            text: "PLEASE IMPLEMENT THIS PLAN:\n# Ship it",
+            sourcePlan: OrchestrationSourcePlanRef(threadID: "thread-1", planID: "plan-1")
+        )
+        XCTAssertEqual(command["sourcePlanRef"], .object([
+            "threadId": .string("thread-1"),
+            "planId": .string("plan-1"),
+        ]))
     }
 
     func testDispatchModesMatchTheContractUnion() throws {

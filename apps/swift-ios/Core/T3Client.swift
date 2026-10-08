@@ -521,6 +521,7 @@ public actor T3Client {
         model: ModelSelection? = nil,
         attachments: [UploadChatAttachment] = [],
         dispatchMode: MessageDispatchMode = .startImmediately,
+        sourcePlan: OrchestrationSourcePlanRef? = nil,
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString
     ) async throws -> DispatchResult {
@@ -536,6 +537,7 @@ public actor T3Client {
                 model: model,
                 attachments: persisted,
                 dispatchMode: dispatchMode,
+                sourcePlan: sourcePlan,
                 commandID: commandID,
                 messageID: messageID
             )
@@ -836,6 +838,26 @@ public actor T3Client {
         )
     }
 
+    public func forkThread(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String,
+        latestOnly: Bool,
+        title: String?,
+        commandID: String = UUID().uuidString
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.forkThread(
+                sourceThreadID: sourceThreadID,
+                targetThreadID: targetThreadID,
+                runID: runID,
+                latestOnly: latestOnly,
+                title: title,
+                commandID: commandID
+            )
+        )
+    }
+
     /// Detaches every named provider session, one command each.
     ///
     /// Each detach derives its command id from the shared gesture id, so a retry
@@ -976,6 +998,23 @@ public actor T3Client {
                 requestID: requestID,
                 decision: decision
             )
+        )
+    }
+
+    /// `secrets.answerRequest`. The secret lives only in this call's payload.
+    public func answerSecretRequest(
+        threadID: String,
+        turnItemID: String,
+        answer: SecretRequestAnswer
+    ) async throws {
+        guard let answer = answer.jsonValue else { return }
+        try await rpc.request(
+            "secrets.answerRequest",
+            payload: .object([
+                "threadId": .string(threadID),
+                "turnItemId": .string(turnItemID),
+                "answer": answer,
+            ])
         )
     }
 
@@ -2981,6 +3020,19 @@ public enum MessageDispatchMode: Equatable, Sendable {
     }
 }
 
+/// `message.dispatch`'s `sourcePlanRef`: the proposed plan a turn implements.
+/// The run records it, which is how clients find the plan behind a run that
+/// was started from one — in this thread or in the thread it was planned in.
+public struct OrchestrationSourcePlanRef: Equatable, Sendable {
+    public let threadID: String
+    public let planID: String
+
+    public init(threadID: String, planID: String) {
+        self.threadID = threadID
+        self.planID = planID
+    }
+}
+
 /// `orchestration.launchThread`'s reply. The full result also carries the new
 /// thread's projection; this decodes only the identity so a projection the
 /// Swift models cannot yet parse never turns an accepted launch into a failure.
@@ -3114,6 +3166,7 @@ public enum OrchestrationCommands {
         model: ModelSelection? = nil,
         attachments: [JSONValue] = [],
         dispatchMode: MessageDispatchMode = .startImmediately,
+        sourcePlan: OrchestrationSourcePlanRef? = nil,
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString
     ) throws -> JSONValue {
@@ -3130,6 +3183,12 @@ public enum OrchestrationCommands {
         ]
         if let model {
             command["modelSelection"] = try .encode(model)
+        }
+        if let sourcePlan {
+            command["sourcePlanRef"] = .object([
+                "threadId": .string(sourcePlan.threadID),
+                "planId": .string(sourcePlan.planID),
+            ])
         }
         return .object(command)
     }
@@ -3450,6 +3509,35 @@ public enum OrchestrationCommands {
                 "runId": .string(runID),
             ]),
         ])
+    }
+
+    /// `thread.fork` from a response: the new thread carries the conversation
+    /// up to the end of `runID`, or the latest stable point for a provider that
+    /// can only fork at its head. Like `client-runtime`'s `forkThreadFromRun`,
+    /// `createdAt` is left to the server.
+    public static func forkThread(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String,
+        latestOnly: Bool,
+        title: String?,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        var command: [String: JSONValue] = [
+            "type": .string("thread.fork"),
+            "commandId": .string(commandID),
+            "createdBy": .string(createdBy),
+            "creationSource": .string(creationSource),
+            "sourceThreadId": .string(sourceThreadID),
+            "targetThreadId": .string(targetThreadID),
+            "sourcePoint": latestOnly
+                ? .object(["type": .string("latest_stable")])
+                : .object(["type": .string("run"), "runId": .string(runID)]),
+        ]
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            command["title"] = .string(title)
+        }
+        return .object(command)
     }
 
     /// `provider-session.detach`. Stopping a thread's session is not one

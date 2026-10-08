@@ -255,7 +255,7 @@ struct MarkdownDocumentTests {
 
         #expect(
             document.blocks == [
-                .codeBlock(language: "console", code: "pnpm test\nno closing fence"),
+                .codeBlock(language: "console", code: "pnpm test\nno closing fence", terminated: false),
             ]
         )
     }

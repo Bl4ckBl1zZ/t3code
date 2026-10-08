@@ -88,6 +88,12 @@ public protocol FeatureClient: AnyObject {
     func setActiveOrder(id: String, key: String?) async throws
     /// `orderKey` re-pins a thread at the slot it held before, as undo does.
     func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws
+    /// Moves a pinned thread within the pinned run (`pinOrderKey` alone).
+    func setPinOrder(id: String, key: String) async throws
+    /// Records that the user has seen the thread up to `visitedAt`.
+    func visitThread(id: String, visitedAt: Date) async throws
+    /// Makes the thread's latest completion read as unseen again.
+    func markThreadUnread(id: String) async throws
     /// Pins a pull request to the thread by number, replacing the
     /// branch-derived one, or clears the pin with `nil`.
     ///
@@ -134,8 +140,41 @@ public protocol FeatureClient: AnyObject {
         attachments: [FeatureUploadAttachment],
         identity: FeatureSubmissionIdentity
     ) async throws
+    /// Implement on a proposed plan: Build mode, then a turn carrying the plan
+    /// that names it as its source.
+    func implementProposedPlan(_ implementation: FeatureProposedPlanImplementation) async throws
+    /// Implement in New Thread: a Build-mode thread on the same branch and
+    /// worktree whose first turn carries the plan. Answers with that thread.
+    func implementProposedPlanInNewThread(_ implementation: FeatureProposedPlanImplementation) async throws -> FeatureThread
+    /// Sends into a running turn: `steer` names the run to steer. When that run
+    /// has already ended the message is sent normally instead.
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity,
+        steer: FeatureSteerTarget?
+    ) async throws
     func cancelTurn(threadID: String) async throws
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws
+    /// Answers a `secret_request` item. `sourceThreadID` is the item's own wire
+    /// thread id; `threadID` routes to its environment.
+    func answerSecretRequest(
+        threadID: String,
+        sourceThreadID: String,
+        turnItemID: String,
+        answer: SecretRequestAnswer
+    ) async throws
+    /// Arms or clears auto-resume, or snoozes until reset, for the run a usage
+    /// limit stopped.
+    func updateLimitRecovery(
+        threadID: String,
+        runID: String,
+        resetAt: String,
+        autoResume: Bool?,
+        snooze: Bool?
+    ) async throws
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws
 
@@ -143,6 +182,17 @@ public protocol FeatureClient: AnyObject {
     /// Generated server side, so it can take a moment and can come back either
     /// AI-written or from the deterministic fallback.
     func generateHandoffScript(threadID: String) async throws -> String
+    /// Forks the open thread `threadID` from a response: `sourceThreadID` is the
+    /// response's wire source thread (an inherited row names its parent) and
+    /// the fork ends with `runID`, or at the latest stable point when
+    /// `latestOnly`. Returns the new thread's feature-scoped id.
+    func forkThread(
+        threadID: String,
+        sourceThreadID: String,
+        runID: String,
+        latestOnly: Bool,
+        title: String?
+    ) async throws -> String
     /// Folds a fork's work back into the thread it came from, at `runID`.
     func mergeThreadBack(
         sourceThreadID: String,
@@ -198,6 +248,9 @@ public protocol FeatureClient: AnyObject {
         limit: Int
     ) async throws -> [FeatureFileEntry]
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent
+    /// Writes a file relative to the thread's workspace, answering with the
+    /// path the server wrote.
+    func writeThreadFile(threadID: String, path: String, contents: String) async throws -> String
     /// Hands the thread to the provider as feedback, answering with the id it
     /// filed the report under. Only providers that advertise a feedback
     /// command support it, and only while a session is live.
@@ -322,6 +375,9 @@ public extension FeatureClient {
     func disconnect() async {}
     func addProject(path: String) async throws {}
     func ensureScratchProject(environmentID: String) async throws -> String { throw FeatureCapabilityUnavailable("Threads without a project") }
+    func forkThread(threadID: String, sourceThreadID: String, runID: String, latestOnly: Bool, title: String?) async throws -> String {
+        throw FeatureCapabilityUnavailable("Forking")
+    }
     func releaseThread(id: String) {}
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer], attachments: [String: [FeatureUploadAttachment]], dismiss: Bool) async throws {
         guard attachments.isEmpty && !dismiss else { throw FeatureCapabilityUnavailable("Question actions") }
@@ -343,6 +399,15 @@ public extension FeatureClient {
         throw FeatureCapabilityUnavailable("Auto-settle behavior")
     }
     func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws {}
+    func setPinOrder(id: String, key: String) async throws {
+        throw FeatureCapabilityUnavailable("Arranging pinned threads")
+    }
+    func visitThread(id: String, visitedAt: Date) async throws {
+        throw FeatureCapabilityUnavailable("Read state")
+    }
+    func markThreadUnread(id: String) async throws {
+        throw FeatureCapabilityUnavailable("Read state")
+    }
     @discardableResult
     func setThreadLinkedPullRequest(
         threadID _: String,
@@ -425,6 +490,42 @@ public extension FeatureClient {
 
     func retryWorkspacePreparation(threadID _: String, runID _: String) async throws {
         throw FeatureCapabilityUnavailable("Retrying setup")
+    }
+
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity,
+        steer _: FeatureSteerTarget?
+    ) async throws {
+        try await sendMessage(
+            threadID: threadID,
+            text: text,
+            selection: selection,
+            attachments: attachments,
+            identity: identity
+        )
+    }
+
+    func answerSecretRequest(
+        threadID _: String,
+        sourceThreadID _: String,
+        turnItemID _: String,
+        answer _: SecretRequestAnswer
+    ) async throws {
+        throw FeatureCapabilityUnavailable("Secret requests")
+    }
+
+    func updateLimitRecovery(
+        threadID _: String,
+        runID _: String,
+        resetAt _: String,
+        autoResume _: Bool?,
+        snooze _: Bool?
+    ) async throws {
+        throw FeatureCapabilityUnavailable("Usage limit recovery")
     }
 
     func loadReviewFileContents(
@@ -544,6 +645,15 @@ public extension FeatureClient {
         )
     }
 
+    func implementProposedPlan(_ implementation: FeatureProposedPlanImplementation) async throws {
+        try await setInteractionMode(id: implementation.threadID, mode: .standard)
+        try await sendMessage(threadID: implementation.threadID, text: implementation.prompt, selection: implementation.selection)
+    }
+
+    func implementProposedPlanInNewThread(_ implementation: FeatureProposedPlanImplementation) async throws -> FeatureThread {
+        throw FeatureCapabilityUnavailable("Implementing in a new thread")
+    }
+
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry] {
         throw FeatureCapabilityUnavailable("Files")
     }
@@ -566,6 +676,10 @@ public extension FeatureClient {
 
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent {
         throw FeatureCapabilityUnavailable("File preview")
+    }
+
+    func writeThreadFile(threadID _: String, path _: String, contents _: String) async throws -> String {
+        throw FeatureCapabilityUnavailable("Saving to the workspace")
     }
 
     func uploadThreadFeedback(threadID _: String, reason _: String?) async throws -> String {

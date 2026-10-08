@@ -97,7 +97,7 @@ struct ThreadHeaderSubtitle: Equatable {
                 tone: .background,
                 systemImage: "circle.dotted"
             )
-        case .failed, .done, .ready:
+        case .failed, .limited, .woke, .done, .ready:
             break
         }
         if thread.isArchived {
@@ -110,6 +110,8 @@ struct ThreadHeaderSubtitle: Equatable {
         switch thread.homeStatus {
         case .failed:
             return Status(label: "Failed", tone: .danger, systemImage: "exclamationmark.circle")
+        case .limited:
+            return Status(label: "Usage limit reached", tone: .warning, systemImage: "hourglass")
         case .done:
             return Status(label: "Done", tone: .success, systemImage: "checkmark.circle")
         default:

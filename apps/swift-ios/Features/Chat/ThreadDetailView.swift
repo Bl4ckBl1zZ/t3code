@@ -18,6 +18,8 @@ public struct ThreadDetailView: View {
     /// Opens a new task in this thread's project, for Cmd+Option+Return.
     let onStartNewThread: ((_ projectID: String) -> Void)?
     @State private var nativeToolIcons = NativeAppToolIconStore()
+    /// Skill chips, shell-block runs and `<details>` expansion for the transcript's Markdown.
+    @State private var markdownTranscript = MarkdownTranscriptContext()
     /// Shared by this screen's MCP App rows; nil when the client cannot host apps.
     @State private var mcpApps: ThreadMcpApps?
     @State private var isSwappingDraft = false
@@ -39,6 +41,7 @@ public struct ThreadDetailView: View {
     /// in a run. See `pendingHandoffItem`.
     @State private var pendingProviderSwitch: PendingProviderSwitch?
     @State private var isSending = false
+    @AppStorage(ComposerFollowUpBehavior.storageKey) private var followUpBehavior: ComposerFollowUpBehavior = .queue
     /// Previous/next turn, from the keyboard shortcuts and the transcript's
     /// accessibility actions.
     @State private var turnNavigationRequest = 0
@@ -52,6 +55,7 @@ public struct ThreadDetailView: View {
     /// Drives the subtitle's working duration, which only moves by minutes.
     @State private var subtitleNow = Date()
     @State private var isConfirmingUnpin = false
+    @State private var isPickingCustomSnooze = false
     @State private var pullRequestPreview: PullRequestLinkTarget?
     /// The provider's answer to `/feedback`: the id it filed the report under,
     /// which is the only handle the reader has for quoting it later.
@@ -67,6 +71,9 @@ public struct ThreadDetailView: View {
     @State private var toolSurface: FeatureThreadToolSurface?
     /// A pending checkpoint restore, previewed in a sheet before it commits.
     @State private var restoreRequest: CheckpointRestoreRequest?
+    @State private var isShowingPlan = false
+    /// Per-message meta, expansion, and the restore and fork actions.
+    @State private var messageActions = ThreadMessageActionsStore()
     /// The queued run a reorder, edit or cancel is in flight for. One at a time:
     /// two overlapping reorders would race for the same positions.
     @State private var queueBusyRunID: String?
@@ -106,6 +113,15 @@ public struct ThreadDetailView: View {
             apps: mcpApps,
             threadID: thread.id,
             awaitingUser: detail.map { !$0.approvals.isEmpty || !$0.userInputs.isEmpty } ?? false
+        ))
+        .modifier(MarkdownTranscriptContextModifier(
+            context: markdownTranscript,
+            client: model.client,
+            threadID: thread.id,
+            skills: threadProviders.first { $0.id == currentSelection?.providerID }?.inWorkspace(threadWorkspaceRoot).skills ?? [],
+            canRunCommands: !isChatConversation && threadWorkspaceRoot != nil && !isEnvironmentOffline
+                && !ModelOptions.isHermesProvider(currentThread.providerID, in: environmentProviders),
+            onTerminalStarted: { toolSurface = .terminal(terminalID: $0) }
         ))
         .onChange(of: model.pendingPullRequestPrompts[thread.id]?.id) { consumePullRequestPrompt() }
         .alert("Pull request checkout", isPresented: Binding(get: { pullRequestCheckoutWarning != nil }, set: { if !$0 { pullRequestCheckoutWarning = nil } })) {
@@ -147,6 +163,11 @@ public struct ThreadDetailView: View {
         .background { keyboardShortcuts }
         .confirmationDialog("Unpin this thread?", isPresented: $isConfirmingUnpin, titleVisibility: .visible) {
             Button("Unpin", role: .destructive) { setPinned(false) }
+        }
+        .sheet(isPresented: $isPickingCustomSnooze) {
+            CustomSnoozeSheet(threadCount: 1) { until in
+                Task { await model.setSnoozed(thread.id, until: until) }
+            }
         }
         .sheet(item: $pullRequestPreview) { target in
             if let context = pullRequestContext {
@@ -202,6 +223,7 @@ public struct ThreadDetailView: View {
         .onChange(of: currentThread.state == .failed) { _, failed in
             if failed { PlatformHapticEngine.shared.play(.error) }
         }
+        .threadVisitTracking(currentThread, model: model)
         .onChange(of: hasFailedDelivery) { _, failed in
             if failed { PlatformHapticEngine.shared.play(.error) }
         }
@@ -218,6 +240,26 @@ public struct ThreadDetailView: View {
         .alert("Quote Unavailable", isPresented: Binding(get: { citationError != nil }, set: { if !$0 { citationError = nil } })) {
             Button("OK") { citationError = nil }
         } message: { Text(citationError ?? "") }
+        .threadMessageActions(
+            messageActions,
+            threadID: thread.id,
+            isReachable: threadConnectionState.map { $0 == .connected } ?? true
+        ) {
+            ThreadMessageActionsStore.Handlers(
+                restore: { restoreRequest = $0 },
+                fork: { [model, thread] point in
+                    try await model.client.forkThread(
+                        threadID: thread.id,
+                        sourceThreadID: point.sourceThreadID,
+                        runID: point.runID,
+                        latestOnly: point.latestOnly,
+                        title: "\(model.details[thread.id]?.thread.title ?? thread.title) fork"
+                    )
+                },
+                isThreadReady: { [model] id in model.snapshot.threads.contains { $0.id == id } },
+                openThread: { onOpenRelatedThread($0, false) }
+            )
+        }
         .sheet(item: $restoreRequest) { request in
             CheckpointRestoreSheet(
                 request: request,
@@ -234,6 +276,9 @@ public struct ThreadDetailView: View {
                     _ = await model.detail(for: thread.id, force: true)
                 }
             )
+        }
+        .sheet(isPresented: $isShowingPlan) {
+            ThreadPlanSheet(model: model, threadID: thread.id, saver: planWorkspaceSaver)
         }
         .sheet(item: $toolSurface) { surface in
             if let tool = surface.tool {
@@ -446,6 +491,11 @@ public struct ThreadDetailView: View {
                     }
                 }
             }
+            if let detail, ThreadProposedPlans.hasPlan(in: detail) {
+                Section {
+                    Button("Plan", systemImage: "list.bullet.clipboard") { isShowingPlan = true }
+                }
+            }
             if !isChatConversation {
                 Section {
                     Button("Files", systemImage: "folder") { toolSurface = .files(path: nil, line: nil) }
@@ -466,12 +516,14 @@ public struct ThreadDetailView: View {
                 }
             }
             Section {
-                if currentThread.supportsSnooze != false,
-                   let until = currentThread.snoozedUntil, until > .now {
-                    Button("Unsnooze", systemImage: "moon.zzz") {
-                        Task { _ = await model.setSnoozed(thread.id, until: nil) }
-                    }
-                }
+                ThreadChatLifecycleActions(
+                    thread: currentThread,
+                    model: model,
+                    offersParking: !isChatConversation,
+                    onCustomSnooze: { isPickingCustomSnooze = true }
+                )
+            }
+            Section {
                 Button("Reload", systemImage: "arrow.clockwise") {
                     Task { _ = await model.detail(for: thread.id, force: true) }
                 }
@@ -652,8 +704,9 @@ public struct ThreadDetailView: View {
                     // reader has scrolled away from, so it must not move the
                     // transcript's bottom inset.
                     VStack(spacing: 0) {
+                        usageLimitBanner(detail)
                         queueSurfaces
-                        ComposerTasksView(detail: detail)
+                        ComposerTasksView(detail: detail) { isShowingPlan = true }
                         sendFailureCallout
                         if currentThread.isArchived {
                             ThreadArchivedBar {
@@ -667,10 +720,12 @@ public struct ThreadDetailView: View {
                             // composer returns for exactly that: with a request
                             // pending it shows only the request panel.
                             providerSubagentBar(detail)
-                            if !detail.approvals.isEmpty || !detail.userInputs.isEmpty {
+                            if !detail.approvals.isEmpty || !detail.userInputs.isEmpty
+                                || !SecretRequestPresentation.pending(in: detail.timelineItems).isEmpty {
                                 composer(detail)
                             }
                         } else {
+                            planFollowUpBanner(detail)
                             composer(detail)
                         }
                     }
@@ -724,6 +779,7 @@ public struct ThreadDetailView: View {
                     client: model.client
                 ),
                 pullRequests: pullRequestContext,
+                messageActions: messageActions,
                 onRollback: { target in
                     // Preview first, never fire-and-forget: the sheet
                     // shows the computed blast radius, owns progress, and
@@ -738,7 +794,7 @@ public struct ThreadDetailView: View {
                 dynamicTypeSize: dynamicTypeSize,
                 topContentInset: bannerHeight,
                 bottomContentInset: composerHeight,
-                canLoadEarlier: detail.page?.hasMore == true,
+                canLoadEarlier: ThreadTimelineClear.canLoadEarlier(detail),
                 isLoadingEarlier: detail.page?.isLoading == true,
                 workspaceRoot: threadWorkspaceRoot,
                 alwaysExpandActivity: model.snapshot.settings.alwaysExpandActivity,
@@ -786,7 +842,9 @@ public struct ThreadDetailView: View {
                     }
                     composerFocused = true
                 },
+                markdownTranscript: markdownTranscript,
                 mcpApps: mcpApps,
+                planSaver: planWorkspaceSaver,
                 threadLinks: threadLinks,
                 statusLine: ThreadStatusLine.resolve(currentThread, now: .now),
                 onStatusLineAction: { [model, threadID = thread.id] kind in
@@ -817,6 +875,30 @@ public struct ThreadDetailView: View {
     /// well; earlier systems keep the opaque bar and stop at it.
     private static var transcriptBleedEdges: Edge.Set {
         if #available(iOS 26, *) { [.top, .bottom] } else { .bottom }
+    }
+
+    @ViewBuilder
+    private func planFollowUpBanner(_ detail: FeatureThreadDetail) -> some View {
+        if let plan = ThreadProposedPlans.followUp(in: detail, thread: currentThread) {
+            ComposerPlanFollowUpBanner(
+                model: model,
+                threadID: thread.id,
+                plan: plan,
+                selection: currentSelection,
+                hasDraft: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty,
+                isBlocked: isSending || isEnvironmentOffline,
+                onOpenPlan: { isShowingPlan = true }
+            )
+        }
+    }
+
+    /// Save to Workspace for plans, offered only where the thread has one.
+    private var planWorkspaceSaver: ProposedPlanWorkspaceSaver? {
+        threadWorkspaceRoot.map { root in
+            ProposedPlanWorkspaceSaver(workspaceRoot: root) { [client = model.client, threadID = thread.id] path, contents in
+                try await client.writeThreadFile(threadID: threadID, path: path, contents: contents)
+            }
+        }
     }
 
     /// Why this thread's last message did not send. Retry resends what failed:
@@ -922,6 +1004,24 @@ public struct ThreadDetailView: View {
     private var backgroundCommands: [ThreadDetailsBackgroundCommand] {
         guard let detail else { return [] }
         return ThreadDetailsBackgroundTasks.backgroundCommands(detail.timelineItems.map(\.item))
+    }
+
+    /// Above the queue it holds back: when the usage limit resets, and the
+    /// choice to resume or snooze until then.
+    @ViewBuilder
+    private func usageLimitBanner(_ detail: FeatureThreadDetail) -> some View {
+        if let limit = detail.workflow.usageLimit, !currentThread.isArchived {
+            UsageLimitRecoveryBanner(limit: limit) { autoResume, snooze in
+                guard let resetAt = limit.resetAt else { return }
+                try await model.client.updateLimitRecovery(
+                    threadID: thread.id,
+                    runID: limit.runID,
+                    resetAt: resetAt,
+                    autoResume: autoResume,
+                    snooze: snooze
+                )
+            }
+        }
     }
 
     /// Queued runs, above the composer that will add to them.
@@ -1045,9 +1145,25 @@ public struct ThreadDetailView: View {
             onStop: {
                 Task { await model.cancelTurn(threadID: thread.id) }
             },
+            contextMeter: contextMeter(detail),
             readingHistory: readingHistoryThreadID == thread.id,
             pendingApprovals: detail.approvals,
             pendingUserInputs: detail.userInputs,
+            pendingSecretRequests: SecretRequestPresentation.pending(in: detail.timelineItems),
+            onSecretRequestAnswer: { request, answer in
+                try await model.client.answerSecretRequest(
+                    threadID: thread.id,
+                    sourceThreadID: request.sourceThreadID,
+                    turnItemID: request.turnItemID,
+                    answer: answer
+                )
+            },
+            steering: ComposerFollowUp.steerTarget(
+                queueState: detail.workflow.queueState,
+                capabilities: detail.workflow.providerSession?.turns
+            ).map { target in
+                ComposerSteering(defaultsToSteer: followUpBehavior == .steer, onSteer: { send(steer: target) })
+            },
             isResolvingRequest: model.isPerformingAction,
             powerFeatures: composerPowerFeatures,
             historyMessages: { detail.messages },
@@ -1605,9 +1721,50 @@ public struct ThreadDetailView: View {
         ))
     }
 
+    /// The composer's context ring. Compact Now runs Claude's native `/compact`
+    /// as its own turn, as web does; other providers compact on their own.
+    private func contextMeter(_ detail: FeatureThreadDetail) -> ComposerContextMeter? {
+        guard let window = detail.workflow.contextWindow else { return nil }
+        let selection = currentSelection
+        let provider = threadProviders.first { $0.id == selection?.providerID }
+        let modelName = provider?.models.first { $0.id == selection?.modelID }?.name ?? selection?.modelID
+        guard provider?.driver == "claudeAgent" else {
+            return ComposerContextMeter(window: window, modelName: modelName, compaction: nil)
+        }
+        let state = detail.thread.state
+        let idle = (state == .idle || state == .completed || state == .failed)
+            && detail.approvals.isEmpty && detail.userInputs.isEmpty
+            && queueState.activeRun == nil && !isSending && !currentThread.isArchived
+        let reason: String? = if provider?.isAvailable != true {
+            "Enable a Claude provider before compacting."
+        } else if !idle || !ClaudeResumeCompaction.hasCompactableConversation(detail.timelineItems) {
+            "Compacting is available once the agent is idle and the conversation has started."
+        } else {
+            nil
+        }
+        return ComposerContextMeter(
+            window: window,
+            modelName: modelName,
+            compaction: .init(disabledReason: reason) { compactNow() }
+        )
+    }
+
+    private func compactNow() {
+        guard !isSending else { return }
+        isSending = true
+        Task {
+            let sent = await submitMessage(
+                FeatureMessageSubmission(threadID: thread.id, text: "/compact", selection: currentSelection)
+            )
+            if !sent { PlatformHapticEngine.shared.play(.error) }
+            isSending = false
+        }
+    }
+
     /// `keepFullHistory` is "Send with Full History": it skips the compaction
-    /// a stale Claude session would otherwise run first.
-    private func send(keepFullHistory: Bool = false) {
+    /// a stale Claude session would otherwise run first. `steer` sends into the
+    /// running turn instead of queueing behind it.
+    private func send(keepFullHistory: Bool = false, steer: FeatureSteerTarget? = nil) {
         let message = draft
         let pendingAttachments = attachments
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1617,7 +1774,7 @@ public struct ThreadDetailView: View {
         // A stale Claude session compacts before this message so the turn does
         // not re-read the old history. The message then waits behind the
         // /compact run: the server queues a send that meets an active run.
-        let compactFirst = !keepFullHistory
+        let compactFirst = !keepFullHistory && steer == nil
             && detail.flatMap(resumeCompactionTokens) != nil
             && !ClaudeResumeCompaction.isCompactCommand(message)
         if pendingAttachments.isEmpty,
@@ -1650,14 +1807,14 @@ public struct ThreadDetailView: View {
                 )
             }
             if sent {
-                sent = await submitMessage(
-                    FeatureMessageSubmission(
+                var submission = FeatureMessageSubmission(
                     threadID: thread.id,
                     text: message,
                     selection: currentSelection,
                     attachments: pendingAttachments
-                    )
                 )
+                submission.steer = steer
+                sent = await submitMessage(submission)
             }
             if sent {
                 let followUpDraft = composerDraft
@@ -1886,7 +2043,11 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
     case workLog(WorkLog)
     /// An MCP App a completed tool call captured, hosted where the call happened.
     case mcpApp(McpApp)
+    /// A proposed plan, as a card that never folds or groups away.
+    case proposedPlan(ThreadProposedPlanEntry)
     case dayDivider(id: String, date: Date)
+    /// Rows derived from the transcript's shape; see `ThreadTimelineStructuralRow`.
+    case structural(ThreadTimelineStructuralRow)
 
     struct Lifecycle: Equatable {
         let id: String
@@ -1935,7 +2096,9 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .lifecycle(lifecycle): lifecycle.id
         case let .workLog(workLog): workLog.id
         case let .mcpApp(app): app.id
+        case let .proposedPlan(entry): entry.id
         case let .dayDivider(id, _): id
+        case let .structural(row): row.id
         }
     }
 
@@ -1948,7 +2111,9 @@ enum ThreadTimelineEntry: Identifiable, Equatable {
         case let .lifecycle(lifecycle): lifecycle.date
         case let .workLog(workLog): workLog.date
         case let .mcpApp(app): app.date
+        case let .proposedPlan(entry): entry.plan.date
         case let .dayDivider(_, date): date
+        case let .structural(row): row.date
         }
     }
 }
@@ -1965,14 +2130,21 @@ enum ThreadTimelineFeed {
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
         let activeRunID = detail.workflow.queueState.activeRun?.id
-        var result = entries(
+        let clearedAt = detail.thread.timelineClearedAt
+        let visible = ThreadTimelineClear.visible(
             timelineItems: detail.timelineItems,
             messages: detail.messages,
+            clearedAt: clearedAt
+        )
+        var result = entries(
+            timelineItems: visible.timelineItems,
+            messages: visible.messages,
             runs: detail.timelineRuns,
             support: detail.itemSupport,
             subagentChildThreadIDs: detail.subagentChildThreadIDs,
             subagentMetadata: detail.subagentMetadata,
             liveRun: ThreadWorkLogLiveRun(threadState: detail.thread.state, activeRunID: activeRunID),
+            chatClearedAt: clearedAt,
             calendar: calendar
         )
         if detail.thread.state == .working, case var .workLog(work)? = result.last {
@@ -1990,11 +2162,17 @@ enum ThreadTimelineFeed {
         subagentChildThreadIDs: [String: String] = [:],
         subagentMetadata: [String: SubagentRowMetadata] = [:],
         liveRun: ThreadWorkLogLiveRun = .unscoped,
+        chatClearedAt: Date? = nil,
         calendar: Calendar = .current
     ) -> [ThreadTimelineEntry] {
         var messagesByID: [String: FeatureMessage] = [:]
         messagesByID.reserveCapacity(messages.count)
         for message in messages { messagesByID[message.id] = message }
+        let changedFiles = ThreadChangedFilesPlacement.resolve(
+            timelineItems: timelineItems,
+            latestRunID: runs.max(by: { $0.ordinal < $1.ordinal })?.id,
+            rendersMessage: { messagesByID[$0].map { !$0.isEmptyBubble } ?? false }
+        )
 
         var entries: [ThreadTimelineEntry] = []
         var openWork: [ThreadWorkLogRow] = []
@@ -2058,6 +2236,7 @@ enum ThreadTimelineFeed {
             openLifecycle.removeAll(keepingCapacity: true)
         }
 
+        let proposedPlans = ThreadProposedPlans.Feed(timelineItems)
         // One Stop is one boundary: a request whose run already reports the
         // result says nothing the result does not.
         var interruptedRunIDs = Set<String>()
@@ -2073,6 +2252,8 @@ enum ThreadTimelineFeed {
             }
             // A setup failure a retry already replaced has nothing left to say.
             if ThreadWorkspacePreparationRetry.isRetriedFailure(item) { continue }
+            // Shown as a tree under the run's reply instead.
+            if changedFiles.placedCheckpointItemIDs.contains(item.id) { continue }
             if item.type == "user_message" || item.type == "assistant_message" {
                 // An empty bubble is not a row — an assistant message before its
                 // first token, say — and skipping it must not split the work
@@ -2081,6 +2262,15 @@ enum ThreadTimelineFeed {
                 closeWork()
                 closeLifecycle()
                 entries.append(.message(message, caption: ThreadMessageCaption.origin(of: item)))
+                if let files = changedFiles.byAssistantItemID[item.id] {
+                    entries.append(.structural(.changedFiles(files)))
+                }
+                continue
+            }
+            if let plan = proposedPlans.entry(for: projected) {
+                closeWork()
+                closeLifecycle()
+                entries.append(.proposedPlan(plan))
                 continue
             }
             if let app = McpAppReference.from(item) {
@@ -2106,6 +2296,11 @@ enum ThreadTimelineFeed {
                 continue
             }
             closeLifecycle()
+            // A superseded attempt folds on its own, so a group never spans two.
+            if let last = openWork.last,
+               support[last.projectedItem.id]?.attempt?.id != support[projected.id]?.attempt?.id {
+                closeWork()
+            }
             openWork.append(ThreadWorkLogRow.make(projected, liveRun: liveRun))
         }
         closeWork()
@@ -2140,6 +2335,10 @@ enum ThreadTimelineFeed {
         // is enforced here rather than trusted.
         var seenIDs = Set<String>()
         entries = entries.filter { seenIDs.insert($0.id).inserted }
+        entries = ThreadAgentUpdateGrouping.merge(entries)
+        if let chatClearedAt {
+            entries.insert(.structural(.chatCleared(at: chatClearedAt)), at: 0)
+        }
 
         return insertingDayDividers(entries, calendar: calendar)
     }
@@ -2223,7 +2422,7 @@ private struct ThreadTimelineEntryView: View {
             .padding(.bottom, ChatTimelineStyle.entrySpacing)
 
         case let .message(message, caption):
-            FeatureMessageView(message: message, caption: caption, onRetrySend: onRetrySend)
+            FeatureMessageView(message: message, caption: caption, onRetrySend: onRetrySend, onOpenThread: onOpenThread)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, ChatTimelineStyle.entrySpacing)
 
@@ -2287,8 +2486,23 @@ private struct ThreadTimelineEntryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.bottom, ChatTimelineStyle.entrySpacing)
 
+        case let .proposedPlan(entry):
+            ProposedPlanCard(entry: entry)
+                .padding(.bottom, ChatTimelineStyle.entrySpacing)
+
         case let .dayDivider(_, date):
             TimelineDayDivider(date: date)
+
+        case let .structural(row):
+            ThreadTimelineStructuralRowView(
+                row: row,
+                currentThreadID: currentThreadID,
+                workspaceRoot: workspaceRoot,
+                onOpenThread: onOpenThread,
+                onOpenFile: onOpenFile,
+                onOpenDiff: onOpenDiff,
+                onToggleFold: onToggleFold
+            )
         }
     }
 }
@@ -2311,6 +2525,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     /// Resolves assistant markdown media against this thread's environment.
     let markdownMedia: MarkdownMediaContext?
     var pullRequests: MarkdownPullRequestContext? = nil
+    var messageActions: ThreadMessageActionsStore? = nil
     let onRollback: (ThreadActivityRollbackTarget) -> Void
     /// The whole detail rather than its rows: building the feed costs O(window),
     /// so it happens inside the coordinator once the revision guard has proved
@@ -2351,7 +2566,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var onOpenCitation: (AssistantCitation) -> Void = { _ in }
     var citationContext: AssistantCitationContext? = nil
     var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
+    var markdownTranscript: MarkdownTranscriptContext? = nil
     var mcpApps: ThreadMcpApps? = nil
+    var planSaver: ProposedPlanWorkspaceSaver? = nil
     /// Resolves `t3-thread://` links in messages against this thread's environment.
     var threadLinks: ThreadLinkResolver? = nil
     /// Settled or snoozed, said once after the last message, with its way out.
@@ -2404,6 +2621,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         context.coordinator.onReadingHistoryChanged = onReadingHistoryChanged
         context.coordinator.onActivityBelowChanged = onActivityBelowChanged
         context.coordinator.turnItemDetails.loader = loadTurnItem
+        context.coordinator.attach(messageActions, to: collectionView)
         context.coordinator.update(
             threadID: threadID,
             detail: detail,
@@ -2433,7 +2651,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 onOpenCitation: onOpenCitation,
                 citationContext: citationContext,
                 onUseTemplate: onUseTemplate,
+                markdownTranscript: markdownTranscript,
                 mcpApps: mcpApps,
+                planSaver: planSaver,
                 threadLinks: threadLinks,
                 onStatusLineAction: onStatusLineAction
             ),
@@ -2507,7 +2727,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onOpenCitation: (AssistantCitation) -> Void = { _ in }
             var citationContext: AssistantCitationContext?
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
+            var markdownTranscript: MarkdownTranscriptContext?
             var mcpApps: ThreadMcpApps?
+            var planSaver: ProposedPlanWorkspaceSaver?
             var threadLinks: ThreadLinkResolver?
             var onStatusLineAction: (ThreadStatusLine.Kind) async -> Void = { _ in }
         }
@@ -2682,6 +2904,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 let highlight = citationHighlight
                 let toolHistory = workLogHistory
                 let toolDetails = turnItemDetails
+                let messageActions = messageActions
                 cell.contentConfiguration = UIHostingConfiguration {
                     ThreadTimelineEntryView(
                         entry: entry,
@@ -2710,9 +2933,12 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .environment(\.assistantCitationHighlight, highlight)
                     .environment(\.threadWorkLogHistory, toolHistory)
                     .environment(\.threadTurnItemDetails, toolDetails)
+                    .environment(\.threadMessageActions, messageActions)
                     .environment(\.threadMcpApps, context.mcpApps)
+                    .environment(\.proposedPlanWorkspaceSaver, context.planSaver)
                     .environment(\.nativeAppToolIconContext, context.nativeAppIcons)
                     .environment(\.markdownTemplateAction, context.onUseTemplate)
+                    .environment(\.markdownTranscriptContext, context.markdownTranscript)
                     .environment(\.threadLinkResolver, context.threadLinks)
                     .environment(\.openURL, OpenURLAction { url in
                         // A thread link names a thread in this transcript's environment.
@@ -2814,6 +3040,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             // messages cannot say which rows moved, and applying it would leave
             // stale groups on screen instead of failing loudly.
             if threadChanged { expandedRunIDs = []; hiddenCitationRunIDs = [:] }
+            messageActions?.apply(detail)
             let fullEntries = ThreadTimelineFeed.entries(for: detail)
             let folded = ThreadTimelineFoldPresentation.apply(entries: fullEntries, detail: detail,
                 expandedRunIDs: expandedRunIDs, alwaysExpand: alwaysExpandActivity)
@@ -2948,6 +3175,33 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private struct VisibleAnchor {
             let id: String
             let offsetFromViewportTop: CGFloat
+        }
+
+        private weak var messageActions: ThreadMessageActionsStore?
+
+        /// Rows read the store from their environment; expanding or collapsing
+        /// a long message keeps its top where the reader left it, and a
+        /// collapse whose top had scrolled away brings it back under the bar.
+        func attach(_ store: ThreadMessageActionsStore?, to collectionView: UICollectionView) {
+            messageActions = store
+            store?.keepTop = { [weak self, weak collectionView] messageID, collapsing, change in
+                guard let self, let collectionView, let dataSource = self.dataSource,
+                      let path = dataSource.indexPath(for: "message:\(messageID)"),
+                      let frame = collectionView.layoutAttributesForItem(at: path)?.frame else {
+                    change()
+                    return
+                }
+                let top = frame.minY - collectionView.contentOffset.y
+                let anchor = VisibleAnchor(
+                    id: "message:\(messageID)",
+                    offsetFromViewportTop: collapsing ? max(top, collectionView.adjustedContentInset.top) : top
+                )
+                change()
+                DispatchQueue.main.async { [weak self, weak collectionView] in
+                    guard let self, let collectionView else { return }
+                    self.restore(anchor, in: collectionView, dataSource: dataSource)
+                }
+            }
         }
 
         private func visibleAnchor(
@@ -3545,6 +3799,8 @@ struct FeatureMessageView: View {
     /// as sending even before the outbox has said more.
     var caption: ThreadMessageCaption? = nil
     var onRetrySend: () -> Void = {}
+    /// Opens the thread an agent-sent message came from.
+    var onOpenThread: ((String) -> Void)? = nil
 
     private var resolvedCaption: ThreadMessageCaption? {
         if caption?.isDelivery == true { return caption }
@@ -3572,9 +3828,7 @@ struct FeatureMessageView: View {
             // feed's treatment.
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Sent by another agent")
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textTertiary)
+                    AgentSenderByline(senderThreadID: message.senderThreadID, onOpenThread: onOpenThread)
 
                     VStack(alignment: .leading, spacing: 10) {
                         FeatureMessageAttachmentsView(attachments: message.attachments)
@@ -3598,46 +3852,17 @@ struct FeatureMessageView: View {
                 }
                 Spacer(minLength: 44)
             }
+            // Contained, so the byline's link to the sender stays reachable.
+            .accessibilityElement(children: .contain)
             .accessibilityLabel("Another agent")
             .accessibilityValue(accessibilityValue)
             .accessibilityIdentifier("message-\(message.id)")
         case .user:
-            HStack {
-                Spacer(minLength: 44)
-                VStack(alignment: .trailing, spacing: 4) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        FeatureMessageAttachmentsView(attachments: message.attachments)
-                        if !message.text.isEmpty {
-                            ReviewContextMessageText(
-                                source: displayText,
-                                isStreaming: message.state == .streaming
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                    .frame(maxWidth: T3Metrics.readingWidth * 0.88, alignment: .leading)
-                    .background(
-                        T3Colors.subtleStrong,
-                        in: UnevenRoundedRectangle(
-                            topLeadingRadius: 16,
-                            bottomLeadingRadius: 16,
-                            bottomTrailingRadius: 4,
-                            topTrailingRadius: 16,
-                            style: .continuous
-                        )
-                    )
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("You")
-                    .accessibilityValue(accessibilityValue)
-
-                    if let resolvedCaption {
-                        ThreadMessageCaptionView(caption: resolvedCaption, onRetry: onRetrySend)
-                    }
-                }
+            // Context chips, the collapsible body, and the status and time
+            // under the bubble live in UserMessageViews.swift.
+            UserMessageBubble(message: message, caption: resolvedCaption, onRetrySend: onRetrySend) {
+                FeatureMessageAttachmentsView(attachments: $0)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("message-\(message.id)")
         case .assistant:
             // No "Working" line over a streaming reply: the composer band and
             // the subtitle already say it, and neither scrolls away.
@@ -3652,7 +3877,9 @@ struct FeatureMessageView: View {
                     )
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                ThreadAssistantMessageFooter(messageID: message.id)
             }
+            .threadAssistantMessageActions(messageID: message.id)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Assistant")
