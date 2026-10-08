@@ -313,6 +313,31 @@ public struct ThreadWorkLogRow: Identifiable, Equatable, Sendable {
 public enum ThreadWorkLogPresentation {
     static let maxVisibleEntries = 1
 
+    /// Plain-text line for the latest thought in the live activity row. A
+    /// bold-only opening line (the Codex summary heading) wins; otherwise this
+    /// is the first sentence of the reasoning text. Ported from
+    /// `liveThoughtLine` in packages/client-runtime/src/work-log/presentation.ts.
+    static func liveThoughtLine(_ markdown: String) -> String {
+        func replacing(_ text: String, _ pattern: String, with template: String, options: NSRegularExpression.Options = []) -> String {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return text }
+            return regex.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: template)
+        }
+        let source = markdown as NSString
+        let heading = (try? NSRegularExpression(pattern: #"^\s*\*\*([^*\r\n]+)\*\*[ \t]*\r?(?:\n|$)"#))?
+            .firstMatch(in: markdown, range: NSRange(location: 0, length: source.length))
+            .map { source.substring(with: $0.range(at: 1)) }
+        var text = heading ?? markdown
+        text = replacing(text, #"!?\[([^\]]*)\]\([^)]*\)"#, with: "$1")
+        text = replacing(text, #"^[ \t]*(?:#{1,6}|[-*+]|\d+\.)[ \t]+"#, with: "", options: .anchorsMatchLines)
+        text = replacing(text, #"`+|\*\*|~~"#, with: "")
+        text = replacing(text, #"(^|[^A-Za-z0-9_*])[*_]([^*_\n]+)[*_](?![A-Za-z0-9_*])"#, with: "$1$2")
+        text = replacing(text, #"\s+"#, with: " ").trimmingCharacters(in: .whitespaces)
+        if heading != nil { return text }
+        // Cut after the first . ? or ! (plus a closing quote or paren) that a space follows.
+        guard let end = text.range(of: #"[.?!]["'”’)]?(?=\s)"#, options: .regularExpression) else { return text }
+        return String(text[..<end.upperBound])
+    }
+
     public static func isToolLike(_ item: OrchestrationV2TurnItem) -> Bool {
         switch item.type {
         case "reasoning", "command_execution", "file_change", "file_search", "web_search",
@@ -1137,17 +1162,65 @@ struct ThreadWorkLog: View {
         }
     }
 
+    /// The latest thought in the live group, while a turn works. A finding
+    /// stays readable while the next tool call runs.
+    private var liveThought: (row: ThreadWorkLogRow, line: String)? {
+        guard liveEntryID != nil,
+              let row = visibleCandidates.last(where: { row in
+                  guard case let .reasoning(text, _) = row.item.payload else { return false }
+                  return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              }),
+              case let .reasoning(text, _) = row.item.payload else { return nil }
+        let line = ThreadWorkLogPresentation.liveThoughtLine(text)
+        return line.isEmpty ? nil : (row, line)
+    }
+
     /// The live row: what the agent is doing now, in the running tint. Its
     /// symbol bounces once when the step changes; nothing on it loops.
+    ///
+    /// Collapsed, the latest thought's first sentence sits above it; the
+    /// expanded history already lists the thought, so the preview steps aside.
     private func focusRow(_ focus: ThreadWorkLogRow) -> some View {
         let count = ThreadWorkLogRow.stepCount(visibleCandidates.count)
-        return Button { toggleGroup() } label: {
+        let thought = isExpanded ? nil : liveThought
+        // While the thought itself is the focus, the status line just says so.
+        let thoughtIsFocus = thought?.row.id == focus.id
+        let focusLabel = focus.isRunning ? "Thinking" : "Thought"
+        return VStack(alignment: .leading, spacing: 2) {
+            if let thought {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "brain")
+                        .font(ChatTimelineStyle.small)
+                        .frame(width: 20)
+                        .accessibilityHidden(true)
+                    Text(verbatim: thought.line)
+                        .font(ChatTimelineStyle.small)
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .foregroundStyle(T3Colors.textSecondary)
+                .padding(.top, 6)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Latest thought: \(thought.line)")
+            }
+            focusButton(focus, count: count, label: thoughtIsFocus ? focusLabel : nil)
+        }
+    }
+
+    private func focusButton(_ focus: ThreadWorkLogRow, count: String, label: String?) -> some View {
+        Button { toggleGroup() } label: {
             HStack(spacing: 8) {
                 ThreadToolActivityIcon(icon: focus.activityIcon, fallback: focus.icon.symbolName)
                     .foregroundStyle(focus.isRunning ? T3Colors.statusRunning : T3Colors.textTertiary)
                     .symbolEffect(.bounce, value: liveEntryID)
                     .frame(width: 20)
-                WorkLogRowText(row: focus, workspaceRoot: workspaceRoot)
+                Group {
+                    if let label {
+                        Text(verbatim: label).font(ChatTimelineStyle.bodyStrong).foregroundStyle(T3Colors.textPrimary)
+                    } else {
+                        WorkLogRowText(row: focus, workspaceRoot: workspaceRoot)
+                    }
+                }
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1163,7 +1236,7 @@ struct ThreadWorkLog: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(focus.displaySummary(threadLinks: threadLinks)), \(count)")
+        .accessibilityLabel("\(label ?? focus.displaySummary(threadLinks: threadLinks)), \(count)")
         .accessibilityAddTraits(.isButton)
         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
     }

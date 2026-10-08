@@ -284,6 +284,46 @@ final class ThreadWorkLogTests: XCTestCase {
         XCTAssertNil(T3McpToolPresentation.displayName(for: "Bash"))
     }
 
+    /// Mirrors `liveThoughtLine` tests in packages/client-runtime/src/work-log/presentation.test.ts.
+    func testLiveThoughtLineKeepsTheFirstSentenceIncludingAClosingQuote() {
+        XCTAssertEqual(
+            ThreadWorkLogPresentation.liveThoughtLine(
+                "Found the cause: the repo has no commits, so `git worktree add` fails with \"invalid reference: main.\" Now checking the UI."
+            ),
+            "Found the cause: the repo has no commits, so git worktree add fails with \"invalid reference: main.\""
+        )
+    }
+
+    func testLiveThoughtLineDoesNotCutAtDotsInsideFileNamesOrLongDashes() {
+        XCTAssertEqual(
+            ThreadWorkLogPresentation.liveThoughtLine("I read ThreadLaunchService.ts \u{2014} it skips the fetch. Next step."),
+            "I read ThreadLaunchService.ts \u{2014} it skips the fetch."
+        )
+    }
+
+    func testLiveThoughtLineUsesABoldOnlyOpeningLineAsTheWholeLine() {
+        XCTAssertEqual(
+            ThreadWorkLogPresentation.liveThoughtLine("**Narrowing dispatch files**\n\nI should check the adapter. Then more."),
+            "Narrowing dispatch files"
+        )
+        XCTAssertEqual(
+            ThreadWorkLogPresentation.liveThoughtLine("**Narrowing dispatch files**\r\n\r\nI should check the adapter."),
+            "Narrowing dispatch files"
+        )
+    }
+
+    func testLiveThoughtLineReturnsUnpunctuatedTextWholeAndFlattensMarkdown() {
+        XCTAssertEqual(
+            ThreadWorkLogPresentation.liveThoughtLine("- Checking [the docs](https://x.dev) for **limits**"),
+            "Checking the docs for limits"
+        )
+        XCTAssertEqual(
+            ThreadWorkLogPresentation.liveThoughtLine("This is *really* ~~not~~ _fine_ in snake_case_names."),
+            "This is really not fine in snake_case_names."
+        )
+        XCTAssertEqual(ThreadWorkLogPresentation.liveThoughtLine("   "), "")
+    }
+
     /// Mirrors the web "thread-read labels" tests (upstream a9fb6a8063).
     func testThreadReadRowsNameTheLiveThreadInEveryTense() {
         let child = FeatureThread(
