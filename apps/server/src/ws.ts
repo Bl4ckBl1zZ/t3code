@@ -128,11 +128,7 @@ import {
   skipUnchangedThreadShells,
 } from "./orchestration-v2/ShellStream.ts";
 import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
-import {
-  decideThreadResume,
-  threadReplayEncodedBytes,
-  THREAD_RESUME_MAX_REPLAY_EVENTS,
-} from "./orchestration-v2/ThreadStream.ts";
+import { readThreadResumeReplay } from "./orchestration-v2/ThreadStream.ts";
 import {
   projectDomainEventForWire,
   projectThreadProjectionForWire,
@@ -480,13 +476,6 @@ const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
 // past this gap a single O(active-threads) snapshot is cheaper and bounded.
 // Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
-
-// Thread resume replays only this thread's own event range
-// (`readAgentEvents({ threadId, ... })`), but a very stale cursor still ships
-// and applies every intervening delta on the client — one projection fold per
-// event. Past this gap a single snapshot frame is both smaller on the wire and
-// a single client-side apply, so replay falls back to the snapshot path.
-const THREAD_RESUME_MAX_GAP = 1_000;
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -892,13 +881,17 @@ const makeWsRpcLayer = (
                 ),
               );
 
-          const loadReplayThrough = (afterSequence: number, throughSequence: number) =>
+          const loadReplayThrough = (
+            afterSequence: number,
+            throughSequence: number,
+            limit: number,
+          ) =>
             applicationEvents
               .readAgentEvents({
                 threadId: input.threadId,
                 afterSequence,
                 throughSequence,
-                limit: THREAD_RESUME_MAX_REPLAY_EVENTS + 1,
+                limit,
               })
               .pipe(
                 Stream.map((stored) => ({
@@ -976,32 +969,25 @@ const makeWsRpcLayer = (
                   }),
               ),
             );
-            // Cheap pre-check: a hopelessly stale cursor (or one from a rebuilt
-            // event log) is answered with a snapshot without reading the gap.
-            const replayGap = highWater - input.afterSequence;
-            if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
-              const replay = yield* loadReplayThrough(input.afterSequence, highWater);
-              // A short gap can still be enormous — a handful of tool outputs
-              // outweighs a thousand small status updates — so the byte budget
-              // decides too.
-              const plan = decideThreadResume({
-                afterSequence: input.afterSequence,
-                highWater,
-                replayEventCount: replay.length,
-                replayEncodedBytes: threadReplayEncodedBytes(replay),
-              });
-              if (plan.mode === "replay") {
-                return Stream.concat(
-                  Stream.concat(
-                    coalesceThreadStreamFrames(Stream.fromIterable(replay)),
-                    completionMarker,
-                  ),
-                  eventStreamFrom(highWater),
-                );
-              }
+            // The read stops one event past the replay budget on the thread's
+            // own stream index, so a cursor far behind on a busy server costs
+            // the same as a near one when this thread was idle.
+            const replay = yield* readThreadResumeReplay({
+              afterSequence: input.afterSequence,
+              highWater,
+              readReplay: loadReplayThrough,
+            });
+            if (replay !== null) {
+              return Stream.concat(
+                Stream.concat(
+                  coalesceThreadStreamFrames(Stream.fromIterable(replay)),
+                  completionMarker,
+                ),
+                eventStreamFrom(highWater),
+              );
             }
-            // Too far behind, too many events, or too many bytes: fall through
-            // to the snapshot path below.
+            // Cursor ahead of the store, too many events, or too many bytes:
+            // fall through to the snapshot path below.
           }
 
           return yield* snapshotThenLive();

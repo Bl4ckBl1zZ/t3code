@@ -1,3 +1,5 @@
+import * as Effect from "effect/Effect";
+
 /** Maximum number of reducer applications allowed during a thread resume. */
 export const THREAD_RESUME_MAX_REPLAY_EVENTS = 128;
 
@@ -49,3 +51,37 @@ export function decideThreadResume(input: {
     throughSequence: input.highWater,
   };
 }
+
+/**
+ * Read a resuming thread subscriber's catch-up, or `null` when a snapshot is
+ * cheaper. Sequences are global across the event log, so the distance between
+ * the cursor and the thread's high water says nothing about how many of this
+ * thread's events lie between them; the bounded read (one row past the event
+ * budget proves an overflow) and the byte budget decide instead.
+ */
+export const readThreadResumeReplay = <A, E, R>(input: {
+  readonly afterSequence: number;
+  readonly highWater: number;
+  readonly readReplay: (
+    afterSequence: number,
+    throughSequence: number,
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<A>, E, R>;
+}): Effect.Effect<ReadonlyArray<A> | null, E, R> =>
+  // A cursor ahead of the store (or from a rebuilt log) gets a snapshot unread.
+  input.afterSequence > input.highWater
+    ? Effect.succeed(null)
+    : input
+        .readReplay(input.afterSequence, input.highWater, THREAD_RESUME_MAX_REPLAY_EVENTS + 1)
+        .pipe(
+          Effect.map((replay) =>
+            decideThreadResume({
+              afterSequence: input.afterSequence,
+              highWater: input.highWater,
+              replayEventCount: replay.length,
+              replayEncodedBytes: threadReplayEncodedBytes(replay),
+            }).mode === "replay"
+              ? replay
+              : null,
+          ),
+        );

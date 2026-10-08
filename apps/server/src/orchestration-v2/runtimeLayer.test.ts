@@ -30,6 +30,7 @@ import * as Logger from "effect/Logger";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
@@ -3342,6 +3343,77 @@ it.layer(SharedApplicationDataPlaneTestLayer)("visited projection", (it) => {
         })
         .pipe(Effect.flip);
       assert.instanceOf(markUnread, OrchestratorDispatchError);
+    }),
+  );
+
+  it.effect("decides a visit from the thread row without reading the transcript", () =>
+    Effect.gen(function* () {
+      const applicationEngine = yield* OrchestrationEngineService;
+      const orchestrator = yield* OrchestratorV2;
+      const projectId = ProjectId.make("runtime-layer-visit-reads-project");
+      const threadId = ThreadId.make("runtime-layer-visit-reads-thread");
+      const visitedAt = "2026-07-24T01:00:00.000Z";
+
+      yield* applicationEngine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("runtime-layer-visit-reads-project-create"),
+        projectId,
+        title: "Visit reads",
+        workspaceRoot: "/tmp/runtime-layer-visit-reads-project",
+        defaultModelSelection: modelSelection,
+        scripts: [],
+        createdAt: "2026-07-24T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-visit-reads-thread-create"),
+        threadId,
+        projectId,
+        title: "Visit reads thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+
+      const statements: Array<string> = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          const end = span.end.bind(span);
+          span.end = (endTime, exit) => {
+            end(endTime, exit);
+            const query = span.attributes.get("db.query.text");
+            if (typeof query === "string") statements.push(query);
+          };
+          return span;
+        },
+      });
+      yield* orchestrator
+        .dispatch({
+          type: "thread.visit",
+          commandId: CommandId.make("runtime-layer-visit-reads-thread-visit"),
+          threadId,
+          visitedAt,
+        })
+        .pipe(Effect.withTracer(tracer));
+
+      assert.isNotEmpty(statements);
+      for (const table of [
+        "orchestration_v2_projection_messages",
+        "orchestration_v2_projection_turn_items",
+        "orchestration_v2_projection_runs",
+      ]) {
+        assert.isFalse(
+          statements.some((statement) => statement.includes(`FROM ${table}`)),
+          `thread.visit read ${table}`,
+        );
+      }
+      const visited = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(DateTime.formatIso(visited.thread.lastVisitedAt!), visitedAt);
     }),
   );
 });

@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import {
   decideThreadResume,
+  readThreadResumeReplay,
   threadReplayEncodedBytes,
   THREAD_RESUME_MAX_REPLAY_ENCODED_BYTES,
   THREAD_RESUME_MAX_REPLAY_EVENTS,
@@ -72,4 +74,68 @@ describe("decideThreadResume", () => {
       Buffer.byteLength('{"value":"a"}', "utf8") + Buffer.byteLength('{"value":"🦊"}', "utf8"),
     );
   });
+});
+
+describe("readThreadResumeReplay", () => {
+  const readReplayOf =
+    (items: ReadonlyArray<unknown>, calls: Array<[number, number, number]>) =>
+    (afterSequence: number, throughSequence: number, limit: number) =>
+      Effect.sync(() => {
+        calls.push([afterSequence, throughSequence, limit]);
+        return items;
+      });
+
+  it.effect("replays an idle thread however far the global sequence moved", () =>
+    Effect.gen(function* () {
+      const calls: Array<[number, number, number]> = [];
+      const replay = yield* readThreadResumeReplay({
+        afterSequence: 10,
+        highWater: 836_010,
+        readReplay: readReplayOf([{ sequence: 836_010 }], calls),
+      });
+      expect(replay).toEqual([{ sequence: 836_010 }]);
+      expect(calls).toEqual([[10, 836_010, THREAD_RESUME_MAX_REPLAY_EVENTS + 1]]);
+    }),
+  );
+
+  it.effect("falls back to a snapshot when the bounded read overflows the event budget", () =>
+    Effect.gen(function* () {
+      const items = Array.from({ length: THREAD_RESUME_MAX_REPLAY_EVENTS + 1 }, (_, sequence) => ({
+        sequence,
+      }));
+      const replay = yield* readThreadResumeReplay({
+        afterSequence: 0,
+        highWater: 200,
+        readReplay: readReplayOf(items, []),
+      });
+      expect(replay).toBeNull();
+    }),
+  );
+
+  it.effect("falls back to a snapshot when a few events exceed the byte budget", () =>
+    Effect.gen(function* () {
+      const replay = yield* readThreadResumeReplay({
+        afterSequence: 0,
+        highWater: 2,
+        readReplay: readReplayOf(
+          [{ output: "x".repeat(THREAD_RESUME_MAX_REPLAY_ENCODED_BYTES) }],
+          [],
+        ),
+      });
+      expect(replay).toBeNull();
+    }),
+  );
+
+  it.effect("answers a cursor ahead of the store with a snapshot without reading", () =>
+    Effect.gen(function* () {
+      const calls: Array<[number, number, number]> = [];
+      const replay = yield* readThreadResumeReplay({
+        afterSequence: 50,
+        highWater: 40,
+        readReplay: readReplayOf([], calls),
+      });
+      expect(replay).toBeNull();
+      expect(calls).toEqual([]);
+    }),
+  );
 });
