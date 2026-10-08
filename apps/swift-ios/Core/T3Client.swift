@@ -836,6 +836,26 @@ public actor T3Client {
         )
     }
 
+    public func forkThread(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String,
+        latestOnly: Bool,
+        title: String?,
+        commandID: String = UUID().uuidString
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            OrchestrationCommands.forkThread(
+                sourceThreadID: sourceThreadID,
+                targetThreadID: targetThreadID,
+                runID: runID,
+                latestOnly: latestOnly,
+                title: title,
+                commandID: commandID
+            )
+        )
+    }
+
     /// Detaches every named provider session, one command each.
     ///
     /// Each detach derives its command id from the shared gesture id, so a retry
@@ -3450,6 +3470,35 @@ public enum OrchestrationCommands {
                 "runId": .string(runID),
             ]),
         ])
+    }
+
+    /// `thread.fork` from a response: the new thread carries the conversation
+    /// up to the end of `runID`, or the latest stable point for a provider that
+    /// can only fork at its head. Like `client-runtime`'s `forkThreadFromRun`,
+    /// `createdAt` is left to the server.
+    public static func forkThread(
+        sourceThreadID: String,
+        targetThreadID: String,
+        runID: String,
+        latestOnly: Bool,
+        title: String?,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        var command: [String: JSONValue] = [
+            "type": .string("thread.fork"),
+            "commandId": .string(commandID),
+            "createdBy": .string(createdBy),
+            "creationSource": .string(creationSource),
+            "sourceThreadId": .string(sourceThreadID),
+            "targetThreadId": .string(targetThreadID),
+            "sourcePoint": latestOnly
+                ? .object(["type": .string("latest_stable")])
+                : .object(["type": .string("run"), "runId": .string(runID)]),
+        ]
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            command["title"] = .string(title)
+        }
+        return .object(command)
     }
 
     /// `provider-session.detach`. Stopping a thread's session is not one

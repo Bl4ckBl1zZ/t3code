@@ -160,11 +160,15 @@ public struct ThreadActivityItemSupport: Equatable, Sendable {
         public let status: String
         public let model: String?
         public let cwd: String
+        /// Nil when the session carries no capability descriptor, which keeps
+        /// the server-side fork on offer.
+        public let fork: ThreadForkCapabilities?
 
-        public init(status: String, model: String?, cwd: String) {
+        public init(status: String, model: String?, cwd: String, fork: ThreadForkCapabilities? = nil) {
             self.status = status
             self.model = model
             self.cwd = cwd
+            self.fork = fork
         }
     }
 

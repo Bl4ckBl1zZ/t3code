@@ -882,6 +882,9 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
 
     /// The projection's visible turn items, in position order.
     public var timelineItems: [OrchestrationV2ProjectedTurnItem] = []
+    /// The projection's checkpoint table, which "Restore to this message"
+    /// resolves its target in.
+    public var checkpoints: [OrchestrationV2Checkpoint] = []
     /// The thread's runs, narrowed to what handoff rows read to recover which
     /// model was speaking before the handoff.
     public var timelineRuns: [LifecycleTimelineRun] = []
@@ -911,6 +914,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         userInputs: [FeatureUserInput] = [],
         page: FeatureThreadPage? = nil,
         timelineItems: [OrchestrationV2ProjectedTurnItem] = [],
+        checkpoints: [OrchestrationV2Checkpoint] = [],
         timelineRuns: [LifecycleTimelineRun] = [],
         itemSupport: [String: ThreadActivityItemSupport] = [:],
         subagentChildThreadIDs: [String: String] = [:],
@@ -923,6 +927,7 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
         self.userInputs = userInputs
         self.page = page
         self.timelineItems = timelineItems
+        self.checkpoints = checkpoints
         self.timelineRuns = timelineRuns
         self.itemSupport = itemSupport
         self.subagentChildThreadIDs = subagentChildThreadIDs

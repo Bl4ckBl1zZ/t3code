@@ -1083,6 +1083,7 @@ public final class FeatureRootModel {
                 page: prepared.page
             )
             merged.timelineItems = prepared.timelineItems
+            merged.checkpoints = prepared.checkpoints
             merged.timelineRuns = prepared.timelineRuns
             merged.itemSupport = prepared.itemSupport
             merged.subagentChildThreadIDs = prepared.subagentChildThreadIDs
