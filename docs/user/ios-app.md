@@ -43,6 +43,9 @@ sheets use the system glass material.
     reload and archive.
 - **Scrolling.** When you scroll up, a round button above the composer jumps back to the latest
   message.
+- **Settled and snoozed.** A settled or snoozed thread says so in one quiet line after its last
+  message, such as **Settled 2d ago · Un-settle** or **Snoozed, in 3h · Wake now**. Sending a
+  message clears either one too.
 - **Failed messages.** A message that could not be sent shows **Not sent · Try Again** underneath.
   Tap it to retry. Above the composer, a notice says why the message was not sent, with **Retry**
   and a close button. It stays with the thread until you dismiss it, send again, or the message

@@ -788,6 +788,13 @@ public struct ThreadDetailView: View {
                 },
                 mcpApps: mcpApps,
                 threadLinks: threadLinks,
+                statusLine: ThreadStatusLine.resolve(currentThread, now: .now),
+                onStatusLineAction: { [model, threadID = thread.id] kind in
+                    switch kind {
+                    case .snoozed: _ = await model.setSnoozed(threadID, until: nil)
+                    case .settled: _ = await model.setSettled(threadID, settled: false)
+                    }
+                },
                 navigationRequest: turnNavigationRequest,
                 scrollToLatestRequest: scrollToLatestRequest,
                 onReadingHistoryChanged: { reading in
@@ -2252,6 +2259,9 @@ private struct ThreadTimelineEntryView: View {
 private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     @SwiftUI.Environment(\.nativeAppToolIconContext) private var nativeAppIcons
     private static let loadEarlierID = "__t3-load-earlier__"
+    /// The settled or snoozed line after the last message. Its id carries the
+    /// line's content, so a change is a new row rather than a reconfigure.
+    private static let statusLinePrefix = "__t3-status-line__:"
 
     private enum Section: Hashable {
         case transcript
@@ -2305,6 +2315,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     var mcpApps: ThreadMcpApps? = nil
     /// Resolves `t3-thread://` links in messages against this thread's environment.
     var threadLinks: ThreadLinkResolver? = nil
+    /// Settled or snoozed, said once after the last message, with its way out.
+    var statusLine: ThreadStatusLine? = nil
+    var onStatusLineAction: (ThreadStatusLine.Kind) async -> Void = { _ in }
     var navigationRequest: Int = 0
     var scrollToLatestRequest: Int = 0
     var onReadingHistoryChanged: (Bool) -> Void = { _ in }
@@ -2361,6 +2374,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             isLoadingEarlier: isLoadingEarlier,
             alwaysExpandActivity: alwaysExpandActivity,
             outboxCaptions: outboxCaptions,
+            statusLine: statusLine,
             rowContext: Coordinator.RowContext(
                 currentThreadID: threadID,
                 currentWireThreadID: wireThreadID,
@@ -2381,7 +2395,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 citationContext: citationContext,
                 onUseTemplate: onUseTemplate,
                 mcpApps: mcpApps,
-                threadLinks: threadLinks
+                threadLinks: threadLinks,
+                onStatusLineAction: onStatusLineAction
             ),
             onLoadEarlier: onLoadEarlier,
             in: collectionView
@@ -2455,6 +2470,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             var onUseTemplate: (CodexArtifactTemplate) -> Void = { _ in }
             var mcpApps: ThreadMcpApps?
             var threadLinks: ThreadLinkResolver?
+            var onStatusLineAction: (ThreadStatusLine.Kind) async -> Void = { _ in }
         }
 
         private var dataSource: UICollectionViewDiffableDataSource<Section, String>?
@@ -2572,6 +2588,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentCanLoadEarlier = false
         private var currentIsLoadingEarlier = false
         private var currentOutboxCaptions: [String: ThreadMessageCaption] = [:]
+        private var currentStatusLine: ThreadStatusLine?
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
         private var rowContext = RowContext()
         private var onLoadEarlier: (() -> Void)?
@@ -2601,6 +2618,20 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     .margins(.all, 0)
                     cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
                     cell.accessibilityIdentifier = "load-earlier-turns"
+                    return
+                }
+                if entryID.hasPrefix(FeatureTranscriptCollectionView.statusLinePrefix) {
+                    guard let self, let line = currentStatusLine else {
+                        cell.contentConfiguration = nil
+                        return
+                    }
+                    let action = rowContext.onStatusLineAction
+                    cell.contentConfiguration = UIHostingConfiguration {
+                        ThreadStatusLineView(line: line) { await action(line.kind) }
+                            .padding(.bottom, ChatTimelineStyle.entrySpacing)
+                    }
+                    .margins(.all, 0)
+                    cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
                     return
                 }
                 guard let self, let entry = entriesByID[entryID] else {
@@ -2702,6 +2733,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             isLoadingEarlier: Bool,
             alwaysExpandActivity: Bool,
             outboxCaptions: [String: ThreadMessageCaption],
+            statusLine: ThreadStatusLine?,
             rowContext: RowContext,
             onLoadEarlier: @escaping () -> Void,
             in collectionView: UICollectionView
@@ -2716,7 +2748,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 self.update(threadID: threadID, detail: detail, renderUpdate: renderUpdate,
                     dynamicTypeSize: dynamicTypeSize, canLoadEarlier: canLoadEarlier,
                     isLoadingEarlier: isLoadingEarlier, alwaysExpandActivity: alwaysExpandActivity,
-                    outboxCaptions: outboxCaptions, rowContext: rowContext,
+                    outboxCaptions: outboxCaptions, statusLine: statusLine, rowContext: rowContext,
                     onLoadEarlier: onLoadEarlier, in: collectionView)
             }
             let foldChoiceChanged = renderedFoldChoiceRevision != foldChoiceRevision
@@ -2731,10 +2763,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
             let outboxChanged = currentOutboxCaptions != outboxCaptions
+            let statusLineChanged = currentStatusLine != statusLine
             if currentIsLoadingEarlier, !isLoadingEarlier { requestedEarlierTurns = false }
             guard threadChanged || typeSizeChanged || expansionPreferenceChanged
                 || revisionChanged || loadEarlierChanged || foldChoiceChanged
-                || outboxChanged else { return }
+                || outboxChanged || statusLineChanged else { return }
 
             // Always the whole feed. An item's shape depends on its neighbours —
             // a new tool call joins the work group above it, a subagent card
@@ -2765,8 +2798,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             currentCanLoadEarlier = canLoadEarlier
             currentIsLoadingEarlier = isLoadingEarlier
             currentOutboxCaptions = outboxCaptions
+            let previousStatusLineID = currentStatusLine.map { FeatureTranscriptCollectionView.statusLinePrefix + $0.id }
+            currentStatusLine = statusLine
             guard threadChanged || idsChanged || !changedIDs.isEmpty
-                || loadEarlierChanged else { return }
+                || loadEarlierChanged || statusLineChanged else { return }
 
             if threadChanged {
                 cancelAllMarkdownPrefetches()
@@ -2830,6 +2865,13 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     )
                 }
                 snapshot.appendItems(newIDs, toSection: .transcript)
+            }
+            // The status line always closes the transcript, after any appended rows.
+            if let previousStatusLineID, snapshot.indexOfItem(previousStatusLineID) != nil {
+                snapshot.deleteItems([previousStatusLineID])
+            }
+            if let statusLine {
+                snapshot.appendItems([FeatureTranscriptCollectionView.statusLinePrefix + statusLine.id], toSection: .transcript)
             }
             let appendedIDSet = Set(state.appendedIDs)
             var reconfiguredIDs = changedIDs.filter { !appendedIDSet.contains($0) }
