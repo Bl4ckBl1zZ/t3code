@@ -20,6 +20,30 @@ The v2 checks pin these invariants:
 - Resume catch-up replays at most 128 thread events and 1 MiB of projected event JSON before
   replacing stale state with a current snapshot. The sequence gap alone is not enough: a handful of
   large tool outputs outweighs a thousand small status updates.
+- Live thread delivery keeps up with a slow link instead of queueing behind it. `RpcServer` sends
+  one stream chunk and waits for the client's ack before pulling the next, so throughput is one
+  frame per round trip; a T3 Connect phone falls behind a provider that republishes a whole message
+  every 50 ms. `streamThreadLiveFrames` (`ThreadStreamFrames.ts`) drains the subscription as events
+  are published and sends everything queued as the next frame:
+  - Undelivered full-state updates that a later event of the same type for the same entity
+    overwrites are dropped. The list of such types, and why runs, attempts, provider sessions and
+    turns, checkpoints, creation and deletion are not on it, lives in
+    `@t3tools/shared/orchestrationV2EventSupersession`. An entity's first event in a frame is kept
+    until the entity has been delivered once, because clients append unseen entities and arrays such
+    as `messages` are read by position. Applying the coalesced stream must give the same projection
+    as applying every event; `threadStreamSupersession.test.ts` checks that with the real reducer.
+  - Survivors keep their own sequences, in order, so a frame still ends with its highest sequence.
+    Every thread client must therefore treat a thread stream's sequences as a cursor that may skip
+    values, never as consecutive. Web, desktop, and React Native skip anything at or below their
+    cursor; the SwiftUI client compares against its highest applied sequence.
+  - When the queued survivors exceed the resume budget (128 events or 1 MiB of projected JSON), the
+    queue is dropped and the next frame is one `snapshot` item, windowed by the subscription's
+    `snapshotMaxVisibleItems`. Delivery continues after the snapshot's sequence. The snapshot is
+    read only when the client asks for its next frame, so a client that keeps up never costs one,
+    and a stalled one costs at most one per frame it acknowledges.
+- Thread-scoped event-sink streams subscribe to their own thread's PubSub. Through the shared one,
+  every open thread, desktop keep-alive, and wait received and filtered every thread's events: with
+  50 subscribers, delivering 20,000 events to one of them took 1.2 s instead of 57 ms.
 - Oversized dynamic-tool results and detail strings are reduced only at the wire boundary; the
   persisted event remains complete.
 - Shell resume sends deltas plus compact repository-enrichment metadata, not another full project
