@@ -169,6 +169,29 @@ Finite requests, durable subscriptions, and commands are separate APIs:
 The Promise bridge exists only at the React/Atom boundary. Runtime and business
 logic remain Effect-native.
 
+## SwiftUI Thread Detail
+
+The SwiftUI client in `apps/swift-ios` does not run this runtime. It mirrors the
+thread state machine by hand:
+
+- `OrchestrationV2LiveProjection` ports `applyOrchestrationV2ProjectionEvent`
+  and folds every event type in place, indexing the streaming tables by id so a
+  token costs the same on a long thread as on a short one.
+  `scripts/swift-reducer-fixture.ts` folds shared cases through the TypeScript
+  reducer, and the Swift tests must land on the same projection and cursor. It
+  is written with the contract fixtures, so CI's `--check` covers it.
+- `NativeThreadDetailSync` mirrors `applyItems`: events at or below the cursor
+  are replays, sequence gaps are expected, and unknown types advance the cursor.
+  The only refetch on the stream path is a known event whose payload Swift
+  cannot decode. Folding then holds until a snapshot lands, and held events
+  newer than that snapshot replay on top of it.
+- Stream items are collected off the main actor and folded per batch. The
+  transcript publishes at most every 80 ms.
+- A detail stream that ends resubscribes from the projection's sequence with
+  jittered backoff (1 s doubling to 30 s), reset once the server reports it has
+  caught up. `[conn] detail-stream-ended`, `detail-stream-restarted`, and
+  `detail-refresh reason=` show this in Console.
+
 ## Platform Layers
 
 Web and mobile provide:
