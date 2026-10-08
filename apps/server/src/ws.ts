@@ -90,7 +90,6 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { windowOrchestrationV2ThreadProjection } from "@t3tools/shared/orchestrationV2Window";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -925,25 +924,22 @@ const makeWsRpcLayer = (
 
           const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(
             function* () {
-              const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationV2GetThreadProjectionError({
-                      threadId: input.threadId,
-                      message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                      cause,
-                    }),
-                ),
-              );
+              const snapshot = yield* threadManagement
+                .getThreadSnapshot(input.threadId, {
+                  maxVisibleItems: input.snapshotMaxVisibleItems,
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationV2GetThreadProjectionError({
+                        threadId: input.threadId,
+                        message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                        cause,
+                      }),
+                  ),
+                );
               const { snapshotSequence } = snapshot;
-              const windowed =
-                input.snapshotMaxVisibleItems === undefined
-                  ? snapshot.projection
-                  : windowOrchestrationV2ThreadProjection(
-                      snapshot.projection,
-                      input.snapshotMaxVisibleItems,
-                    );
-              const projection = projectThreadProjectionForWire(windowed);
+              const projection = projectThreadProjectionForWire(snapshot.projection);
               return Stream.concat(
                 Stream.concat(
                   Stream.make({

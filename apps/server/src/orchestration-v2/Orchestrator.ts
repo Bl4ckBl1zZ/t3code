@@ -96,6 +96,7 @@ import {
   type ProjectionRecordField,
   type ProjectionRecordFilter,
   type ProjectionRecords,
+  type ThreadSnapshotOptions,
 } from "./ProjectionStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
@@ -279,7 +280,10 @@ export interface OrchestratorV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
-  readonly getThreadSnapshot: (threadId: ThreadId) => Effect.Effect<
+  readonly getThreadSnapshot: (
+    threadId: ThreadId,
+    options?: ThreadSnapshotOptions,
+  ) => Effect.Effect<
     {
       readonly schemaVersion: number;
       readonly snapshotSequence: number;
@@ -9536,9 +9540,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projectionStore
         .getThreadProjection(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
-    getThreadSnapshot: (threadId) =>
+    getThreadSnapshot: (threadId, options) =>
       projectionStore
-        .getThreadSnapshot(threadId)
+        .getThreadSnapshot(threadId, options)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
     getShellSnapshot: (options) =>
       projectionStore.getShellSnapshot(options).pipe(

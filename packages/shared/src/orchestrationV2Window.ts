@@ -1,16 +1,45 @@
 import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 
 /**
+ * How many leading visible rows a window of `maxVisibleItems` drops: the last
+ * N rows are kept, and the cut moves backwards to the nearest run boundary
+ * because turn-item visibility pairs items within a run (e.g. interrupt
+ * request/result), so a run must never be split across the window edge.
+ * Zero means nothing is dropped. The server computes this over row metadata
+ * before reading any payloads, so it must stay the one definition of the cut.
+ */
+export function orchestrationV2WindowCut(
+  rows: ReadonlyArray<{ readonly runId: string | null }>,
+  maxVisibleItems: number,
+): number {
+  // Normalize rather than trust the caller: a fractional or NaN window would
+  // produce a fractional cut index and crash on `rows[cut]` below.
+  const window = Math.floor(maxVisibleItems);
+  if (!Number.isFinite(window) || window <= 0 || rows.length <= window) {
+    return 0;
+  }
+
+  let cut = rows.length - window;
+  const boundaryRunId = rows[cut]!.runId;
+  if (boundaryRunId !== null) {
+    while (cut > 0 && rows[cut - 1]!.runId === boundaryRunId) {
+      cut -= 1;
+    }
+  }
+  return cut;
+}
+
+/**
  * Trims a thread projection to roughly the last `maxVisibleItems` visible turn
  * items so cold loads transfer (and decode) a bounded tail instead of the full
- * history. The cut is extended backwards to the nearest run boundary: turn-item
- * visibility rules pair items within a run (e.g. interrupt request/result), so
- * a run must never be split across the window edge.
+ * history. See {@link orchestrationV2WindowCut} for where the edge falls.
  *
- * Only the three history-proportional arrays are trimmed — `visibleTurnItems`,
+ * Only the three transcript arrays are trimmed — `visibleTurnItems`,
  * `turnItems`, and `messages`. Runs, attempts, nodes, and the other entity
- * arrays stay complete: they are small, and visibility recomputation on the
- * client reads them.
+ * arrays stay complete: clients read them for visibility, attempts, approvals,
+ * and checkpoints, and "load earlier" merges only the transcript arrays back.
+ * The server builds the same result in SQL (`ProjectionStore.getThreadSnapshot`
+ * with `maxVisibleItems`); this function is the reference it is tested against.
  *
  * The number of visible items dropped is recorded in
  * `truncatedVisibleItemCount` so clients can offer to load the full history.
@@ -20,20 +49,10 @@ export function windowOrchestrationV2ThreadProjection(
   maxVisibleItems: number,
 ): OrchestrationV2ThreadProjection {
   const rows = projection.visibleTurnItems;
-  // Normalize rather than trust the caller: a fractional or NaN window would
-  // produce a fractional cut index and crash on `rows[cut]` below.
-  const window = Math.floor(maxVisibleItems);
-  if (!Number.isFinite(window) || window <= 0 || rows.length <= window) {
-    return projection;
-  }
-
-  let cut = rows.length - window;
-  const boundaryRunId = rows[cut]!.item.runId;
-  if (boundaryRunId !== null) {
-    while (cut > 0 && rows[cut - 1]!.item.runId === boundaryRunId) {
-      cut -= 1;
-    }
-  }
+  const cut = orchestrationV2WindowCut(
+    rows.map((row) => row.item),
+    maxVisibleItems,
+  );
   if (cut === 0) {
     return projection;
   }
