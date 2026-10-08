@@ -88,6 +88,12 @@ public protocol FeatureClient: AnyObject {
     func setActiveOrder(id: String, key: String?) async throws
     /// `orderKey` re-pins a thread at the slot it held before, as undo does.
     func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws
+    /// Moves a pinned thread within the pinned run (`pinOrderKey` alone).
+    func setPinOrder(id: String, key: String) async throws
+    /// Records that the user has seen the thread up to `visitedAt`.
+    func visitThread(id: String, visitedAt: Date) async throws
+    /// Makes the thread's latest completion read as unseen again.
+    func markThreadUnread(id: String) async throws
     /// Pins a pull request to the thread by number, replacing the
     /// branch-derived one, or clears the pin with `nil`.
     ///
@@ -343,6 +349,15 @@ public extension FeatureClient {
         throw FeatureCapabilityUnavailable("Auto-settle behavior")
     }
     func setThreadPinned(id: String, pinned: Bool, orderKey: String?) async throws {}
+    func setPinOrder(id: String, key: String) async throws {
+        throw FeatureCapabilityUnavailable("Arranging pinned threads")
+    }
+    func visitThread(id: String, visitedAt: Date) async throws {
+        throw FeatureCapabilityUnavailable("Read state")
+    }
+    func markThreadUnread(id: String) async throws {
+        throw FeatureCapabilityUnavailable("Read state")
+    }
     @discardableResult
     func setThreadLinkedPullRequest(
         threadID _: String,

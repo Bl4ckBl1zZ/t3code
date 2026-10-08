@@ -335,11 +335,23 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var hasActionableProposedPlan: Bool?
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
+    /// The server's read watermark, shared by every device on the
+    /// environment. See ``hasUnseenCompletion``.
+    public var lastVisitedAt: Date? = nil
+    /// Whether the environment tracks read state at all. Absent means no
+    /// Done-until-seen and no Mark Read/Unread, as on the other mobile client.
+    public var supportsVisitedTracking: Bool? = nil
+    /// The failed run's failure class from the shell; `usage_limit` reads as
+    /// Limited rather than Failed. Nil on detail-only rows and older servers.
+    public var lastErrorClass: String? = nil
     public var pinnedAt: Date?
     /// Where the thread sits in the user-arranged pinned run, as the web
     /// client orders it. Kept so undoing an unpin restores the same slot.
     public var pinOrderKey: String?
     public var supportsPinning: Bool?
+    /// Whether the environment accepts `pinOrderKey` writes, so the pinned
+    /// run can be arranged and fresh pins land on top.
+    public var supportsPinReorder: Bool? = nil
     public var activeOrderKey: String?
     public var supportsActiveOrder: Bool?
     /// Whether the thread's environment supports the settled lifecycle at all.

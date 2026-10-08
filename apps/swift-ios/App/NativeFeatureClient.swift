@@ -1616,6 +1616,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refresh(client: route.client)
     }
 
+    func setPinOrder(id: String, key: String) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(OrchestrationCommands.updateMetadata(
+            threadID: route.wireID, fields: ["pinOrderKey": .string(key)]))
+    }
+
+    // Read state rides the shell stream's `thread.visited` / `thread.marked-unread`
+    // echo; no refresh, since visits fire every time an open thread moves.
+    func visitThread(id: String, visitedAt: Date) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(
+            OrchestrationCommands.visit(threadID: route.wireID, visitedAt: visitedAt))
+    }
+
+    func markThreadUnread(id: String) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.dispatch(OrchestrationCommands.markUnread(threadID: route.wireID))
+    }
+
     func addThreadPullRequest(threadID: String, number: Int) async throws -> FeatureLinkedPullRequest? {
         try await changeThreadLinkedPullRequest(threadID: threadID, number: number, adding: true)
     }
@@ -5466,7 +5485,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environment: Environment
     ) -> FeatureThread {
         let isRunning = latestRun.map { $0.completedAt == nil } ?? false
-        return FeatureThread(
+        var mapped = FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -5544,6 +5563,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode)
         )
+        mapped.lastVisitedAt = thread.lastVisitedAt.flatMap(parseValidDate)
+        mapped.supportsVisitedTracking = environment.descriptor?.capabilities.threadVisitedTracking
+        mapped.supportsPinReorder = environment.descriptor?.capabilities.threadPinReorder
+        // The projection carries no failure class; the shell does. Read only
+        // for a failed run, so streaming rebuilds skip the lookup.
+        if latestRun?.status == "failed" {
+            mapped.lastErrorClass = shellsByEnvironmentID[environment.id]?.threads
+                .first(where: { $0.id == thread.id })?.lastErrorClass
+        }
+        return mapped
     }
 
     /// The wire's project id is environment-local; every other project
@@ -5635,7 +5664,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationV2ThreadShell,
         environment: Environment
     ) -> FeatureThread {
-        FeatureThread(
+        var mapped = FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -5731,6 +5760,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             interactionMode: mapInteractionMode(thread.interactionMode),
             archiveBlockedByLiveRun: !ThreadArchive.canArchive(shell: thread)
         )
+        mapped.lastVisitedAt = thread.lastVisitedAt.flatMap(parseValidDate)
+        mapped.supportsVisitedTracking = environment.descriptor?.capabilities.threadVisitedTracking
+        mapped.lastErrorClass = thread.lastErrorClass
+        mapped.supportsPinReorder = environment.descriptor?.capabilities.threadPinReorder
+        return mapped
     }
 
 

@@ -494,6 +494,11 @@ struct HomeBatchAvailability: Equatable {
     var canArchive = false
     var canPin = false
     var canUnpin = false
+    /// Read state, as the row menu offers it. The slot only shows when some
+    /// selected thread's server tracks read state at all.
+    var canMarkRead = false
+    var canMarkUnread = false
+    var supportsReadState = false
 
     /// Same rule as the row menu's Snooze: never hide a row that is asking for
     /// something, and never offer what the server would refuse.
@@ -555,6 +560,9 @@ struct HomeBatchAvailability: Equatable {
             if canWake(thread, in: workspace, now: now) { result.canWake = true }
             if !thread.isArchived, thread.canArchive { result.canArchive = true }
             if thread.pinnedAt == nil { result.canPin = true } else { result.canUnpin = true }
+            if thread.canMarkRead(at: now) { result.canMarkRead = true }
+            if thread.canMarkUnread { result.canMarkUnread = true }
+            if thread.supportsVisitedTracking == true { result.supportsReadState = true }
         }
         return result
     }
